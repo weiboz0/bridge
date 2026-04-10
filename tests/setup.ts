@@ -1,6 +1,10 @@
-import { afterAll } from "vitest";
+import { afterAll, afterEach } from "vitest";
+import { cleanupDatabase, closeTestDb } from "./helpers";
+
+afterEach(async () => {
+  await cleanupDatabase();
+});
 
 afterAll(async () => {
-  // Cleanup hooks for database connections etc.
-  // Will be populated in Task 2
+  await closeTestDb();
 });
