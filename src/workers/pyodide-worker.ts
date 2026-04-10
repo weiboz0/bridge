@@ -1,6 +1,5 @@
-/// <reference lib="webworker" />
-
-declare const self: DedicatedWorkerGlobalScope;
+/* eslint-disable no-restricted-globals */
+const workerSelf = self as any;
 
 interface RunMessage {
   type: "run";
@@ -19,37 +18,37 @@ let pyodide: any = null;
 async function initPyodide() {
   if (pyodide) return;
 
-  importScripts("https://cdn.jsdelivr.net/pyodide/v0.27.5/full/pyodide.js");
+  workerSelf.importScripts("https://cdn.jsdelivr.net/pyodide/v0.27.5/full/pyodide.js");
 
-  pyodide = await (self as any).loadPyodide({
+  pyodide = await (workerSelf as any).loadPyodide({
     stdout: (text: string) => {
-      self.postMessage({ type: "stdout", text });
+      workerSelf.postMessage({ type: "stdout", text });
     },
     stderr: (text: string) => {
-      self.postMessage({ type: "stderr", text });
+      workerSelf.postMessage({ type: "stderr", text });
     },
   });
 
-  self.postMessage({ type: "ready" });
+  workerSelf.postMessage({ type: "ready" });
 }
 
 async function runCode(code: string, id: string) {
   if (!pyodide) {
-    self.postMessage({ type: "stderr", text: "Pyodide not initialized" });
-    self.postMessage({ type: "done", id, success: false });
+    workerSelf.postMessage({ type: "stderr", text: "Pyodide not initialized" });
+    workerSelf.postMessage({ type: "done", id, success: false });
     return;
   }
 
   try {
     await pyodide.runPythonAsync(code);
-    self.postMessage({ type: "done", id, success: true });
+    workerSelf.postMessage({ type: "done", id, success: true });
   } catch (err: any) {
-    self.postMessage({ type: "stderr", text: err.message });
-    self.postMessage({ type: "done", id, success: false });
+    workerSelf.postMessage({ type: "stderr", text: err.message });
+    workerSelf.postMessage({ type: "done", id, success: false });
   }
 }
 
-self.onmessage = async (event: MessageEvent<WorkerMessage>) => {
+workerSelf.onmessage = async (event: MessageEvent<WorkerMessage>) => {
   const { data } = event;
 
   switch (data.type) {

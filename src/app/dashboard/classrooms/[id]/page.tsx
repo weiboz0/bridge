@@ -2,6 +2,8 @@ import { notFound } from "next/navigation";
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { getClassroom, getClassroomMembers } from "@/lib/classrooms";
+import Link from "next/link";
+import { buttonVariants } from "@/components/ui/button";
 import {
   Card,
   CardContent,
@@ -36,6 +38,15 @@ export default async function ClassroomDetailPage({
         {classroom.description && (
           <p className="mt-2">{classroom.description}</p>
         )}
+      </div>
+
+      <div className="flex gap-2">
+        <Link
+          href={`/dashboard/classrooms/${id}/editor`}
+          className={buttonVariants()}
+        >
+          Open Editor
+        </Link>
       </div>
 
       {isTeacher && (
