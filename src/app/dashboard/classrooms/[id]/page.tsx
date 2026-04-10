@@ -2,8 +2,10 @@ import { notFound } from "next/navigation";
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { getClassroom, getClassroomMembers } from "@/lib/classrooms";
+import { getActiveSession } from "@/lib/sessions";
 import Link from "next/link";
 import { buttonVariants } from "@/components/ui/button";
+import { SessionControls } from "@/components/session/session-controls";
 import {
   Card,
   CardContent,
@@ -26,6 +28,7 @@ export default async function ClassroomDetailPage({
   }
 
   const members = await getClassroomMembers(db, id);
+  const activeSession = await getActiveSession(db, id);
   const isTeacher = classroom.teacherId === session!.user.id;
 
   return (
@@ -40,12 +43,28 @@ export default async function ClassroomDetailPage({
         )}
       </div>
 
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg">Live Session</CardTitle>
+          <CardDescription>
+            {activeSession ? "A session is currently active" : "No active session"}
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <SessionControls
+            classroomId={id}
+            isTeacher={isTeacher}
+            activeSessionId={activeSession?.id || null}
+          />
+        </CardContent>
+      </Card>
+
       <div className="flex gap-2">
         <Link
           href={`/dashboard/classrooms/${id}/editor`}
-          className={buttonVariants()}
+          className={buttonVariants({ variant: "outline" })}
         >
-          Open Editor
+          Standalone Editor
         </Link>
       </div>
 

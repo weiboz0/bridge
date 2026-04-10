@@ -11,7 +11,8 @@
     "test:watch": "vitest",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
-    "db:studio": "drizzle-kit studio"
+    "db:studio": "drizzle-kit studio",
+    "hocuspocus": "bun run server/hocuspocus.ts"
   },
   "dependencies": {
     "@auth/drizzle-adapter": "^1.11.1",

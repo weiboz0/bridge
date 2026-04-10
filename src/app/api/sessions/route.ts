@@ -7,7 +7,7 @@ import { getClassroom } from "@/lib/classrooms";
 
 const createSchema = z.object({
   classroomId: z.string().uuid(),
-  settings: z.record(z.unknown()).optional(),
+  settings: z.record(z.string(), z.unknown()).optional(),
 });
 
 export async function POST(request: NextRequest) {
