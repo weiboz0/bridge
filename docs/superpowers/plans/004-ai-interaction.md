@@ -8,7 +8,7 @@
 
 **Tech Stack:** `@anthropic-ai/sdk`, SSE (ReadableStream), CodeMirror 6 decorations, Drizzle ORM, Zod, Vitest
 
-**Spec:** `docs/superpowers/specs/2026-04-10-bridge-platform-design.md`
+**Spec:** `docs/superpowers/specs/001-bridge-platform-design.md`
 
 **Depends on:** Plan 1 (Foundation), Plan 2 (Live Editor), Plan 3 (Real-time Sessions)
 
