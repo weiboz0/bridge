@@ -45,6 +45,34 @@ export async function listOrganizations(db: Database, status?: string) {
   return db.select().from(organizations);
 }
 
+export async function countOrganizations(db: Database, status?: string) {
+  const { sql } = await import("drizzle-orm");
+  if (status) {
+    const result = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(organizations)
+      .where(eq(organizations.status, status as "pending" | "active" | "suspended"));
+    return Number(result[0].count);
+  }
+  const result = await db
+    .select({ count: sql<number>`count(*)` })
+    .from(organizations);
+  return Number(result[0].count);
+}
+
+export async function updateOrganization(
+  db: Database,
+  orgId: string,
+  updates: Partial<Pick<typeof organizations.$inferInsert, "name" | "contactEmail" | "contactName" | "domain">>
+) {
+  const [org] = await db
+    .update(organizations)
+    .set({ ...updates, updatedAt: new Date() })
+    .where(eq(organizations.id, orgId))
+    .returning();
+  return org || null;
+}
+
 export async function updateOrgStatus(
   db: Database,
   orgId: string,

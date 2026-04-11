@@ -70,6 +70,26 @@ export async function listClassesByCourse(db: Database, courseId: string) {
     .where(eq(classes.courseId, courseId));
 }
 
+export async function listClassesByUser(db: Database, userId: string) {
+  const memberships = await db
+    .select({ classId: classMemberships.classId, role: classMemberships.role })
+    .from(classMemberships)
+    .where(eq(classMemberships.userId, userId));
+
+  if (memberships.length === 0) return [];
+
+  const { or } = await import("drizzle-orm");
+  const classList = await db
+    .select()
+    .from(classes)
+    .where(or(...memberships.map((m) => eq(classes.id, m.classId))));
+
+  return classList.map((cls) => ({
+    ...cls,
+    memberRole: memberships.find((m) => m.classId === cls.id)?.role || "student",
+  }));
+}
+
 export async function getClassByJoinCode(db: Database, joinCode: string) {
   const [cls] = await db
     .select()

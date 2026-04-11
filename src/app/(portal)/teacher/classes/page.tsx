@@ -1,35 +1,33 @@
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { getLinkedChildren } from "@/lib/parent-links";
+import { listClassesByUser } from "@/lib/classes";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import Link from "next/link";
 
-export default async function ParentDashboard() {
+export default async function TeacherClassesPage() {
   const session = await auth();
-  const children = await getLinkedChildren(db, session!.user.id);
+  const classes = await listClassesByUser(db, session!.user.id);
+  const myClasses = classes.filter((c) => c.memberRole === "instructor");
 
   return (
     <div className="p-6 space-y-6">
-      <h1 className="text-2xl font-bold">Parent Dashboard</h1>
+      <h1 className="text-2xl font-bold">My Classes</h1>
 
-      {children.length === 0 ? (
+      {myClasses.length === 0 ? (
         <Card>
           <CardContent className="py-8 text-center text-muted-foreground">
-            <p>No children linked yet.</p>
-            <p className="text-sm mt-2">
-              Your child's teacher will link your account to your child's classes.
-            </p>
+            <p>No classes yet. Create a course first, then create a class from it.</p>
           </CardContent>
         </Card>
       ) : (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {children.map((child) => (
-            <Link key={child.userId} href={`/parent/children/${child.userId}`}>
+          {myClasses.map((cls) => (
+            <Link key={cls.id} href={`/teacher/classes/${cls.id}`}>
               <Card className="hover:border-primary transition-colors cursor-pointer">
                 <CardHeader>
-                  <CardTitle className="text-lg">{child.name}</CardTitle>
+                  <CardTitle className="text-lg">{cls.title}</CardTitle>
                   <CardDescription>
-                    {child.classCount} class{child.classCount !== 1 ? "es" : ""}
+                    {cls.term || "No term"} · {cls.status}
                   </CardDescription>
                 </CardHeader>
               </Card>

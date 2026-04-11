@@ -3,21 +3,15 @@ import { db } from "@/lib/db";
 import { listClassesByUser } from "@/lib/classes";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import Link from "next/link";
-import { buttonVariants } from "@/components/ui/button";
 
-export default async function StudentDashboard() {
+export default async function StudentClassesPage() {
   const session = await auth();
   const classes = await listClassesByUser(db, session!.user.id);
   const myClasses = classes.filter((c) => c.memberRole === "student");
 
   return (
     <div className="p-6 space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">My Dashboard</h1>
-        <Link href="/student/classes" className={buttonVariants({ variant: "outline" })}>
-          Join a Class
-        </Link>
-      </div>
+      <h1 className="text-2xl font-bold">My Classes</h1>
 
       {myClasses.length === 0 ? (
         <Card>
@@ -27,12 +21,12 @@ export default async function StudentDashboard() {
         </Card>
       ) : (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {myClasses.filter((c) => c.status === "active").map((cls) => (
+          {myClasses.map((cls) => (
             <Link key={cls.id} href={`/student/classes/${cls.id}`}>
               <Card className="hover:border-primary transition-colors cursor-pointer">
                 <CardHeader>
                   <CardTitle className="text-lg">{cls.title}</CardTitle>
-                  <CardDescription>{cls.term || "No term"}</CardDescription>
+                  <CardDescription>{cls.term || "No term"} · {cls.status}</CardDescription>
                 </CardHeader>
               </Card>
             </Link>

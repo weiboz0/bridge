@@ -1,0 +1,1 @@
+export default function HelpPage() { return <div className="p-6"><h1 className="text-2xl font-bold">Help</h1><p className="text-muted-foreground mt-2">Need help? Ask your teacher or use the AI tutor during a live session.</p></div>; }

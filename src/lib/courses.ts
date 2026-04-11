@@ -34,6 +34,13 @@ export async function listCoursesByOrg(db: Database, orgId: string) {
     .where(eq(courses.orgId, orgId));
 }
 
+export async function listCoursesByCreator(db: Database, createdBy: string) {
+  return db
+    .select()
+    .from(courses)
+    .where(eq(courses.createdBy, createdBy));
+}
+
 export async function updateCourse(
   db: Database,
   courseId: string,
