@@ -2,14 +2,21 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { getCourse } from "@/lib/courses";
 import { getTopic, updateTopic, deleteTopic } from "@/lib/topics";
 
 const updateSchema = z.object({
   title: z.string().min(1).max(255).optional(),
-  description: z.string().max(2000).optional(),
+  description: z.string().max(5000).optional(),
   lessonContent: z.record(z.string(), z.unknown()).optional(),
   starterCode: z.string().optional(),
 });
+
+async function verifyCourseOwnership(courseId: string, userId: string, isPlatformAdmin: boolean) {
+  const course = await getCourse(db, courseId);
+  if (!course) return false;
+  return course.createdBy === userId || isPlatformAdmin;
+}
 
 export async function GET(
   _request: NextRequest,
@@ -20,9 +27,13 @@ export async function GET(
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const { topicId } = await params;
-  const topic = await getTopic(db, topicId);
+  const { id: courseId, topicId } = await params;
 
+  if (!await verifyCourseOwnership(courseId, session.user.id, session.user.isPlatformAdmin)) {
+    return NextResponse.json({ error: "Access denied" }, { status: 403 });
+  }
+
+  const topic = await getTopic(db, topicId);
   if (!topic) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
@@ -39,7 +50,12 @@ export async function PATCH(
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const { topicId } = await params;
+  const { id: courseId, topicId } = await params;
+
+  if (!await verifyCourseOwnership(courseId, session.user.id, session.user.isPlatformAdmin)) {
+    return NextResponse.json({ error: "Access denied" }, { status: 403 });
+  }
+
   const body = await request.json();
   const parsed = updateSchema.safeParse(body);
 
@@ -67,9 +83,13 @@ export async function DELETE(
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const { topicId } = await params;
-  const deleted = await deleteTopic(db, topicId);
+  const { id: courseId, topicId } = await params;
 
+  if (!await verifyCourseOwnership(courseId, session.user.id, session.user.isPlatformAdmin)) {
+    return NextResponse.json({ error: "Access denied" }, { status: 403 });
+  }
+
+  const deleted = await deleteTopic(db, topicId);
   if (!deleted) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
