@@ -47,6 +47,14 @@ export async function updateCourse(
   return course || null;
 }
 
+export async function deleteCourse(db: Database, courseId: string) {
+  const [deleted] = await db
+    .delete(courses)
+    .where(eq(courses.id, courseId))
+    .returning();
+  return deleted || null;
+}
+
 export async function cloneCourse(db: Database, courseId: string, newCreatedBy: string) {
   const original = await getCourse(db, courseId);
   if (!original) return null;

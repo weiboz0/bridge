@@ -1,5 +1,5 @@
 import { eq, and } from "drizzle-orm";
-import { classMemberships, users } from "@/lib/db/schema";
+import { classMemberships, classes, users } from "@/lib/db/schema";
 import type { Database } from "@/lib/db";
 
 interface AddClassMemberInput {
@@ -18,7 +18,7 @@ export async function addClassMember(db: Database, input: AddClassMemberInput) {
     })
     .onConflictDoNothing()
     .returning();
-  return member;
+  return member || null;
 }
 
 export async function listClassMembers(db: Database, classId: string) {
@@ -71,9 +71,13 @@ export async function joinClassByCode(
   joinCode: string,
   userId: string
 ) {
-  const { getClassByJoinCode } = await import("@/lib/classes");
-  const cls = await getClassByJoinCode(db, joinCode);
+  const [cls] = await db
+    .select()
+    .from(classes)
+    .where(eq(classes.joinCode, joinCode));
+
   if (!cls) return null;
+  if (cls.status !== "active") return null;
 
   const member = await addClassMember(db, {
     classId: cls.id,

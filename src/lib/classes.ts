@@ -1,5 +1,5 @@
 import { eq } from "drizzle-orm";
-import { classes, classMemberships, newClassrooms, users } from "@/lib/db/schema";
+import { classes, classMemberships, newClassrooms, courses, users } from "@/lib/db/schema";
 import { generateJoinCode } from "@/lib/utils";
 import type { Database } from "@/lib/db";
 
@@ -23,9 +23,15 @@ export async function createClass(db: Database, input: CreateClassInput) {
     })
     .returning();
 
-  // Auto-create classroom (1:1)
+  // Auto-create classroom (1:1) — set editorMode from course language
+  const [course] = await db
+    .select({ language: courses.language })
+    .from(courses)
+    .where(eq(courses.id, input.courseId));
+
   await db.insert(newClassrooms).values({
     classId: cls.id,
+    editorMode: course?.language || "python",
   });
 
   // Add creator as instructor
@@ -46,11 +52,15 @@ export async function getClass(db: Database, classId: string) {
   return cls || null;
 }
 
-export async function listClassesByOrg(db: Database, orgId: string) {
+export async function listClassesByOrg(db: Database, orgId: string, includeArchived = false) {
+  if (includeArchived) {
+    return db.select().from(classes).where(eq(classes.orgId, orgId));
+  }
+  const { and } = await import("drizzle-orm");
   return db
     .select()
     .from(classes)
-    .where(eq(classes.orgId, orgId));
+    .where(and(eq(classes.orgId, orgId), eq(classes.status, "active")));
 }
 
 export async function listClassesByCourse(db: Database, courseId: string) {
