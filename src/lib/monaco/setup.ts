@@ -7,14 +7,10 @@ export function setupMonaco() {
   if (initialized) return;
   initialized = true;
 
-  loader.config({
-    paths: {
-      vs: "https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs",
-    },
-  });
-
   loader.init().then((monaco) => {
     registerPythonCompletions(monaco);
+  }).catch((error) => {
+    console.error("Failed to initialize Monaco editor:", error);
   });
 }
 
