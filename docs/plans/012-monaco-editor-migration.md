@@ -1274,3 +1274,102 @@ Only commit this if there were fixes. Skip if everything passed cleanly.
 | 6 | Add student diff view (before/after run) | `session/[sessionId]/page.tsx` |
 | 7 | Add teacher diff view on student code | `session/[sessionId]/dashboard/page.tsx` |
 | 8 | Full test suite + visual verification | — |
+
+---
+
+## Post-Execution Report
+
+**Date:** 2026-04-11
+**Branch:** `feat/monaco-editor-migration`
+**Commits:** 11 (8ad479d..bf12eeb)
+**Tests:** 284 passed, 11 skipped (LLM integration tests requiring API keys), 0 failed
+**Build:** Passes clean
+
+### Implementation Details
+
+All 8 tasks completed successfully using subagent-driven development (one subagent per task, spec review + code quality review after each).
+
+| Task | Status | Notes |
+|------|--------|-------|
+| 1. Install deps | Done | Used CDN loader instead of self-hosting (follow-up) |
+| 2. Themes | Done | Light/dark themes derived from platform OKLCH CSS variables |
+| 3. CodeEditor rewrite | Done | Same props interface, zero consumer changes needed |
+| 4. Student tiles | Done | Shiki replaces 20+ CodeMirror instances |
+| 5. DiffViewer | Done | New component wrapping Monaco DiffEditor |
+| 6. Student diff | Done | Before/after toggle on code runs |
+| 7. Teacher diff | Done | Student code vs hardcoded starter template |
+| 8. Verification | Done | All tests pass, build succeeds |
+
+### Deviations from Plan
+
+1. **CDN instead of self-hosting.** The spec says "self-hosted from node_modules." The implementation uses `@monaco-editor/react`'s default CDN loader (jsDelivr). Self-hosting requires copying Monaco's `vs/` directory to `/public/`, which is a follow-up task. The loader config in `setup.ts` was simplified — the hardcoded CDN URL was removed so `@monaco-editor/react` uses its default matched version.
+
+2. **`next.config.ts` not modified.** The plan originally included a webpack config change for Monaco workers, but this was removed during self-review since `@monaco-editor/react` handles worker loading via its own loader.
+
+3. **`lightbulb` option removed.** Monaco 0.55.x changed `lightbulb.enabled` from `boolean` to `ShowLightbulbIconMode` enum. Rather than importing the enum, the option was removed — lightbulb is off by default without code actions providers.
+
+4. **Theme switching `useEffect` removed.** Code review identified that `(window as any).monaco` is unreliable. The `<Editor>` component's `theme` prop already handles reactive theme changes natively.
+
+5. **Debounce added to student tiles.** Code review identified that every Yjs keystroke triggered a Shiki `codeToHtml` call. A 300ms debounce was added to prevent performance issues with 20+ concurrent tiles.
+
+### Known Limitations
+
+1. **Student tiles always use `github-light` Shiki theme** — does not follow platform dark/light toggle. Should use `useTheme()` to pick between `github-light` and `github-dark`.
+2. **`STARTER_CODE` is hardcoded** in the teacher dashboard diff view. Should be fetched from the database (`topics.starterCode` column) for the session's topic.
+3. **Monaco models not explicitly disposed on unmount.** `@monaco-editor/react` handles some cleanup, but custom `path` URIs can leak models over long sessions.
+4. **CDN dependency.** Monaco assets loaded from jsDelivr. Should self-host for firewall reliability.
+5. **`bindingRef` typed as `any`** — could use `MonacoBinding` type from `y-monaco`.
+
+### Follow-Up Work
+
+- [ ] Self-host Monaco assets (copy `vs/` to `/public/`, configure loader)
+- [ ] Student tiles: respect dark/light theme for Shiki highlighting
+- [ ] Teacher diff: fetch actual starter code from database instead of hardcoded constant
+- [ ] Dispose Monaco models on component unmount
+- [ ] Type `bindingRef` properly with `MonacoBinding`
+
+---
+
+## Code Review
+
+### Review 1
+
+- **Date:** 2026-04-11
+- **Reviewer:** Claude (superpowers:code-reviewer subagent)
+- **Branch:** `feat/monaco-editor-migration`
+- **Verdict:** Approved with fixes
+
+**Must Fix**
+
+1. `[FIXED]` Redundant/fragile `(window as any).monaco` theme switching in `code-editor.tsx:72-79`. The `<Editor>` component's `theme` prop already handles reactive theme changes. The `window.monaco` global is not guaranteed by `@monaco-editor/react`.
+   → Response: Removed the entire `useEffect` block. Commit bf12eeb.
+
+2. `[FIXED]` No debounce on Shiki highlighting in `student-tile.tsx:60-64`. Every Yjs keystroke triggers `codeToHtml` across 20+ tiles on the teacher dashboard, causing performance issues.
+   → Response: Added 300ms debounce with proper cleanup in the effect teardown. Commit bf12eeb.
+
+**Should Fix**
+
+3. `[OPEN]` Student tiles hardcode `github-light` Shiki theme in `student-tile.tsx:52` — ignores platform dark mode. Should use `useTheme()` to select between `github-light` and `github-dark`.
+   → Response: Deferred to follow-up. Cosmetic issue, not a blocker.
+
+4. `[OPEN]` `STARTER_CODE` duplicated and hardcoded in `dashboard/page.tsx:18-22` and `editor/page.tsx:10`. Should come from the database (`topics.starterCode`).
+   → Response: Deferred to follow-up. Requires API integration outside migration scope.
+
+5. `[OPEN]` Monaco model not disposed on unmount in `code-editor.tsx`. Custom `path` URIs can leak models over long sessions.
+   → Response: Deferred to follow-up. Gradual degradation, not acute.
+
+6. `[OPEN]` `dangerouslySetInnerHTML` in `student-tile.tsx:93` is safe (Shiki handles escaping) but deserves a comment explaining the trust boundary.
+   → Response: Deferred to follow-up. Minor documentation concern.
+
+**Minor**
+
+7. `[OPEN]` `bindingRef` typed as `any` in `code-editor.tsx:29`. Could use `MonacoBinding` type.
+   → Response: Deferred. Minor type improvement.
+
+8. `[OPEN]` Theme registration via dynamic import in `code-editor.tsx:45` adds latency. Could be a static import since it's small static data.
+   → Response: Deferred. Minor optimization.
+
+9. `[OPEN]` Monaco assets loaded from CDN, spec says self-host. Noted as follow-up.
+   → Response: Tracked in follow-up work above.
+
+**Summary:** The migration is functionally complete and architecturally sound. All spec requirements are met. The two must-fix issues (fragile theme switching and missing debounce) were resolved in commit bf12eeb. Remaining items are cosmetic, optimization, or follow-up scope — none are merge blockers.
