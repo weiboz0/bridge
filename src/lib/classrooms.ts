@@ -9,7 +9,6 @@ interface CreateClassroomInput {
   description?: string;
   gradeLevel: "K-5" | "6-8" | "9-12";
   editorMode: "blockly" | "python" | "javascript";
-  schoolId?: string;
 }
 
 export async function createClassroom(db: Database, input: CreateClassroomInput) {

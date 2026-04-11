@@ -30,6 +30,16 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  // Check for duplicate slug
+  const { getOrganizationBySlug } = await import("@/lib/organizations");
+  const existingSlug = await getOrganizationBySlug(db, parsed.data.slug);
+  if (existingSlug) {
+    return NextResponse.json(
+      { error: "Organization with this slug already exists" },
+      { status: 409 }
+    );
+  }
+
   const org = await createOrganization(db, parsed.data);
 
   // Auto-assign creator as org_admin

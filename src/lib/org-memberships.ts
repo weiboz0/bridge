@@ -40,9 +40,21 @@ export async function listOrgMembers(db: Database, orgId: string) {
 }
 
 export async function getUserMemberships(db: Database, userId: string) {
+  const { organizations } = await import("@/lib/db/schema");
   return db
-    .select()
+    .select({
+      id: orgMemberships.id,
+      orgId: orgMemberships.orgId,
+      userId: orgMemberships.userId,
+      role: orgMemberships.role,
+      status: orgMemberships.status,
+      createdAt: orgMemberships.createdAt,
+      orgName: organizations.name,
+      orgSlug: organizations.slug,
+      orgStatus: organizations.status,
+    })
     .from(orgMemberships)
+    .innerJoin(organizations, eq(orgMemberships.orgId, organizations.id))
     .where(eq(orgMemberships.userId, userId));
 }
 

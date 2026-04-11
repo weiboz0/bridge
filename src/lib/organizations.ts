@@ -50,8 +50,16 @@ export async function updateOrgStatus(
   orgId: string,
   status: "pending" | "active" | "suspended",
 ) {
+  // Check existing org type — only set verifiedAt for schools
+  const [existing] = await db
+    .select()
+    .from(organizations)
+    .where(eq(organizations.id, orgId));
+
+  if (!existing) return null;
+
   const updates: Record<string, unknown> = { status, updatedAt: new Date() };
-  if (status === "active") {
+  if (status === "active" && existing.type === "school" && !existing.verifiedAt) {
     updates.verifiedAt = new Date();
   }
 
