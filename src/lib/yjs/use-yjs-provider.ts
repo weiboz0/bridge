@@ -20,9 +20,8 @@ interface UseYjsProviderReturn {
 export function useYjsProvider({
   documentName,
   token,
-  serverUrl = typeof window !== "undefined"
-    ? `ws://${window.location.hostname}:4000`
-    : "ws://127.0.0.1:4000",
+  serverUrl = process.env.NEXT_PUBLIC_HOCUSPOCUS_URL
+    || (typeof window !== "undefined" ? `ws://${window.location.hostname}:4000` : "ws://127.0.0.1:4000"),
 }: UseYjsProviderOptions): UseYjsProviderReturn {
   const [connected, setConnected] = useState(false);
   const providerRef = useRef<HocuspocusProvider | null>(null);

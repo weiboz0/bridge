@@ -37,7 +37,7 @@ export function StudentTile({
     const documentName = `session:${sessionId}:user:${studentId}`;
 
     const provider = new HocuspocusProvider({
-      url: `ws://${window.location.hostname}:4000`,
+      url: process.env.NEXT_PUBLIC_HOCUSPOCUS_URL || `ws://${window.location.hostname}:4000`,
       name: documentName,
       document: yDoc,
       token,
