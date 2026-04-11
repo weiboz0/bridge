@@ -59,6 +59,13 @@ const PROVIDERS: Record<string, ProviderConfig> = {
     apiKeyEnv: "OPENROUTER_API_KEY",
     defaultModel: "anthropic/claude-sonnet-4",
   },
+  gemini: {
+    type: "openai-compatible",
+    name: "Google Gemini",
+    baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+    apiKeyEnv: "GEMINI_API_KEY",
+    defaultModel: "gemini-2.5-flash",
+  },
 };
 
 // Aliases for convenience (same as magicburg)
@@ -76,6 +83,8 @@ const ALIASES: Record<string, string> = {
   nvidia: "nvidia",
   nim: "nvidia",
   openrouter: "openrouter",
+  gemini: "gemini",
+  google: "gemini",
 };
 
 export function resolveProvider(backend: string): ProviderConfig {
