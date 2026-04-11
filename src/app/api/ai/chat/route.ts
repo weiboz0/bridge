@@ -1,7 +1,12 @@
 import { NextRequest } from "next/server";
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { getAnthropicClient } from "@/lib/ai/client";
+import {
+  getAnthropicClient,
+  getOpenAIClient,
+  isAnthropicBackend,
+  getModel,
+} from "@/lib/ai/client";
 import { getSystemPrompt } from "@/lib/ai/system-prompts";
 import { filterResponse } from "@/lib/ai/guardrails";
 import {
@@ -25,7 +30,6 @@ export async function POST(request: NextRequest) {
     return new Response("Missing sessionId or message", { status: 400 });
   }
 
-  // Get session and classroom for grade level
   const liveSession = await getSession(db, sessionId);
   if (!liveSession || liveSession.status !== "active") {
     return new Response("Session not found or ended", { status: 404 });
@@ -36,7 +40,6 @@ export async function POST(request: NextRequest) {
     return new Response("Classroom not found", { status: 404 });
   }
 
-  // Get or create AI interaction
   let interaction = await getActiveInteraction(db, session.user.id, sessionId);
   if (!interaction) {
     interaction = await createInteraction(db, {
@@ -46,27 +49,23 @@ export async function POST(request: NextRequest) {
     });
   }
 
-  // Append user message
   await appendMessage(db, interaction.id, {
     role: "user",
     content: message,
     timestamp: new Date().toISOString(),
   });
 
-  // Build messages for Claude
   const history = ((interaction.messages as any[]) || []).map((m: any) => ({
     role: m.role as "user" | "assistant",
     content: m.content,
   }));
   history.push({ role: "user" as const, content: message });
 
-  // Add code context if provided
   const systemPrompt =
     getSystemPrompt(classroom.gradeLevel as "K-5" | "6-8" | "9-12") +
     (code ? `\n\nThe student's current code:\n\`\`\`python\n${code}\n\`\`\`` : "");
 
-  // Stream response
-  const client = getAnthropicClient();
+  const model = getModel();
 
   const stream = new ReadableStream({
     async start(controller) {
@@ -74,31 +73,56 @@ export async function POST(request: NextRequest) {
       let fullResponse = "";
 
       try {
-        const response = await client.messages.create({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 500,
-          system: systemPrompt,
-          messages: history,
-          stream: true,
-        });
+        if (isAnthropicBackend()) {
+          // --- Anthropic SDK ---
+          const client = getAnthropicClient();
+          const response = await client.messages.create({
+            model,
+            max_tokens: 500,
+            system: systemPrompt,
+            messages: history,
+            stream: true,
+          });
 
-        for await (const event of response) {
-          if (
-            event.type === "content_block_delta" &&
-            event.delta.type === "text_delta"
-          ) {
-            const text = event.delta.text;
-            fullResponse += text;
-            controller.enqueue(
-              encoder.encode(`data: ${JSON.stringify({ text })}\n\n`)
-            );
+          for await (const event of response) {
+            if (
+              event.type === "content_block_delta" &&
+              event.delta.type === "text_delta"
+            ) {
+              const text = event.delta.text;
+              fullResponse += text;
+              controller.enqueue(
+                encoder.encode(`data: ${JSON.stringify({ text })}\n\n`)
+              );
+            }
+          }
+        } else {
+          // --- OpenAI-compatible SDK ---
+          const client = getOpenAIClient();
+          const response = await client.chat.completions.create({
+            model,
+            max_tokens: 500,
+            messages: [
+              { role: "system", content: systemPrompt },
+              ...history,
+            ],
+            stream: true,
+          });
+
+          for await (const chunk of response) {
+            const text = chunk.choices[0]?.delta?.content;
+            if (text) {
+              fullResponse += text;
+              controller.enqueue(
+                encoder.encode(`data: ${JSON.stringify({ text })}\n\n`)
+              );
+            }
           }
         }
 
         // Apply guardrails to full response
         const filtered = filterResponse(fullResponse);
         if (filtered !== fullResponse) {
-          // Response was filtered — send replacement
           controller.enqueue(
             encoder.encode(
               `data: ${JSON.stringify({ replace: filtered })}\n\n`
