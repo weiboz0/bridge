@@ -9,7 +9,6 @@ const registerSchema = z.object({
   name: z.string().min(1).max(255),
   email: z.string().email(),
   password: z.string().min(8).max(128),
-  role: z.enum(["teacher", "student"]),
 });
 
 export async function POST(request: NextRequest) {
@@ -23,7 +22,7 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const { name, email, password, role } = parsed.data;
+  const { name, email, password } = parsed.data;
 
   const [existing] = await db
     .select()
@@ -44,14 +43,12 @@ export async function POST(request: NextRequest) {
     .values({
       name,
       email,
-      role,
       passwordHash,
     })
     .returning({
       id: users.id,
       name: users.name,
       email: users.email,
-      role: users.role,
     });
 
   await db.insert(authProviders).values({

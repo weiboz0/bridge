@@ -30,7 +30,7 @@ export async function POST(request: NextRequest) {
   const annotation = await createAnnotation(db, {
     ...parsed.data,
     authorId: session.user.id,
-    authorType: session.user.role === "teacher" ? "teacher" : "ai",
+    authorType: "teacher", /* TODO: determine from org/class membership */
   });
 
   return NextResponse.json(annotation, { status: 201 });

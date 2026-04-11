@@ -23,7 +23,7 @@ export default function StudentSessionPage() {
 
   const userId = session?.user?.id || "";
   const documentName = `session:${params.sessionId}:user:${userId}`;
-  const token = `${userId}:${session?.user?.role || "student"}`;
+  const token = `${userId}:user`;
 
   const { yText, provider, connected } = useYjsProvider({
     documentName,

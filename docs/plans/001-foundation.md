@@ -8,7 +8,7 @@
 
 **Tech Stack:** Bun, Next.js 15 (App Router), TypeScript, Drizzle ORM, PostgreSQL, Redis, Auth.js v5, Vitest, shadcn/ui, Tailwind CSS, Zod
 
-**Spec:** `docs/superpowers/specs/001-bridge-platform-design.md`
+**Spec:** `docs/specs/001-bridge-platform-design.md`
 
 **Subsequent plans:**
 - Plan 2: Live Editor (CodeMirror 6 + Pyodide)

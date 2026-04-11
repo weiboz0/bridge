@@ -22,28 +22,9 @@
 - Before merging any PR, check CI status with `gh pr checks <number>`. If any checks fail, fix the errors and push before merging. Never merge a PR with failing checks.
 - Do not commit every small change individually. Batch related small fixes into a single meaningful commit. Only commit when a logical unit of work is complete.
 
-## Plans
-
-For substantial code changes — new features, re-architecting, multi-file refactors, new integrations, etc. — always enter plan mode first and write a detailed plan before any implementation. Get user approval on the plan before proceeding.
-
-Before writing a new plan, review existing plans to ensure consistency. Avoid introducing duplicate code — reuse existing implementations and keep logic in a single source of truth.
-
 ## Development Workflow
 
-Follow `docs/development-workflow.md` exactly for every plan (Steps 1 through 6). Do not skip steps or batch them. Key points:
-- **Design before plan** — explore the problem, brainstorm approaches, get alignment
-- **Plan before code** — write and commit plan file before any implementation
-- **Phase by phase** — implement, test, review, document, commit each phase separately
-- **Verify after all phases** — full test suite, cross-phase consistency check
-- **Review** — code review findings go in plan file's `## Code Review` section
-- **Ship** — update plan with post-execution report, update TODO.md, push and create PR
-
-## Code Review
-
-Follow `docs/code-review.md` for the review process. Key points:
-- Reviews go in the plan file's `## Code Review` section
-- Reviewers: append findings with `[OPEN]` status and file:line references
-- Authors: respond inline with `→ Response:` and `[FIXED]`/`[WONTFIX]`
+Follow `docs/development-workflow.md` for all substantial work. Follow `docs/code-review.md` for the review process. Design specs go in `docs/specs/`, implementation plans in `docs/plans/`, both with numbered prefixes (e.g., `001-feature-name.md`).
 
 ## Multi-Agent Coordination
 

@@ -45,7 +45,6 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           id: user.id,
           name: user.name,
           email: user.email,
-          role: user.role,
         };
       },
     }),
@@ -63,12 +62,12 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         if (existing) {
           userId = existing.id;
         } else {
+          // New user — no role assigned, just create account
           const [newUser] = await db
             .insert(users)
             .values({
               name: user.name || "Unknown",
               email: user.email,
-              role: "teacher",
               avatarUrl: user.image,
             })
             .returning();
@@ -103,7 +102,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           .where(eq(users.email, token.email!));
         if (dbUser) {
           token.id = dbUser.id;
-          token.role = dbUser.role;
+          token.isPlatformAdmin = dbUser.isPlatformAdmin;
         }
       }
       return token;
@@ -111,7 +110,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     async session({ session, token }) {
       if (token) {
         session.user.id = token.id as string;
-        session.user.role = token.role as string;
+        session.user.isPlatformAdmin = token.isPlatformAdmin as boolean;
       }
       return session;
     },

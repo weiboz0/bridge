@@ -8,7 +8,7 @@
 
 **Tech Stack:** Drizzle ORM (pgTable, pgEnum), Next.js API routes, Zod v4 validation, Auth.js v5 (JWT callbacks), Vitest, bcryptjs
 
-**Spec:** `docs/superpowers/specs/002-platform-redesign.md` (Sub-project 1)
+**Spec:** `docs/specs/002-platform-redesign.md` (Sub-project 1)
 
 **Depends on:** Plans 001-005 (MVP complete)
 
@@ -3422,3 +3422,65 @@ Expected: New test count should include ~50+ new tests across:
 | Existing routes | Removed `session.user.role` checks from classroom routes; removed `users.role` from queries |
 | Test helpers | Removed `role` from `createTestUser`; added `createTestOrg`, `createTestOrgMembership`; updated auth mock |
 | Migration | Script to migrate `schools` → `organizations` and `users.role` → `orgMemberships` |
+
+---
+
+## Code Review
+
+### Review 1
+
+- **Date**: 2026-04-10
+- **Reviewer**: Claude (superpowers:code-reviewer)
+- **PR**: #6 — feat: organization & role system (Plan 006)
+- **Verdict**: Approved with changes
+
+**Must Fix**
+
+1. `[FIXED]` `updateOrgStatus` unconditionally sets `verifiedAt` on any activation, not just schools. `src/lib/organizations.ts:53-55`
+   → Response: Fixed to check `existing.type === "school" && !existing.verifiedAt` before setting. Commit 1915623.
+
+2. `[FIXED]` `POST /api/orgs` does not handle duplicate slug errors — returns 500 instead of 409. `src/app/api/orgs/route.ts:33`
+   → Response: Added `getOrganizationBySlug` check before insert, returns 409. Commit 1915623.
+
+3. `[FIXED]` `PATCH /api/orgs/[id]` is missing — org admins cannot update their org profile. `src/app/api/orgs/[id]/route.ts`
+   → Response: Added PATCH handler with Zod validation for name, contactEmail, contactName, domain. Commit 1915623.
+
+4. `[FIXED]` Middleware not updated to include `/api/orgs/:path*` and `/api/admin/:path*`. `src/middleware.ts`
+   → Response: Added both matchers. Commit 1915623.
+
+**Should Fix**
+
+5. `[WONTFIX]` `listOrganizations` takes string instead of filter object.
+   → Response: Acceptable for current scope. Will refactor to filter object when more filter dimensions are needed.
+
+6. `[WONTFIX]` `addOrgMember` silently returns `undefined` on conflict instead of throwing.
+   → Response: Intentional — idempotent insert matches the `joinClassroom` pattern elsewhere in the codebase. Callers can check for `undefined` if needed.
+
+7. `[FIXED]` `GET /api/orgs` returns raw memberships without org details. `src/app/api/orgs/route.ts:52`
+   → Response: Enriched `getUserMemberships` with org name/slug/status via innerJoin. Commit 1915623.
+
+8. `[WONTFIX]` Registration response does not return `isPlatformAdmin`.
+   → Response: Clients don't need this at registration time — it comes from the session after login.
+
+9. `[WONTFIX]` `PATCH /api/orgs/[id]/members/[memberId]` lacks Zod validation.
+   → Response: Simple status enum check is sufficient. Will standardize to Zod when role update is added through this endpoint.
+
+10. `[FIXED]` Security: member operations don't verify membership belongs to the org. `src/app/api/orgs/[id]/members/[memberId]/route.ts`
+    → Response: Added `getOrgMembership` check verifying `membership.orgId === orgId` before update/delete. Commit 1915623.
+
+**Nice to Have**
+
+11. `[FIXED]` `classrooms.ts` still has `schoolId` in `CreateClassroomInput`. `src/lib/classrooms.ts:12`
+    → Response: Removed. Commit 1915623.
+
+12. `[WONTFIX]` Unit test coverage gaps for `organizations.ts` — 7 tests vs 13 planned.
+    → Response: Core paths are covered. Missing edge cases (optional domain, non-existent slug) are low risk.
+
+13. `[WONTFIX]` Unit test coverage gaps for `org-memberships.ts` — missing role filter test.
+    → Response: Filter parameter doesn't exist in implementation. Will add when needed.
+
+14. `[WONTFIX]` Missing `beforeEach` with explicit `cleanupDatabase()` in some test files.
+    → Response: Handled by global setup in `tests/setup.ts` which runs `cleanupDatabase()` in `afterEach`.
+
+15. `[WONTFIX]` `getUserRoleInOrg` should also check org status.
+    → Response: Valid suggestion. Deferred — will address when org suspension enforcement is needed in Plan 007.

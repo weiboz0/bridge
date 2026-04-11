@@ -33,7 +33,7 @@ export default async function DashboardLayout({
           </div>
           <div className="flex items-center gap-4">
             <span className="text-sm text-muted-foreground">
-              {session.user.name} ({session.user.role})
+              {session.user.name}
             </span>
             <SignOutButton />
           </div>

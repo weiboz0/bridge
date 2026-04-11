@@ -20,14 +20,12 @@ export default async function DashboardPage() {
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Dashboard</h1>
         <div className="flex gap-2">
-          {session!.user.role === "teacher" && (
-            <Link
-              href="/dashboard/classrooms/new"
-              className={buttonVariants()}
-            >
-              Create Classroom
-            </Link>
-          )}
+          <Link
+            href="/dashboard/classrooms/new"
+            className={buttonVariants()}
+          >
+            Create Classroom
+          </Link>
           <Link
             href="/dashboard/classrooms/join"
             className={buttonVariants({ variant: "outline" })}
@@ -42,9 +40,7 @@ export default async function DashboardPage() {
           <CardContent className="py-8 text-center text-muted-foreground">
             <p>No classrooms yet.</p>
             <p className="text-sm mt-2">
-              {session!.user.role === "teacher"
-                ? "Create your first classroom to get started."
-                : "Ask your teacher for a join code."}
+              Create a classroom or ask your teacher for a join code.
             </p>
           </CardContent>
         </Card>

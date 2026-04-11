@@ -15,36 +15,46 @@ export async function cleanupDatabase() {
   await testDb.delete(schema.liveSessions);
   await testDb.delete(schema.classroomMembers);
   await testDb.delete(schema.classrooms);
+  await testDb.delete(schema.orgMemberships);
   await testDb.delete(schema.authProviders);
   await testDb.delete(schema.users);
-  await testDb.delete(schema.schools);
+  await testDb.delete(schema.organizations);
 }
 
-export async function createTestSession(
-  classroomId: string,
-  teacherId: string,
-  overrides: Partial<typeof schema.liveSessions.$inferInsert> = {}
+export async function createTestOrg(
+  overrides: Partial<typeof schema.organizations.$inferInsert> = {}
 ) {
-  const [session] = await testDb
-    .insert(schema.liveSessions)
+  const [org] = await testDb
+    .insert(schema.organizations)
     .values({
-      classroomId,
-      teacherId,
+      name: "Test Org",
+      slug: `test-org-${nanoid(6)}`,
+      type: "school",
+      status: "active",
+      contactEmail: "admin@test.edu",
+      contactName: "Admin",
       ...overrides,
     })
     .returning();
-  return session;
+  return org;
 }
 
-export async function createTestSchool(overrides: Partial<typeof schema.schools.$inferInsert> = {}) {
-  const [school] = await testDb
-    .insert(schema.schools)
+export async function createTestOrgMembership(
+  orgId: string,
+  userId: string,
+  overrides: Partial<typeof schema.orgMemberships.$inferInsert> = {}
+) {
+  const [membership] = await testDb
+    .insert(schema.orgMemberships)
     .values({
-      name: "Test School",
+      orgId,
+      userId,
+      role: "teacher",
+      status: "active",
       ...overrides,
     })
     .returning();
-  return school;
+  return membership;
 }
 
 export async function createTestUser(
@@ -55,7 +65,6 @@ export async function createTestUser(
     .values({
       name: "Test User",
       email: `test-${nanoid(6)}@example.com`,
-      role: "teacher",
       ...overrides,
     })
     .returning();
@@ -78,6 +87,22 @@ export async function createTestClassroom(
     })
     .returning();
   return classroom;
+}
+
+export async function createTestSession(
+  classroomId: string,
+  teacherId: string,
+  overrides: Partial<typeof schema.liveSessions.$inferInsert> = {}
+) {
+  const [session] = await testDb
+    .insert(schema.liveSessions)
+    .values({
+      classroomId,
+      teacherId,
+      ...overrides,
+    })
+    .returning();
+  return session;
 }
 
 export async function closeTestDb() {

@@ -12,13 +12,13 @@ describe("Classroom API", () => {
   let student: Awaited<ReturnType<typeof createTestUser>>;
 
   beforeEach(async () => {
-    teacher = await createTestUser({ name: "Teacher", role: "teacher", email: "teacher@test.edu" });
-    student = await createTestUser({ name: "Student", role: "student", email: "student@test.edu" });
+    teacher = await createTestUser({ name: "Teacher", email: "teacher@test.edu" });
+    student = await createTestUser({ name: "Student", email: "student@test.edu" });
   });
 
   describe("POST /api/classrooms", () => {
     it("creates a classroom as teacher", async () => {
-      setMockUser({ id: teacher.id, name: teacher.name, email: teacher.email, role: "teacher" });
+      setMockUser({ id: teacher.id, name: teacher.name, email: teacher.email });
 
       const req = createRequest("/api/classrooms", {
         method: "POST",
@@ -36,21 +36,7 @@ describe("Classroom API", () => {
       expect((body as any).joinCode).toHaveLength(8);
     });
 
-    it("rejects creation by student", async () => {
-      setMockUser({ id: student.id, name: student.name, email: student.email, role: "student" });
-
-      const req = createRequest("/api/classrooms", {
-        method: "POST",
-        body: {
-          name: "Should Fail",
-          gradeLevel: "6-8",
-          editorMode: "python",
-        },
-      });
-
-      const { status } = await parseResponse(await POST(req));
-      expect(status).toBe(403);
-    });
+    // TODO: role-based rejection tests will be re-added with OrgMembership-based auth
 
     it("rejects unauthenticated request", async () => {
       setMockUser(null);
@@ -69,7 +55,7 @@ describe("Classroom API", () => {
     });
 
     it("rejects invalid grade level", async () => {
-      setMockUser({ id: teacher.id, name: teacher.name, email: teacher.email, role: "teacher" });
+      setMockUser({ id: teacher.id, name: teacher.name, email: teacher.email });
 
       const req = createRequest("/api/classrooms", {
         method: "POST",
@@ -87,7 +73,7 @@ describe("Classroom API", () => {
 
   describe("GET /api/classrooms", () => {
     it("lists classrooms for teacher", async () => {
-      setMockUser({ id: teacher.id, name: teacher.name, email: teacher.email, role: "teacher" });
+      setMockUser({ id: teacher.id, name: teacher.name, email: teacher.email });
       await createTestClassroom(teacher.id, { name: "Class A" });
       await createTestClassroom(teacher.id, { name: "Class B" });
 
@@ -98,7 +84,7 @@ describe("Classroom API", () => {
     });
 
     it("lists classrooms where student is member", async () => {
-      setMockUser({ id: student.id, name: student.name, email: student.email, role: "student" });
+      setMockUser({ id: student.id, name: student.name, email: student.email });
       const classroom = await createTestClassroom(teacher.id, { name: "Joined Class" });
       await testDb.insert(classroomMembers).values({
         classroomId: classroom.id,
@@ -113,7 +99,7 @@ describe("Classroom API", () => {
     });
 
     it("returns empty for student with no classrooms", async () => {
-      setMockUser({ id: student.id, name: student.name, email: student.email, role: "student" });
+      setMockUser({ id: student.id, name: student.name, email: student.email });
 
       const { status, body } = await parseResponse<any[]>(await GET());
       expect(status).toBe(200);
@@ -123,7 +109,7 @@ describe("Classroom API", () => {
 
   describe("GET /api/classrooms/[id]", () => {
     it("returns classroom by ID", async () => {
-      setMockUser({ id: teacher.id, name: teacher.name, email: teacher.email, role: "teacher" });
+      setMockUser({ id: teacher.id, name: teacher.name, email: teacher.email });
       const classroom = await createTestClassroom(teacher.id, { name: "Find Me" });
 
       const res = await GET_CLASSROOM(
@@ -137,7 +123,7 @@ describe("Classroom API", () => {
     });
 
     it("returns 404 for non-existent classroom", async () => {
-      setMockUser({ id: teacher.id, name: teacher.name, email: teacher.email, role: "teacher" });
+      setMockUser({ id: teacher.id, name: teacher.name, email: teacher.email });
 
       const res = await GET_CLASSROOM(
         createRequest("/api/classrooms/00000000-0000-0000-0000-000000000000"),
@@ -151,7 +137,7 @@ describe("Classroom API", () => {
 
   describe("POST /api/classrooms/join", () => {
     it("joins a classroom by code", async () => {
-      setMockUser({ id: student.id, name: student.name, email: student.email, role: "student" });
+      setMockUser({ id: student.id, name: student.name, email: student.email });
       const classroom = await createTestClassroom(teacher.id);
 
       const req = createRequest("/api/classrooms/join", {
@@ -165,7 +151,7 @@ describe("Classroom API", () => {
     });
 
     it("returns 404 for invalid code", async () => {
-      setMockUser({ id: student.id, name: student.name, email: student.email, role: "student" });
+      setMockUser({ id: student.id, name: student.name, email: student.email });
 
       const req = createRequest("/api/classrooms/join", {
         method: "POST",
@@ -177,7 +163,7 @@ describe("Classroom API", () => {
     });
 
     it("rejects malformed code", async () => {
-      setMockUser({ id: student.id, name: student.name, email: student.email, role: "student" });
+      setMockUser({ id: student.id, name: student.name, email: student.email });
 
       const req = createRequest("/api/classrooms/join", {
         method: "POST",
@@ -191,7 +177,7 @@ describe("Classroom API", () => {
 
   describe("GET /api/classrooms/[id]/members", () => {
     it("lists classroom members", async () => {
-      setMockUser({ id: teacher.id, name: teacher.name, email: teacher.email, role: "teacher" });
+      setMockUser({ id: teacher.id, name: teacher.name, email: teacher.email });
       const classroom = await createTestClassroom(teacher.id);
       await testDb.insert(classroomMembers).values({
         classroomId: classroom.id,

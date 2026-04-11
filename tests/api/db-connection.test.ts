@@ -1,19 +1,19 @@
 import { describe, it, expect } from "vitest";
-import { testDb, createTestSchool, createTestUser } from "../helpers";
-import { users, schools } from "@/lib/db/schema";
+import { testDb, createTestUser, createTestOrg } from "../helpers";
+import { users, organizations } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 
 describe("database connection", () => {
-  it("can insert and query a school", async () => {
-    const school = await createTestSchool({ name: "Bridge Academy" });
+  it("can insert and query an organization", async () => {
+    const org = await createTestOrg({ name: "Bridge Academy" });
 
-    expect(school.id).toBeDefined();
-    expect(school.name).toBe("Bridge Academy");
+    expect(org.id).toBeDefined();
+    expect(org.name).toBe("Bridge Academy");
 
     const results = await testDb
       .select()
-      .from(schools)
-      .where(eq(schools.id, school.id));
+      .from(organizations)
+      .where(eq(organizations.id, org.id));
 
     expect(results).toHaveLength(1);
     expect(results[0].name).toBe("Bridge Academy");
@@ -23,11 +23,10 @@ describe("database connection", () => {
     const user = await createTestUser({
       name: "Alice",
       email: "alice@school.edu",
-      role: "student",
     });
 
     expect(user.id).toBeDefined();
-    expect(user.role).toBe("student");
+    expect(user.isPlatformAdmin).toBe(false);
 
     const results = await testDb
       .select()

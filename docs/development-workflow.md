@@ -20,7 +20,7 @@ Explore the problem space before committing to an approach.
 **Output:** One of the following, depending on complexity:
 - **Verbal alignment** — for simple, well-defined tasks. Proceed directly to Plan.
 - **Straight to plan** — when brainstorming produces a concrete design (components, file lists, phases, testing strategy). No spec needed.
-- **Design spec** in `docs/superpowers/specs/` — only for large, novel, or cross-cutting designs that will be referenced by multiple plans or need a standalone reference document.
+- **Design spec** in `docs/specs/` — only for large, novel, or cross-cutting designs that will be referenced by multiple plans or need a standalone reference document. Use numbered prefixes (e.g., `001-feature-name.md`).
 
 **Skip when:** The task is well-defined with an obvious approach (e.g., "add field X to endpoint Y").
 
@@ -35,12 +35,12 @@ Explore the problem space before committing to an approach.
 Write a concrete execution plan with phases, files, tests, and verification steps.
 
 1. Read `docs/architecture/decisions.md`. Ensure the plan respects all existing rules.
-2. Read existing plans in `plan/` for reusable patterns and established conventions.
+2. Read existing plans in `docs/plans/` for reusable patterns and established conventions.
 3. Read `TODO.md` for outstanding items relevant to this work.
 4. Write a detailed plan with: phases, file lists, testing plan per phase (files, functions, expected coverage), and verification steps.
 5. Self-review the plan: check for inconsistencies, missing files, stale references, blast radius, naming conflicts, edge cases.
 6. Get user approval.
-7. Save to `plan/` with the next sequential number (e.g., `plan/102-feature-name.md`). Reference the design spec if one exists.
+7. Save to `docs/plans/` with a numbered prefix (e.g., `docs/plans/006-feature-name.md`). Reference the design spec if one exists.
 8. **Commit the plan file before any implementation code.**
 
 **Output:** Committed plan file in `plan/`.

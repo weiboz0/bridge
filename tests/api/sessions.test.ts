@@ -17,8 +17,8 @@ describe("session operations", () => {
   let classroom: Awaited<ReturnType<typeof createTestClassroom>>;
 
   beforeEach(async () => {
-    teacher = await createTestUser({ role: "teacher", email: "teacher@test.edu" });
-    student = await createTestUser({ role: "student", email: "student@test.edu" });
+    teacher = await createTestUser({ email: "teacher@test.edu" });
+    student = await createTestUser({ email: "student@test.edu" });
     classroom = await createTestClassroom(teacher.id);
   });
 

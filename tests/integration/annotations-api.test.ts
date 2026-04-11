@@ -9,12 +9,12 @@ describe("Annotations API", () => {
   let teacher: Awaited<ReturnType<typeof createTestUser>>;
 
   beforeEach(async () => {
-    teacher = await createTestUser({ name: "Teacher", role: "teacher", email: "teacher@test.edu" });
+    teacher = await createTestUser({ name: "Teacher", email: "teacher@test.edu" });
   });
 
   describe("POST /api/annotations", () => {
     it("creates an annotation", async () => {
-      setMockUser({ id: teacher.id, name: teacher.name, email: teacher.email, role: "teacher" });
+      setMockUser({ id: teacher.id, name: teacher.name, email: teacher.email });
 
       const req = createRequest("/api/annotations", {
         method: "POST",
@@ -52,7 +52,7 @@ describe("Annotations API", () => {
     });
 
     it("rejects missing content", async () => {
-      setMockUser({ id: teacher.id, name: teacher.name, email: teacher.email, role: "teacher" });
+      setMockUser({ id: teacher.id, name: teacher.name, email: teacher.email });
 
       const req = createRequest("/api/annotations", {
         method: "POST",
@@ -70,7 +70,7 @@ describe("Annotations API", () => {
 
   describe("GET /api/annotations", () => {
     it("lists annotations by document", async () => {
-      setMockUser({ id: teacher.id, name: teacher.name, email: teacher.email, role: "teacher" });
+      setMockUser({ id: teacher.id, name: teacher.name, email: teacher.email });
       const docId = "session:abc:user:xyz";
 
       await createAnnotation(testDb, {
@@ -100,7 +100,7 @@ describe("Annotations API", () => {
     });
 
     it("requires documentId param", async () => {
-      setMockUser({ id: teacher.id, name: teacher.name, email: teacher.email, role: "teacher" });
+      setMockUser({ id: teacher.id, name: teacher.name, email: teacher.email });
 
       const req = createRequest("/api/annotations");
       const { status } = await parseResponse(await LIST(req));
@@ -110,7 +110,7 @@ describe("Annotations API", () => {
 
   describe("DELETE /api/annotations/[id]", () => {
     it("deletes an annotation", async () => {
-      setMockUser({ id: teacher.id, name: teacher.name, email: teacher.email, role: "teacher" });
+      setMockUser({ id: teacher.id, name: teacher.name, email: teacher.email });
 
       const annotation = await createAnnotation(testDb, {
         documentId: "session:abc:user:xyz",
@@ -131,7 +131,7 @@ describe("Annotations API", () => {
     });
 
     it("returns 404 for non-existent annotation", async () => {
-      setMockUser({ id: teacher.id, name: teacher.name, email: teacher.email, role: "teacher" });
+      setMockUser({ id: teacher.id, name: teacher.name, email: teacher.email });
 
       const res = await DELETE(
         createRequest("/api/annotations/00000000-0000-0000-0000-000000000000", { method: "DELETE" }),
@@ -145,7 +145,7 @@ describe("Annotations API", () => {
 
   describe("PATCH /api/annotations/[id] (resolve)", () => {
     it("resolves an annotation", async () => {
-      setMockUser({ id: teacher.id, name: teacher.name, email: teacher.email, role: "teacher" });
+      setMockUser({ id: teacher.id, name: teacher.name, email: teacher.email });
 
       const annotation = await createAnnotation(testDb, {
         documentId: "session:abc:user:xyz",

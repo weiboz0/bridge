@@ -8,7 +8,7 @@
 
 **Tech Stack:** CodeMirror 6, @codemirror/lang-python, Pyodide 0.27+, Web Workers, React
 
-**Spec:** `docs/superpowers/specs/001-bridge-platform-design.md` (Code Execution section)
+**Spec:** `docs/specs/001-bridge-platform-design.md` (Code Execution section)
 
 **Depends on:** Plan 1 (Foundation) — classroom pages, auth, layout
 

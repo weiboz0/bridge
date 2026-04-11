@@ -8,8 +8,12 @@ import {
   pgEnum,
   uniqueIndex,
   index,
+  boolean,
 } from "drizzle-orm/pg-core";
 
+// --- Enums ---
+
+// Kept temporarily for migration compatibility — no table references it
 export const userRoleEnum = pgEnum("user_role", [
   "admin",
   "teacher",
@@ -46,15 +50,55 @@ export const annotationAuthorTypeEnum = pgEnum("annotation_author_type", [
   "ai",
 ]);
 
+export const orgTypeEnum = pgEnum("org_type", [
+  "school",
+  "tutoring_center",
+  "bootcamp",
+  "other",
+]);
+
+export const orgStatusEnum = pgEnum("org_status", [
+  "pending",
+  "active",
+  "suspended",
+]);
+
+export const orgMemberRoleEnum = pgEnum("org_member_role", [
+  "org_admin",
+  "teacher",
+  "student",
+  "parent",
+]);
+
+export const orgMemberStatusEnum = pgEnum("org_member_status", [
+  "pending",
+  "active",
+  "suspended",
+]);
+
 // --- Tables ---
 
-export const schools = pgTable("schools", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  name: varchar("name", { length: 255 }).notNull(),
-  settings: jsonb("settings").default({}),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().notNull(),
-});
+export const organizations = pgTable(
+  "organizations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    name: varchar("name", { length: 255 }).notNull(),
+    slug: varchar("slug", { length: 255 }).notNull(),
+    type: orgTypeEnum("type").notNull(),
+    status: orgStatusEnum("status").notNull().default("pending"),
+    contactEmail: varchar("contact_email", { length: 255 }).notNull(),
+    contactName: varchar("contact_name", { length: 255 }).notNull(),
+    domain: varchar("domain", { length: 255 }),
+    settings: jsonb("settings").default({}),
+    verifiedAt: timestamp("verified_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("organizations_slug_idx").on(table.slug),
+    index("organizations_status_idx").on(table.status),
+  ]
+);
 
 export const users = pgTable(
   "users",
@@ -62,14 +106,39 @@ export const users = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     name: varchar("name", { length: 255 }).notNull(),
     email: varchar("email", { length: 255 }).notNull(),
-    role: userRoleEnum("role").notNull().default("student"),
     avatarUrl: text("avatar_url"),
     passwordHash: text("password_hash"),
-    schoolId: uuid("school_id").references(() => schools.id),
+    isPlatformAdmin: boolean("is_platform_admin").notNull().default(false),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
   },
   (table) => [uniqueIndex("users_email_idx").on(table.email)]
+);
+
+export const orgMemberships = pgTable(
+  "org_memberships",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orgId: uuid("org_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    role: orgMemberRoleEnum("role").notNull(),
+    status: orgMemberStatusEnum("status").notNull().default("pending"),
+    invitedBy: uuid("invited_by").references(() => users.id),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("org_memberships_org_idx").on(table.orgId),
+    index("org_memberships_user_idx").on(table.userId),
+    uniqueIndex("org_memberships_org_user_role_idx").on(
+      table.orgId,
+      table.userId,
+      table.role
+    ),
+  ]
 );
 
 export const authProviders = pgTable(
@@ -95,7 +164,6 @@ export const classrooms = pgTable(
   "classrooms",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    schoolId: uuid("school_id").references(() => schools.id),
     teacherId: uuid("teacher_id")
       .notNull()
       .references(() => users.id),

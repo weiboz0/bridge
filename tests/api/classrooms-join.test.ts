@@ -12,8 +12,8 @@ describe("join classroom by code", () => {
   let student: Awaited<ReturnType<typeof createTestUser>>;
 
   beforeEach(async () => {
-    teacher = await createTestUser({ role: "teacher", email: "teacher@school.edu" });
-    student = await createTestUser({ role: "student", email: "student@school.edu" });
+    teacher = await createTestUser({ email: "teacher@school.edu" });
+    student = await createTestUser({ email: "student@school.edu" });
   });
 
   it("finds classroom by join code", async () => {

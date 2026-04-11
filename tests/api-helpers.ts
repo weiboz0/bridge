@@ -11,7 +11,7 @@ interface MockUser {
   id: string;
   name: string;
   email: string;
-  role: string;
+  isPlatformAdmin?: boolean;
 }
 
 let mockUser: MockUser | null = null;
@@ -33,7 +33,7 @@ vi.mock("@/lib/auth", () => ({
         id: mockUser.id,
         name: mockUser.name,
         email: mockUser.email,
-        role: mockUser.role,
+        isPlatformAdmin: mockUser.isPlatformAdmin || false,
       },
     };
   }),
@@ -76,7 +76,7 @@ export function createRequest(
     }
   }
 
-  const init: RequestInit = { method };
+  const init: any = { method };
   if (body) {
     init.body = JSON.stringify(body);
     init.headers = { "Content-Type": "application/json" };
