@@ -13,6 +13,13 @@ import { AnnotationList } from "@/components/annotations/annotation-list";
 import { BroadcastControls } from "@/components/session/broadcast-controls";
 import { useYjsProvider } from "@/lib/yjs/use-yjs-provider";
 import { Button } from "@/components/ui/button";
+import { DiffViewer } from "@/components/editor/diff-viewer";
+
+const STARTER_CODE = `# Welcome to Bridge!
+# Write your Python code here and click Run.
+
+print("Hello, world!")
+`;
 
 interface Participant {
   studentId: string;
@@ -29,6 +36,7 @@ export default function TeacherDashboardPage() {
   const [ending, setEnding] = useState(false);
   const [annotations, setAnnotations] = useState<any[]>([]);
   const [aiInteractions, setAiInteractions] = useState<any[]>([]);
+  const [showDiff, setShowDiff] = useState(false);
 
   const userId = session?.user?.id || "";
   const token = `${userId}:teacher`;
@@ -116,6 +124,10 @@ export default function TeacherDashboardPage() {
     fetchAnnotations();
   }, [fetchAnnotations]);
 
+  useEffect(() => {
+    setShowDiff(false);
+  }, [selectedStudent]);
+
   async function deleteAnnotation(id: string) {
     await fetch(`/api/annotations/${id}`, { method: "DELETE" });
     fetchAnnotations();
@@ -142,11 +154,28 @@ export default function TeacherDashboardPage() {
               <span className="font-medium">{student?.name || "Student"}</span>
               <span className={`w-2 h-2 rounded-full ${connected ? "bg-green-500" : "bg-red-500"}`} />
             </div>
-            <AiToggleButton sessionId={params.sessionId} studentId={selectedStudent} />
+            <div className="flex items-center gap-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setShowDiff(!showDiff)}
+              >
+                {showDiff ? "Editor" : "View Diff"}
+              </Button>
+              <AiToggleButton sessionId={params.sessionId} studentId={selectedStudent} />
+            </div>
           </div>
           <div className="flex-1 min-h-0 p-4">
             {selectedDocName && (
-              <CodeEditor yText={yText} provider={provider} />
+              showDiff ? (
+                <DiffViewer
+                  original={STARTER_CODE}
+                  modified={yText?.toString() || ""}
+                  readOnly
+                />
+              ) : (
+                <CodeEditor yText={yText} provider={provider} />
+              )
             )}
           </div>
         </div>

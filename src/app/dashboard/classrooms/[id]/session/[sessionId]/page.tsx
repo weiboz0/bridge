@@ -11,6 +11,7 @@ import { RaiseHandButton } from "@/components/help-queue/raise-hand-button";
 import { usePyodide } from "@/lib/pyodide/use-pyodide";
 import { useYjsProvider } from "@/lib/yjs/use-yjs-provider";
 import { Button } from "@/components/ui/button";
+import { DiffViewer } from "@/components/editor/diff-viewer";
 
 export default function StudentSessionPage() {
   const params = useParams<{ id: string; sessionId: string }>();
@@ -19,6 +20,8 @@ export default function StudentSessionPage() {
   const [aiEnabled, setAiEnabled] = useState(false);
   const [showAi, setShowAi] = useState(false);
   const [broadcastActive, setBroadcastActive] = useState(false);
+  const [codeBeforeRun, setCodeBeforeRun] = useState<string | null>(null);
+  const [showDiff, setShowDiff] = useState(false);
   const { ready, running, output, runCode, clearOutput } = usePyodide();
 
   const userId = session?.user?.id || "";
@@ -68,6 +71,13 @@ export default function StudentSessionPage() {
     return () => eventSource.close();
   }, [params.sessionId, params.id, userId, showAi]);
 
+  function handleRun() {
+    const currentCode = yText?.toString() || code;
+    setCodeBeforeRun(currentCode);
+    setShowDiff(false);
+    runCode(currentCode);
+  }
+
   return (
     <div className="flex h-[calc(100vh-3.5rem)]">
       <div className="flex flex-col flex-1 gap-2 p-0">
@@ -93,6 +103,15 @@ export default function StudentSessionPage() {
                 {showAi ? "Hide AI" : "Ask AI"}
               </Button>
             )}
+            {codeBeforeRun !== null && !running && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setShowDiff(!showDiff)}
+              >
+                {showDiff ? "Editor" : "View Changes"}
+              </Button>
+            )}
             <Button
               variant="ghost"
               size="sm"
@@ -102,10 +121,7 @@ export default function StudentSessionPage() {
               Clear
             </Button>
             <RunButton
-              onRun={() => {
-                const currentCode = yText?.toString() || code;
-                runCode(currentCode);
-              }}
+              onRun={handleRun}
               running={running}
               ready={ready}
             />
@@ -124,11 +140,19 @@ export default function StudentSessionPage() {
         )}
 
         <div className="flex-1 min-h-0 px-4">
-          <CodeEditor
-            onChange={setCode}
-            yText={yText}
-            provider={provider}
-          />
+          {showDiff && codeBeforeRun !== null ? (
+            <DiffViewer
+              original={codeBeforeRun}
+              modified={yText?.toString() || code}
+              readOnly
+            />
+          ) : (
+            <CodeEditor
+              onChange={setCode}
+              yText={yText}
+              provider={provider}
+            />
+          )}
         </div>
 
         <div className="h-[200px] shrink-0 px-4 pb-4">
