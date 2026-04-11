@@ -29,19 +29,19 @@ export interface LessonContent {
 
 export const markdownBlockSchema = z.object({
   type: z.literal("markdown"),
-  content: z.string(),
+  content: z.string().min(1),
 });
 
 export const codeBlockSchema = z.object({
   type: z.literal("code"),
-  language: z.string(),
-  content: z.string(),
+  language: z.string().min(1),
+  content: z.string().min(1),
 });
 
 export const imageBlockSchema = z.object({
   type: z.literal("image"),
-  url: z.string(),
-  alt: z.string(),
+  url: z.string().url(),
+  alt: z.string().min(1),
 });
 
 export const contentBlockSchema = z.discriminatedUnion("type", [

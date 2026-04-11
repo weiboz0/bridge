@@ -31,9 +31,12 @@ export default async function TeacherCourseDetailPage({
     "use server";
     const { auth: getAuth } = await import("@/lib/auth");
     const { db: database } = await import("@/lib/db");
+    const { getCourse: get } = await import("@/lib/courses");
     const { createTopic: create } = await import("@/lib/topics");
     const sess = await getAuth();
     if (!sess?.user?.id) return;
+    const c = await get(database, id);
+    if (!c || (c.createdBy !== sess.user.id && !sess.user.isPlatformAdmin)) return;
     const title = formData.get("title") as string;
     if (!title) return;
     await create(database, { courseId: id, title });
@@ -44,9 +47,12 @@ export default async function TeacherCourseDetailPage({
     "use server";
     const { auth: getAuth } = await import("@/lib/auth");
     const { db: database } = await import("@/lib/db");
+    const { getCourse: get } = await import("@/lib/courses");
     const { deleteTopic: del } = await import("@/lib/topics");
     const sess = await getAuth();
     if (!sess?.user?.id) return;
+    const c = await get(database, id);
+    if (!c || (c.createdBy !== sess.user.id && !sess.user.isPlatformAdmin)) return;
     const topicId = formData.get("topicId") as string;
     if (!topicId) return;
     await del(database, topicId);

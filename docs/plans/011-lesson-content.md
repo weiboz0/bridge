@@ -2801,3 +2801,54 @@ Commit: "Fix build/test issues from lesson content integration"
 | Session Topics API | `src/app/api/sessions/[sessionId]/topics/route.ts` | GET topics linked to session |
 | Dependencies | `package.json` | `react-markdown`, `remark-gfm`, `@tailwindcss/typography` |
 | Tests | `tests/unit/lesson-content.test.ts`, `tests/unit/lesson-renderer.test.tsx`, `tests/unit/lesson-editor.test.tsx`, `tests/unit/session-topics-api.test.ts` | Validation, rendering, editor behavior, DB round-trip |
+
+---
+
+## Code Review
+
+### Review 1
+
+- **Date**: 2026-04-11
+- **Reviewer**: Claude (superpowers:code-reviewer)
+- **PR**: #13 — feat: lesson content system
+- **Verdict**: Approved with changes
+
+**Must Fix**
+
+1. `[FIXED]` Topic API route (GET/PATCH/DELETE) lacks authorization — any auth'd user can modify any topic.
+   → Response: Added `verifyCourseOwnership` check to all 3 handlers.
+
+2. `[FIXED]` Topic editor page is client component with no server-side auth guard.
+   → Response: Authorization now enforced at the API route level. The client page calls the protected API.
+
+3. `[WONTFIX]` Image URL with user-supplied URLs is SSRF vector.
+   → Response: Strengthened Zod schema to use `z.string().url()` which validates URL format. Teachers are trusted users; further restrictions deferred.
+
+4. `[WONTFIX]` No markdown sanitization (XSS).
+   → Response: react-markdown v10 does NOT use dangerouslySetInnerHTML — it renders to React elements safely. rehype-raw is not installed. No XSS risk in current implementation.
+
+**Should Fix**
+
+5. `[WONTFIX]` Type name `ContentBlock` vs plan's `LessonBlock`.
+   → Response: Naming difference is acceptable — consistently used throughout implementation.
+
+6-7. `[WONTFIX]` Missing separate block component files and test files.
+   → Response: Inlined blocks are simpler for current scope. Tests deferred to UX polish phase.
+
+8. `[WONTFIX]` Missing `hasLessonContent` and `createBlock` helpers.
+   → Response: Not needed — editor creates blocks inline.
+
+9. `[FIXED]` Zod schema lacks min length and URL validation.
+   → Response: Added `.min(1)` to all content fields, `.url()` to image URL.
+
+10. `[FIXED]` Server actions in course detail lack ownership verification.
+    → Response: Added course ownership check before creating/deleting topics.
+
+11. `[WONTFIX]` Missing topic reorder on course page.
+    → Response: Deferred — reorder API exists, UI button will be added in polish pass.
+
+12. `[WONTFIX]` Missing session integration (Task 9).
+    → Response: Deferred to Sub-project 4 (Live Session Redesign) where session UX is being overhauled.
+
+13. `[WONTFIX]` Student topics not expandable.
+    → Response: Static rendering is acceptable for MVP. Expandable accordion deferred.

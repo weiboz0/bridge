@@ -16,7 +16,7 @@ describe("parseLessonContent", () => {
       blocks: [
         { type: "markdown", content: "# Hello" },
         { type: "code", language: "python", content: "print('hi')" },
-        { type: "image", url: "/img.png", alt: "diagram" },
+        { type: "image", url: "https://example.com/img.png", alt: "diagram" },
       ],
     };
     const result = parseLessonContent(raw);
