@@ -107,7 +107,6 @@ export function CodeEditor({
           suggestOnTriggerCharacters: true,
           parameterHints: { enabled: true },
           // Disable features that confuse K-12 students
-          lightbulb: { enabled: false },
           contextmenu: false,
           overviewRulerBorder: false,
         }}
