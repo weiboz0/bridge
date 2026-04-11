@@ -1,0 +1,53 @@
+import { NextRequest, NextResponse } from "next/server";
+import { z } from "zod";
+import { auth } from "@/lib/auth";
+import { db } from "@/lib/db";
+import { createAssignment, listAssignmentsByClass } from "@/lib/assignments";
+
+const createSchema = z.object({
+  classId: z.string().uuid(),
+  topicId: z.string().uuid().optional(),
+  title: z.string().min(1).max(255),
+  description: z.string().max(5000).optional(),
+  starterCode: z.string().optional(),
+  dueDate: z.string().datetime().optional(),
+});
+
+export async function POST(request: NextRequest) {
+  const session = await auth();
+  if (!session?.user?.id) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const body = await request.json();
+  const parsed = createSchema.safeParse(body);
+
+  if (!parsed.success) {
+    return NextResponse.json(
+      { error: "Invalid input", details: parsed.error.flatten() },
+      { status: 400 }
+    );
+  }
+
+  const assignment = await createAssignment(db, {
+    ...parsed.data,
+    dueDate: parsed.data.dueDate ? new Date(parsed.data.dueDate) : undefined,
+  });
+
+  return NextResponse.json(assignment, { status: 201 });
+}
+
+export async function GET(request: NextRequest) {
+  const session = await auth();
+  if (!session?.user?.id) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const classId = request.nextUrl.searchParams.get("classId");
+  if (!classId) {
+    return NextResponse.json({ error: "classId required" }, { status: 400 });
+  }
+
+  const list = await listAssignmentsByClass(db, classId);
+  return NextResponse.json(list);
+}

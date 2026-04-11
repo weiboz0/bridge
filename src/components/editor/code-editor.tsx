@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useEffect, useId } from "react";
+import { useRef, useEffect, useId, useState } from "react";
 import { Editor, type OnMount } from "@monaco-editor/react";
 import type * as monacoTypes from "monaco-editor";
 import type * as Y from "yjs";
@@ -27,19 +27,35 @@ export function CodeEditor({
 }: CodeEditorProps) {
   const editorRef = useRef<monacoTypes.editor.IStandaloneCodeEditor | null>(null);
   const bindingRef = useRef<any>(null);
+  const [editorReady, setEditorReady] = useState(false);
   const { theme } = useTheme();
   const instanceId = useId();
 
-  // Clean up Yjs binding when yText/provider change or unmount
+  // Create/recreate Yjs binding when editor, yText, or provider become available
   useEffect(() => {
+    const editor = editorRef.current;
+    if (!editorReady || !editor || !yText || !provider) return;
+
+    let binding: any;
+    import("y-monaco").then(({ MonacoBinding }) => {
+      binding = new MonacoBinding(
+        yText,
+        editor.getModel()!,
+        new Set([editor]),
+        provider.awareness!
+      );
+      bindingRef.current = binding;
+    });
+
     return () => {
-      bindingRef.current?.destroy();
+      binding?.destroy();
       bindingRef.current = null;
     };
-  }, [yText, provider]);
+  }, [editorReady, yText, provider]);
 
   const handleMount: OnMount = (editor, monaco) => {
     editorRef.current = editor;
+    setEditorReady(true);
 
     // Register themes
     import("@/lib/monaco/themes").then(({ bridgeLightTheme, bridgeDarkTheme }) => {
@@ -47,18 +63,6 @@ export function CodeEditor({
       monaco.editor.defineTheme("bridge-dark", bridgeDarkTheme);
       monaco.editor.setTheme(theme === "dark" ? "bridge-dark" : "bridge-light");
     });
-
-    // Yjs collaborative binding
-    if (yText && provider) {
-      import("y-monaco").then(({ MonacoBinding }) => {
-        bindingRef.current = new MonacoBinding(
-          yText,
-          editor.getModel()!,
-          new Set([editor]),
-          provider.awareness!
-        );
-      });
-    }
 
     // onChange listener (works in both collaborative and standalone modes)
     if (onChange) {

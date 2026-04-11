@@ -10,6 +10,7 @@ import {
   index,
   boolean,
   integer,
+  doublePrecision,
 } from "drizzle-orm/pg-core";
 
 // --- Enums ---
@@ -448,5 +449,50 @@ export const documents = pgTable(
     index("documents_owner_idx").on(table.ownerId),
     index("documents_classroom_idx").on(table.classroomId),
     index("documents_session_idx").on(table.sessionId),
+  ]
+);
+
+// --- Assignments ---
+
+export const assignments = pgTable(
+  "assignments",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    topicId: uuid("topic_id").references(() => topics.id, { onDelete: "cascade" }),
+    classId: uuid("class_id")
+      .notNull()
+      .references(() => classes.id, { onDelete: "cascade" }),
+    title: varchar("title", { length: 255 }).notNull(),
+    description: text("description").default(""),
+    starterCode: text("starter_code"),
+    dueDate: timestamp("due_date"),
+    rubric: jsonb("rubric").default({}),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("assignments_class_idx").on(table.classId),
+    index("assignments_topic_idx").on(table.topicId),
+  ]
+);
+
+export const submissions = pgTable(
+  "submissions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    assignmentId: uuid("assignment_id")
+      .notNull()
+      .references(() => assignments.id, { onDelete: "cascade" }),
+    studentId: uuid("student_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    documentId: uuid("document_id"),
+    grade: doublePrecision("grade"),
+    feedback: text("feedback"),
+    submittedAt: timestamp("submitted_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("submission_unique_idx").on(table.assignmentId, table.studentId),
+    index("submissions_assignment_idx").on(table.assignmentId),
+    index("submissions_student_idx").on(table.studentId),
   ]
 );

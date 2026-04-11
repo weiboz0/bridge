@@ -9,6 +9,8 @@ const testClient = postgres(
 export const testDb = drizzle(testClient, { schema });
 
 export async function cleanupDatabase() {
+  await testDb.delete(schema.submissions);
+  await testDb.delete(schema.assignments);
   await testDb.delete(schema.documents);
   await testDb.delete(schema.sessionTopics);
   await testDb.delete(schema.codeAnnotations);
@@ -162,6 +164,37 @@ export async function createTestClass(
     })
     .returning();
   return cls;
+}
+
+export async function createTestAssignment(
+  classId: string,
+  overrides: Partial<typeof schema.assignments.$inferInsert> = {}
+) {
+  const [assignment] = await testDb
+    .insert(schema.assignments)
+    .values({
+      classId,
+      title: "Test Assignment",
+      ...overrides,
+    })
+    .returning();
+  return assignment;
+}
+
+export async function createTestSubmission(
+  assignmentId: string,
+  studentId: string,
+  overrides: Partial<typeof schema.submissions.$inferInsert> = {}
+) {
+  const [submission] = await testDb
+    .insert(schema.submissions)
+    .values({
+      assignmentId,
+      studentId,
+      ...overrides,
+    })
+    .returning();
+  return submission;
 }
 
 export async function closeTestDb() {
