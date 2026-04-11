@@ -18,6 +18,18 @@ export const metadata: Metadata = {
   description: "A live-first K-12 coding education platform",
 };
 
+// Inline script to prevent FOUC — runs before React hydration
+const themeScript = `
+(function() {
+  var theme = localStorage.getItem('bridge-theme') || 'dark';
+  if (theme === 'dark') {
+    document.documentElement.classList.add('dark');
+  } else {
+    document.documentElement.classList.remove('dark');
+  }
+})()
+`;
+
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -27,8 +39,12 @@ export default function RootLayout({
     <html
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      suppressHydrationWarning
     >
-      <body className="min-h-full flex flex-col">
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
+      </head>
+      <body className="min-h-full flex flex-col bg-background text-foreground">
         <SessionProvider>{children}</SessionProvider>
       </body>
     </html>
