@@ -1,12 +1,9 @@
 "use client";
 
-import { useEffect, useRef } from "react";
-import { EditorView, lineNumbers } from "@codemirror/view";
-import { EditorState } from "@codemirror/state";
-import { python } from "@codemirror/lang-python";
-import { syntaxHighlighting, defaultHighlightStyle } from "@codemirror/language";
+import { useEffect, useRef, useState } from "react";
 import * as Y from "yjs";
 import { HocuspocusProvider } from "@hocuspocus/provider";
+import { codeToHtml } from "shiki";
 import { AiToggleButton } from "@/components/ai/ai-toggle-button";
 
 interface StudentTileProps {
@@ -26,12 +23,11 @@ export function StudentTile({
   token,
   onClick,
 }: StudentTileProps) {
-  const containerRef = useRef<HTMLDivElement>(null);
+  const [html, setHtml] = useState("");
   const providerRef = useRef<HocuspocusProvider | null>(null);
+  const yDocRef = useRef<Y.Doc | null>(null);
 
   useEffect(() => {
-    if (!containerRef.current) return;
-
     const yDoc = new Y.Doc();
     const yText = yDoc.getText("content");
     const documentName = `session:${sessionId}:user:${studentId}`;
@@ -42,30 +38,33 @@ export function StudentTile({
       document: yDoc,
       token,
     });
+
+    yDocRef.current = yDoc;
     providerRef.current = provider;
 
-    import("y-codemirror.next").then(({ yCollab }) => {
-      if (!containerRef.current) return;
-
-      const state = EditorState.create({
-        extensions: [
-          lineNumbers(),
-          python(),
-          syntaxHighlighting(defaultHighlightStyle),
-          EditorView.editable.of(false),
-          EditorView.theme({
-            "&": { height: "100%", fontSize: "9px" },
-            ".cm-scroller": { overflow: "hidden", fontFamily: "monospace" },
-            ".cm-gutters": { display: "none" },
-          }),
-          yCollab(yText, provider.awareness!),
-        ],
+    async function highlight(code: string) {
+      if (!code.trim()) {
+        setHtml("");
+        return;
+      }
+      const result = await codeToHtml(code, {
+        lang: "python",
+        theme: "github-light",
       });
+      setHtml(result);
+    }
 
-      new EditorView({ state, parent: containerRef.current });
-    });
+    // Initial render
+    highlight(yText.toString());
+
+    // Subscribe to changes
+    const observer = () => {
+      highlight(yText.toString());
+    };
+    yText.observe(observer);
 
     return () => {
+      yText.unobserve(observer);
       provider.destroy();
       yDoc.destroy();
     };
@@ -89,7 +88,10 @@ export function StudentTile({
           <span className={`w-2 h-2 rounded-full ${statusColor}`} />
         </div>
       </div>
-      <div ref={containerRef} className="h-24 overflow-hidden rounded" />
+      <div
+        className="h-24 overflow-hidden rounded text-[9px] font-mono leading-tight"
+        dangerouslySetInnerHTML={{ __html: html }}
+      />
     </div>
   );
 }
