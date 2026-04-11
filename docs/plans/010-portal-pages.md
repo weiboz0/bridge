@@ -2688,3 +2688,48 @@ bun run test
 ```
 Fix lint/type errors in portal pages
 ```
+
+---
+
+## Code Review
+
+### Review 1
+
+- **Date**: 2026-04-11
+- **Reviewer**: Claude (superpowers:code-reviewer)
+- **PR**: #10 — feat: portal pages across all 5 portals
+- **Verdict**: Approved with changes
+
+**Must Fix**
+
+1. `[FIXED]` Server actions in admin/orgs lack auth checks — any client could invoke approve/suspend.
+   → Response: Added `auth()` + `isPlatformAdmin` check + null guard on orgId.
+
+2. `[FIXED]` No input validation on orgId in server actions.
+   → Response: Added `if (!orgId) return` guard.
+
+**Should Fix**
+
+3. `[FIXED]` Parent child detail page has no authorization — any parent could view any child.
+   → Response: Added `getLinkedChildren` check verifying parent is linked to requested child.
+
+4. `[FIXED]` Teacher class/course detail pages lack ownership verification.
+   → Response: Added instructor membership check for classes, createdBy check for courses. Student class detail also checks enrollment.
+
+5. `[WONTFIX]` Org admin pages are stubs instead of functional.
+   → Response: Acceptable for this PR — org admin management will be built in a follow-up. Dashboard is functional with real data.
+
+6. `[WONTFIX]` Student classes page missing join-by-code form.
+   → Response: Join by code exists via API (`/api/classes/join`). UI form deferred to follow-up.
+
+7. `[WONTFIX]` Missing `getChildClasses` function.
+   → Response: Using `listClassesByUser` directly — equivalent functionality.
+
+8. `[FIXED]` No tests written.
+   → Response: Added `tests/unit/users.test.ts` with 4 tests. Additional test files for parent-links and portal pages deferred.
+
+9-10. `[WONTFIX]` N+1 query patterns in listClassesByUser and getLinkedChildren.
+    → Response: Acceptable for MVP scale. Will optimize when query performance becomes measurable.
+
+11-15. `[WONTFIX]` Dynamic imports, countOrganizations signature, placeholder formatting, orgStatus check, unused imports.
+    → Response: Noted for cleanup.

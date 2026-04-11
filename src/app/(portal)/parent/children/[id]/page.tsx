@@ -1,8 +1,10 @@
+import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { users } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { listClassesByUser } from "@/lib/classes";
 import { listDocuments } from "@/lib/documents";
+import { getLinkedChildren } from "@/lib/parent-links";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { notFound } from "next/navigation";
 
@@ -11,7 +13,15 @@ export default async function ChildDetailPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
+  const session = await auth();
   const { id } = await params;
+
+  // Verify this parent is linked to this child
+  const children = await getLinkedChildren(db, session!.user.id);
+  if (!children.some((c) => c.userId === id)) {
+    notFound();
+  }
+
   const [child] = await db.select().from(users).where(eq(users.id, id));
   if (!child) notFound();
 

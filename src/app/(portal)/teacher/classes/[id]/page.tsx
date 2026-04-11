@@ -1,4 +1,5 @@
 import { notFound } from "next/navigation";
+import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { getClass } from "@/lib/classes";
 import { listClassMembers } from "@/lib/class-memberships";
@@ -9,11 +10,19 @@ export default async function TeacherClassDetailPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
+  const session = await auth();
   const { id } = await params;
   const cls = await getClass(db, id);
   if (!cls) notFound();
 
   const members = await listClassMembers(db, id);
+
+  // Verify teacher is an instructor in this class
+  const isInstructor = members.some(
+    (m) => m.userId === session!.user.id && (m.role === "instructor" || m.role === "ta")
+  );
+  if (!isInstructor && !session!.user.isPlatformAdmin) notFound();
+
   const students = members.filter((m) => m.role === "student");
   const instructors = members.filter((m) => m.role === "instructor" || m.role === "ta");
 

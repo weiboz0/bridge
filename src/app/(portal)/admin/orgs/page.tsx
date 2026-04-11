@@ -14,14 +14,22 @@ export default async function AdminOrgsPage({
 
   async function approveOrg(formData: FormData) {
     "use server";
+    const { auth: getAuth } = await import("@/lib/auth");
+    const session = await getAuth();
+    if (!session?.user?.isPlatformAdmin) return;
     const orgId = formData.get("orgId") as string;
+    if (!orgId) return;
     await updateOrgStatus(db, orgId, "active");
     revalidatePath("/admin/orgs");
   }
 
   async function suspendOrg(formData: FormData) {
     "use server";
+    const { auth: getAuth } = await import("@/lib/auth");
+    const session = await getAuth();
+    if (!session?.user?.isPlatformAdmin) return;
     const orgId = formData.get("orgId") as string;
+    if (!orgId) return;
     await updateOrgStatus(db, orgId, "suspended");
     revalidatePath("/admin/orgs");
   }

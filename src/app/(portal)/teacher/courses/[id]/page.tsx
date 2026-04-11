@@ -1,4 +1,5 @@
 import { notFound } from "next/navigation";
+import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { getCourse } from "@/lib/courses";
 import { listTopicsByCourse } from "@/lib/topics";
@@ -12,9 +13,13 @@ export default async function TeacherCourseDetailPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
+  const session = await auth();
   const { id } = await params;
   const course = await getCourse(db, id);
   if (!course) notFound();
+
+  // Verify teacher is the course creator
+  if (course.createdBy !== session!.user.id && !session!.user.isPlatformAdmin) notFound();
 
   const [topicList, classList] = await Promise.all([
     listTopicsByCourse(db, id),
