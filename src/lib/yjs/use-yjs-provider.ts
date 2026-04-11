@@ -20,7 +20,8 @@ interface UseYjsProviderReturn {
 export function useYjsProvider({
   documentName,
   token,
-  serverUrl = "ws://127.0.0.1:4000",
+  serverUrl = process.env.NEXT_PUBLIC_HOCUSPOCUS_URL
+    || (typeof window !== "undefined" ? `ws://${window.location.hostname}:4000` : "ws://127.0.0.1:4000"),
 }: UseYjsProviderOptions): UseYjsProviderReturn {
   const [connected, setConnected] = useState(false);
   const providerRef = useRef<HocuspocusProvider | null>(null);
@@ -28,7 +29,19 @@ export function useYjsProvider({
   const yTextRef = useRef<Y.Text | null>(null);
   const [, forceUpdate] = useState(0);
 
+  // Don't connect for placeholder/empty document names
+  const shouldConnect = documentName && documentName !== "noop" && token && !token.startsWith(":");
+
   useEffect(() => {
+    if (!shouldConnect) {
+      yDocRef.current = null;
+      yTextRef.current = null;
+      providerRef.current = null;
+      setConnected(false);
+      forceUpdate((n) => n + 1);
+      return;
+    }
+
     const yDoc = new Y.Doc();
     const yText = yDoc.getText("content");
 
@@ -37,8 +50,17 @@ export function useYjsProvider({
       name: documentName,
       document: yDoc,
       token,
-      onConnect: () => setConnected(true),
-      onDisconnect: () => setConnected(false),
+      onConnect: () => {
+        console.log(`[yjs] Connected to ${documentName}`);
+        setConnected(true);
+      },
+      onDisconnect: () => {
+        console.log(`[yjs] Disconnected from ${documentName}`);
+        setConnected(false);
+      },
+      onAuthenticationFailed: (data) => {
+        console.error(`[yjs] Auth failed for ${documentName}:`, data);
+      },
     });
 
     yDocRef.current = yDoc;
@@ -53,7 +75,7 @@ export function useYjsProvider({
       yTextRef.current = null;
       providerRef.current = null;
     };
-  }, [documentName, token, serverUrl]);
+  }, [shouldConnect, documentName, token, serverUrl]);
 
   return {
     yDoc: yDocRef.current,

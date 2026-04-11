@@ -1,6 +1,8 @@
 import { Server } from "@hocuspocus/server";
 
-const server = Server.configure({
+const server = new Server({
+  port: 4000,
+
   async onAuthenticate({ token, documentName }: { token: string; documentName: string }) {
     if (!token) {
       throw new Error("Authentication required");
@@ -35,6 +37,6 @@ const server = Server.configure({
   },
 });
 
-server.listen(4000).then(() => {
+server.listen().then(() => {
   console.log(`[hocuspocus] WebSocket server running on ws://127.0.0.1:4000`);
 });
