@@ -496,3 +496,27 @@ export const submissions = pgTable(
     index("submissions_student_idx").on(table.studentId),
   ]
 );
+
+// --- Parent Reports ---
+
+export const parentReports = pgTable(
+  "parent_reports",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    studentId: uuid("student_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    generatedBy: uuid("generated_by")
+      .notNull()
+      .references(() => users.id),
+    periodStart: timestamp("period_start").notNull(),
+    periodEnd: timestamp("period_end").notNull(),
+    content: text("content").notNull(),
+    summary: jsonb("summary").default({}),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("parent_reports_student_idx").on(table.studentId),
+    index("parent_reports_period_idx").on(table.studentId, table.periodStart),
+  ]
+);
