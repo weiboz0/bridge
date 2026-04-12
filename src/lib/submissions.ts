@@ -73,9 +73,13 @@ export async function gradeSubmission(
   grade: number,
   feedback?: string
 ) {
+  const updates: Record<string, unknown> = { grade };
+  if (feedback !== undefined) {
+    updates.feedback = feedback;
+  }
   const [updated] = await db
     .update(submissions)
-    .set({ grade, feedback })
+    .set(updates)
     .where(eq(submissions.id, submissionId))
     .returning();
   return updated || null;

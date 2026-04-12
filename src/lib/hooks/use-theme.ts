@@ -5,7 +5,7 @@ import { useState, useEffect, useCallback } from "react";
 export type Theme = "light" | "dark";
 
 export function useTheme() {
-  const [theme, setThemeState] = useState<Theme>("dark");
+  const [theme, setThemeState] = useState<Theme>("light");
 
   useEffect(() => {
     const stored = localStorage.getItem("bridge-theme") as Theme | null;

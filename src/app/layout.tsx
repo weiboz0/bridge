@@ -21,7 +21,7 @@ export const metadata: Metadata = {
 // Inline script to prevent FOUC — runs before React hydration
 const themeScript = `
 (function() {
-  var theme = localStorage.getItem('bridge-theme') || 'dark';
+  var theme = localStorage.getItem('bridge-theme') || 'light';
   if (theme === 'dark') {
     document.documentElement.classList.add('dark');
   } else {

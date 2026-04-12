@@ -3,6 +3,7 @@ import { z } from "zod";
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { createAssignment, listAssignmentsByClass } from "@/lib/assignments";
+import { listClassMembers } from "@/lib/class-memberships";
 
 const createSchema = z.object({
   classId: z.string().uuid(),
@@ -11,6 +12,7 @@ const createSchema = z.object({
   description: z.string().max(5000).optional(),
   starterCode: z.string().optional(),
   dueDate: z.string().datetime().optional(),
+  rubric: z.record(z.string(), z.unknown()).optional(),
 });
 
 export async function POST(request: NextRequest) {
@@ -27,6 +29,15 @@ export async function POST(request: NextRequest) {
       { error: "Invalid input", details: parsed.error.flatten() },
       { status: 400 }
     );
+  }
+
+  // Verify user is instructor/TA in this class
+  const members = await listClassMembers(db, parsed.data.classId);
+  const isInstructor = members.some(
+    (m) => m.userId === session.user.id && (m.role === "instructor" || m.role === "ta")
+  );
+  if (!isInstructor && !session.user.isPlatformAdmin) {
+    return NextResponse.json({ error: "Only instructors can create assignments" }, { status: 403 });
   }
 
   const assignment = await createAssignment(db, {
@@ -46,6 +57,13 @@ export async function GET(request: NextRequest) {
   const classId = request.nextUrl.searchParams.get("classId");
   if (!classId) {
     return NextResponse.json({ error: "classId required" }, { status: 400 });
+  }
+
+  // Verify user is a member of this class
+  const members = await listClassMembers(db, classId);
+  const isMember = members.some((m) => m.userId === session.user.id);
+  if (!isMember && !session.user.isPlatformAdmin) {
+    return NextResponse.json({ error: "Not a member of this class" }, { status: 403 });
   }
 
   const list = await listAssignmentsByClass(db, classId);
