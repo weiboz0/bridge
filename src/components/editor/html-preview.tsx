@@ -32,6 +32,7 @@ ${html}
 
   useEffect(() => {
     function handleMessage(e: MessageEvent) {
+      if (e.source !== iframeRef.current?.contentWindow) return;
       if (e.data?.type === "preview-error") {
         setError(e.data.text);
       }

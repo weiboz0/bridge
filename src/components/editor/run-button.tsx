@@ -6,9 +6,12 @@ interface RunButtonProps {
   onRun: () => void;
   running: boolean;
   ready: boolean;
+  language?: string;
 }
 
-export function RunButton({ onRun, running, ready }: RunButtonProps) {
+export function RunButton({ onRun, running, ready, language = "python" }: RunButtonProps) {
+  const loadingText = language === "python" ? "Loading Python..." : "Loading...";
+
   return (
     <Button
       onClick={onRun}
@@ -16,7 +19,7 @@ export function RunButton({ onRun, running, ready }: RunButtonProps) {
       size="sm"
       variant={running ? "outline" : "default"}
     >
-      {!ready ? "Loading Python..." : running ? "Running..." : "Run"}
+      {!ready ? loadingText : running ? "Running..." : "Run"}
     </Button>
   );
 }

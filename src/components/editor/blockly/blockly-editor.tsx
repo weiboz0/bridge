@@ -38,9 +38,10 @@ export function BlocklyEditor({ initialState, onChange }: BlocklyEditorProps) {
           }
         }
 
-        // Listen for changes
-        workspace.addChangeListener(() => {
+        // Listen for changes (skip UI events like scroll/drag)
+        workspace.addChangeListener((event: any) => {
           if (!onChange) return;
+          if (event.isUiEvent) return;
           const state = Blockly.serialization.workspaces.save(workspace);
           const code = jsGenerator.javascriptGenerator.workspaceToCode(workspace);
           onChange(JSON.stringify(state), code);

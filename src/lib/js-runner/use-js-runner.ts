@@ -17,15 +17,29 @@ const SANDBOX_HTML = `<!DOCTYPE html>
   console.log = function() { send("stdout", Array.from(arguments).join(" ")); };
   console.error = function() { send("stderr", Array.from(arguments).join(" ")); };
   console.warn = function() { send("stdout", "[warn] " + Array.from(arguments).join(" ")); };
+  console.info = function() { send("stdout", Array.from(arguments).join(" ")); };
+
+  window.onerror = function(msg) { send("stderr", String(msg)); };
+  window.onunhandledrejection = function(e) { send("stderr", "Unhandled rejection: " + e.reason); };
 
   window.addEventListener("message", function(e) {
     if (e.data && e.data.type === "run") {
+      var id = e.data.id;
       try {
-        eval(e.data.code);
-        parent.postMessage({ type: "done", success: true }, "*");
+        var result = new Function(e.data.code)();
+        if (result && typeof result.then === "function") {
+          result.then(function() {
+            parent.postMessage({ type: "done", id: id, success: true }, "*");
+          }).catch(function(err) {
+            send("stderr", err.message || String(err));
+            parent.postMessage({ type: "done", id: id, success: false }, "*");
+          });
+        } else {
+          parent.postMessage({ type: "done", id: id, success: true }, "*");
+        }
       } catch(err) {
         send("stderr", err.message);
-        parent.postMessage({ type: "done", success: false }, "*");
+        parent.postMessage({ type: "done", id: id, success: false }, "*");
       }
     }
   });
@@ -89,7 +103,8 @@ export function useJsRunner(): UseJsRunnerReturn {
     if (!iframeRef.current?.contentWindow || !ready) return;
     setRunning(true);
     setOutput([]);
-    iframeRef.current.contentWindow.postMessage({ type: "run", code }, "*");
+    const id = crypto.randomUUID();
+    iframeRef.current.contentWindow.postMessage({ type: "run", code, id }, "*");
   }, [ready]);
 
   const clearOutput = useCallback(() => {

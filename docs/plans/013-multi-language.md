@@ -2332,3 +2332,65 @@ fix: resolve test and lint issues from multi-language integration
 - `editorModeEnum` already includes `"blockly"`, `"python"`, `"javascript"`
 - `programmingLanguageEnum` already includes `"python"`, `"javascript"`, `"blockly"`
 - `courses.language` and `newClassrooms.editorMode` already use these enums
+
+---
+
+## Post-Execution Report
+
+**Completed 2026-04-12.**
+
+- [x] JS sandbox execution with useJsRunner hook (Task 1)
+- [x] HTML/CSS preview component (Task 2)
+- [x] Blockly editor with K-5 toolbox (Task 4)
+- [x] EditorSwitcher orchestrator (Task 5)
+- [x] CodeEditor language prop (Task 3 partial)
+- [x] RunButton language prop (Task 3 partial)
+- [x] Tests: 8 new (Task 7 partial)
+- [ ] DiffViewer/StudentTile language prop — deferred
+- [ ] Editor/session page integration — deferred to Sub-project 4
+- [ ] Monaco JS completions — deferred
+- 307 total tests passing
+
+**Deviations:** EditorSwitcher is simpler than planned — missing session integration props. Page integration deferred to Sub-project 4 (Live Session Redesign) where the entire session UX is being overhauled.
+
+---
+
+## Code Review
+
+### Review 1
+
+- **Date**: 2026-04-12
+- **Reviewer**: Claude (superpowers:code-reviewer)
+- **PR**: #16 — feat: multi-language support
+- **Verdict**: Approved with changes
+
+**Must Fix**
+
+1. `[FIXED]` eval() replaced with new Function() for better scope isolation.
+2. `[FIXED]` Added source check to html-preview message handler.
+3. `[FIXED]` Added run ID to JS sandbox message protocol.
+4. `[FIXED]` Added console.info override to sandbox.
+5. `[FIXED]` Added window.onerror + onunhandledrejection to sandbox.
+6. `[FIXED]` Added async code support (Promise detection) in sandbox.
+
+**Should Fix**
+
+7. `[WONTFIX]` EditorSwitcher missing session props (connected, readOnly, headerLeft/Right).
+   → Response: Deferred to Sub-project 4 where session UX is redesigned.
+
+8. `[FIXED]` RunButton loading text hardcoded to "Loading Python...".
+   → Response: Added language prop with conditional text.
+
+9-10. `[WONTFIX]` DiffViewer/StudentTile/page integration not updated.
+    → Response: Deferred — feature is wired via EditorSwitcher, page integration in Sub-project 4.
+
+11-13. `[WONTFIX]` File locations, toolbox types, BlocklyEditor API differ from plan.
+    → Response: Acceptable organizational differences.
+
+14. `[WONTFIX]` Both runners initialized unconditionally.
+    → Response: Known tradeoff — conditional hooks violate React rules. Will optimize with lazy loading later.
+
+15-16. `[WONTFIX]` Thin test coverage, any casts in toolbox tests.
+    → Response: Core behavioral tests need browser environment (jsdom doesn't support iframe sandboxing). Structural tests cover the config.
+
+17-19. `[FIXED]` Blockly change listener now filters UI events.
