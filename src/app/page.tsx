@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { auth } from "@/lib/auth";
+import { getEffectiveSession } from "@/lib/impersonate";
 import { db } from "@/lib/db";
 import { getUserMemberships } from "@/lib/org-memberships";
 import { buildUserRoles, getPrimaryPortalPath } from "@/lib/portal/roles";
@@ -7,7 +7,7 @@ import Link from "next/link";
 import { buttonVariants } from "@/components/ui/button";
 
 export default async function Home() {
-  const session = await auth();
+  const session = await getEffectiveSession();
 
   if (session?.user?.id) {
     // Detect roles and redirect to primary portal

@@ -1,4 +1,4 @@
-import { auth } from "@/lib/auth";
+import { getEffectiveSession } from "@/lib/impersonate";
 import { db } from "@/lib/db";
 import { getUserMemberships } from "@/lib/org-memberships";
 import { buildUserRoles, isAuthorizedForPortal } from "@/lib/portal/roles";
@@ -13,7 +13,7 @@ interface PortalShellProps {
 }
 
 export async function PortalShell({ portalRole, children }: PortalShellProps) {
-  const session = await auth();
+  const session = await getEffectiveSession();
 
   if (!session?.user?.id) {
     redirect("/login");

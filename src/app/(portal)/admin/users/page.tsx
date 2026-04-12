@@ -1,7 +1,10 @@
 import { db } from "@/lib/db";
+import { auth } from "@/lib/auth";
 import { listUsers } from "@/lib/users";
+import { ImpersonateButton } from "@/components/admin/impersonate-button";
 
 export default async function AdminUsersPage() {
+  const session = await auth();
   const userList = await listUsers(db);
 
   return (
@@ -15,6 +18,7 @@ export default async function AdminUsersPage() {
               <th className="text-left px-4 py-2">Email</th>
               <th className="text-left px-4 py-2">Admin</th>
               <th className="text-left px-4 py-2">Joined</th>
+              <th className="text-left px-4 py-2">Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -25,6 +29,11 @@ export default async function AdminUsersPage() {
                 <td className="px-4 py-2">{user.isPlatformAdmin ? "Yes" : ""}</td>
                 <td className="px-4 py-2 text-muted-foreground">
                   {new Date(user.createdAt).toLocaleDateString()}
+                </td>
+                <td className="px-4 py-2">
+                  {user.id !== session!.user.id && (
+                    <ImpersonateButton userId={user.id} userName={user.name} />
+                  )}
                 </td>
               </tr>
             ))}
