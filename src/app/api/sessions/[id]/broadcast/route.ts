@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { auth } from "@/lib/auth";
+import { db } from "@/lib/db";
+import { getSession } from "@/lib/sessions";
 import { sessionEventBus } from "@/lib/sse";
 
 const broadcastSchema = z.object({
@@ -17,6 +19,16 @@ export async function POST(
   }
 
   const { id } = await params;
+
+  // Verify session exists and user is the teacher
+  const liveSession = await getSession(db, id);
+  if (!liveSession) {
+    return NextResponse.json({ error: "Session not found" }, { status: 404 });
+  }
+  if (liveSession.teacherId !== session.user.id && !session.user.isPlatformAdmin) {
+    return NextResponse.json({ error: "Only the teacher can broadcast" }, { status: 403 });
+  }
+
   const body = await request.json();
   const parsed = broadcastSchema.safeParse(body);
 

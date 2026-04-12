@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { getSession } from "@/lib/sessions";
+import { getSession, joinSession } from "@/lib/sessions";
 import { getClass, getClassroom } from "@/lib/classes";
 import { listClassMembers } from "@/lib/class-memberships";
 import { StudentSession } from "@/components/session/student/student-session";
@@ -25,11 +25,8 @@ export default async function StudentSessionPage({
   const liveSession = await getSession(db, sessionId);
   if (!liveSession || liveSession.status !== "active") notFound();
 
-  // Auto-join session
-  await fetch(`${process.env.NEXTAUTH_URL || "http://localhost:3000"}/api/sessions/${sessionId}/join`, {
-    method: "POST",
-    headers: { cookie: "" }, // Session managed server-side
-  }).catch(() => {});
+  // Auto-join session (server-side, no HTTP round-trip)
+  await joinSession(db, sessionId, session!.user.id);
 
   const classroom = await getClassroom(db, classId);
 

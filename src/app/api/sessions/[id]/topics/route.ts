@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { getSession } from "@/lib/sessions";
 import { linkSessionTopic, unlinkSessionTopic, getSessionTopics } from "@/lib/session-topics";
 
 export async function GET(
@@ -20,6 +21,13 @@ export async function GET(
 
 const linkSchema = z.object({ topicId: z.string().uuid() });
 
+async function verifyTeacher(sessionId: string, userId: string, isPlatformAdmin: boolean) {
+  const liveSession = await getSession(db, sessionId);
+  if (!liveSession) return null;
+  if (liveSession.teacherId !== userId && !isPlatformAdmin) return null;
+  return liveSession;
+}
+
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -30,6 +38,12 @@ export async function POST(
   }
 
   const { id } = await params;
+
+  const liveSession = await verifyTeacher(id, session.user.id, session.user.isPlatformAdmin);
+  if (!liveSession) {
+    return NextResponse.json({ error: "Only the session teacher can manage topics" }, { status: 403 });
+  }
+
   const body = await request.json();
   const parsed = linkSchema.safeParse(body);
 
@@ -51,6 +65,12 @@ export async function DELETE(
   }
 
   const { id } = await params;
+
+  const liveSession = await verifyTeacher(id, session.user.id, session.user.isPlatformAdmin);
+  if (!liveSession) {
+    return NextResponse.json({ error: "Only the session teacher can manage topics" }, { status: 403 });
+  }
+
   const body = await request.json();
   const parsed = linkSchema.safeParse(body);
 
