@@ -14,6 +14,7 @@ interface CodeEditorProps {
   initialCode?: string;
   onChange?: (code: string) => void;
   readOnly?: boolean;
+  language?: string;
   yText?: Y.Text | null;
   provider?: HocuspocusProvider | null;
 }
@@ -22,6 +23,7 @@ export function CodeEditor({
   initialCode = "",
   onChange,
   readOnly = false,
+  language = "python",
   yText,
   provider,
 }: CodeEditorProps) {
@@ -78,7 +80,7 @@ export function CodeEditor({
     <div className="border rounded-lg overflow-hidden h-full">
       <Editor
         defaultValue={yText ? undefined : initialCode}
-        language="python"
+        language={language}
         theme={theme === "dark" ? "bridge-dark" : "bridge-light"}
         path={modelUri}
         onMount={handleMount}
