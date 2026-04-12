@@ -19,7 +19,7 @@ const server = new Server({
     const parts = documentName.split(":");
     if (parts[0] === "session" && parts[2] === "user") {
       const docOwner = parts[3];
-      if (role !== "teacher" && role !== "user" && userId !== docOwner) {
+      if (role !== "teacher" && role !== "user" && role !== "parent" && userId !== docOwner) {
         throw new Error("Access denied");
       }
     } else if (parts[0] === "broadcast") {

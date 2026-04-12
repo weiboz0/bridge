@@ -1,4 +1,4 @@
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, isNull } from "drizzle-orm";
 import { liveSessions, sessionParticipants, sessionTopics, topics } from "@/lib/db/schema";
 import type { Database } from "@/lib/db";
 
@@ -81,7 +81,8 @@ export async function getActiveSessionForStudent(db: Database, studentId: string
     .where(
       and(
         eq(sessionParticipants.studentId, studentId),
-        eq(liveSessions.status, "active")
+        eq(liveSessions.status, "active"),
+        isNull(sessionParticipants.leftAt)
       )
     )
     .limit(1);
