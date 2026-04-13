@@ -70,7 +70,7 @@ func (m Message) ToDict() map[string]any {
 type LLMConfig struct {
 	Backend     string         `json:"backend" toml:"backend"`
 	Model       string         `json:"model" toml:"model"`
-	APIKey      string         `json:"api_key" toml:"api_key"`
+	APIKey      string         `json:"-" toml:"-"`
 	BaseURL     string         `json:"base_url" toml:"base_url"`
 	Temperature float64        `json:"temperature" toml:"temperature"`
 	MaxTokens   int            `json:"max_tokens" toml:"max_tokens"`

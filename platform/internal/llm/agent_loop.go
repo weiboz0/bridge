@@ -82,6 +82,7 @@ func RunAgenticLoop(ctx context.Context, cfg AgenticLoopConfig, messages []Messa
 			messages = append(messages, Message{
 				Role:       RoleTool,
 				Content:    string(resultJSON),
+				Name:       tc.Name,
 				ToolCallID: tc.ID,
 			})
 		}

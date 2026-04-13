@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 var anthropicModels = []string{
@@ -36,7 +37,7 @@ func NewAnthropicBackend(cfg LLMConfig) *AnthropicBackend {
 	return &AnthropicBackend{
 		config:       cfg,
 		providerName: "anthropic",
-		httpClient:   &http.Client{},
+		httpClient:   &http.Client{Timeout: 5 * time.Minute},
 	}
 }
 

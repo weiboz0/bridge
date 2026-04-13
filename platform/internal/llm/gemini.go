@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 var geminiModels = []string{
@@ -34,7 +35,7 @@ func NewGeminiBackend(cfg LLMConfig) *GeminiBackend {
 	return &GeminiBackend{
 		config:       cfg,
 		providerName: "gemini",
-		httpClient:   &http.Client{},
+		httpClient:   &http.Client{Timeout: 5 * time.Minute},
 	}
 }
 

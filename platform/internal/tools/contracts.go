@@ -34,7 +34,6 @@ func (s ToolSpec) ToOpenAI() map[string]any {
 // ToolInvocation represents a structured assistant tool call.
 type ToolInvocation struct {
 	ToolName     string         `json:"tool_name"`
-	TenantID     string         `json:"tenant_id"`
 	UserID       string         `json:"user_id"`
 	Payload      map[string]any `json:"payload"`
 	SessionID    string         `json:"session_id"`
