@@ -242,7 +242,7 @@ func parseGeminiResponse(data map[string]any, model string) *LLMResponse {
 				args = a
 			}
 			toolCalls = append(toolCalls, ToolCall{
-				ID:        name, // Gemini doesn't use IDs, use name
+				ID:        fmt.Sprintf("%s_%d", name, len(toolCalls)), // synthetic unique ID
 				Name:      name,
 				Arguments: args,
 			})

@@ -3947,6 +3947,8 @@ Tasks 1-4 are independent and can be parallelized. Tasks 5-7 depend on 1-4. Task
 
 **Nice to Have**
 
-8. `[OPEN]` Anthropic StreamChat doesn't surface usage info for cost tracking.
+8. `[FIXED]` Anthropic StreamChat doesn't surface usage info for cost tracking.
+   → Fixed: Extract input_tokens from message_start, output_tokens from message_delta. Final StreamChunk includes Usage.
 
-9. `[OPEN]` Gemini uses tool name as ToolCall ID — could collide for duplicate tool calls.
+9. `[FIXED]` Gemini uses tool name as ToolCall ID — could collide for duplicate tool calls.
+   → Fixed: Generate synthetic unique IDs with `fmt.Sprintf("%s_%d", name, index)`.
