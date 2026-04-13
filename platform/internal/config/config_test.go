@@ -91,3 +91,28 @@ func TestLoad_InvalidTOML(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "config:")
 }
+
+func TestResolveLLMAPIKey(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+	t.Setenv("DASHSCOPE_API_KEY", "sk-dash-test")
+	t.Setenv("GEMINI_API_KEY", "gm-test")
+
+	assert.Equal(t, "sk-ant-test", resolveLLMAPIKey("anthropic"))
+	assert.Equal(t, "sk-dash-test", resolveLLMAPIKey("dashscope"))
+	assert.Equal(t, "sk-dash-test", resolveLLMAPIKey("aliyun"))
+	assert.Equal(t, "sk-dash-test", resolveLLMAPIKey("qwen"))
+	assert.Equal(t, "gm-test", resolveLLMAPIKey("gemini"))
+	assert.Equal(t, "gm-test", resolveLLMAPIKey("google"))
+	assert.Equal(t, "", resolveLLMAPIKey("unknown"))
+}
+
+func TestLoad_LLMAPIKeyResolved(t *testing.T) {
+	t.Setenv("LLM_BACKEND", "anthropic")
+	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-resolved")
+	t.Setenv("DATABASE_URL", "")
+
+	cfg, err := Load("")
+	require.NoError(t, err)
+	assert.Equal(t, "anthropic", cfg.LLM.Backend)
+	assert.Equal(t, "sk-ant-resolved", cfg.LLM.APIKey)
+}
