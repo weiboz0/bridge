@@ -320,6 +320,7 @@ func (b *AnthropicBackend) StreamChat(ctx context.Context, messages []Message, o
 
 		scanner := bufio.NewScanner(resp.Body)
 		stopReason := "end_turn"
+		var totalUsage UsageInfo
 
 		for scanner.Scan() {
 			line := scanner.Text()
@@ -358,9 +359,26 @@ func (b *AnthropicBackend) StreamChat(ctx context.Context, messages []Message, o
 						stopReason = sr
 					}
 				}
+				// Extract usage from message_delta event
+				if u, ok := event["usage"].(map[string]any); ok {
+					outTokens, _ := u["output_tokens"].(float64)
+					if outTokens > 0 {
+						totalUsage.CompletionTokens = int(outTokens)
+						totalUsage.TotalTokens = totalUsage.PromptTokens + totalUsage.CompletionTokens
+					}
+				}
+			case "message_start":
+				if msg, ok := event["message"].(map[string]any); ok {
+					if u, ok := msg["usage"].(map[string]any); ok {
+						inputTokens, _ := u["input_tokens"].(float64)
+						if inputTokens > 0 {
+							totalUsage.PromptTokens = int(inputTokens)
+						}
+					}
+				}
 			}
 		}
-		ch <- StreamChunk{IsFinal: true, FinishReason: stopReason}
+		ch <- StreamChunk{IsFinal: true, FinishReason: stopReason, Usage: &totalUsage}
 	}()
 
 	return ch, nil
