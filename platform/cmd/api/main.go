@@ -17,6 +17,7 @@ import (
 	"github.com/weiboz0/bridge/platform/internal/auth"
 	"github.com/weiboz0/bridge/platform/internal/config"
 	"github.com/weiboz0/bridge/platform/internal/db"
+	"github.com/weiboz0/bridge/platform/internal/events"
 	"github.com/weiboz0/bridge/platform/internal/handlers"
 )
 
@@ -94,6 +95,24 @@ func main() {
 
 		classH := &handlers.ClassHandler{Classes: stores.Classes, Orgs: stores.Orgs, Users: stores.Users}
 		classH.Routes(r)
+
+		sessionH := &handlers.SessionHandler{Sessions: stores.Sessions, Broadcaster: events.NewBroadcaster()}
+		sessionH.Routes(r)
+
+		docH := &handlers.DocumentHandler{Documents: stores.Documents}
+		docH.Routes(r)
+
+		assignH := &handlers.AssignmentHandler{Assignments: stores.Assignments, Classes: stores.Classes}
+		assignH.Routes(r)
+
+		subH := &handlers.SubmissionHandler{Assignments: stores.Assignments}
+		subH.Routes(r)
+
+		annotH := &handlers.AnnotationHandler{Annotations: stores.Annotations}
+		annotH.Routes(r)
+
+		classroomH := &handlers.ClassroomHandler{Classrooms: stores.Classrooms, Sessions: stores.Sessions}
+		classroomH.Routes(r)
 
 		adminH := &handlers.AdminHandler{Orgs: stores.Orgs, Users: stores.Users, DB: database}
 		adminH.Routes(r)
