@@ -19,6 +19,7 @@ import (
 	"github.com/weiboz0/bridge/platform/internal/db"
 	"github.com/weiboz0/bridge/platform/internal/events"
 	"github.com/weiboz0/bridge/platform/internal/handlers"
+	"github.com/weiboz0/bridge/platform/internal/llm"
 )
 
 func main() {
@@ -50,6 +51,20 @@ func main() {
 
 	// Build stores
 	stores := handlers.NewStores(database)
+
+	// Build LLM backend
+	llmBackend, err := llm.CreateBackend(llm.LLMConfig{
+		Backend: cfg.LLM.Backend,
+		Model:   cfg.LLM.Model,
+		APIKey:  cfg.LLM.APIKey,
+		BaseURL: cfg.LLM.BaseURL,
+	})
+	if err != nil {
+		slog.Warn("LLM backend not configured", "error", err)
+	}
+
+	// Shared event broadcaster
+	broadcaster := events.NewBroadcaster()
 
 	// Build router
 	r := chi.NewRouter()
@@ -96,7 +111,7 @@ func main() {
 		classH := &handlers.ClassHandler{Classes: stores.Classes, Orgs: stores.Orgs, Users: stores.Users}
 		classH.Routes(r)
 
-		sessionH := &handlers.SessionHandler{Sessions: stores.Sessions, Classrooms: stores.Classrooms, Broadcaster: events.NewBroadcaster()}
+		sessionH := &handlers.SessionHandler{Sessions: stores.Sessions, Classrooms: stores.Classrooms, Broadcaster: broadcaster}
 		sessionH.Routes(r)
 
 		docH := &handlers.DocumentHandler{Documents: stores.Documents}
@@ -113,6 +128,20 @@ func main() {
 
 		classroomH := &handlers.ClassroomHandler{Classrooms: stores.Classrooms, Sessions: stores.Sessions}
 		classroomH.Routes(r)
+
+		if llmBackend != nil {
+			aiH := &handlers.AIHandler{
+				Interactions: stores.Interactions,
+				Sessions:     stores.Sessions,
+				Classrooms:   stores.Classrooms,
+				Backend:      llmBackend,
+				Broadcaster:  broadcaster,
+			}
+			aiH.Routes(r)
+		}
+
+		parentH := &handlers.ParentHandler{Reports: stores.Reports}
+		parentH.Routes(r)
 
 		adminH := &handlers.AdminHandler{Orgs: stores.Orgs, Users: stores.Users, DB: database}
 		adminH.Routes(r)
