@@ -3952,3 +3952,76 @@ Tasks 1-4 are independent and can be parallelized. Tasks 5-7 depend on 1-4. Task
 
 9. `[FIXED]` Gemini uses tool name as ToolCall ID — could collide for duplicate tool calls.
    → Fixed: Generate synthetic unique IDs with `fmt.Sprintf("%s_%d", name, index)`.
+
+---
+
+## Phase B — Post-Execution Report
+
+**Branch:** `feat/019b-stores-chat-handler`
+**PR:** #25
+**Executed:** 2026-04-13
+
+### What was done
+
+- InteractionStore: create, get, get active, list by session, atomic append message
+- ReportStore: create, get, list by student
+- AI chat handler: streaming SSE with incremental guardrails, grade-level prompts
+- AI toggle handler: teacher enables/disables AI per student
+- AI interactions list: scoped to session teacher
+- Parent report handler: list + create (LLM generation deferred to Phase C)
+- Server wiring: shared broadcaster, LLM backend from config, conditional AI routes
+
+### Code Review — Phase B
+
+#### Review 1
+
+- **Date**: 2026-04-13
+- **Reviewer**: Claude (superpowers:code-reviewer)
+- **PR**: #25
+- **Verdict**: Changes requested (2 critical, 6 important)
+
+**Must Fix**
+
+1. `[FIXED]` Race condition in AppendMessage — read-modify-write on JSONB.
+   → Fixed: Use atomic `messages || jsonb_build_array($1::jsonb)`. Commit bcc5efb.
+
+2. `[FIXED]` Guardrails applied post-streaming — client already received solution.
+   → Fixed: Incremental guardrail checks during streaming, early termination on detection. Commit bcc5efb.
+
+**Should Fix**
+
+3. `[FIXED]` Chat handler auto-creates interactions — bypasses teacher toggle.
+   → Fixed: Require existing interaction, return 403 if not enabled. Commit bcc5efb.
+
+4. `[FIXED]` ListInteractions has no authorization scoping.
+   → Fixed: Verify caller is session teacher or platform admin. Commit bcc5efb.
+
+5. `[WONTFIX]` ParentHandler has no parent-child link verification.
+   → Deferred: parent_links table doesn't exist yet. Added TODO comment.
+
+6. `[FIXED]` Stale history — used pre-append interaction for LLM context.
+   → Fixed: Use returned interaction from atomic AppendMessage. Commit bcc5efb.
+
+7. `[FIXED]` json.Unmarshal errors silently ignored.
+   → Fixed: Return error on parse failure. Commit bcc5efb.
+
+8. `[FIXED]` Error from saving assistant message silently ignored.
+   → Fixed: Capture error (logged, don't fail streamed response). Commit bcc5efb.
+
+**Nice to Have**
+
+9. `[FIXED]` No ChunkType/IsFinal filtering in stream loop.
+   → Fixed: Filter on `chunk.ChunkType == "text"` and break on `chunk.IsFinal`. Commit bcc5efb.
+
+10. `[OPEN]` No message length validation on user input.
+
+11. `[FIXED]` Code language hardcoded to python.
+   → Fixed: Use classroom.EditorMode. Commit bcc5efb.
+
+12. `[WONTFIX]` Missing handler-level tests for AI/parent endpoints.
+   → Deferred: store integration tests cover core logic; will add handler tests in test pass.
+
+13. `[WONTFIX]` Missing GatherReportData for LLM report generation.
+   → Deferred to Phase C (AI Skills).
+
+14. `[OPEN]` Toggle handler disable is cosmetic — no database state change.
