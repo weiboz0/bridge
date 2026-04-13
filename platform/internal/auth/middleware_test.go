@@ -183,6 +183,26 @@ func TestRequireAdmin_Denied_NoClaims(t *testing.T) {
 	handler.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusForbidden, w.Code)
+	assert.Contains(t, w.Header().Get("Content-Type"), "application/json")
+}
+
+func TestRequireAdmin_AllowedWhenImpersonating(t *testing.T) {
+	handler := RequireAdmin(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	// Impersonated user is NOT admin, but the impersonator was
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	ctx := ContextWithClaims(req.Context(), &Claims{
+		UserID:         "target-1",
+		IsPlatformAdmin: false,
+		ImpersonatedBy: "admin-1",
+	})
+	req = req.WithContext(ctx)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
 }
 
 func TestContextWithClaims_And_GetClaims(t *testing.T) {

@@ -3,10 +3,18 @@ package auth
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
 )
+
+// writeJSONError writes a JSON error response with the given status code.
+func writeJSONError(w http.ResponseWriter, status int, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	fmt.Fprintf(w, `{"error":%q}`, message)
+}
 
 type contextKey string
 
@@ -26,14 +34,14 @@ func (m *Middleware) RequireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		authHeader := r.Header.Get("Authorization")
 		if !strings.HasPrefix(authHeader, "Bearer ") {
-			http.Error(w, `{"error":"Unauthorized"}`, http.StatusUnauthorized)
+			writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
 			return
 		}
 
 		tokenStr := strings.TrimPrefix(authHeader, "Bearer ")
 		claims, err := VerifyToken(tokenStr, m.Secret)
 		if err != nil {
-			http.Error(w, `{"error":"Invalid token"}`, http.StatusUnauthorized)
+			writeJSONError(w, http.StatusUnauthorized, "Invalid token")
 			return
 		}
 
@@ -66,12 +74,17 @@ func (m *Middleware) RequireAdminMiddleware(next http.Handler) http.Handler {
 }
 
 // RequireAdmin checks that the user is a platform admin.
-// This is a standalone middleware function that can be used with r.Use(auth.RequireAdmin).
+// Admins who are impersonating a non-admin user retain admin access.
 func RequireAdmin(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		claims := GetClaims(r.Context())
-		if claims == nil || !claims.IsPlatformAdmin {
-			http.Error(w, `{"error":"Platform admin required"}`, http.StatusForbidden)
+		if claims == nil {
+			writeJSONError(w, http.StatusForbidden, "Platform admin required")
+			return
+		}
+		// Allow if admin, or if impersonating (impersonator was verified as admin)
+		if !claims.IsPlatformAdmin && claims.ImpersonatedBy == "" {
+			writeJSONError(w, http.StatusForbidden, "Platform admin required")
 			return
 		}
 		next.ServeHTTP(w, r)
