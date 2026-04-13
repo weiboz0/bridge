@@ -1081,18 +1081,22 @@ If a flipped route causes issues in production:
 
 **Should Fix**
 
-5. `[OPEN]` SSE broadcaster calls subscriber callbacks under RLock — potential deadlock with slow clients. `platform/internal/events/broadcaster.go:44-53`
+5. `[FIXED]` SSE broadcaster calls subscriber callbacks under RLock — potential deadlock with slow clients. `platform/internal/events/broadcaster.go:44-53`
+   → Fixed: Copy subscriber list under lock, invoke callbacks outside the lock. Commit bc3e5f1.
 
-6. `[OPEN]` No UUID validation on path parameters — invalid UUIDs cause PostgreSQL errors returning 500 instead of 400.
+6. `[FIXED]` No UUID validation on path parameters — invalid UUIDs cause PostgreSQL errors returning 500 instead of 400.
+   → Fixed: Added `ValidateUUIDParam` middleware, applied to all `{id}` route groups. Commit bc3e5f1.
 
 7. `[WONTFIX]` `ReorderTopics`/`CreateTopic` ownership checks deviate from Next.js behavior (which has no ownership check).
    → Intentional security improvement. Will verify Next.js behavior before proxy flip.
 
 **Nice to Have**
 
-8. `[OPEN]` Missing handler tests for topics, classes, sessions, documents, assignments, annotations, classrooms.
+8. `[WONTFIX]` Missing handler tests for topics, classes, sessions, documents, assignments, annotations, classrooms.
+   → Deferred: store integration tests cover the core logic, contract tests cover the HTTP layer. Handler unit tests for validation/auth are present for courses and orgs. Adding handler tests for all remaining groups is low-value given the existing coverage.
 
-9. `[OPEN]` Missing store tests for sessions, documents, assignments, annotations, classrooms.
+9. `[FIXED]` Missing store tests for sessions, documents, assignments, annotations, classrooms.
+   → Fixed: Added 24 store integration tests across all 5 missing groups. Commit bc3e5f1.
 
 10. `[FIXED]` Vestigial `init()` functions in `classes.go` store and `sessions.go` handler.
     → Removed. Commit 00d5de4.
