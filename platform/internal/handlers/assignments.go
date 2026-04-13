@@ -28,6 +28,34 @@ func (h *AssignmentHandler) Routes(r chi.Router) {
 	})
 }
 
+// isInstructorOrTA checks if the user is instructor or TA in the given class.
+func (h *AssignmentHandler) isInstructorOrTA(r *http.Request, classID, userID string) (bool, error) {
+	members, err := h.Classes.ListClassMembers(r.Context(), classID)
+	if err != nil {
+		return false, err
+	}
+	for _, m := range members {
+		if m.UserID == userID && (m.Role == "instructor" || m.Role == "ta") {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// isClassMember checks if the user is any member of the given class.
+func (h *AssignmentHandler) isClassMember(r *http.Request, classID, userID string) (bool, error) {
+	members, err := h.Classes.ListClassMembers(r.Context(), classID)
+	if err != nil {
+		return false, err
+	}
+	for _, m := range members {
+		if m.UserID == userID {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func (h *AssignmentHandler) CreateAssignment(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
@@ -52,6 +80,19 @@ func (h *AssignmentHandler) CreateAssignment(w http.ResponseWriter, r *http.Requ
 	if body.Title == "" || len(body.Title) > 255 {
 		writeError(w, http.StatusBadRequest, "title is required (max 255 chars)")
 		return
+	}
+
+	// Auth: instructor or TA in class, or platform admin
+	if !claims.IsPlatformAdmin {
+		ok, err := h.isInstructorOrTA(r, body.ClassID, claims.UserID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "Database error")
+			return
+		}
+		if !ok {
+			writeError(w, http.StatusForbidden, "Must be instructor or TA in this class")
+			return
+		}
 	}
 
 	assignment, err := h.Assignments.CreateAssignment(r.Context(), store.CreateAssignmentInput{
@@ -79,6 +120,19 @@ func (h *AssignmentHandler) ListAssignments(w http.ResponseWriter, r *http.Reque
 	if classID == "" {
 		writeError(w, http.StatusBadRequest, "classId query parameter is required")
 		return
+	}
+
+	// Auth: any class member, or platform admin
+	if !claims.IsPlatformAdmin {
+		ok, err := h.isClassMember(r, classID, claims.UserID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "Database error")
+			return
+		}
+		if !ok {
+			writeError(w, http.StatusForbidden, "Must be a member of this class")
+			return
+		}
 	}
 
 	assignments, err := h.Assignments.ListAssignmentsByClass(r.Context(), classID)
@@ -115,18 +169,38 @@ func (h *AssignmentHandler) UpdateAssignment(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	assignmentID := chi.URLParam(r, "id")
+	assignment, err := h.Assignments.GetAssignment(r.Context(), assignmentID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if assignment == nil {
+		writeError(w, http.StatusNotFound, "Not found")
+		return
+	}
+
+	// Auth: instructor or TA in assignment's class
+	if !claims.IsPlatformAdmin {
+		ok, err := h.isInstructorOrTA(r, assignment.ClassID, claims.UserID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "Database error")
+			return
+		}
+		if !ok {
+			writeError(w, http.StatusForbidden, "Must be instructor or TA")
+			return
+		}
+	}
+
 	var body store.UpdateAssignmentInput
 	if !decodeJSON(w, r, &body) {
 		return
 	}
 
-	updated, err := h.Assignments.UpdateAssignment(r.Context(), chi.URLParam(r, "id"), body)
+	updated, err := h.Assignments.UpdateAssignment(r.Context(), assignmentID, body)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
-		return
-	}
-	if updated == nil {
-		writeError(w, http.StatusNotFound, "Not found")
 		return
 	}
 	writeJSON(w, http.StatusOK, updated)
@@ -139,7 +213,31 @@ func (h *AssignmentHandler) DeleteAssignment(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	deleted, err := h.Assignments.DeleteAssignment(r.Context(), chi.URLParam(r, "id"))
+	assignmentID := chi.URLParam(r, "id")
+	assignment, err := h.Assignments.GetAssignment(r.Context(), assignmentID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if assignment == nil {
+		writeError(w, http.StatusNotFound, "Not found")
+		return
+	}
+
+	// Auth: instructor or TA in assignment's class
+	if !claims.IsPlatformAdmin {
+		ok, err := h.isInstructorOrTA(r, assignment.ClassID, claims.UserID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "Database error")
+			return
+		}
+		if !ok {
+			writeError(w, http.StatusForbidden, "Must be instructor or TA")
+			return
+		}
+	}
+
+	deleted, err := h.Assignments.DeleteAssignment(r.Context(), assignmentID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
@@ -159,11 +257,33 @@ func (h *AssignmentHandler) SubmitAssignment(w http.ResponseWriter, r *http.Requ
 	}
 
 	assignmentID := chi.URLParam(r, "id")
+	assignment, err := h.Assignments.GetAssignment(r.Context(), assignmentID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if assignment == nil {
+		writeError(w, http.StatusNotFound, "Not found")
+		return
+	}
+
+	// Auth: must be a member of the assignment's class
+	if !claims.IsPlatformAdmin {
+		ok, err := h.isClassMember(r, assignment.ClassID, claims.UserID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "Database error")
+			return
+		}
+		if !ok {
+			writeError(w, http.StatusForbidden, "Must be a member of this class")
+			return
+		}
+	}
 
 	var body struct {
 		DocumentID *string `json:"documentId"`
 	}
-	_ = decodeJSON(w, r, &body) // body is optional
+	_ = decodeJSON(w, r, &body)
 
 	submission, err := h.Assignments.CreateSubmission(r.Context(), assignmentID, claims.UserID, body.DocumentID)
 	if err != nil {
@@ -184,7 +304,31 @@ func (h *AssignmentHandler) ListSubmissions(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	submissions, err := h.Assignments.ListSubmissionsByAssignment(r.Context(), chi.URLParam(r, "id"))
+	assignmentID := chi.URLParam(r, "id")
+	assignment, err := h.Assignments.GetAssignment(r.Context(), assignmentID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if assignment == nil {
+		writeError(w, http.StatusNotFound, "Not found")
+		return
+	}
+
+	// Auth: instructor or TA in assignment's class
+	if !claims.IsPlatformAdmin {
+		ok, err := h.isInstructorOrTA(r, assignment.ClassID, claims.UserID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "Database error")
+			return
+		}
+		if !ok {
+			writeError(w, http.StatusForbidden, "Must be instructor or TA to view submissions")
+			return
+		}
+	}
+
+	submissions, err := h.Assignments.ListSubmissionsByAssignment(r.Context(), assignmentID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
@@ -195,6 +339,7 @@ func (h *AssignmentHandler) ListSubmissions(w http.ResponseWriter, r *http.Reque
 // SubmissionHandler for grading
 type SubmissionHandler struct {
 	Assignments *store.AssignmentStore
+	Classes     *store.ClassStore
 }
 
 func (h *SubmissionHandler) Routes(r chi.Router) {
@@ -212,6 +357,47 @@ func (h *SubmissionHandler) GradeSubmission(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	submissionID := chi.URLParam(r, "id")
+	submission, err := h.Assignments.GetSubmission(r.Context(), submissionID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if submission == nil {
+		writeError(w, http.StatusNotFound, "Not found")
+		return
+	}
+
+	// Multi-hop auth: submission -> assignment -> class -> membership check
+	assignment, err := h.Assignments.GetAssignment(r.Context(), submission.AssignmentID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if assignment == nil {
+		writeError(w, http.StatusNotFound, "Assignment not found")
+		return
+	}
+
+	if !claims.IsPlatformAdmin {
+		members, err := h.Classes.ListClassMembers(r.Context(), assignment.ClassID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "Database error")
+			return
+		}
+		isInstructorOrTA := false
+		for _, m := range members {
+			if m.UserID == claims.UserID && (m.Role == "instructor" || m.Role == "ta") {
+				isInstructorOrTA = true
+				break
+			}
+		}
+		if !isInstructorOrTA {
+			writeError(w, http.StatusForbidden, "Must be instructor or TA to grade")
+			return
+		}
+	}
+
 	var body struct {
 		Grade    float64 `json:"grade"`
 		Feedback *string `json:"feedback"`
@@ -224,13 +410,9 @@ func (h *SubmissionHandler) GradeSubmission(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	graded, err := h.Assignments.GradeSubmission(r.Context(), chi.URLParam(r, "id"), body.Grade, body.Feedback)
+	graded, err := h.Assignments.GradeSubmission(r.Context(), submissionID, body.Grade, body.Feedback)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
-		return
-	}
-	if graded == nil {
-		writeError(w, http.StatusNotFound, "Not found")
 		return
 	}
 	writeJSON(w, http.StatusOK, graded)

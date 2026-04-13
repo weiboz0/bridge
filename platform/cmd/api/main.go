@@ -96,7 +96,7 @@ func main() {
 		classH := &handlers.ClassHandler{Classes: stores.Classes, Orgs: stores.Orgs, Users: stores.Users}
 		classH.Routes(r)
 
-		sessionH := &handlers.SessionHandler{Sessions: stores.Sessions, Broadcaster: events.NewBroadcaster()}
+		sessionH := &handlers.SessionHandler{Sessions: stores.Sessions, Classrooms: stores.Classrooms, Broadcaster: events.NewBroadcaster()}
 		sessionH.Routes(r)
 
 		docH := &handlers.DocumentHandler{Documents: stores.Documents}
@@ -105,7 +105,7 @@ func main() {
 		assignH := &handlers.AssignmentHandler{Assignments: stores.Assignments, Classes: stores.Classes}
 		assignH.Routes(r)
 
-		subH := &handlers.SubmissionHandler{Assignments: stores.Assignments}
+		subH := &handlers.SubmissionHandler{Assignments: stores.Assignments, Classes: stores.Classes}
 		subH.Routes(r)
 
 		annotH := &handlers.AnnotationHandler{Annotations: stores.Annotations}

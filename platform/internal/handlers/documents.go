@@ -42,6 +42,17 @@ func (h *DocumentHandler) ListDocuments(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Non-admin users can only list their own documents
+	if !claims.IsPlatformAdmin {
+		if filters.OwnerID != "" && filters.OwnerID != claims.UserID {
+			writeError(w, http.StatusForbidden, "Cannot view other users' documents")
+			return
+		}
+		if filters.OwnerID == "" {
+			filters.OwnerID = claims.UserID
+		}
+	}
+
 	docs, err := h.Documents.ListDocuments(r.Context(), filters)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")

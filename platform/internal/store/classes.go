@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"database/sql"
-	"fmt"
 	"math/big"
 	"strings"
 	"time"
@@ -340,8 +339,4 @@ var validClassMemberRoles = map[string]bool{
 // IsValidClassMemberRole checks if the role is valid.
 func IsValidClassMemberRole(role string) bool {
 	return validClassMemberRoles[role]
-}
-
-func init() {
-	_ = fmt.Sprintf // avoid unused import
 }

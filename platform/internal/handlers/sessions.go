@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -14,6 +13,7 @@ import (
 
 type SessionHandler struct {
 	Sessions    *store.SessionStore
+	Classrooms  *store.ClassroomStore
 	Broadcaster *events.Broadcaster
 }
 
@@ -54,6 +54,21 @@ func (h *SessionHandler) CreateSession(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.ClassroomID == "" {
 		writeError(w, http.StatusBadRequest, "classroomId is required")
+		return
+	}
+
+	// Verify user is the classroom teacher
+	classroom, err := h.Classrooms.GetClassroom(r.Context(), body.ClassroomID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if classroom == nil {
+		writeError(w, http.StatusNotFound, "Classroom not found")
+		return
+	}
+	if !claims.IsPlatformAdmin && classroom.TeacherID != claims.UserID {
+		writeError(w, http.StatusForbidden, "Only the classroom teacher can start a session")
 		return
 	}
 
@@ -448,6 +463,3 @@ func (h *SessionHandler) UnlinkSessionTopic(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, map[string]bool{"success": true})
 }
 
-func init() {
-	_ = fmt.Sprintf // ensure fmt is used
-}
