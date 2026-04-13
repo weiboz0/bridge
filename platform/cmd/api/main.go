@@ -92,6 +92,9 @@ func main() {
 		topicH := &handlers.TopicHandler{Topics: stores.Topics, Courses: stores.Courses, Orgs: stores.Orgs}
 		topicH.Routes(r)
 
+		classH := &handlers.ClassHandler{Classes: stores.Classes, Orgs: stores.Orgs, Users: stores.Users}
+		classH.Routes(r)
+
 		adminH := &handlers.AdminHandler{Orgs: stores.Orgs, Users: stores.Users, DB: database}
 		adminH.Routes(r)
 	})
