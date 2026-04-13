@@ -4011,23 +4011,42 @@ Docs:
 | contract | 18 | N/A (out-of-process) |
 | **Total** | **104** | **50.5% (internal packages)** |
 
-### Code Review Results
+## Code Review
 
-**Reviewer:** superpowers:code-reviewer subagent
-**Verdict:** Merge after fixing 2 important issues (done)
+### Review 1
 
-**Fixed before merge:**
-- RequireAdmin now allows impersonated admins through (ImpersonatedBy check)
-- Auth middleware error responses changed from text/plain to application/json
+- **Date**: 2026-04-13
+- **Reviewer**: Claude (superpowers:code-reviewer)
+- **PR**: #21 — feat: Go platform foundation (Plan 017)
+- **Verdict**: Approved with suggestions
 
-**Deferred to Plan 018 (not blocking — proxy routes are commented out):**
-- Auth.js v5 uses JWE (encrypted tokens), not plain HS256 JWTs. Go server currently uses its own plain JWTs for contract tests. When proxy routes are enabled, a Next.js middleware will create plain JWTs for Go API calls.
-- DB lookup for `isPlatformAdmin` instead of trusting token claims — eliminates stale-permission risk
-- Reconcile port 8001 (spec) vs 8002 (implementation) in docs
+**Must Fix**
 
-**Acknowledged (low priority):**
-- `decodeJSON` has no request body size limit
-- `maskURL` in main.go is a naive truncation
-- Missing `go vet` / linter Makefile target
-- Contract test cleanup for created orgs/users is incomplete
-- No email format validation in Register/AddMember handlers
+1. `[FIXED]` RequireAdmin does not allow impersonated admins through. When admin impersonates a non-admin, they get locked out of `/api/admin/*` routes. `platform/internal/auth/middleware.go:78`
+   → Fixed: Added `ImpersonatedBy` check so admins retain access while impersonating. Commit d3a7028.
+
+2. `[FIXED]` Auth middleware error responses use `text/plain` (`http.Error`) while handler errors use `application/json` (`writeError`). Inconsistent for frontend clients. `platform/internal/auth/middleware.go:35,42`
+   → Fixed: Added `writeJSONError` helper, all auth errors now return `application/json`. Commit d3a7028.
+
+**Should Fix**
+
+3. `[WONTFIX]` Auth.js v5 uses JWE (encrypted tokens), not plain HS256 JWTs. Go `VerifyToken` cannot parse Auth.js session tokens.
+   → Deferred to Plan 018. Proxy routes are commented out so Auth.js tokens never reach Go yet. Will add a Next.js middleware to create plain JWTs for Go API calls.
+
+4. `[WONTFIX]` JWT reads `"id"` claim but Auth.js uses `"sub"`. No DB lookup means `isPlatformAdmin` is trusted from token without verification. `platform/internal/auth/jwt.go:42`
+   → Deferred to Plan 018. Current `"id"` field works because the Auth.js `jwt` callback sets `token.id`. DB lookup will be added when proxy routes are enabled.
+
+5. `[WONTFIX]` Port 8001 in spec/plans vs 8002 in implementation.
+   → Port 8002 chosen because 8001 is occupied. Will update spec docs in Plan 018.
+
+**Nice to Have**
+
+6. `[OPEN]` `decodeJSON` has no request body size limit — potential memory issue from large payloads. `platform/internal/handlers/helpers.go:25`
+
+7. `[OPEN]` `maskURL` in main.go is naive truncation — may expose credentials in short URLs. `platform/cmd/api/main.go:131`
+
+8. `[OPEN]` Missing `go vet` / `golangci-lint` Makefile target.
+
+9. `[OPEN]` Contract test cleanup incomplete — created orgs/users not deleted after test runs.
+
+10. `[OPEN]` No email format validation in Register and AddMember handlers. Next.js uses `z.string().email()`.
