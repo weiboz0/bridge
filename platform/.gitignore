@@ -1,0 +1,11 @@
+# Binaries
+/bin/
+/tmp/
+*.exe
+
+# IDE
+.idea/
+*.swp
+
+# Test coverage
+coverage.out
