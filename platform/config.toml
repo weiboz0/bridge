@@ -1,0 +1,9 @@
+[server]
+port = 8002
+host = "0.0.0.0"
+
+[database]
+url = "postgresql://work@127.0.0.1:5432/bridge"
+
+[auth]
+# nextauth_secret loaded from NEXTAUTH_SECRET env var at runtime

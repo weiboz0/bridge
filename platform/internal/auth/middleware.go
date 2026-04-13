@@ -1,0 +1,90 @@
+package auth
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/url"
+	"strings"
+)
+
+type contextKey string
+
+const claimsKey contextKey = "claims"
+
+type Middleware struct {
+	Secret string
+}
+
+func NewMiddleware(secret string) *Middleware {
+	return &Middleware{Secret: secret}
+}
+
+// RequireAuth validates the JWT and injects claims into context.
+// Also handles impersonation via bridge-impersonate cookie.
+func (m *Middleware) RequireAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authHeader := r.Header.Get("Authorization")
+		if !strings.HasPrefix(authHeader, "Bearer ") {
+			http.Error(w, `{"error":"Unauthorized"}`, http.StatusUnauthorized)
+			return
+		}
+
+		tokenStr := strings.TrimPrefix(authHeader, "Bearer ")
+		claims, err := VerifyToken(tokenStr, m.Secret)
+		if err != nil {
+			http.Error(w, `{"error":"Invalid token"}`, http.StatusUnauthorized)
+			return
+		}
+
+		// Check impersonation cookie
+		if cookie, err := r.Cookie("bridge-impersonate"); err == nil && claims.IsPlatformAdmin {
+			cookieVal := cookie.Value
+			if decoded, err := url.QueryUnescape(cookieVal); err == nil {
+				cookieVal = decoded
+			}
+			var impData ImpersonationData
+			if json.Unmarshal([]byte(cookieVal), &impData) == nil && impData.OriginalUserID == claims.UserID {
+				claims = &Claims{
+					UserID:          impData.TargetUserID,
+					Email:           impData.TargetEmail,
+					Name:            impData.TargetName,
+					IsPlatformAdmin: false,
+					ImpersonatedBy:  impData.OriginalUserID,
+				}
+			}
+		}
+
+		ctx := ContextWithClaims(r.Context(), claims)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+// RequireAdminMiddleware is a method-based admin check middleware.
+func (m *Middleware) RequireAdminMiddleware(next http.Handler) http.Handler {
+	return RequireAdmin(next)
+}
+
+// RequireAdmin checks that the user is a platform admin.
+// This is a standalone middleware function that can be used with r.Use(auth.RequireAdmin).
+func RequireAdmin(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		claims := GetClaims(r.Context())
+		if claims == nil || !claims.IsPlatformAdmin {
+			http.Error(w, `{"error":"Platform admin required"}`, http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// ContextWithClaims returns a new context with the given claims attached.
+func ContextWithClaims(ctx context.Context, claims *Claims) context.Context {
+	return context.WithValue(ctx, claimsKey, claims)
+}
+
+// GetClaims retrieves the authenticated user's claims from context.
+func GetClaims(ctx context.Context) *Claims {
+	claims, _ := ctx.Value(claimsKey).(*Claims)
+	return claims
+}
