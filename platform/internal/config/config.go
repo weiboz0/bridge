@@ -32,6 +32,7 @@ type LLMConfig struct {
 	Backend string `toml:"backend"`
 	Model   string `toml:"model"`
 	BaseURL string `toml:"base_url"`
+	APIKey  string `toml:"-"` // resolved from env at runtime, never in config file
 }
 
 func Load(path string) (*Config, error) {
@@ -71,9 +72,33 @@ func Load(path string) (*Config, error) {
 	if v := os.Getenv("LLM_BASE_URL"); v != "" {
 		cfg.LLM.BaseURL = v
 	}
+
+	// Resolve LLM API key from provider-specific env var
+	cfg.LLM.APIKey = resolveLLMAPIKey(cfg.LLM.Backend)
 	if v := os.Getenv("GO_PORT"); v != "" {
 		fmt.Sscanf(v, "%d", &cfg.Server.Port)
 	}
 
 	return cfg, nil
+}
+
+// resolveLLMAPIKey maps backend names to their environment variable for API keys.
+func resolveLLMAPIKey(backend string) string {
+	envVars := map[string]string{
+		"anthropic":  "ANTHROPIC_API_KEY",
+		"openai":     "OPENAI_API_KEY",
+		"aliyun":     "DASHSCOPE_API_KEY",
+		"dashscope":  "DASHSCOPE_API_KEY",
+		"qwen":       "DASHSCOPE_API_KEY",
+		"gemini":     "GEMINI_API_KEY",
+		"google":     "GEMINI_API_KEY",
+		"openrouter": "OPENROUTER_API_KEY",
+		"ark":        "ARK_API_KEY",
+		"doubao":     "ARK_API_KEY",
+		"nvidia":     "NVIDIA_API_KEY",
+	}
+	if envName, ok := envVars[backend]; ok {
+		return os.Getenv(envName)
+	}
+	return ""
 }
