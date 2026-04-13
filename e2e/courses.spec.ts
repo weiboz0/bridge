@@ -30,10 +30,11 @@ test.describe("Course & Class Management", () => {
       // Add a topic
       const topicInput = page.locator('input[name="title"]');
       if (await topicInput.isVisible()) {
-        await topicInput.fill("E2E Test Topic");
+        const topicName = `E2E Topic ${Date.now()}`;
+        await topicInput.fill(topicName);
         await page.click('button:text("Add Topic")');
         await page.waitForTimeout(1000);
-        await expect(page.locator("text=E2E Test Topic")).toBeVisible();
+        await expect(page.locator(`text=${topicName}`).first()).toBeVisible();
       }
     }
   });
