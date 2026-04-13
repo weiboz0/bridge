@@ -89,6 +89,13 @@ func (s *InteractionStore) ListInteractionsBySession(ctx context.Context, sessio
 	return interactions, rows.Err()
 }
 
+func (s *InteractionStore) DeleteInteraction(ctx context.Context, studentID, sessionID string) error {
+	_, err := s.db.ExecContext(ctx,
+		`DELETE FROM ai_interactions WHERE student_id = $1 AND session_id = $2`,
+		studentID, sessionID)
+	return err
+}
+
 type ChatMessage struct {
 	Role      string `json:"role"`
 	Content   string `json:"content"`

@@ -4013,7 +4013,7 @@ Tasks 1-4 are independent and can be parallelized. Tasks 5-7 depend on 1-4. Task
 9. `[FIXED]` No ChunkType/IsFinal filtering in stream loop.
    → Fixed: Filter on `chunk.ChunkType == "text"` and break on `chunk.IsFinal`. Commit bcc5efb.
 
-10. `[OPEN]` No message length validation on user input.
+10. `[FIXED]` No message length validation on user input.
 
 11. `[FIXED]` Code language hardcoded to python.
    → Fixed: Use classroom.EditorMode. Commit bcc5efb.
@@ -4024,4 +4024,4 @@ Tasks 1-4 are independent and can be parallelized. Tasks 5-7 depend on 1-4. Task
 13. `[WONTFIX]` Missing GatherReportData for LLM report generation.
    → Deferred to Phase C (AI Skills).
 
-14. `[OPEN]` Toggle handler disable is cosmetic — no database state change.
+14. `[FIXED]` Toggle handler disable is cosmetic — no database state change.

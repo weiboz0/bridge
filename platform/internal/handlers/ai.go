@@ -125,6 +125,10 @@ func (h *AIHandler) Chat(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "sessionId and message are required")
 		return
 	}
+	if len(body.Message) > 5000 {
+		writeError(w, http.StatusBadRequest, "message is too long (max 5000 characters)")
+		return
+	}
 
 	// Verify session exists and is active
 	liveSession, err := h.Sessions.GetSession(r.Context(), body.SessionID)
@@ -324,6 +328,12 @@ func (h *AIHandler) Toggle(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusInternalServerError, "Database error")
 				return
 			}
+		}
+	} else {
+		// Disable: delete the interaction so Chat handler rejects future messages
+		if err := h.Interactions.DeleteInteraction(r.Context(), body.StudentID, body.SessionID); err != nil {
+			writeError(w, http.StatusInternalServerError, "Database error")
+			return
 		}
 	}
 
