@@ -4014,6 +4014,7 @@ Tasks 1-4 are independent and can be parallelized. Tasks 5-7 depend on 1-4. Task
    → Fixed: Filter on `chunk.ChunkType == "text"` and break on `chunk.IsFinal`. Commit bcc5efb.
 
 10. `[FIXED]` No message length validation on user input.
+   → Fixed: Added 5000 char limit on chat messages. Commit f381b51.
 
 11. `[FIXED]` Code language hardcoded to python.
    → Fixed: Use classroom.EditorMode. Commit bcc5efb.
@@ -4025,3 +4026,4 @@ Tasks 1-4 are independent and can be parallelized. Tasks 5-7 depend on 1-4. Task
    → Deferred to Phase C (AI Skills).
 
 14. `[FIXED]` Toggle handler disable is cosmetic — no database state change.
+   → Fixed: Disable now deletes interaction record; Chat handler returns 403. Commit f381b51.
