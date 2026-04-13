@@ -86,6 +86,9 @@ func main() {
 		orgH := &handlers.OrgHandler{Orgs: stores.Orgs, Users: stores.Users}
 		orgH.Routes(r)
 
+		courseH := &handlers.CourseHandler{Courses: stores.Courses, Orgs: stores.Orgs}
+		courseH.Routes(r)
+
 		adminH := &handlers.AdminHandler{Orgs: stores.Orgs, Users: stores.Users, DB: database}
 		adminH.Routes(r)
 	})

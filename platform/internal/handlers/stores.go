@@ -8,14 +8,16 @@ import (
 
 // Stores holds all store instances for dependency injection.
 type Stores struct {
-	Orgs  *store.OrgStore
-	Users *store.UserStore
+	Orgs    *store.OrgStore
+	Users   *store.UserStore
+	Courses *store.CourseStore
 }
 
 // NewStores creates all stores from a database connection.
 func NewStores(db *sql.DB) *Stores {
 	return &Stores{
-		Orgs:  store.NewOrgStore(db),
-		Users: store.NewUserStore(db),
+		Orgs:    store.NewOrgStore(db),
+		Users:   store.NewUserStore(db),
+		Courses: store.NewCourseStore(db),
 	}
 }
