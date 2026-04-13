@@ -6,19 +6,19 @@
 
 Phase 3 of the Go backend migration (spec `docs/specs/004-go-backend-migration.md`). Migrates all AI/LLM functionality from Next.js to Go: the LLM abstraction layer, agentic loop with tool calling, Bridge-specific AI tools (code runner, code analyzer, tutor, report generator, lesson generator), streaming SSE chat, and Piston-based code execution for compiled languages.
 
-**Source reference:** `/home/chris/workshop/magicburg-go/gobackend/internal/` — proven Go patterns for LLM, tools, events, and agentic loop. Copied and adapted for Bridge.
+**Source reference:** `/home/chris/workshop/magicburg-go/platform/internal/` — proven Go patterns for LLM, tools, events, and agentic loop. Copied and adapted for Bridge.
 
 **What moves:**
-- `src/lib/ai/client.ts` → `gobackend/internal/llm/` (full LLM layer)
-- `src/lib/ai/guardrails.ts` → `gobackend/internal/skills/tutor.go` (guardrail logic)
-- `src/lib/ai/system-prompts.ts` → `gobackend/internal/skills/tutor.go` (prompt templates)
-- `src/lib/ai/report-prompts.ts` → `gobackend/internal/skills/report_generator.go`
-- `src/lib/ai/interactions.ts` → `gobackend/internal/store/interactions.go`
-- `src/app/api/ai/chat/route.ts` → `gobackend/internal/handlers/ai.go`
-- `src/app/api/ai/toggle/route.ts` → `gobackend/internal/handlers/ai.go`
-- `src/app/api/ai/interactions/route.ts` → `gobackend/internal/handlers/ai.go`
-- `src/app/api/parent/children/[id]/reports/route.ts` → `gobackend/internal/handlers/parent.go`
-- `src/lib/parent-reports.ts` → `gobackend/internal/skills/report_generator.go`
+- `src/lib/ai/client.ts` → `platform/internal/llm/` (full LLM layer)
+- `src/lib/ai/guardrails.ts` → `platform/internal/skills/tutor.go` (guardrail logic)
+- `src/lib/ai/system-prompts.ts` → `platform/internal/skills/tutor.go` (prompt templates)
+- `src/lib/ai/report-prompts.ts` → `platform/internal/skills/report_generator.go`
+- `src/lib/ai/interactions.ts` → `platform/internal/store/interactions.go`
+- `src/app/api/ai/chat/route.ts` → `platform/internal/handlers/ai.go`
+- `src/app/api/ai/toggle/route.ts` → `platform/internal/handlers/ai.go`
+- `src/app/api/ai/interactions/route.ts` → `platform/internal/handlers/ai.go`
+- `src/app/api/parent/children/[id]/reports/route.ts` → `platform/internal/handlers/parent.go`
+- `src/lib/parent-reports.ts` → `platform/internal/skills/report_generator.go`
 
 **What's new:**
 - Piston integration for server-side code execution (C++, Java, Rust)
@@ -30,7 +30,7 @@ Phase 3 of the Go backend migration (spec `docs/specs/004-go-backend-migration.m
 
 ## Prerequisites
 
-- Go project foundation exists (`gobackend/cmd/api/main.go`, Chi router, auth middleware, DB connection, config) — assumed from Phase 1
+- Go project foundation exists (`platform/cmd/api/main.go`, Chi router, auth middleware, DB connection, config) — assumed from Phase 1
 - Phase 2 routes (sessions, documents, classrooms) are migrated — handlers referenced by AI endpoints exist
 - PostgreSQL tables `ai_interactions` and `parent_reports` already exist (created by Drizzle migrations)
 
@@ -38,15 +38,15 @@ Phase 3 of the Go backend migration (spec `docs/specs/004-go-backend-migration.m
 
 ## Task 1: Copy LLM Layer from Magicburg
 
-Copy the entire `internal/llm/` package from magicburg. Change the module import path from `github.com/MagicBurg/magicburg/gobackend` to `github.com/bridge-edu/bridge/gobackend`.
+Copy the entire `internal/llm/` package from magicburg. Change the module import path from `github.com/weiboz0/bridge/platform` to `github.com/weiboz0/bridge/platform`.
 
 ### Files to create
 
-All files under `gobackend/internal/llm/`:
+All files under `platform/internal/llm/`:
 
-#### 1a. `gobackend/internal/llm/types.go`
+#### 1a. `platform/internal/llm/types.go`
 
-Copy verbatim from `/home/chris/workshop/magicburg-go/gobackend/internal/llm/types.go`. Only change: the `package` declaration stays `llm` (no import path change needed within the package).
+Copy verbatim from `/home/chris/workshop/magicburg-go/platform/internal/llm/types.go`. Only change: the `package` declaration stays `llm` (no import path change needed within the package).
 
 ```go
 // Package llm provides the LLM abstraction layer: types, backend interface, and implementations.
@@ -202,7 +202,7 @@ func contentToString(content any) string {
 }
 ```
 
-#### 1b. `gobackend/internal/llm/backend.go`
+#### 1b. `platform/internal/llm/backend.go`
 
 Copy verbatim from magicburg. Contains `Backend` interface, `ChatOption` functional options, `resolveOpts`.
 
@@ -266,33 +266,33 @@ func resolveOpts(opts []ChatOption) chatOpts {
 }
 ```
 
-#### 1c. `gobackend/internal/llm/openai.go`
+#### 1c. `platform/internal/llm/openai.go`
 
-Copy verbatim from magicburg (`/home/chris/workshop/magicburg-go/gobackend/internal/llm/openai.go`). All 506 lines. No changes needed — the file has no project-specific imports.
+Copy verbatim from magicburg (`/home/chris/workshop/magicburg-go/platform/internal/llm/openai.go`). All 506 lines. No changes needed — the file has no project-specific imports.
 
-#### 1d. `gobackend/internal/llm/anthropic.go`
+#### 1d. `platform/internal/llm/anthropic.go`
 
-Copy verbatim from magicburg (`/home/chris/workshop/magicburg-go/gobackend/internal/llm/anthropic.go`). All 381 lines. No changes needed.
+Copy verbatim from magicburg (`/home/chris/workshop/magicburg-go/platform/internal/llm/anthropic.go`). All 381 lines. No changes needed.
 
-#### 1e. `gobackend/internal/llm/gemini.go`
+#### 1e. `platform/internal/llm/gemini.go`
 
-Copy verbatim from magicburg (`/home/chris/workshop/magicburg-go/gobackend/internal/llm/gemini.go`). All 351 lines. No changes needed.
+Copy verbatim from magicburg (`/home/chris/workshop/magicburg-go/platform/internal/llm/gemini.go`). All 351 lines. No changes needed.
 
-#### 1f. `gobackend/internal/llm/ollama.go`
+#### 1f. `platform/internal/llm/ollama.go`
 
-Copy verbatim from magicburg (`/home/chris/workshop/magicburg-go/gobackend/internal/llm/ollama.go`). All 135 lines. No changes needed.
+Copy verbatim from magicburg (`/home/chris/workshop/magicburg-go/platform/internal/llm/ollama.go`). All 135 lines. No changes needed.
 
-#### 1g. `gobackend/internal/llm/factory.go`
+#### 1g. `platform/internal/llm/factory.go`
 
-Copy verbatim from magicburg (`/home/chris/workshop/magicburg-go/gobackend/internal/llm/factory.go`). All 170 lines. No changes needed — the `CreateBackend` function, provider aliases, and model lists are project-agnostic.
+Copy verbatim from magicburg (`/home/chris/workshop/magicburg-go/platform/internal/llm/factory.go`). All 170 lines. No changes needed — the `CreateBackend` function, provider aliases, and model lists are project-agnostic.
 
-#### 1h. `gobackend/internal/llm/agent_loop.go`
+#### 1h. `platform/internal/llm/agent_loop.go`
 
-Copy verbatim from magicburg (`/home/chris/workshop/magicburg-go/gobackend/internal/llm/agent_loop.go`). All 91 lines. No changes needed.
+Copy verbatim from magicburg (`/home/chris/workshop/magicburg-go/platform/internal/llm/agent_loop.go`). All 91 lines. No changes needed.
 
 ### go.mod additions
 
-Add to `gobackend/go.mod`:
+Add to `platform/go.mod`:
 ```
 github.com/sashabaranov/go-openai v1.41.2
 ```
@@ -301,11 +301,11 @@ github.com/sashabaranov/go-openai v1.41.2
 
 ## Task 2: Copy Tool Registry from Magicburg
 
-Copy `internal/tools/` package. Change import path from `github.com/MagicBurg/magicburg/gobackend/internal/llm` to `github.com/bridge-edu/bridge/gobackend/internal/llm`.
+Copy `internal/tools/` package. Change import path from `github.com/MagicBurg/magicburg/platform/internal/llm` to `github.com/bridge-edu/bridge/platform/internal/llm`.
 
 ### Files to create
 
-#### 2a. `gobackend/internal/tools/contracts.go`
+#### 2a. `platform/internal/tools/contracts.go`
 
 ```go
 // Package tools provides the tool registry and contracts for assistant tools.
@@ -366,7 +366,7 @@ type Tool interface {
 }
 ```
 
-#### 2b. `gobackend/internal/tools/registry.go`
+#### 2b. `platform/internal/tools/registry.go`
 
 ```go
 package tools
@@ -376,7 +376,7 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/bridge-edu/bridge/gobackend/internal/llm"
+	"github.com/bridge-edu/bridge/platform/internal/llm"
 )
 
 // Registry holds registered assistant tools and dispatches calls.
@@ -462,7 +462,7 @@ Copy `internal/events/broadcaster.go` from magicburg, adapted for Bridge (no `ag
 
 ### File to create
 
-#### 3a. `gobackend/internal/events/broadcaster.go`
+#### 3a. `platform/internal/events/broadcaster.go`
 
 ```go
 // Package events provides per-session SSE event distribution using Go channels.
@@ -574,7 +574,7 @@ New file. Wraps the Piston HTTP API for sandboxed code execution.
 
 ### File to create
 
-#### 4a. `gobackend/internal/sandbox/piston.go`
+#### 4a. `platform/internal/sandbox/piston.go`
 
 ```go
 // Package sandbox provides sandboxed code execution via the Piston API.
@@ -815,7 +815,7 @@ Five tools that implement the `tools.Tool` interface. Each is registered in the 
 
 ### Files to create
 
-#### 5a. `gobackend/internal/skills/code_runner.go`
+#### 5a. `platform/internal/skills/code_runner.go`
 
 Wraps Piston. Called by the agentic loop when the AI wants to execute student code or validate AI-generated code.
 
@@ -827,8 +827,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/bridge-edu/bridge/gobackend/internal/sandbox"
-	"github.com/bridge-edu/bridge/gobackend/internal/tools"
+	"github.com/bridge-edu/bridge/platform/internal/sandbox"
+	"github.com/bridge-edu/bridge/platform/internal/tools"
 )
 
 // CodeRunner executes code in Piston and returns stdout/stderr.
@@ -921,7 +921,7 @@ func (t *CodeRunner) Invoke(ctx context.Context, inv tools.ToolInvocation) (tool
 }
 ```
 
-#### 5b. `gobackend/internal/skills/code_analyzer.go`
+#### 5b. `platform/internal/skills/code_analyzer.go`
 
 AI tool that analyzes student code patterns (not via LLM itself but by static analysis of common issues).
 
@@ -934,7 +934,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/bridge-edu/bridge/gobackend/internal/tools"
+	"github.com/bridge-edu/bridge/platform/internal/tools"
 )
 
 // CodeAnalyzer performs static analysis on student code to identify patterns,
@@ -1171,7 +1171,7 @@ func codeMetrics(code string) map[string]any {
 }
 ```
 
-#### 5c. `gobackend/internal/skills/tutor.go`
+#### 5c. `platform/internal/skills/tutor.go`
 
 Socratic guardrails and grade-level system prompts. Migrates `src/lib/ai/guardrails.ts` and `src/lib/ai/system-prompts.ts`.
 
@@ -1183,7 +1183,7 @@ import (
 	"fmt"
 	"regexp"
 
-	"github.com/bridge-edu/bridge/gobackend/internal/tools"
+	"github.com/bridge-edu/bridge/platform/internal/tools"
 )
 
 // GradeLevel represents the student's grade band.
@@ -1346,7 +1346,7 @@ func BuildChatSystemPrompt(gradeLevel GradeLevel, code string) string {
 }
 ```
 
-#### 5d. `gobackend/internal/skills/report_generator.go`
+#### 5d. `platform/internal/skills/report_generator.go`
 
 Migrates `src/lib/parent-reports.ts` and `src/lib/ai/report-prompts.ts`.
 
@@ -1358,8 +1358,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/bridge-edu/bridge/gobackend/internal/llm"
-	"github.com/bridge-edu/bridge/gobackend/internal/tools"
+	"github.com/bridge-edu/bridge/platform/internal/llm"
+	"github.com/bridge-edu/bridge/platform/internal/tools"
 )
 
 // ReportGenerator generates parent-facing progress reports using LLM.
@@ -1554,7 +1554,7 @@ func stringsFromPayload(p map[string]any, key string) []string {
 }
 ```
 
-#### 5e. `gobackend/internal/skills/lesson_generator.go`
+#### 5e. `platform/internal/skills/lesson_generator.go`
 
 AIGC lesson content generation tool.
 
@@ -1565,8 +1565,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/bridge-edu/bridge/gobackend/internal/llm"
-	"github.com/bridge-edu/bridge/gobackend/internal/tools"
+	"github.com/bridge-edu/bridge/platform/internal/llm"
+	"github.com/bridge-edu/bridge/platform/internal/tools"
 )
 
 // LessonGenerator generates lesson content using LLM.
@@ -1685,7 +1685,7 @@ Migrates `src/lib/ai/interactions.ts` to Go.
 
 ### File to create
 
-#### 6a. `gobackend/internal/store/interactions.go`
+#### 6a. `platform/internal/store/interactions.go`
 
 ```go
 package store
@@ -1817,7 +1817,7 @@ Migrates the DB operations from `src/lib/parent-reports.ts`.
 
 ### File to create
 
-#### 7a. `gobackend/internal/store/reports.go`
+#### 7a. `platform/internal/store/reports.go`
 
 ```go
 package store
@@ -2024,7 +2024,7 @@ Migrates `src/app/api/ai/chat/route.ts`, `src/app/api/ai/toggle/route.ts`, and `
 
 ### File to create
 
-#### 8a. `gobackend/internal/handlers/ai.go`
+#### 8a. `platform/internal/handlers/ai.go`
 
 ```go
 package handlers
@@ -2039,10 +2039,10 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/bridge-edu/bridge/gobackend/internal/events"
-	"github.com/bridge-edu/bridge/gobackend/internal/llm"
-	"github.com/bridge-edu/bridge/gobackend/internal/skills"
-	"github.com/bridge-edu/bridge/gobackend/internal/store"
+	"github.com/bridge-edu/bridge/platform/internal/events"
+	"github.com/bridge-edu/bridge/platform/internal/llm"
+	"github.com/bridge-edu/bridge/platform/internal/skills"
+	"github.com/bridge-edu/bridge/platform/internal/store"
 )
 
 // AIHandler handles AI chat, toggle, and interaction endpoints.
@@ -2343,7 +2343,7 @@ Migrates `src/app/api/parent/children/[id]/reports/route.ts`.
 
 ### File to create
 
-#### 9a. `gobackend/internal/handlers/parent.go`
+#### 9a. `platform/internal/handlers/parent.go`
 
 ```go
 package handlers
@@ -2356,10 +2356,10 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/bridge-edu/bridge/gobackend/internal/llm"
-	"github.com/bridge-edu/bridge/gobackend/internal/skills"
-	"github.com/bridge-edu/bridge/gobackend/internal/store"
-	"github.com/bridge-edu/bridge/gobackend/internal/tools"
+	"github.com/bridge-edu/bridge/platform/internal/llm"
+	"github.com/bridge-edu/bridge/platform/internal/skills"
+	"github.com/bridge-edu/bridge/platform/internal/store"
+	"github.com/bridge-edu/bridge/platform/internal/tools"
 )
 
 // ParentHandler handles parent portal API endpoints.
@@ -2548,7 +2548,7 @@ Wire all Bridge tools into a registry, create the bridge-specific `ToolExecutor`
 
 ### File to create
 
-#### 10a. `gobackend/internal/skills/registry.go`
+#### 10a. `platform/internal/skills/registry.go`
 
 ```go
 package skills
@@ -2557,9 +2557,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/bridge-edu/bridge/gobackend/internal/llm"
-	"github.com/bridge-edu/bridge/gobackend/internal/sandbox"
-	"github.com/bridge-edu/bridge/gobackend/internal/tools"
+	"github.com/bridge-edu/bridge/platform/internal/llm"
+	"github.com/bridge-edu/bridge/platform/internal/sandbox"
+	"github.com/bridge-edu/bridge/platform/internal/tools"
 )
 
 // NewBridgeRegistry creates a tool registry with all Bridge-specific tools registered.
@@ -2666,7 +2666,7 @@ echo "All languages installed."
 
 ### File to create / modify
 
-#### 12a. `gobackend/config.toml` (add LLM and Piston sections)
+#### 12a. `platform/config.toml` (add LLM and Piston sections)
 
 Add to the existing `config.toml` (or create if it doesn't exist):
 
@@ -2689,7 +2689,7 @@ max_output_size = 65536
 max_concurrent = 10
 ```
 
-#### 12b. `gobackend/internal/config/config.go` (extend)
+#### 12b. `platform/internal/config/config.go` (extend)
 
 Add to the existing config struct (assumed from Phase 1):
 
@@ -2728,7 +2728,7 @@ The LLM API key is read from environment variables (e.g., `ANTHROPIC_API_KEY`, `
 
 ### File to modify
 
-#### 13a. `gobackend/cmd/api/main.go` (extend)
+#### 13a. `platform/cmd/api/main.go` (extend)
 
 Add initialization of the LLM backend, Piston client, tool registry, and new handlers to the existing `main.go` (assumed from Phase 1):
 
@@ -2805,7 +2805,7 @@ parentHandler.Routes(r)
 
 ### Files to create
 
-#### 14a. `gobackend/tests/unit/llm/agent_loop_test.go`
+#### 14a. `platform/tests/unit/llm/agent_loop_test.go`
 
 Tests for the agentic loop.
 
@@ -2816,7 +2816,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/bridge-edu/bridge/gobackend/internal/llm"
+	"github.com/bridge-edu/bridge/platform/internal/llm"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -2976,7 +2976,7 @@ func TestAgenticLoop_ContextCancellation(t *testing.T) {
 }
 ```
 
-#### 14b. `gobackend/tests/unit/tools/registry_test.go`
+#### 14b. `platform/tests/unit/tools/registry_test.go`
 
 Tests for the tool registry.
 
@@ -2987,8 +2987,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/bridge-edu/bridge/gobackend/internal/llm"
-	"github.com/bridge-edu/bridge/gobackend/internal/tools"
+	"github.com/bridge-edu/bridge/platform/internal/llm"
+	"github.com/bridge-edu/bridge/platform/internal/tools"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -3084,7 +3084,7 @@ func TestRegistry_Copy(t *testing.T) {
 }
 ```
 
-#### 14c. `gobackend/tests/unit/skills/guardrails_test.go`
+#### 14c. `platform/tests/unit/skills/guardrails_test.go`
 
 Tests for guardrails and system prompts.
 
@@ -3094,7 +3094,7 @@ package skills_test
 import (
 	"testing"
 
-	"github.com/bridge-edu/bridge/gobackend/internal/skills"
+	"github.com/bridge-edu/bridge/platform/internal/skills"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -3180,7 +3180,7 @@ func TestBuildChatSystemPrompt_WithoutCode(t *testing.T) {
 }
 ```
 
-#### 14d. `gobackend/tests/unit/skills/code_analyzer_test.go`
+#### 14d. `platform/tests/unit/skills/code_analyzer_test.go`
 
 Tests for the code analyzer.
 
@@ -3191,8 +3191,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/bridge-edu/bridge/gobackend/internal/skills"
-	"github.com/bridge-edu/bridge/gobackend/internal/tools"
+	"github.com/bridge-edu/bridge/platform/internal/skills"
+	"github.com/bridge-edu/bridge/platform/internal/tools"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -3266,7 +3266,7 @@ func TestCodeAnalyzer_Metrics(t *testing.T) {
 }
 ```
 
-#### 14e. `gobackend/tests/unit/sandbox/piston_test.go`
+#### 14e. `platform/tests/unit/sandbox/piston_test.go`
 
 Tests for the Piston client (unit tests with HTTP mock).
 
@@ -3280,7 +3280,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/bridge-edu/bridge/gobackend/internal/sandbox"
+	"github.com/bridge-edu/bridge/platform/internal/sandbox"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -3438,7 +3438,7 @@ func TestPiston_ContextCancellation(t *testing.T) {
 }
 ```
 
-#### 14f. `gobackend/tests/unit/events/broadcaster_test.go`
+#### 14f. `platform/tests/unit/events/broadcaster_test.go`
 
 Tests for the SSE broadcaster.
 
@@ -3449,7 +3449,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bridge-edu/bridge/gobackend/internal/events"
+	"github.com/bridge-edu/bridge/platform/internal/events"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -3553,7 +3553,7 @@ func TestBroadcaster_UnsubscribeCleansUp(t *testing.T) {
 }
 ```
 
-#### 14g. `gobackend/tests/unit/skills/tutor_tool_test.go`
+#### 14g. `platform/tests/unit/skills/tutor_tool_test.go`
 
 Tests for the tutor tool invocation.
 
@@ -3564,8 +3564,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/bridge-edu/bridge/gobackend/internal/skills"
-	"github.com/bridge-edu/bridge/gobackend/internal/tools"
+	"github.com/bridge-edu/bridge/platform/internal/skills"
+	"github.com/bridge-edu/bridge/platform/internal/tools"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -3619,7 +3619,7 @@ func TestTutor_GuardrailCheckTriggered(t *testing.T) {
 }
 ```
 
-#### 14h. `gobackend/tests/contract/ai_chat_test.go`
+#### 14h. `platform/tests/contract/ai_chat_test.go`
 
 Contract test comparing Go AI chat endpoint with Next.js. This validates response format compatibility.
 
@@ -3796,7 +3796,7 @@ The `codeIssue` type in `code_analyzer.go` is lowercase (unexported). Either exp
 
 ### Modification
 
-In `gobackend/internal/skills/code_analyzer.go`, change `codeIssue` to `CodeIssue`:
+In `platform/internal/skills/code_analyzer.go`, change `codeIssue` to `CodeIssue`:
 
 ```go
 // Change:
@@ -3841,47 +3841,47 @@ Tasks 1-4 are independent and can be parallelized. Tasks 5-7 depend on 1-4. Task
 
 | # | File | Source |
 |---|------|--------|
-| 1 | `gobackend/internal/llm/types.go` | Copy from magicburg |
-| 2 | `gobackend/internal/llm/backend.go` | Copy from magicburg |
-| 3 | `gobackend/internal/llm/openai.go` | Copy from magicburg |
-| 4 | `gobackend/internal/llm/anthropic.go` | Copy from magicburg |
-| 5 | `gobackend/internal/llm/gemini.go` | Copy from magicburg |
-| 6 | `gobackend/internal/llm/ollama.go` | Copy from magicburg |
-| 7 | `gobackend/internal/llm/factory.go` | Copy from magicburg |
-| 8 | `gobackend/internal/llm/agent_loop.go` | Copy from magicburg |
-| 9 | `gobackend/internal/tools/contracts.go` | Copy from magicburg (path fix) |
-| 10 | `gobackend/internal/tools/registry.go` | Copy from magicburg (path fix) |
-| 11 | `gobackend/internal/events/broadcaster.go` | Adapted from magicburg |
-| 12 | `gobackend/internal/sandbox/piston.go` | New |
-| 13 | `gobackend/internal/skills/code_runner.go` | New |
-| 14 | `gobackend/internal/skills/code_analyzer.go` | New |
-| 15 | `gobackend/internal/skills/tutor.go` | New (migrates guardrails.ts + system-prompts.ts) |
-| 16 | `gobackend/internal/skills/report_generator.go` | New (migrates parent-reports.ts + report-prompts.ts) |
-| 17 | `gobackend/internal/skills/lesson_generator.go` | New |
-| 18 | `gobackend/internal/skills/registry.go` | New |
-| 19 | `gobackend/internal/store/interactions.go` | New (migrates interactions.ts) |
-| 20 | `gobackend/internal/store/reports.go` | New (migrates parent-reports.ts DB ops) |
-| 21 | `gobackend/internal/handlers/ai.go` | New (migrates 3 Next.js routes) |
-| 22 | `gobackend/internal/handlers/parent.go` | New (migrates parent report route) |
+| 1 | `platform/internal/llm/types.go` | Copy from magicburg |
+| 2 | `platform/internal/llm/backend.go` | Copy from magicburg |
+| 3 | `platform/internal/llm/openai.go` | Copy from magicburg |
+| 4 | `platform/internal/llm/anthropic.go` | Copy from magicburg |
+| 5 | `platform/internal/llm/gemini.go` | Copy from magicburg |
+| 6 | `platform/internal/llm/ollama.go` | Copy from magicburg |
+| 7 | `platform/internal/llm/factory.go` | Copy from magicburg |
+| 8 | `platform/internal/llm/agent_loop.go` | Copy from magicburg |
+| 9 | `platform/internal/tools/contracts.go` | Copy from magicburg (path fix) |
+| 10 | `platform/internal/tools/registry.go` | Copy from magicburg (path fix) |
+| 11 | `platform/internal/events/broadcaster.go` | Adapted from magicburg |
+| 12 | `platform/internal/sandbox/piston.go` | New |
+| 13 | `platform/internal/skills/code_runner.go` | New |
+| 14 | `platform/internal/skills/code_analyzer.go` | New |
+| 15 | `platform/internal/skills/tutor.go` | New (migrates guardrails.ts + system-prompts.ts) |
+| 16 | `platform/internal/skills/report_generator.go` | New (migrates parent-reports.ts + report-prompts.ts) |
+| 17 | `platform/internal/skills/lesson_generator.go` | New |
+| 18 | `platform/internal/skills/registry.go` | New |
+| 19 | `platform/internal/store/interactions.go` | New (migrates interactions.ts) |
+| 20 | `platform/internal/store/reports.go` | New (migrates parent-reports.ts DB ops) |
+| 21 | `platform/internal/handlers/ai.go` | New (migrates 3 Next.js routes) |
+| 22 | `platform/internal/handlers/parent.go` | New (migrates parent report route) |
 | 23 | `docker-compose.yml` | New / extend |
 | 24 | `scripts/piston-install-languages.sh` | New |
-| 25 | `gobackend/tests/unit/llm/agent_loop_test.go` | New |
-| 26 | `gobackend/tests/unit/tools/registry_test.go` | New |
-| 27 | `gobackend/tests/unit/skills/guardrails_test.go` | New |
-| 28 | `gobackend/tests/unit/skills/code_analyzer_test.go` | New |
-| 29 | `gobackend/tests/unit/skills/tutor_tool_test.go` | New |
-| 30 | `gobackend/tests/unit/sandbox/piston_test.go` | New |
-| 31 | `gobackend/tests/unit/events/broadcaster_test.go` | New |
-| 32 | `gobackend/tests/contract/ai_chat_test.go` | New |
+| 25 | `platform/tests/unit/llm/agent_loop_test.go` | New |
+| 26 | `platform/tests/unit/tools/registry_test.go` | New |
+| 27 | `platform/tests/unit/skills/guardrails_test.go` | New |
+| 28 | `platform/tests/unit/skills/code_analyzer_test.go` | New |
+| 29 | `platform/tests/unit/skills/tutor_tool_test.go` | New |
+| 30 | `platform/tests/unit/sandbox/piston_test.go` | New |
+| 31 | `platform/tests/unit/events/broadcaster_test.go` | New |
+| 32 | `platform/tests/contract/ai_chat_test.go` | New |
 
 ### Modified files
 
 | File | Change |
 |------|--------|
-| `gobackend/go.mod` | Add `go-openai` dependency |
-| `gobackend/config.toml` | Add `[llm]` and `[piston]` sections |
-| `gobackend/internal/config/config.go` | Add LLM and Piston config structs |
-| `gobackend/cmd/api/main.go` | Wire LLM, Piston, tools, handlers |
+| `platform/go.mod` | Add `go-openai` dependency |
+| `platform/config.toml` | Add `[llm]` and `[piston]` sections |
+| `platform/internal/config/config.go` | Add LLM and Piston config structs |
+| `platform/cmd/api/main.go` | Wire LLM, Piston, tools, handlers |
 
 ---
 
@@ -3899,3 +3899,54 @@ Tasks 1-4 are independent and can be parallelized. Tasks 5-7 depend on 1-4. Task
 - [ ] `POST /api/parent/children/{id}/reports` generates and saves a report
 - [ ] `GET /api/parent/children/{id}/reports` lists saved reports
 - [ ] Contract tests pass (when both servers are running)
+
+---
+
+## Phase A — Post-Execution Report
+
+**Branch:** `feat/019a-llm-foundation`
+**PR:** #23
+**Executed:** 2026-04-13
+
+### What was done
+
+- Synced `llm/` (8 files) and `tools/` (2 files) from magicburg-go
+- Updated import paths to `github.com/weiboz0/bridge/platform`
+- Added `sashabaranov/go-openai` dependency
+- Updated config to resolve API keys from provider-specific env vars
+- 53 new tests (LLM types + agentic loop + factory + tool registry + config)
+
+### Code Review — Phase A
+
+#### Review 1
+
+- **Date**: 2026-04-13
+- **Reviewer**: Claude (superpowers:code-reviewer)
+- **PR**: #23
+- **Verdict**: Changes requested (2 critical, 6 important)
+
+**Must Fix**
+
+1. `[FIXED]` Gemini tool result messages have empty function name. `platform/internal/llm/agent_loop.go:82`
+   → Set `Name: tc.Name` on tool result messages. Commit 7a622d3.
+
+2. `[FIXED]` `LLMConfig.APIKey` has `json:"api_key"` — key leakage risk. `platform/internal/llm/types.go:73`
+   → Changed to `json:"-" toml:"-"`. Commit 7a622d3.
+
+**Should Fix**
+
+3. `[FIXED]` No HTTP client timeouts on Anthropic and Gemini. → Added 5-min timeout. Commit 7a622d3.
+
+4. `[FIXED]` `ToolInvocation.TenantID` magicburg artifact. → Removed. Commit 7a622d3.
+
+5. `[WONTFIX]` Duplicate `ToolSpec` type in llm and tools packages. → Intentional, avoids circular imports.
+
+6. `[WONTFIX]` `Message.Text()` only handles `[]map[string]any`. → Works in practice; fix when needed.
+
+7. `[FIXED]` Missing factory and config tests. → Added 18 tests. Commit 7a622d3.
+
+**Nice to Have**
+
+8. `[OPEN]` Anthropic StreamChat doesn't surface usage info for cost tracking.
+
+9. `[OPEN]` Gemini uses tool name as ToolCall ID — could collide for duplicate tool calls.
