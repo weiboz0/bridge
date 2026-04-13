@@ -31,6 +31,11 @@ func (h *ParentHandler) ListReports(w http.ResponseWriter, r *http.Request) {
 	}
 
 	childID := chi.URLParam(r, "childId")
+
+	// TODO: Verify caller is parent of this child via parent_links table.
+	// Currently any authenticated user can view any student's reports.
+	// This will be addressed when parent-child linking is implemented.
+
 	reports, err := h.Reports.ListReportsByStudent(r.Context(), childID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")

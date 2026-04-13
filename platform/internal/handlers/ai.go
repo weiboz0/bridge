@@ -137,26 +137,19 @@ func (h *AIHandler) Chat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get or create interaction
+	// Require AI to be enabled for this student (interaction created by Toggle)
 	interaction, err := h.Interactions.GetActiveInteraction(r.Context(), claims.UserID, body.SessionID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
 	}
 	if interaction == nil {
-		interaction, err = h.Interactions.CreateInteraction(r.Context(), store.CreateInteractionInput{
-			StudentID:          claims.UserID,
-			SessionID:          body.SessionID,
-			EnabledByTeacherID: liveSession.TeacherID,
-		})
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "Database error")
-			return
-		}
+		writeError(w, http.StatusForbidden, "AI is not enabled for you in this session")
+		return
 	}
 
-	// Save user message
-	_, err = h.Interactions.AppendMessage(r.Context(), interaction.ID, store.ChatMessage{
+	// Save user message (atomic append)
+	updated, err := h.Interactions.AppendMessage(r.Context(), interaction.ID, store.ChatMessage{
 		Role:      "user",
 		Content:   body.Message,
 		Timestamp: time.Now().Format(time.RFC3339),
@@ -166,10 +159,12 @@ func (h *AIHandler) Chat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build message history
+	// Build message history from the updated interaction
 	var history []store.ChatMessage
-	json.Unmarshal([]byte(interaction.Messages), &history)
-	history = append(history, store.ChatMessage{Role: "user", Content: body.Message})
+	if err := json.Unmarshal([]byte(updated.Messages), &history); err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to parse message history")
+		return
+	}
 
 	// Get classroom for grade level
 	classroom, err := h.Classrooms.GetClassroom(r.Context(), liveSession.ClassroomID)
@@ -185,7 +180,11 @@ func (h *AIHandler) Chat(w http.ResponseWriter, r *http.Request) {
 
 	systemPrompt := getSystemPrompt(gradeLevel)
 	if body.Code != "" {
-		systemPrompt += "\n\nThe student's current code:\n```python\n" + body.Code + "\n```"
+		lang := "python"
+		if classroom != nil && classroom.EditorMode != "" {
+			lang = classroom.EditorMode
+		}
+		systemPrompt += "\n\nThe student's current code:\n```" + lang + "\n" + body.Code + "\n```"
 	}
 
 	// Build LLM messages
@@ -222,19 +221,37 @@ func (h *AIHandler) Chat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var fullResponse strings.Builder
+	guardrailTriggered := false
 	for chunk := range stream {
-		if chunk.Delta != "" {
+		if chunk.IsFinal {
+			break
+		}
+		if chunk.Delta != "" && chunk.ChunkType == "text" {
 			fullResponse.WriteString(chunk.Delta)
+
+			// Incremental guardrail check every 200 chars
+			if fullResponse.Len() > 200 && containsSolution(fullResponse.String()) {
+				guardrailTriggered = true
+				break
+			}
+
 			data, _ := json.Marshal(map[string]string{"text": chunk.Delta})
 			w.Write([]byte("data: " + string(data) + "\n\n"))
 			flusher.Flush()
 		}
 	}
 
-	// Apply guardrails
+	// Drain remaining chunks if guardrail triggered early
+	if guardrailTriggered {
+		go func() {
+			for range stream {
+			}
+		}()
+	}
+
 	response := fullResponse.String()
-	filtered := filterResponse(response)
-	if filtered != response {
+	if guardrailTriggered || containsSolution(response) {
+		filtered := filterResponse(response)
 		data, _ := json.Marshal(map[string]string{"replace": filtered})
 		w.Write([]byte("data: " + string(data) + "\n\n"))
 		flusher.Flush()
@@ -242,11 +259,14 @@ func (h *AIHandler) Chat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Save assistant message
-	h.Interactions.AppendMessage(r.Context(), interaction.ID, store.ChatMessage{
+	if _, err := h.Interactions.AppendMessage(r.Context(), interaction.ID, store.ChatMessage{
 		Role:      "assistant",
 		Content:   response,
 		Timestamp: time.Now().Format(time.RFC3339),
-	})
+	}); err != nil {
+		// Log but don't fail — response was already streamed
+		_ = err
+	}
 
 	w.Write([]byte("data: [DONE]\n\n"))
 	flusher.Flush()
@@ -331,6 +351,23 @@ func (h *AIHandler) ListInteractions(w http.ResponseWriter, r *http.Request) {
 	if sessionID == "" {
 		writeError(w, http.StatusBadRequest, "sessionId query parameter is required")
 		return
+	}
+
+	// Verify caller is session teacher or platform admin
+	if !claims.IsPlatformAdmin {
+		liveSession, err := h.Sessions.GetSession(r.Context(), sessionID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "Database error")
+			return
+		}
+		if liveSession == nil {
+			writeError(w, http.StatusNotFound, "Session not found")
+			return
+		}
+		if liveSession.TeacherID != claims.UserID {
+			writeError(w, http.StatusForbidden, "Only the session teacher can view interactions")
+			return
+		}
 	}
 
 	interactions, err := h.Interactions.ListInteractionsBySession(r.Context(), sessionID)

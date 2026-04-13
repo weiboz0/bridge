@@ -96,21 +96,11 @@ type ChatMessage struct {
 }
 
 func (s *InteractionStore) AppendMessage(ctx context.Context, interactionID string, msg ChatMessage) (*AIInteraction, error) {
-	interaction, err := s.GetInteraction(ctx, interactionID)
-	if err != nil || interaction == nil {
-		return nil, err
-	}
-
-	var messages []ChatMessage
-	json.Unmarshal([]byte(interaction.Messages), &messages)
-	messages = append(messages, msg)
-
-	messagesJSON, err := json.Marshal(messages)
+	msgJSON, err := json.Marshal(msg)
 	if err != nil {
 		return nil, err
 	}
-
 	return scanInteraction(s.db.QueryRowContext(ctx,
-		`UPDATE ai_interactions SET messages = $1 WHERE id = $2 RETURNING `+interactionColumns,
-		string(messagesJSON), interactionID))
+		`UPDATE ai_interactions SET messages = messages || jsonb_build_array($1::jsonb) WHERE id = $2 RETURNING `+interactionColumns,
+		string(msgJSON), interactionID))
 }
