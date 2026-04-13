@@ -4,7 +4,17 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"regexp"
+
+	"github.com/go-chi/chi/v5"
 )
+
+var uuidRegex = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
+// isValidUUID checks if a string is a valid UUID v4 format.
+func isValidUUID(s string) bool {
+	return uuidRegex.MatchString(s)
+}
 
 // writeJSON writes a JSON response with the given status code.
 func writeJSON(w http.ResponseWriter, status int, data any) {
@@ -28,4 +38,29 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 		return false
 	}
 	return true
+}
+
+// requireUUID validates that a URL param is a valid UUID, writing a 400 error if not.
+// Returns the value and true if valid, or empty string and false if invalid.
+func requireUUID(w http.ResponseWriter, r *http.Request, param string) (string, bool) {
+	val := chi.URLParam(r, param)
+	if val != "" && !isValidUUID(val) {
+		writeError(w, http.StatusBadRequest, "Invalid UUID: "+param)
+		return "", false
+	}
+	return val, true
+}
+
+// ValidateUUIDParam returns a middleware that validates a named URL param is a valid UUID.
+func ValidateUUIDParam(param string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			val := chi.URLParam(r, param)
+			if val != "" && !isValidUUID(val) {
+				writeError(w, http.StatusBadRequest, "Invalid UUID: "+param)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }
