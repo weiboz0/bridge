@@ -3977,3 +3977,57 @@ Docs:
 | GET | `/api/admin/impersonate/status` | `AdminHandler.ImpersonateStatus` | `src/app/api/admin/impersonate/status/route.ts` GET |
 | DELETE | `/api/admin/impersonate` | `AdminHandler.StopImpersonate` | `src/app/api/admin/impersonate/route.ts` DELETE |
 | POST | `/api/auth/register` | `AuthHandler.Register` | `src/app/api/auth/register/route.ts` POST |
+
+---
+
+## Post-Execution Report
+
+**Branch:** `feat/017-go-foundation`
+**PR:** #21 (merged via squash)
+**Executed:** 2026-04-12 to 2026-04-13
+
+### Deviations from Plan
+
+| Plan | Implementation | Reason |
+|------|---------------|--------|
+| Directory `gobackend/` | `platform/` | User requested rename — this service will host agentic loop, workflows, code execution beyond just API |
+| Module `github.com/chriszhang/bridge/gobackend` | `github.com/weiboz0/bridge/platform` | Correct GitHub owner + directory rename |
+| Port 8001 | Port 8002 | 8001 occupied by another service on the machine |
+| Channel-based SSE broadcaster | Callback-based broadcaster | Simpler for Phase 1; no SSE handler wired yet |
+| Separate `auth/claims.go` | Claims in `jwt.go`, context in `middleware.go` | Fewer files, same API surface |
+| `auth.NewVerifier` + `auth.NewUserLookup` | `auth.NewMiddleware(secret)` | Simplified — no DB lookup per request. JWT claims trusted directly. Noted as deferred item. |
+| `shared-patterns.md` tracking doc | Not created | User decided not to track this |
+
+### Test Coverage
+
+| Package | Tests | Coverage |
+|---------|-------|----------|
+| auth | 17 | 94.5% |
+| config | 6 | 100% |
+| db | 3 | 87.5% |
+| events | 9 | 100% |
+| handlers | 18 | 20.2% (validation paths only; happy paths tested via contract tests) |
+| store | 33 | 84.8% |
+| contract | 18 | N/A (out-of-process) |
+| **Total** | **104** | **50.5% (internal packages)** |
+
+### Code Review Results
+
+**Reviewer:** superpowers:code-reviewer subagent
+**Verdict:** Merge after fixing 2 important issues (done)
+
+**Fixed before merge:**
+- RequireAdmin now allows impersonated admins through (ImpersonatedBy check)
+- Auth middleware error responses changed from text/plain to application/json
+
+**Deferred to Plan 018 (not blocking — proxy routes are commented out):**
+- Auth.js v5 uses JWE (encrypted tokens), not plain HS256 JWTs. Go server currently uses its own plain JWTs for contract tests. When proxy routes are enabled, a Next.js middleware will create plain JWTs for Go API calls.
+- DB lookup for `isPlatformAdmin` instead of trusting token claims — eliminates stale-permission risk
+- Reconcile port 8001 (spec) vs 8002 (implementation) in docs
+
+**Acknowledged (low priority):**
+- `decodeJSON` has no request body size limit
+- `maskURL` in main.go is a naive truncation
+- Missing `go vet` / linter Makefile target
+- Contract test cleanup for created orgs/users is incomplete
+- No email format validation in Register/AddMember handlers
