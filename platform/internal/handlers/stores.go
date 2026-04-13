@@ -11,6 +11,7 @@ type Stores struct {
 	Orgs    *store.OrgStore
 	Users   *store.UserStore
 	Courses *store.CourseStore
+	Topics  *store.TopicStore
 }
 
 // NewStores creates all stores from a database connection.
@@ -19,5 +20,6 @@ func NewStores(db *sql.DB) *Stores {
 		Orgs:    store.NewOrgStore(db),
 		Users:   store.NewUserStore(db),
 		Courses: store.NewCourseStore(db),
+		Topics:  store.NewTopicStore(db),
 	}
 }
