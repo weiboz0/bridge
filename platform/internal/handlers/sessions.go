@@ -21,6 +21,7 @@ func (h *SessionHandler) Routes(r chi.Router) {
 	r.Route("/api/sessions", func(r chi.Router) {
 		r.Post("/", h.CreateSession)
 		r.Route("/{id}", func(r chi.Router) {
+			r.Use(ValidateUUIDParam("id"))
 			r.Get("/", h.GetSession)
 			r.Patch("/", h.EndSession)
 			r.Post("/join", h.JoinSession)

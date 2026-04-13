@@ -19,6 +19,7 @@ func (h *CourseHandler) Routes(r chi.Router) {
 		r.Post("/", h.CreateCourse)
 		r.Get("/", h.ListCourses)
 		r.Route("/{id}", func(r chi.Router) {
+			r.Use(ValidateUUIDParam("id"))
 			r.Get("/", h.GetCourse)
 			r.Patch("/", h.UpdateCourse)
 			r.Delete("/", h.DeleteCourse)

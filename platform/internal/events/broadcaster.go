@@ -42,13 +42,22 @@ func (b *Broadcaster) Subscribe(sessionID string, cb EventCallback) func() {
 }
 
 func (b *Broadcaster) Emit(sessionID string, event string, data interface{}) {
+	// Copy callbacks under lock, then invoke outside the lock.
+	// This prevents slow subscribers from blocking other Emit/Subscribe calls.
 	b.mu.RLock()
-	defer b.mu.RUnlock()
+	subs, ok := b.listeners[sessionID]
+	if !ok || len(subs) == 0 {
+		b.mu.RUnlock()
+		return
+	}
+	cbs := make([]EventCallback, 0, len(subs))
+	for _, cb := range subs {
+		cbs = append(cbs, cb)
+	}
+	b.mu.RUnlock()
 
-	if subs, ok := b.listeners[sessionID]; ok {
-		for _, cb := range subs {
-			cb(event, data)
-		}
+	for _, cb := range cbs {
+		cb(event, data)
 	}
 }
 

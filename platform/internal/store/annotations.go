@@ -37,7 +37,7 @@ func NewAnnotationStore(db *sql.DB) *AnnotationStore {
 	return &AnnotationStore{db: db}
 }
 
-const annotationColumns = `id, document_id, author_id, author_type, line_start, line_end, content, resolved, created_at`
+const annotationColumns = `id, document_id, author_id, author_type, line_start, line_end, content, resolved_at, created_at`
 
 func scanAnnotation(row interface{ Scan(...any) error }) (*Annotation, error) {
 	var a Annotation
@@ -93,6 +93,6 @@ func (s *AnnotationStore) DeleteAnnotation(ctx context.Context, id string) (*Ann
 
 func (s *AnnotationStore) ResolveAnnotation(ctx context.Context, id string) (*Annotation, error) {
 	return scanAnnotation(s.db.QueryRowContext(ctx,
-		`UPDATE code_annotations SET resolved = $1 WHERE id = $2 RETURNING `+annotationColumns,
+		`UPDATE code_annotations SET resolved_at = $1 WHERE id = $2 RETURNING `+annotationColumns,
 		time.Now(), id))
 }

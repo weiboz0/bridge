@@ -19,6 +19,7 @@ func (h *AssignmentHandler) Routes(r chi.Router) {
 		r.Post("/", h.CreateAssignment)
 		r.Get("/", h.ListAssignments)
 		r.Route("/{id}", func(r chi.Router) {
+			r.Use(ValidateUUIDParam("id"))
 			r.Get("/", h.GetAssignment)
 			r.Patch("/", h.UpdateAssignment)
 			r.Delete("/", h.DeleteAssignment)
@@ -345,6 +346,7 @@ type SubmissionHandler struct {
 func (h *SubmissionHandler) Routes(r chi.Router) {
 	r.Route("/api/submissions", func(r chi.Router) {
 		r.Route("/{id}", func(r chi.Router) {
+			r.Use(ValidateUUIDParam("id"))
 			r.Patch("/", h.GradeSubmission)
 		})
 	})

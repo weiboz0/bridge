@@ -18,10 +18,12 @@ type TopicHandler struct {
 // Routes registers topic routes nested under /api/courses/{courseId}/topics
 func (h *TopicHandler) Routes(r chi.Router) {
 	r.Route("/api/courses/{courseId}/topics", func(r chi.Router) {
+		r.Use(ValidateUUIDParam("courseId"))
 		r.Post("/", h.CreateTopic)
 		r.Get("/", h.ListTopics)
 		r.Patch("/reorder", h.ReorderTopics)
 		r.Route("/{topicId}", func(r chi.Router) {
+			r.Use(ValidateUUIDParam("topicId"))
 			r.Get("/", h.GetTopic)
 			r.Patch("/", h.UpdateTopic)
 			r.Delete("/", h.DeleteTopic)

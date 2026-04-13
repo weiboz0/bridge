@@ -18,6 +18,7 @@ func (h *AnnotationHandler) Routes(r chi.Router) {
 		r.Post("/", h.CreateAnnotation)
 		r.Get("/", h.ListAnnotations)
 		r.Route("/{id}", func(r chi.Router) {
+			r.Use(ValidateUUIDParam("id"))
 			r.Delete("/", h.DeleteAnnotation)
 			r.Patch("/", h.ResolveAnnotation)
 		})

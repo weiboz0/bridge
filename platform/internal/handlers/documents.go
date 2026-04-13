@@ -17,6 +17,7 @@ func (h *DocumentHandler) Routes(r chi.Router) {
 	r.Route("/api/documents", func(r chi.Router) {
 		r.Get("/", h.ListDocuments)
 		r.Route("/{id}", func(r chi.Router) {
+			r.Use(ValidateUUIDParam("id"))
 			r.Get("/", h.GetDocument)
 			r.Get("/content", h.GetDocumentContent)
 		})

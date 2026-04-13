@@ -20,6 +20,7 @@ func (h *ClassroomHandler) Routes(r chi.Router) {
 		r.Post("/", h.CreateClassroom)
 		r.Post("/join", h.JoinClassroom)
 		r.Route("/{id}", func(r chi.Router) {
+			r.Use(ValidateUUIDParam("id"))
 			r.Get("/", h.GetClassroom)
 			r.Get("/members", h.GetClassroomMembers)
 			r.Get("/active-session", h.GetActiveSession)

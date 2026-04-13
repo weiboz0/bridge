@@ -21,12 +21,14 @@ func (h *ClassHandler) Routes(r chi.Router) {
 		r.Get("/", h.ListClasses)
 		r.Post("/join", h.JoinClass)
 		r.Route("/{id}", func(r chi.Router) {
+			r.Use(ValidateUUIDParam("id"))
 			r.Get("/", h.GetClass)
 			r.Patch("/", h.ArchiveClass)
 			r.Route("/members", func(r chi.Router) {
 				r.Post("/", h.AddMember)
 				r.Get("/", h.ListMembers)
 				r.Route("/{memberId}", func(r chi.Router) {
+					r.Use(ValidateUUIDParam("memberId"))
 					r.Patch("/", h.UpdateMemberRole)
 					r.Delete("/", h.RemoveMember)
 				})

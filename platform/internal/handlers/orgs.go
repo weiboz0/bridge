@@ -22,12 +22,14 @@ func (h *OrgHandler) Routes(r chi.Router) {
 		r.Get("/", h.ListUserOrgs)
 		r.Post("/", h.CreateOrg)
 		r.Route("/{orgID}", func(r chi.Router) {
+			r.Use(ValidateUUIDParam("orgID"))
 			r.Get("/", h.GetOrg)
 			r.Patch("/", h.UpdateOrg)
 			r.Route("/members", func(r chi.Router) {
 				r.Get("/", h.ListMembers)
 				r.Post("/", h.AddMember)
 				r.Route("/{memberID}", func(r chi.Router) {
+					r.Use(ValidateUUIDParam("memberID"))
 					r.Patch("/", h.UpdateMember)
 					r.Delete("/", h.RemoveMember)
 				})
