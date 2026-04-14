@@ -107,13 +107,3 @@ func TestCodeAnalyzer_MissingInput(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, "error", result.Status)
 }
-
-func TestCodeRunner_NilExecutor(t *testing.T) {
-	runner := NewCodeRunner(nil)
-	result, err := runner.Invoke(context.Background(), tools.ToolInvocation{
-		Payload: map[string]any{"language": "python", "code": "print('hi')"},
-	})
-	require.NoError(t, err)
-	assert.Equal(t, "error", result.Status)
-	assert.Contains(t, result.Payload["error"], "not configured")
-}

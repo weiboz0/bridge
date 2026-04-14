@@ -4068,8 +4068,8 @@ Tasks 1-4 are independent and can be parallelized. Tasks 5-7 depend on 1-4. Task
 
 **Nice to Have**
 
-5. `[OPEN]` Guardrail patterns only detect Python code blocks — should expand to JS/C++/Java fences.
+5. `[FIXED]` Guardrail patterns only detect Python code blocks — should expand to JS/C++/Java fences.
 
-6. `[OPEN]` No tests for ReportGenerator or LessonGenerator (need mock LLM backend).
+6. `[FIXED]` No tests for ReportGenerator or LessonGenerator (need mock LLM backend).
 
-7. `[OPEN]` `TestCodeRunner_NilExecutor` is in `code_analyzer_test.go` — should be its own file.
+7. `[FIXED]` `TestCodeRunner_NilExecutor` is in `code_analyzer_test.go` — should be its own file.

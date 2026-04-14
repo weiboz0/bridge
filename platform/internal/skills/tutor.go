@@ -21,9 +21,10 @@ const (
 // --- Guardrails (migrated from src/lib/ai/guardrails.ts) ---
 
 var solutionPatterns = []*regexp.Regexp{
-	regexp.MustCompile("(?s)```python\\n.{200,}```"),
+	regexp.MustCompile("(?s)```(?:python|javascript|js|typescript|ts|cpp|c\\+\\+|java|rust|c)\\n.{200,}```"),
 	regexp.MustCompile(`(?s)def\s+\w+\s*\([^)]*\):.{100,}`),
 	regexp.MustCompile(`(?s)class\s+\w+.{150,}`),
+	regexp.MustCompile(`(?s)function\s+\w+\s*\([^)]*\)\s*\{.{100,}`),
 	regexp.MustCompile(`(?i)here(?:'s| is) the (?:complete |full )?(?:solution|answer|code)`),
 	regexp.MustCompile(`(?i)just (?:copy|paste|use) this`),
 }

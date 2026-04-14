@@ -15,6 +15,21 @@ func TestContainsSolution_LongCodeBlock(t *testing.T) {
 	assert.True(t, ContainsSolution(text))
 }
 
+func TestContainsSolution_LongJSCodeBlock(t *testing.T) {
+	text := "Here's the code:\n```javascript\n" + string(make([]byte, 201)) + "```"
+	assert.True(t, ContainsSolution(text))
+}
+
+func TestContainsSolution_LongCppCodeBlock(t *testing.T) {
+	text := "Here's the code:\n```cpp\n" + string(make([]byte, 201)) + "```"
+	assert.True(t, ContainsSolution(text))
+}
+
+func TestContainsSolution_JSFunctionDefinition(t *testing.T) {
+	text := "function calculateTotal(items) {\n" + string(make([]byte, 101)) + "\n}"
+	assert.True(t, ContainsSolution(text))
+}
+
 func TestContainsSolution_ShortCodeBlock(t *testing.T) {
 	text := "Try this:\n```python\nprint('hello')\n```"
 	assert.False(t, ContainsSolution(text))
