@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"database/sql"
+	"fmt"
 	"math/big"
 	"strings"
 	"time"
@@ -156,6 +157,40 @@ func (s *ClassStore) GetClass(ctx context.Context, id string) (*Class, error) {
 func (s *ClassStore) ListClassesByOrg(ctx context.Context, orgID string) ([]Class, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT `+classColumns+` FROM classes WHERE org_id = $1 AND status = 'active' ORDER BY created_at DESC`, orgID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var classes []Class
+	for rows.Next() {
+		var c Class
+		if err := rows.Scan(&c.ID, &c.CourseID, &c.OrgID, &c.Title, &c.Term,
+			&c.JoinCode, &c.Status, &c.CreatedAt, &c.UpdatedAt); err != nil {
+			return nil, err
+		}
+		classes = append(classes, c)
+	}
+	if classes == nil {
+		classes = []Class{}
+	}
+	return classes, rows.Err()
+}
+
+func (s *ClassStore) ListClassesByOrgIDs(ctx context.Context, orgIDs []string) ([]Class, error) {
+	if len(orgIDs) == 0 {
+		return []Class{}, nil
+	}
+	// Build placeholders: $1, $2, $3, ...
+	placeholders := make([]string, len(orgIDs))
+	args := make([]any, len(orgIDs))
+	for i, id := range orgIDs {
+		placeholders[i] = fmt.Sprintf("$%d", i+1)
+		args[i] = id
+	}
+	query := `SELECT ` + classColumns + ` FROM classes WHERE org_id IN (` +
+		strings.Join(placeholders, ",") + `) AND status = 'active' ORDER BY created_at DESC`
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}

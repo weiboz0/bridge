@@ -68,6 +68,38 @@ func (m *Middleware) RequireAuth(next http.Handler) http.Handler {
 	})
 }
 
+// OptionalAuth validates the JWT if present but does not reject requests without one.
+// If a valid token is found, claims are injected into context. Otherwise, claims are nil.
+func (m *Middleware) OptionalAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authHeader := r.Header.Get("Authorization")
+		if strings.HasPrefix(authHeader, "Bearer ") {
+			tokenStr := strings.TrimPrefix(authHeader, "Bearer ")
+			if claims, err := VerifyToken(tokenStr, m.Secret); err == nil {
+				// Check impersonation
+				if cookie, err := r.Cookie("bridge-impersonate"); err == nil && claims.IsPlatformAdmin {
+					cookieVal := cookie.Value
+					if decoded, err := url.QueryUnescape(cookieVal); err == nil {
+						cookieVal = decoded
+					}
+					var impData ImpersonationData
+					if json.Unmarshal([]byte(cookieVal), &impData) == nil && impData.OriginalUserID == claims.UserID {
+						claims = &Claims{
+							UserID:          impData.TargetUserID,
+							Email:           impData.TargetEmail,
+							Name:            impData.TargetName,
+							IsPlatformAdmin: false,
+							ImpersonatedBy:  impData.OriginalUserID,
+						}
+					}
+				}
+				r = r.WithContext(ContextWithClaims(r.Context(), claims))
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // RequireAdminMiddleware is a method-based admin check middleware.
 func (m *Middleware) RequireAdminMiddleware(next http.Handler) http.Handler {
 	return RequireAdmin(next)

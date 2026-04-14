@@ -1130,3 +1130,52 @@ The E2E tests interact with the browser and should not need major changes since 
 - **Proxy fallback:** The Next.js rewrite proxy means client-side fetches work regardless of whether Go or Next.js handles them. Remove the proxy only after all routes are verified.
 - **Auth.js is the riskiest change:** Test login flows (Google OAuth and credentials) thoroughly after Task 2. If Auth.js changes break login, all other work is blocked. Consider doing Task 2 last or having a rollback plan.
 - **Impersonation:** The `bridge-impersonate` cookie is now forwarded as an `X-Bridge-Impersonate` header to Go. Go must read this header and apply the same override logic. Verify impersonation E2E test passes.
+
+---
+
+## Stage 1 — Post-Execution Report
+
+**Branch:** `feat/021a-api-client-endpoints`
+**PR:** #30
+**Executed:** 2026-04-14
+
+### What was done
+
+- 7 new Go aggregation endpoints: /api/me/roles, /api/me/portal-access, /api/me/memberships, /api/teacher/dashboard, /api/teacher/courses, /api/org/dashboard, /api/admin/stats
+- StatsStore for admin and org dashboard queries
+- OptionalAuth middleware for endpoints that work with or without token
+- src/lib/api-client.ts — server-side fetch wrapper for Next.js server components
+- Stage 3 (delete backend) deferred — keeping Next.js backend for debugging
+
+### Code Review — Stage 1
+
+#### Review 1
+
+- **Date**: 2026-04-14
+- **Reviewer**: Claude (superpowers:code-reviewer)
+- **PR**: #30
+- **Verdict**: Changes requested (1 critical, 3 important)
+
+**Must Fix**
+
+1. `[FIXED]` No tests for 539 new lines of code.
+   → Added 16 tests: me_test.go (12), teacher_test.go (2), stats_test.go (2).
+
+**Should Fix**
+
+2. `[FIXED]` N+1 query in teacher dashboard — per-org ListClassesByOrg loop.
+   → Added ListClassesByOrgIDs with IN clause, single batch query.
+
+3. `[WONTFIX]` Teacher endpoints have no role-check middleware.
+   → Data is scoped to claims.UserID; students get empty results. Acceptable for now.
+
+4. `[FIXED]` /api/me/roles behind RequireAuth but handles nil claims.
+   → Moved to OptionalAuth middleware group. Added OptionalAuth middleware.
+
+**Nice to Have**
+
+5. `[WONTFIX]` Impersonation cookie forwarding uses Cookie header instead of X-Bridge-Impersonate.
+   → Works correctly with Go middleware. Documented.
+
+6. `[WONTFIX]` OrgDashboardStats counts only active members vs TypeScript counts all.
+   → Active-only is more correct. Acceptable behavioral difference.

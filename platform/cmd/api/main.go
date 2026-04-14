@@ -107,6 +107,13 @@ func main() {
 	authH := &handlers.AuthHandler{Users: stores.Users}
 	authH.PublicRoutes(r)
 
+	// Optional auth routes (work with or without token)
+	meH := &handlers.MeHandler{Orgs: stores.Orgs, Courses: stores.Courses, Classes: stores.Classes}
+	r.Group(func(r chi.Router) {
+		r.Use(authMw.OptionalAuth)
+		meH.OptionalAuthRoutes(r)
+	})
+
 	// Authenticated routes
 	r.Group(func(r chi.Router) {
 		r.Use(authMw.RequireAuth)
@@ -155,7 +162,15 @@ func main() {
 		parentH := &handlers.ParentHandler{Reports: stores.Reports}
 		parentH.Routes(r)
 
-		adminH := &handlers.AdminHandler{Orgs: stores.Orgs, Users: stores.Users, DB: database}
+		meH.Routes(r)
+
+		teacherH := &handlers.TeacherHandler{Courses: stores.Courses, Classes: stores.Classes, Orgs: stores.Orgs}
+		teacherH.Routes(r)
+
+		orgDashH := &handlers.OrgDashboardHandler{Orgs: stores.Orgs, Courses: stores.Courses, Classes: stores.Classes, Stats: stores.Stats}
+		orgDashH.Routes(r)
+
+		adminH := &handlers.AdminHandler{Orgs: stores.Orgs, Users: stores.Users, Stats: stores.Stats, DB: database}
 		adminH.Routes(r)
 	})
 
