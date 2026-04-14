@@ -2,7 +2,6 @@ package skills
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/weiboz0/bridge/platform/internal/tools"
 )
@@ -74,7 +73,7 @@ func (t *CodeRunner) Invoke(ctx context.Context, inv tools.ToolInvocation) (tool
 			ToolName: t.GetName(),
 			Status:   "error",
 			Payload:  map[string]any{"error": "language and code are required"},
-		}, fmt.Errorf("missing language or code")
+		}, nil
 	}
 
 	if t.executor == nil {

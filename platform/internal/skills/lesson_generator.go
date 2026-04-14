@@ -71,7 +71,7 @@ func (t *LessonGenerator) Invoke(ctx context.Context, inv tools.ToolInvocation) 
 			ToolName: t.GetName(),
 			Status:   "error",
 			Payload:  map[string]any{"error": "topic, language, and grade_level are required"},
-		}, fmt.Errorf("missing required fields")
+		}, nil
 	}
 
 	if t.backend == nil {

@@ -46,7 +46,7 @@ func (t *CodeAnalyzer) Invoke(ctx context.Context, inv tools.ToolInvocation) (to
 			ToolName: t.GetName(),
 			Status:   "error",
 			Payload:  map[string]any{"error": "language and code are required"},
-		}, fmt.Errorf("missing language or code")
+		}, nil
 	}
 
 	issues := analyzeCode(language, code)

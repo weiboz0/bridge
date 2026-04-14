@@ -89,7 +89,7 @@ func (t *ReportGenerator) Invoke(ctx context.Context, inv tools.ToolInvocation) 
 			ToolName: t.GetName(),
 			Status:   "error",
 			Payload:  map[string]any{"error": "student_name is required"},
-		}, fmt.Errorf("missing student_name")
+		}, nil
 	}
 
 	userMessage := fmt.Sprintf(`Generate a progress report for %s (%s grade level).

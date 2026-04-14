@@ -4027,3 +4027,49 @@ Tasks 1-4 are independent and can be parallelized. Tasks 5-7 depend on 1-4. Task
 
 14. `[FIXED]` Toggle handler disable is cosmetic — no database state change.
    → Fixed: Disable now deletes interaction record; Chat handler returns 403. Commit f381b51.
+
+---
+
+## Phase C — Post-Execution Report
+
+**Branch:** `feat/019c-ai-skills`
+**PR:** #26
+**Executed:** 2026-04-13
+
+### What was done
+
+- 5 AI skills: tutor, code_analyzer, code_runner, report_generator, lesson_generator
+- Skills registry (`NewBridgeRegistry`) for centralized tool registration
+- Refactored AI handler to use `skills.*` instead of inline guardrails/prompts
+- 22 tests for tutor + code analyzer + code runner
+
+### Code Review — Phase C
+
+#### Review 1
+
+- **Date**: 2026-04-13
+- **Reviewer**: Claude (superpowers:code-reviewer)
+- **PR**: #26
+- **Verdict**: Changes requested (0 critical, 4 important)
+
+**Should Fix**
+
+1. `[WONTFIX]` Report Generator simplified from plan (missing period_start/end, assignment_grades, etc.).
+   → Intentional: full parameters depend on GatherReportData which is deferred. Will enrich when data pipeline exists.
+
+2. `[WONTFIX]` Lesson Generator simplified from plan (missing prerequisites parameter).
+   → Intentional: will add when curriculum sequencing is implemented.
+
+3. `[FIXED]` Missing `skills/registry.go` — no centralized skill registration.
+   → Added `NewBridgeRegistry(executor, backend)`. Commit pending.
+
+4. `[FIXED]` Inconsistent error returns — validation failures returned Go errors in some skills but nil in others.
+   → Aligned: all tool-level failures return nil Go error with status "error" in ToolResult.
+
+**Nice to Have**
+
+5. `[OPEN]` Guardrail patterns only detect Python code blocks — should expand to JS/C++/Java fences.
+
+6. `[OPEN]` No tests for ReportGenerator or LessonGenerator (need mock LLM backend).
+
+7. `[OPEN]` `TestCodeRunner_NilExecutor` is in `code_analyzer_test.go` — should be its own file.

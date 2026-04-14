@@ -101,10 +101,11 @@ func TestCodeAnalyzer_Metrics(t *testing.T) {
 
 func TestCodeAnalyzer_MissingInput(t *testing.T) {
 	analyzer := NewCodeAnalyzer()
-	_, err := analyzer.Invoke(context.Background(), tools.ToolInvocation{
+	result, err := analyzer.Invoke(context.Background(), tools.ToolInvocation{
 		Payload: map[string]any{"language": "python"},
 	})
-	assert.Error(t, err)
+	assert.NoError(t, err)
+	assert.Equal(t, "error", result.Status)
 }
 
 func TestCodeRunner_NilExecutor(t *testing.T) {
