@@ -208,3 +208,74 @@ func TestSessionStore_GetActiveSession(t *testing.T) {
 	require.NotNil(t, active)
 	assert.Equal(t, session.ID, active.ID)
 }
+
+func TestSessionStore_SessionTopics(t *testing.T) {
+	db := testDB(t)
+	sessions := NewSessionStore(db)
+	classrooms := NewClassroomStore(db)
+	courses := NewCourseStore(db)
+	topics := NewTopicStore(db)
+	orgs := NewOrgStore(db)
+	users := NewUserStore(db)
+	ctx := context.Background()
+
+	org := createTestOrg(t, db, orgs, t.Name())
+	user := createTestUser(t, db, users, t.Name())
+	classroom := createTestClassroom(t, classrooms, user.ID)
+	course, _ := courses.CreateCourse(ctx, CreateCourseInput{
+		OrgID: org.ID, CreatedBy: user.ID, Title: "Topic Test", GradeLevel: "K-5",
+	})
+	topic, _ := topics.CreateTopic(ctx, CreateTopicInput{
+		CourseID: course.ID, Title: "Variables",
+	})
+	t.Cleanup(func() {
+		db.ExecContext(ctx, "DELETE FROM session_topics WHERE topic_id = $1", topic.ID)
+		db.ExecContext(ctx, "DELETE FROM topics WHERE id = $1", topic.ID)
+		db.ExecContext(ctx, "DELETE FROM courses WHERE id = $1", course.ID)
+		db.ExecContext(ctx, "DELETE FROM live_sessions WHERE classroom_id = $1", classroom.ID)
+		db.ExecContext(ctx, "DELETE FROM classrooms WHERE id = $1", classroom.ID)
+	})
+
+	session, err := sessions.CreateSession(ctx, CreateSessionInput{
+		ClassroomID: classroom.ID, TeacherID: user.ID,
+	})
+	require.NoError(t, err)
+
+	// Link topic
+	link, err := sessions.LinkSessionTopic(ctx, session.ID, topic.ID)
+	require.NoError(t, err)
+	require.NotNil(t, link)
+	assert.Equal(t, session.ID, link.SessionID)
+	assert.Equal(t, topic.ID, link.TopicID)
+
+	// Duplicate link returns nil
+	dup, err := sessions.LinkSessionTopic(ctx, session.ID, topic.ID)
+	assert.NoError(t, err)
+	assert.Nil(t, dup)
+
+	// List topics
+	topicList, err := sessions.GetSessionTopics(ctx, session.ID)
+	require.NoError(t, err)
+	assert.Len(t, topicList, 1)
+	assert.Equal(t, topic.ID, topicList[0].TopicID)
+	assert.Equal(t, "Variables", topicList[0].Title)
+
+	// Unlink
+	err = sessions.UnlinkSessionTopic(ctx, session.ID, topic.ID)
+	require.NoError(t, err)
+
+	// Verify removed
+	topicList, err = sessions.GetSessionTopics(ctx, session.ID)
+	require.NoError(t, err)
+	assert.Len(t, topicList, 0)
+}
+
+func TestSessionStore_GetSessionTopics_Empty(t *testing.T) {
+	db := testDB(t)
+	sessions := NewSessionStore(db)
+
+	topics, err := sessions.GetSessionTopics(context.Background(), "00000000-0000-0000-0000-000000000000")
+	require.NoError(t, err)
+	assert.NotNil(t, topics)
+	assert.Len(t, topics, 0)
+}
