@@ -41,7 +41,7 @@ func DefaultRunnerConfig() RunnerConfig {
 // Runner manages sandboxed skill execution.
 type Runner struct {
 	jail       JailBackend
-	baseDir    string // e.g. ~/.magicburg/userspace
+	baseDir    string // e.g. ~/.bridge/userspace
 	runnersDir string // path to runner scripts (runner.py, runner.sh)
 	config     RunnerConfig
 }
@@ -273,14 +273,17 @@ func (r *Runner) Execute(ctx context.Context, req ExecuteRequest) (*ExecuteResul
 	}, nil
 }
 
-// buildEnv constructs an os.Environ()-style slice from a map, inheriting
-// the current environment and overlaying the provided variables.
+// buildEnv constructs an os.Environ()-style slice from a map.
+// Does NOT inherit host environment to prevent leaking secrets (API keys, DB URLs).
 func buildEnv(env map[string]string) []string {
-	base := os.Environ()
+	result := make([]string, 0, len(env)+2)
+	// Provide minimal safe defaults
+	result = append(result, "PATH=/usr/local/bin:/usr/bin:/bin")
+	result = append(result, "HOME=/tmp")
 	for k, v := range env {
-		base = append(base, k+"="+v)
+		result = append(result, k+"="+v)
 	}
-	return base
+	return result
 }
 
 // scanOutputDir lists files in the output directory and returns them as artifacts.

@@ -102,7 +102,7 @@ func (c *PistonClient) ExecuteWithStdin(ctx context.Context, language, code, std
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024)) // 10MB max
 	if err != nil {
 		return nil, fmt.Errorf("piston: read response: %w", err)
 	}

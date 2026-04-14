@@ -50,6 +50,7 @@ func (b BwrapBackend) BuildCommand(cfg JailConfig) (string, []string, error) {
 
 	args := []string{
 		"--unshare-all",
+		"--die-with-parent",
 		"--uid", "0",
 		"--gid", "0",
 		// Read-only system dirs

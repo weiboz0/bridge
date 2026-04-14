@@ -241,15 +241,16 @@ type limitedWriter struct {
 }
 
 func (w *limitedWriter) Write(p []byte) (int, error) {
+	n := len(p) // save original length to satisfy io.Writer contract
 	remaining := w.max - len(w.buf)
 	if remaining <= 0 {
-		return len(p), nil // silently discard
+		return n, nil // silently discard
 	}
 	if len(p) > remaining {
 		p = p[:remaining]
 	}
 	w.buf = append(w.buf, p...)
-	return len(p), nil
+	return n, nil
 }
 
 func (w *limitedWriter) Len() int       { return len(w.buf) }
