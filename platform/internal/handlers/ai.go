@@ -3,7 +3,6 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
-	"regexp"
 	"strings"
 	"time"
 
@@ -12,6 +11,7 @@ import (
 	"github.com/weiboz0/bridge/platform/internal/auth"
 	"github.com/weiboz0/bridge/platform/internal/events"
 	"github.com/weiboz0/bridge/platform/internal/llm"
+	"github.com/weiboz0/bridge/platform/internal/skills"
 	"github.com/weiboz0/bridge/platform/internal/store"
 )
 
@@ -29,80 +29,6 @@ func (h *AIHandler) Routes(r chi.Router) {
 		r.Post("/toggle", h.Toggle)
 		r.Get("/interactions", h.ListInteractions)
 	})
-}
-
-// --- System prompts by grade level ---
-
-const baseRules = `You are a patient coding tutor helping a student learn to program.
-
-RULES:
-- Ask guiding questions to help the student think through the problem
-- Point to where the issue might be (e.g., "look at line 5"), but don't give the answer
-- Never provide complete function implementations or full solutions
-- If the student asks you to write the code for them, redirect them to think about the approach
-- Celebrate small wins and encourage persistence
-- Keep responses concise (2-4 sentences unless explaining a concept)`
-
-var gradePrompts = map[string]string{
-	"K-5": baseRules + `
-
-GRADE LEVEL: Elementary (K-5)
-- Use simple vocabulary and short sentences
-- Use analogies from everyday life (building blocks, recipes, treasure maps)
-- Be extra encouraging and patient
-- Focus on visual thinking: "What do you see happening when you run this?"
-- Reference block concepts if using Blockly: "Which purple block did you use?"`,
-
-	"6-8": baseRules + `
-
-GRADE LEVEL: Middle School (6-8)
-- Explain concepts clearly but don't over-simplify
-- Reference specific line numbers: "Take a look at line 7 — what value does x have there?"
-- Use analogies when helpful but can be more technical
-- Encourage reading error messages: "What does the error message tell you?"
-- Help build debugging habits: "What did you expect to happen vs what actually happened?"`,
-
-	"9-12": baseRules + `
-
-GRADE LEVEL: High School (9-12)
-- Use proper technical terminology
-- Reference documentation and best practices
-- Discuss trade-offs when relevant: "This works, but what happens if the list is empty?"
-- Encourage independent problem-solving: "How would you test that this works?"
-- Help develop computational thinking and code organization skills`,
-}
-
-func getSystemPrompt(gradeLevel string) string {
-	if p, ok := gradePrompts[gradeLevel]; ok {
-		return p
-	}
-	return gradePrompts["6-8"]
-}
-
-// --- Guardrails ---
-
-var solutionPatterns = []*regexp.Regexp{
-	regexp.MustCompile("(?s)```python\\n.{200,}```"),
-	regexp.MustCompile("(?s)def\\s+\\w+\\s*\\([^)]*\\):.{100,}"),
-	regexp.MustCompile("(?s)class\\s+\\w+.{150,}"),
-	regexp.MustCompile("(?i)here(?:'s| is) the (?:complete |full )?(?:solution|answer|code)"),
-	regexp.MustCompile("(?i)just (?:copy|paste|use) this"),
-}
-
-func containsSolution(text string) bool {
-	for _, p := range solutionPatterns {
-		if p.MatchString(text) {
-			return true
-		}
-	}
-	return false
-}
-
-func filterResponse(text string) string {
-	if containsSolution(text) {
-		return "I was about to give you too much! Let me try again with a hint instead.\n\nWhat part of the problem are you finding most confusing? Let's break it down together."
-	}
-	return text
 }
 
 // Chat handles POST /api/ai/chat — streaming SSE chat with LLM
@@ -182,14 +108,11 @@ func (h *AIHandler) Chat(w http.ResponseWriter, r *http.Request) {
 		gradeLevel = classroom.GradeLevel
 	}
 
-	systemPrompt := getSystemPrompt(gradeLevel)
-	if body.Code != "" {
-		lang := "python"
-		if classroom != nil && classroom.EditorMode != "" {
-			lang = classroom.EditorMode
-		}
-		systemPrompt += "\n\nThe student's current code:\n```" + lang + "\n" + body.Code + "\n```"
+	lang := "python"
+	if classroom != nil && classroom.EditorMode != "" {
+		lang = classroom.EditorMode
 	}
+	systemPrompt := skills.BuildChatSystemPrompt(skills.GradeLevel(gradeLevel), body.Code, lang)
 
 	// Build LLM messages
 	llmMessages := []llm.Message{
@@ -234,7 +157,7 @@ func (h *AIHandler) Chat(w http.ResponseWriter, r *http.Request) {
 			fullResponse.WriteString(chunk.Delta)
 
 			// Incremental guardrail check every 200 chars
-			if fullResponse.Len() > 200 && containsSolution(fullResponse.String()) {
+			if fullResponse.Len() > 200 && skills.ContainsSolution(fullResponse.String()) {
 				guardrailTriggered = true
 				break
 			}
@@ -254,8 +177,8 @@ func (h *AIHandler) Chat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response := fullResponse.String()
-	if guardrailTriggered || containsSolution(response) {
-		filtered := filterResponse(response)
+	if guardrailTriggered || skills.ContainsSolution(response) {
+		filtered := skills.FilterResponse(response)
 		data, _ := json.Marshal(map[string]string{"replace": filtered})
 		w.Write([]byte("data: " + string(data) + "\n\n"))
 		flusher.Flush()
