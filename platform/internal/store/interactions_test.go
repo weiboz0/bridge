@@ -145,3 +145,42 @@ func TestInteractionStore_ListBySession(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, list, 1)
 }
+
+func TestInteractionStore_DeleteInteraction(t *testing.T) {
+	db := testDB(t)
+	interactions := NewInteractionStore(db)
+	users := NewUserStore(db)
+	classrooms := NewClassroomStore(db)
+	sessions := NewSessionStore(db)
+	ctx := context.Background()
+
+	teacher := createTestUser(t, db, users, t.Name()+"-teacher")
+	student := createTestUser(t, db, users, t.Name()+"-student")
+	classroom := createTestClassroom(t, classrooms, teacher.ID)
+	t.Cleanup(func() {
+		db.ExecContext(ctx, "DELETE FROM ai_interactions WHERE session_id IN (SELECT id FROM live_sessions WHERE classroom_id = $1)", classroom.ID)
+		db.ExecContext(ctx, "DELETE FROM live_sessions WHERE classroom_id = $1", classroom.ID)
+		db.ExecContext(ctx, "DELETE FROM classrooms WHERE id = $1", classroom.ID)
+	})
+
+	session, _ := sessions.CreateSession(ctx, CreateSessionInput{
+		ClassroomID: classroom.ID, TeacherID: teacher.ID,
+	})
+	interactions.CreateInteraction(ctx, CreateInteractionInput{
+		StudentID: student.ID, SessionID: session.ID, EnabledByTeacherID: teacher.ID,
+	})
+
+	// Verify it exists
+	active, err := interactions.GetActiveInteraction(ctx, student.ID, session.ID)
+	require.NoError(t, err)
+	require.NotNil(t, active)
+
+	// Delete
+	err = interactions.DeleteInteraction(ctx, student.ID, session.ID)
+	require.NoError(t, err)
+
+	// Verify gone
+	active, err = interactions.GetActiveInteraction(ctx, student.ID, session.ID)
+	require.NoError(t, err)
+	assert.Nil(t, active)
+}

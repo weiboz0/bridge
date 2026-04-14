@@ -222,3 +222,15 @@ func TestClassStore_AddAndRemoveClassMember(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Nil(t, gone)
 }
+
+func TestIsValidClassMemberRole(t *testing.T) {
+	assert.True(t, IsValidClassMemberRole("instructor"))
+	assert.True(t, IsValidClassMemberRole("ta"))
+	assert.True(t, IsValidClassMemberRole("student"))
+	assert.True(t, IsValidClassMemberRole("observer"))
+	assert.True(t, IsValidClassMemberRole("guest"))
+	assert.True(t, IsValidClassMemberRole("parent"))
+	assert.False(t, IsValidClassMemberRole("admin"))
+	assert.False(t, IsValidClassMemberRole("superuser"))
+	assert.False(t, IsValidClassMemberRole(""))
+}
