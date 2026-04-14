@@ -1,6 +1,6 @@
 # Plan 020 — Go Workflow Engine & Bridge AI Agents
 
-> **NOTE:** This plan requires review and approval before execution. Do not execute until the user explicitly approves.
+> **STATUS: DEFERRED** — Workflow capability is not needed for current scope. Will revisit when Bridge requires background automation, scheduled tasks, or multi-step AI agent pipelines.
 
 **Spec:** `docs/specs/004-go-backend-migration.md` — Phase 4
 **Source:** `~/workshop/magicburg-go/gobackend/internal/workflows/` — proven DAG engine (~850 lines)
