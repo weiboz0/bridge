@@ -16,6 +16,7 @@ import (
 type AdminHandler struct {
 	Orgs  *store.OrgStore
 	Users *store.UserStore
+	Stats *store.StatsStore
 	DB    *sql.DB
 }
 
@@ -24,6 +25,7 @@ func (h *AdminHandler) Routes(r chi.Router) {
 	r.Route("/api/admin", func(r chi.Router) {
 		r.Use(auth.RequireAdmin)
 
+		r.Get("/stats", h.GetStats)
 		r.Get("/orgs", h.ListAllOrgs)
 		r.Patch("/orgs/{orgID}", h.UpdateOrgStatus)
 
@@ -31,6 +33,16 @@ func (h *AdminHandler) Routes(r chi.Router) {
 		r.Get("/impersonate/status", h.ImpersonateStatus)
 		r.Delete("/impersonate", h.StopImpersonate)
 	})
+}
+
+// GetStats handles GET /api/admin/stats
+func (h *AdminHandler) GetStats(w http.ResponseWriter, r *http.Request) {
+	stats, err := h.Stats.GetAdminStats(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	writeJSON(w, http.StatusOK, stats)
 }
 
 // ListAllOrgs handles GET /api/admin/orgs

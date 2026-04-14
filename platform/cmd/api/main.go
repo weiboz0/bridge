@@ -155,7 +155,16 @@ func main() {
 		parentH := &handlers.ParentHandler{Reports: stores.Reports}
 		parentH.Routes(r)
 
-		adminH := &handlers.AdminHandler{Orgs: stores.Orgs, Users: stores.Users, DB: database}
+		meH := &handlers.MeHandler{Orgs: stores.Orgs, Courses: stores.Courses, Classes: stores.Classes}
+		meH.Routes(r)
+
+		teacherH := &handlers.TeacherHandler{Courses: stores.Courses, Classes: stores.Classes, Orgs: stores.Orgs}
+		teacherH.Routes(r)
+
+		orgDashH := &handlers.OrgDashboardHandler{Orgs: stores.Orgs, Courses: stores.Courses, Classes: stores.Classes, Stats: stores.Stats}
+		orgDashH.Routes(r)
+
+		adminH := &handlers.AdminHandler{Orgs: stores.Orgs, Users: stores.Users, Stats: stores.Stats, DB: database}
 		adminH.Routes(r)
 	})
 
