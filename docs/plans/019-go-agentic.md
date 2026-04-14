@@ -4073,3 +4073,61 @@ Tasks 1-4 are independent and can be parallelized. Tasks 5-7 depend on 1-4. Task
 6. `[FIXED]` No tests for ReportGenerator or LessonGenerator (need mock LLM backend).
 
 7. `[FIXED]` `TestCodeRunner_NilExecutor` is in `code_analyzer_test.go` — should be its own file.
+
+---
+
+## Phase D — Post-Execution Report
+
+**Branch:** `feat/019d-sandbox`
+**PR:** #27
+**Executed:** 2026-04-13
+
+### What was done
+
+- Synced sandbox layer from magicburg (7 files): jail, runner, deno, protocol, runtimes, userspace
+- New: Piston HTTP client + PistonExecutor adapter for skills.CodeExecutor
+- Config: PISTON_URL env var + sandbox config section
+- Server wiring: PistonExecutor + skill registry at startup
+
+### Code Review — Phase D
+
+#### Review 1
+
+- **Date**: 2026-04-13
+- **Reviewer**: Claude (superpowers:code-reviewer)
+- **PR**: #27
+- **Verdict**: Changes requested (2 critical, 8 important)
+
+**Must Fix**
+
+1. `[FIXED]` UserID path traversal — no validation allows `../../etc` in file paths.
+   → Added validateUserID() rejecting `/`, `\`, `..`, null bytes. Applied to EnsureUserSpace and CleanupUserSpace.
+
+2. `[FIXED]` buildEnv leaks host environment (DB URLs, API keys) into sandboxed subprocesses.
+   → Changed to empty environment with minimal safe defaults (PATH, HOME only).
+
+**Should Fix**
+
+3. `[FIXED]` Bwrap missing --die-with-parent flag.
+   → Added to bwrap args.
+
+4. `[FIXED]` io.ReadAll without size limit on Piston response.
+   → Added 10MB limit via io.LimitReader.
+
+5. `[FIXED]` limitedWriter returns wrong byte count (io.Writer contract violation).
+   → Save original len(p) before truncation.
+
+6. `[FIXED]` Magicburg path reference in runner.go comment.
+   → Changed to ~/.bridge/userspace.
+
+7. `[WONTFIX]` Piston client simplified (no concurrency semaphore, configurable timeouts).
+   → Acceptable for current scale. Will add when production load requires it.
+
+8. `[WONTFIX]` Missing tests for runner.go, deno.go, deno_host.go, userspace.go.
+   → These are synced from magicburg and not yet wired into Bridge handlers. Will add tests when integrated.
+
+9. `[WONTFIX]` Registry created but immediately discarded in main.go.
+   → Placeholder wiring. Will wire into agentic loop handler in Phase E.
+
+10. `[WONTFIX]` Bwrap runs as UID 0 inside namespace.
+    → Standard bwrap pattern with --unshare-all. Defense-in-depth improvement deferred.

@@ -13,6 +13,7 @@ type Config struct {
 	Database DatabaseConfig `toml:"database"`
 	Auth     AuthConfig     `toml:"auth"`
 	LLM      LLMConfig     `toml:"llm"`
+	Sandbox  SandboxConfig  `toml:"sandbox"`
 }
 
 type ServerConfig struct {
@@ -33,6 +34,10 @@ type LLMConfig struct {
 	Model   string `toml:"model"`
 	BaseURL string `toml:"base_url"`
 	APIKey  string `toml:"-"` // resolved from env at runtime, never in config file
+}
+
+type SandboxConfig struct {
+	PistonURL string `toml:"piston_url"`
 }
 
 func Load(path string) (*Config, error) {
@@ -71,6 +76,10 @@ func Load(path string) (*Config, error) {
 	}
 	if v := os.Getenv("LLM_BASE_URL"); v != "" {
 		cfg.LLM.BaseURL = v
+	}
+
+	if v := os.Getenv("PISTON_URL"); v != "" {
+		cfg.Sandbox.PistonURL = v
 	}
 
 	// Resolve LLM API key from provider-specific env var

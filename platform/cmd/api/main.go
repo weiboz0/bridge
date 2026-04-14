@@ -20,6 +20,8 @@ import (
 	"github.com/weiboz0/bridge/platform/internal/events"
 	"github.com/weiboz0/bridge/platform/internal/handlers"
 	"github.com/weiboz0/bridge/platform/internal/llm"
+	"github.com/weiboz0/bridge/platform/internal/sandbox"
+	"github.com/weiboz0/bridge/platform/internal/skills"
 )
 
 func main() {
@@ -62,6 +64,16 @@ func main() {
 	if err != nil {
 		slog.Warn("LLM backend not configured", "error", err)
 	}
+
+	// Build Piston executor for code execution
+	var codeExecutor skills.CodeExecutor
+	if cfg.Sandbox.PistonURL != "" {
+		codeExecutor = sandbox.NewPistonExecutor(sandbox.NewPistonClient(cfg.Sandbox.PistonURL))
+		slog.Info("Piston code execution enabled", "url", cfg.Sandbox.PistonURL)
+	}
+
+	// Build skill registry (used by agentic loop)
+	_ = skills.NewBridgeRegistry(codeExecutor, llmBackend)
 
 	// Shared event broadcaster
 	broadcaster := events.NewBroadcaster()
