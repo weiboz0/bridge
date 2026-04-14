@@ -16,12 +16,17 @@ type MeHandler struct {
 	Classes *store.ClassStore
 }
 
+// OptionalAuthRoutes registers /api/me endpoints that work with or without auth.
+// These use optional auth — the middleware validates the token if present but
+// doesn't reject requests without one.
+func (h *MeHandler) OptionalAuthRoutes(r chi.Router) {
+	r.Get("/api/me/roles", h.GetRoles)
+	r.Get("/api/me/portal-access", h.GetPortalAccess)
+}
+
+// Routes registers /api/me endpoints that require auth.
 func (h *MeHandler) Routes(r chi.Router) {
-	r.Route("/api/me", func(r chi.Router) {
-		r.Get("/roles", h.GetRoles)
-		r.Get("/portal-access", h.GetPortalAccess)
-		r.Get("/memberships", h.GetMemberships)
-	})
+	r.Get("/api/me/memberships", h.GetMemberships)
 }
 
 type userRole struct {

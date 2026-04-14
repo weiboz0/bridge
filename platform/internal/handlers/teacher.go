@@ -45,8 +45,9 @@ func (h *TeacherHandler) Dashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var allClasses []store.Class
+	// Collect org IDs for a single batch query (avoids N+1)
 	seen := make(map[string]bool)
+	var orgIDs []string
 	for _, m := range memberships {
 		if m.Status != "active" || m.OrgStatus != "active" {
 			continue
@@ -54,19 +55,16 @@ func (h *TeacherHandler) Dashboard(w http.ResponseWriter, r *http.Request) {
 		if m.Role != "teacher" && m.Role != "org_admin" {
 			continue
 		}
-		if seen[m.OrgID] {
-			continue
+		if !seen[m.OrgID] {
+			seen[m.OrgID] = true
+			orgIDs = append(orgIDs, m.OrgID)
 		}
-		seen[m.OrgID] = true
-		classes, err := h.Classes.ListClassesByOrg(r.Context(), m.OrgID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "Database error")
-			return
-		}
-		allClasses = append(allClasses, classes...)
 	}
-	if allClasses == nil {
-		allClasses = []store.Class{}
+
+	allClasses, err := h.Classes.ListClassesByOrgIDs(r.Context(), orgIDs)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
