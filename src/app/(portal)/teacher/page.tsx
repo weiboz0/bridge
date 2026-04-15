@@ -3,16 +3,16 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import Link from "next/link";
 import { buttonVariants } from "@/components/ui/button";
 
-interface DashboardResponse {
-  courses: { id: string; title: string }[];
-  classes: { id: string; title: string; term: string; status: string }[];
-}
+interface CourseItem { id: string; title: string }
+interface ClassItem { id: string; title: string; term: string; status: string; memberRole: string }
 
 export default async function TeacherDashboard() {
-  const data = await api<DashboardResponse>("/api/teacher/dashboard");
-  const { courses, classes } = data;
+  const [courses, allClasses] = await Promise.all([
+    api<CourseItem[]>("/api/teacher/courses").then((d) => (d as any).courses ?? []),
+    api<ClassItem[]>("/api/classes/mine"),
+  ]);
 
-  const myClasses = classes.filter((c) => c.status === "active");
+  const myClasses = allClasses.filter((c) => c.memberRole === "instructor");
 
   return (
     <div className="p-6 space-y-6">

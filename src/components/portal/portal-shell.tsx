@@ -1,15 +1,13 @@
-import { api } from "@/lib/api-client";
+import { api, ApiError } from "@/lib/api-client";
 import { getPortalConfig } from "@/lib/portal/nav-config";
 import { Sidebar } from "./sidebar";
 import { redirect } from "next/navigation";
-import type { PortalRole } from "@/lib/portal/types";
-import type { UserRole } from "@/lib/portal/types";
+import type { PortalRole, UserRole } from "@/lib/portal/types";
 
 interface PortalAccessResponse {
   authorized: boolean;
   userName: string;
   roles: UserRole[];
-  currentRole: { role: string; orgId?: string; orgName?: string } | null;
 }
 
 interface PortalShellProps {
@@ -21,8 +19,11 @@ export async function PortalShell({ portalRole, children }: PortalShellProps) {
   let data: PortalAccessResponse;
   try {
     data = await api<PortalAccessResponse>("/api/me/portal-access");
-  } catch {
-    redirect("/login");
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 401) {
+      redirect("/login");
+    }
+    throw e; // surface infrastructure errors
   }
 
   if (!data.authorized) {

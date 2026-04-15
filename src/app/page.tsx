@@ -17,7 +17,12 @@ export default async function Home() {
   } catch (e) {
     // Re-throw Next.js redirects
     if (e instanceof Error && "digest" in e) throw e;
-    // Not authenticated or API unavailable — show landing page
+    // 401 = not authenticated — show landing page
+    if (e instanceof ApiError && e.status === 401) {
+      // expected for unauthenticated users
+    } else {
+      throw e; // surface infrastructure errors
+    }
   }
 
   return (

@@ -106,3 +106,11 @@ func TestAddClassMember_MissingEmail(t *testing.T) {
 	h.AddMember(w, req)
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
+
+func TestListMyClasses_NoClaims(t *testing.T) {
+	h := &ClassHandler{}
+	req := httptest.NewRequest(http.MethodGet, "/api/classes/mine", nil)
+	w := httptest.NewRecorder()
+	h.ListMyClasses(w, req)
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+}

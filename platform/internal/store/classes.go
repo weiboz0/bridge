@@ -220,7 +220,8 @@ type ClassWithRole struct {
 // ListClassesByUser returns all classes where the user is a member, with their role.
 func (s *ClassStore) ListClassesByUser(ctx context.Context, userID string) ([]ClassWithRole, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT `+classColumns+`, cm.role
+		`SELECT classes.id, classes.course_id, classes.org_id, classes.title, classes.term,
+		        classes.join_code, classes.status, classes.created_at, classes.updated_at, cm.role
 		 FROM classes
 		 INNER JOIN class_memberships cm ON cm.class_id = classes.id
 		 WHERE cm.user_id = $1 AND classes.status = 'active'
