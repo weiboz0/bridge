@@ -1,19 +1,18 @@
-import { auth } from "@/lib/auth";
-import { db } from "@/lib/db";
-import { listCoursesByCreator } from "@/lib/courses";
-import { listClassesByUser } from "@/lib/classes";
+import { api } from "@/lib/api-client";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import Link from "next/link";
 import { buttonVariants } from "@/components/ui/button";
 
-export default async function TeacherDashboard() {
-  const session = await auth();
-  const [courses, classes] = await Promise.all([
-    listCoursesByCreator(db, session!.user.id),
-    listClassesByUser(db, session!.user.id),
-  ]);
+interface DashboardResponse {
+  courses: { id: string; title: string }[];
+  classes: { id: string; title: string; term: string; status: string }[];
+}
 
-  const myClasses = classes.filter((c) => c.memberRole === "instructor");
+export default async function TeacherDashboard() {
+  const data = await api<DashboardResponse>("/api/teacher/dashboard");
+  const { courses, classes } = data;
+
+  const myClasses = classes.filter((c) => c.status === "active");
 
   return (
     <div className="p-6 space-y-6">

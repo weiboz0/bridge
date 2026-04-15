@@ -1,14 +1,18 @@
-import { auth } from "@/lib/auth";
-import { db } from "@/lib/db";
-import { listClassesByUser } from "@/lib/classes";
+import { api } from "@/lib/api-client";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import Link from "next/link";
 import { buttonVariants } from "@/components/ui/button";
 
+interface ClassItem {
+  id: string;
+  title: string;
+  term: string;
+  status: string;
+}
+
 export default async function StudentDashboard() {
-  const session = await auth();
-  const classes = await listClassesByUser(db, session!.user.id);
-  const myClasses = classes.filter((c) => c.memberRole === "student");
+  const allClasses = await api<(ClassItem & { memberRole: string })[]>("/api/classes/mine");
+  const myClasses = allClasses.filter((c) => c.memberRole === "student" && c.status === "active");
 
   return (
     <div className="p-6 space-y-6">
