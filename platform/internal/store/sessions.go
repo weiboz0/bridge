@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -11,7 +10,7 @@ import (
 
 type LiveSession struct {
 	ID          string     `json:"id"`
-	ClassroomID string     `json:"classroomId"`
+	ClassID string     `json:"classId"`
 	TeacherID   string     `json:"teacherId"`
 	Status      string     `json:"status"`
 	Settings    string     `json:"settings"`
@@ -52,7 +51,7 @@ type SessionTopicWithDetails struct {
 }
 
 type CreateSessionInput struct {
-	ClassroomID string `json:"classroomId"`
+	ClassID string `json:"classId"`
 	TeacherID   string `json:"teacherId"`
 	Settings    string `json:"settings"`
 }
@@ -65,11 +64,11 @@ func NewSessionStore(db *sql.DB) *SessionStore {
 	return &SessionStore{db: db}
 }
 
-const sessionColumns = `id, classroom_id, teacher_id, status, settings, started_at, ended_at`
+const sessionColumns = `id, class_id, teacher_id, status, settings, started_at, ended_at`
 
 func scanSession(row interface{ Scan(...any) error }) (*LiveSession, error) {
 	var s LiveSession
-	err := row.Scan(&s.ID, &s.ClassroomID, &s.TeacherID, &s.Status, &s.Settings, &s.StartedAt, &s.EndedAt)
+	err := row.Scan(&s.ID, &s.ClassID, &s.TeacherID, &s.Status, &s.Settings, &s.StartedAt, &s.EndedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -89,8 +88,8 @@ func (s *SessionStore) CreateSession(ctx context.Context, input CreateSessionInp
 	// End any active session for this classroom
 	now := time.Now()
 	_, err = tx.ExecContext(ctx,
-		`UPDATE live_sessions SET status = 'ended', ended_at = $1 WHERE classroom_id = $2 AND status = 'active'`,
-		now, input.ClassroomID)
+		`UPDATE live_sessions SET status = 'ended', ended_at = $1 WHERE class_id = $2 AND status = 'active'`,
+		now, input.ClassID)
 	if err != nil {
 		return nil, err
 	}
@@ -103,11 +102,11 @@ func (s *SessionStore) CreateSession(ctx context.Context, input CreateSessionInp
 
 	var session LiveSession
 	err = tx.QueryRowContext(ctx,
-		`INSERT INTO live_sessions (id, classroom_id, teacher_id, status, settings, started_at)
+		`INSERT INTO live_sessions (id, class_id, teacher_id, status, settings, started_at)
 		 VALUES ($1, $2, $3, 'active', $4, $5)
 		 RETURNING `+sessionColumns,
-		id, input.ClassroomID, input.TeacherID, settings, now,
-	).Scan(&session.ID, &session.ClassroomID, &session.TeacherID, &session.Status, &session.Settings, &session.StartedAt, &session.EndedAt)
+		id, input.ClassID, input.TeacherID, settings, now,
+	).Scan(&session.ID, &session.ClassID, &session.TeacherID, &session.Status, &session.Settings, &session.StartedAt, &session.EndedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -118,58 +117,14 @@ func (s *SessionStore) CreateSession(ctx context.Context, input CreateSessionInp
 	return &session, nil
 }
 
-// FindOrCreateLegacyClassroom finds or creates a legacy classrooms record for a new-style class.
-// This bridges the gap between the new classes system and the legacy session system
-// which requires a classrooms.id as foreign key.
-func (s *SessionStore) FindOrCreateLegacyClassroom(ctx context.Context, classID, teacherID string) (string, error) {
-	// Check if a legacy classroom already exists for this class
-	var existingID string
-	err := s.db.QueryRowContext(ctx,
-		`SELECT c.id FROM classrooms c
-		 INNER JOIN new_classrooms nc ON nc.class_id = $1
-		 WHERE c.teacher_id = $2 AND c.name = (SELECT title FROM classes WHERE id = $1)
-		 LIMIT 1`, classID, teacherID,
-	).Scan(&existingID)
-	if err == nil {
-		return existingID, nil
-	}
-
-	// Create a new legacy classroom from the class data
-	var title, gradeLevel, editorMode string
-	err = s.db.QueryRowContext(ctx,
-		`SELECT c.title, co.grade_level, nc.editor_mode
-		 FROM classes c
-		 INNER JOIN courses co ON c.course_id = co.id
-		 INNER JOIN new_classrooms nc ON nc.class_id = c.id
-		 WHERE c.id = $1`, classID,
-	).Scan(&title, &gradeLevel, &editorMode)
-	if err != nil {
-		return "", fmt.Errorf("lookup class: %w", err)
-	}
-
-	newID := uuid.New().String()
-	joinCode := generateJoinCode()
-	now := time.Now()
-	_, err = s.db.ExecContext(ctx,
-		`INSERT INTO classrooms (id, teacher_id, name, description, grade_level, editor_mode, join_code, created_at, updated_at)
-		 VALUES ($1, $2, $3, '', $4, $5, $6, $7, $8)`,
-		newID, teacherID, title, gradeLevel, editorMode, joinCode, now, now,
-	)
-	if err != nil {
-		return "", fmt.Errorf("create legacy classroom: %w", err)
-	}
-
-	return newID, nil
-}
-
 func (s *SessionStore) GetSession(ctx context.Context, id string) (*LiveSession, error) {
 	return scanSession(s.db.QueryRowContext(ctx,
 		`SELECT `+sessionColumns+` FROM live_sessions WHERE id = $1`, id))
 }
 
-func (s *SessionStore) GetActiveSession(ctx context.Context, classroomID string) (*LiveSession, error) {
+func (s *SessionStore) GetActiveSession(ctx context.Context, classID string) (*LiveSession, error) {
 	return scanSession(s.db.QueryRowContext(ctx,
-		`SELECT `+sessionColumns+` FROM live_sessions WHERE classroom_id = $1 AND status = 'active'`, classroomID))
+		`SELECT `+sessionColumns+` FROM live_sessions WHERE class_id = $1 AND status = 'active'`, classID))
 }
 
 func (s *SessionStore) EndSession(ctx context.Context, id string) (*LiveSession, error) {

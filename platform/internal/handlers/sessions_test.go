@@ -14,7 +14,7 @@ import (
 
 func TestCreateSession_NoClaims(t *testing.T) {
 	h := &SessionHandler{}
-	body, _ := json.Marshal(map[string]string{"classroomId": "cr1"})
+	body, _ := json.Marshal(map[string]string{"classId": "c1"})
 	req := httptest.NewRequest(http.MethodPost, "/api/sessions", bytes.NewReader(body))
 	w := httptest.NewRecorder()
 	h.CreateSession(w, req)

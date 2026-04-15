@@ -223,9 +223,9 @@ export const liveSessions = pgTable(
   "live_sessions",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    classroomId: uuid("classroom_id")
+    classId: uuid("class_id")
       .notNull()
-      .references(() => classrooms.id, { onDelete: "cascade" }),
+      .references(() => classes.id, { onDelete: "cascade" }),
     teacherId: uuid("teacher_id")
       .notNull()
       .references(() => users.id),
@@ -235,8 +235,8 @@ export const liveSessions = pgTable(
     endedAt: timestamp("ended_at"),
   },
   (table) => [
-    index("live_sessions_classroom_idx").on(table.classroomId),
-    index("live_sessions_status_idx").on(table.classroomId, table.status),
+    index("live_sessions_class_idx").on(table.classId),
+    index("live_sessions_class_status_idx").on(table.classId, table.status),
   ]
 );
 

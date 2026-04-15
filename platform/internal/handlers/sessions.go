@@ -13,7 +13,6 @@ import (
 
 type SessionHandler struct {
 	Sessions    *store.SessionStore
-	Classrooms  *store.ClassroomStore
 	Broadcaster *events.Broadcaster
 }
 
@@ -47,51 +46,20 @@ func (h *SessionHandler) CreateSession(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var body struct {
-		ClassroomID string `json:"classroomId"`
-		ClassID     string `json:"classId"`
-		Settings    string `json:"settings"`
+		ClassID  string `json:"classId"`
+		Settings string `json:"settings"`
 	}
 	if !decodeJSON(w, r, &body) {
 		return
 	}
-
-	classroomID := body.ClassroomID
-
-	// If classId is provided (new-style class), resolve or create the legacy classroom
-	if body.ClassID != "" && classroomID == "" {
-		legacyID, err := h.Sessions.FindOrCreateLegacyClassroom(r.Context(), body.ClassID, claims.UserID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "Failed to resolve classroom")
-			return
-		}
-		classroomID = legacyID
-	}
-
-	if classroomID == "" {
-		writeError(w, http.StatusBadRequest, "classroomId or classId is required")
+	if body.ClassID == "" {
+		writeError(w, http.StatusBadRequest, "classId is required")
 		return
 	}
 
-	// Verify user is the classroom teacher (for legacy classrooms)
-	if body.ClassroomID != "" {
-		classroom, err := h.Classrooms.GetClassroom(r.Context(), classroomID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "Database error")
-			return
-		}
-		if classroom == nil {
-			writeError(w, http.StatusNotFound, "Classroom not found")
-			return
-		}
-		if !claims.IsPlatformAdmin && classroom.TeacherID != claims.UserID {
-			writeError(w, http.StatusForbidden, "Only the classroom teacher can start a session")
-			return
-		}
-	}
-
 	session, err := h.Sessions.CreateSession(r.Context(), store.CreateSessionInput{
-		ClassroomID: classroomID,
-		TeacherID:   claims.UserID,
+		ClassID:   body.ClassID,
+		TeacherID: claims.UserID,
 		Settings:    body.Settings,
 	})
 	if err != nil {

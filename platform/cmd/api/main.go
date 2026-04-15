@@ -130,7 +130,7 @@ func main() {
 		classH := &handlers.ClassHandler{Classes: stores.Classes, Orgs: stores.Orgs, Users: stores.Users}
 		classH.Routes(r)
 
-		sessionH := &handlers.SessionHandler{Sessions: stores.Sessions, Classrooms: stores.Classrooms, Broadcaster: broadcaster}
+		sessionH := &handlers.SessionHandler{Sessions: stores.Sessions, Broadcaster: broadcaster}
 		sessionH.Routes(r)
 
 		docH := &handlers.DocumentHandler{Documents: stores.Documents}
@@ -152,7 +152,8 @@ func main() {
 			aiH := &handlers.AIHandler{
 				Interactions: stores.Interactions,
 				Sessions:     stores.Sessions,
-				Classrooms:   stores.Classrooms,
+				Classes:      stores.Classes,
+				Courses:      stores.Courses,
 				Backend:      llmBackend,
 				Broadcaster:  broadcaster,
 			}
