@@ -27,10 +27,13 @@ const GO_PROXY_ROUTES = [
 const nextConfig: NextConfig = {
   turbopack: {},
   async rewrites() {
-    return GO_PROXY_ROUTES.map((source) => ({
-      source,
-      destination: `${GO_API_URL}${source}`,
-    }));
+    // Use beforeFiles to override Next.js API routes with Go proxy
+    return {
+      beforeFiles: GO_PROXY_ROUTES.map((source) => ({
+        source,
+        destination: `${GO_API_URL}${source}`,
+      })),
+    };
   },
 };
 
