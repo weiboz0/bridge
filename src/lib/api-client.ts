@@ -30,7 +30,10 @@ export async function api<T = unknown>(
   } = {}
 ): Promise<T> {
   const cookieStore = await cookies();
+  // Auth.js v5 cookie names (try HTTPS first, then HTTP, then v4 fallbacks)
   const sessionToken =
+    cookieStore.get("__Secure-authjs.session-token")?.value ||
+    cookieStore.get("authjs.session-token")?.value ||
     cookieStore.get("__Secure-next-auth.session-token")?.value ||
     cookieStore.get("next-auth.session-token")?.value;
 
