@@ -1,7 +1,7 @@
 import { api } from "@/lib/api-client";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import Link from "next/link";
-import { buttonVariants } from "@/components/ui/button";
+import { JoinClassDialog } from "@/components/student/join-class-dialog";
 
 interface ClassItem {
   id: string;
@@ -18,9 +18,7 @@ export default async function StudentDashboard() {
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">My Dashboard</h1>
-        <Link href="/student/classes" className={buttonVariants({ variant: "outline" })}>
-          Join a Class
-        </Link>
+        <JoinClassDialog />
       </div>
 
       {myClasses.length === 0 ? (
@@ -31,7 +29,7 @@ export default async function StudentDashboard() {
         </Card>
       ) : (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {myClasses.filter((c) => c.status === "active").map((cls) => (
+          {myClasses.map((cls) => (
             <Link key={cls.id} href={`/student/classes/${cls.id}`}>
               <Card className="hover:border-primary transition-colors cursor-pointer">
                 <CardHeader>
