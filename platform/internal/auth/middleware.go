@@ -32,13 +32,24 @@ func NewMiddleware(secret string) *Middleware {
 // Also handles impersonation via bridge-impersonate cookie.
 func (m *Middleware) RequireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		authHeader := r.Header.Get("Authorization")
-		if !strings.HasPrefix(authHeader, "Bearer ") {
+		// Try Authorization header first, then session cookies
+		tokenStr := ""
+		if authHeader := r.Header.Get("Authorization"); strings.HasPrefix(authHeader, "Bearer ") {
+			tokenStr = strings.TrimPrefix(authHeader, "Bearer ")
+		} else {
+			// Read Auth.js session token from cookies (for proxied requests)
+			for _, name := range []string{CookieNameHTTPS, CookieNameHTTP} {
+				if cookie, err := r.Cookie(name); err == nil && cookie.Value != "" {
+					tokenStr = cookie.Value
+					break
+				}
+			}
+		}
+
+		if tokenStr == "" {
 			writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
 			return
 		}
-
-		tokenStr := strings.TrimPrefix(authHeader, "Bearer ")
 		claims, err := VerifyToken(tokenStr, m.Secret)
 		if err != nil {
 			writeJSONError(w, http.StatusUnauthorized, "Invalid token")
@@ -72,9 +83,18 @@ func (m *Middleware) RequireAuth(next http.Handler) http.Handler {
 // If a valid token is found, claims are injected into context. Otherwise, claims are nil.
 func (m *Middleware) OptionalAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		authHeader := r.Header.Get("Authorization")
-		if strings.HasPrefix(authHeader, "Bearer ") {
-			tokenStr := strings.TrimPrefix(authHeader, "Bearer ")
+		tokenStr := ""
+		if authHeader := r.Header.Get("Authorization"); strings.HasPrefix(authHeader, "Bearer ") {
+			tokenStr = strings.TrimPrefix(authHeader, "Bearer ")
+		} else {
+			for _, name := range []string{CookieNameHTTPS, CookieNameHTTP} {
+				if cookie, err := r.Cookie(name); err == nil && cookie.Value != "" {
+					tokenStr = cookie.Value
+					break
+				}
+			}
+		}
+		if tokenStr != "" {
 			if claims, err := VerifyToken(tokenStr, m.Secret); err == nil {
 				// Check impersonation
 				if cookie, err := r.Cookie("bridge-impersonate"); err == nil && claims.IsPlatformAdmin {
