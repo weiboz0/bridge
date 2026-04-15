@@ -64,6 +64,30 @@ func (s *UserStore) GetUserByEmail(ctx context.Context, email string) (*User, er
 	return &u, nil
 }
 
+// ListUsers returns all users ordered by creation date.
+func (s *UserStore) ListUsers(ctx context.Context) ([]User, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, name, email, avatar_url, is_platform_admin, created_at, updated_at
+		 FROM users ORDER BY created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var users []User
+	for rows.Next() {
+		var u User
+		if err := rows.Scan(&u.ID, &u.Name, &u.Email, &u.AvatarURL, &u.IsPlatformAdmin, &u.CreatedAt, &u.UpdatedAt); err != nil {
+			return nil, err
+		}
+		users = append(users, u)
+	}
+	if users == nil {
+		users = []User{}
+	}
+	return users, rows.Err()
+}
+
 // RegisterInput is the input for registering a new user.
 type RegisterInput struct {
 	Name     string `json:"name"`

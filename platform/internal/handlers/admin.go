@@ -26,6 +26,7 @@ func (h *AdminHandler) Routes(r chi.Router) {
 		r.Use(auth.RequireAdmin)
 
 		r.Get("/stats", h.GetStats)
+		r.Get("/users", h.ListAllUsers)
 		r.Get("/orgs", h.ListAllOrgs)
 		r.Patch("/orgs/{orgID}", h.UpdateOrgStatus)
 
@@ -43,6 +44,16 @@ func (h *AdminHandler) GetStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, stats)
+}
+
+// ListAllUsers handles GET /api/admin/users
+func (h *AdminHandler) ListAllUsers(w http.ResponseWriter, r *http.Request) {
+	users, err := h.Users.ListUsers(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	writeJSON(w, http.StatusOK, users)
 }
 
 // ListAllOrgs handles GET /api/admin/orgs
