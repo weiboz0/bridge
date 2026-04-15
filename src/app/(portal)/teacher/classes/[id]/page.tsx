@@ -19,12 +19,6 @@ interface ClassMember {
   email: string;
 }
 
-interface Classroom {
-  id: string;
-  classId: string;
-  editorMode: string;
-}
-
 export default async function TeacherClassDetailPage({
   params,
 }: {
@@ -39,10 +33,7 @@ export default async function TeacherClassDetailPage({
     notFound();
   }
 
-  const [members, classroom] = await Promise.all([
-    api<ClassMember[]>(`/api/classes/${id}/members`),
-    api<Classroom | null>(`/api/classrooms/by-class/${id}`).catch(() => null),
-  ]);
+  const members = await api<ClassMember[]>(`/api/classes/${id}/members`);
 
   const students = members.filter((m) => m.role === "student");
   const instructors = members.filter((m) => m.role === "instructor" || m.role === "ta");
@@ -54,9 +45,7 @@ export default async function TeacherClassDetailPage({
           <h1 className="text-2xl font-bold">{cls.title}</h1>
           <p className="text-muted-foreground">{cls.term || "No term"} · {cls.status}</p>
         </div>
-        {classroom && (
-          <StartSessionButton classId={id} classroomId={classroom.id} />
-        )}
+        <StartSessionButton classId={id} />
       </div>
 
       <Card>

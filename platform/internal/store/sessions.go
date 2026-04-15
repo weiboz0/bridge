@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -115,6 +116,50 @@ func (s *SessionStore) CreateSession(ctx context.Context, input CreateSessionInp
 		return nil, err
 	}
 	return &session, nil
+}
+
+// FindOrCreateLegacyClassroom finds or creates a legacy classrooms record for a new-style class.
+// This bridges the gap between the new classes system and the legacy session system
+// which requires a classrooms.id as foreign key.
+func (s *SessionStore) FindOrCreateLegacyClassroom(ctx context.Context, classID, teacherID string) (string, error) {
+	// Check if a legacy classroom already exists for this class
+	var existingID string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT c.id FROM classrooms c
+		 INNER JOIN new_classrooms nc ON nc.class_id = $1
+		 WHERE c.teacher_id = $2 AND c.name = (SELECT title FROM classes WHERE id = $1)
+		 LIMIT 1`, classID, teacherID,
+	).Scan(&existingID)
+	if err == nil {
+		return existingID, nil
+	}
+
+	// Create a new legacy classroom from the class data
+	var title, gradeLevel, editorMode string
+	err = s.db.QueryRowContext(ctx,
+		`SELECT c.title, co.grade_level, nc.editor_mode
+		 FROM classes c
+		 INNER JOIN courses co ON c.course_id = co.id
+		 INNER JOIN new_classrooms nc ON nc.class_id = c.id
+		 WHERE c.id = $1`, classID,
+	).Scan(&title, &gradeLevel, &editorMode)
+	if err != nil {
+		return "", fmt.Errorf("lookup class: %w", err)
+	}
+
+	newID := uuid.New().String()
+	joinCode := generateJoinCode()
+	now := time.Now()
+	_, err = s.db.ExecContext(ctx,
+		`INSERT INTO classrooms (id, teacher_id, name, description, grade_level, editor_mode, join_code, created_at, updated_at)
+		 VALUES ($1, $2, $3, '', $4, $5, $6, $7, $8)`,
+		newID, teacherID, title, gradeLevel, editorMode, joinCode, now, now,
+	)
+	if err != nil {
+		return "", fmt.Errorf("create legacy classroom: %w", err)
+	}
+
+	return newID, nil
 }
 
 func (s *SessionStore) GetSession(ctx context.Context, id string) (*LiveSession, error) {

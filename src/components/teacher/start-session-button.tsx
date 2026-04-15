@@ -6,10 +6,9 @@ import { Button } from "@/components/ui/button";
 
 interface StartSessionButtonProps {
   classId: string;
-  classroomId: string;
 }
 
-export function StartSessionButton({ classId, classroomId }: StartSessionButtonProps) {
+export function StartSessionButton({ classId }: StartSessionButtonProps) {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
 
@@ -18,7 +17,7 @@ export function StartSessionButton({ classId, classroomId }: StartSessionButtonP
     const res = await fetch("/api/sessions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ classroomId }),
+      body: JSON.stringify({ classId }),
     });
 
     if (res.ok) {
