@@ -145,7 +145,7 @@ func main() {
 		annotH := &handlers.AnnotationHandler{Annotations: stores.Annotations}
 		annotH.Routes(r)
 
-		classroomH := &handlers.ClassroomHandler{Classrooms: stores.Classrooms, Sessions: stores.Sessions}
+		classroomH := &handlers.ClassroomHandler{Classrooms: stores.Classrooms, Classes: stores.Classes, Sessions: stores.Sessions}
 		classroomH.Routes(r)
 
 		if llmBackend != nil {
