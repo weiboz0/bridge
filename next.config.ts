@@ -28,12 +28,15 @@ const GO_PROXY_ROUTES = [
 const nextConfig: NextConfig = {
   turbopack: {},
   async rewrites() {
-    // Use beforeFiles to override Next.js API routes with Go proxy
+    const rules = GO_PROXY_ROUTES.map((source) => ({
+      source,
+      destination: `${GO_API_URL}${source}`,
+    }));
     return {
-      beforeFiles: GO_PROXY_ROUTES.map((source) => ({
-        source,
-        destination: `${GO_API_URL}${source}`,
-      })),
+      // beforeFiles: intercept routes that have existing Next.js API files
+      beforeFiles: rules,
+      // fallback: catch routes that have NO Next.js API files (e.g., /api/schedule/)
+      fallback: rules,
     };
   },
 };
