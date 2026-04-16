@@ -6,6 +6,7 @@ export const ACCOUNTS = {
   orgAdmin: { email: "frank@demo.edu", password: "bridge123" },
   parent: { email: "diana@demo.edu", password: "bridge123" },
   student2: { email: "bob@demo.edu", password: "bridge123" },
+  admin: { email: "admin@e2e.test", password: "bridge123" },
 };
 
 export async function loginWithCredentials(

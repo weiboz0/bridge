@@ -22,3 +22,8 @@ setup("authenticate parent", async ({ page }) => {
   await loginWithCredentials(page, ACCOUNTS.parent.email, ACCOUNTS.parent.password);
   await page.context().storageState({ path: "e2e/.auth/parent.json" });
 });
+
+setup("authenticate admin", async ({ page }) => {
+  await loginWithCredentials(page, ACCOUNTS.admin.email, ACCOUNTS.admin.password);
+  await page.context().storageState({ path: "e2e/.auth/admin.json" });
+});
