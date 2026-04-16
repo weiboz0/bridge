@@ -127,6 +127,63 @@ func (s *SessionStore) GetActiveSession(ctx context.Context, classID string) (*L
 		`SELECT `+sessionColumns+` FROM live_sessions WHERE class_id = $1 AND status = 'active'`, classID))
 }
 
+// ListSessionsByClass returns all sessions for a class, most recent first.
+func (s *SessionStore) ListSessionsByClass(ctx context.Context, classID string) ([]LiveSession, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT `+sessionColumns+` FROM live_sessions WHERE class_id = $1 ORDER BY started_at DESC`, classID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var sessions []LiveSession
+	for rows.Next() {
+		var ls LiveSession
+		if err := rows.Scan(&ls.ID, &ls.ClassID, &ls.TeacherID, &ls.Status, &ls.Settings, &ls.StartedAt, &ls.EndedAt); err != nil {
+			return nil, err
+		}
+		sessions = append(sessions, ls)
+	}
+	if sessions == nil {
+		sessions = []LiveSession{}
+	}
+	return sessions, rows.Err()
+}
+
+// SessionWithParticipantCount is a session with the number of participants.
+type SessionWithParticipantCount struct {
+	LiveSession
+	ParticipantCount int `json:"participantCount"`
+}
+
+// ListSessionsWithCounts returns sessions with participant counts.
+func (s *SessionStore) ListSessionsWithCounts(ctx context.Context, classID string) ([]SessionWithParticipantCount, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT ls.id, ls.class_id, ls.teacher_id, ls.status, ls.settings, ls.started_at, ls.ended_at,
+		        COALESCE((SELECT count(*) FROM session_participants sp WHERE sp.session_id = ls.id), 0)
+		 FROM live_sessions ls
+		 WHERE ls.class_id = $1
+		 ORDER BY ls.started_at DESC`, classID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var sessions []SessionWithParticipantCount
+	for rows.Next() {
+		var s SessionWithParticipantCount
+		if err := rows.Scan(&s.ID, &s.ClassID, &s.TeacherID, &s.Status, &s.Settings,
+			&s.StartedAt, &s.EndedAt, &s.ParticipantCount); err != nil {
+			return nil, err
+		}
+		sessions = append(sessions, s)
+	}
+	if sessions == nil {
+		sessions = []SessionWithParticipantCount{}
+	}
+	return sessions, rows.Err()
+}
+
 func (s *SessionStore) EndSession(ctx context.Context, id string) (*LiveSession, error) {
 	return scanSession(s.db.QueryRowContext(ctx,
 		`UPDATE live_sessions SET status = 'ended', ended_at = $1 WHERE id = $2 RETURNING `+sessionColumns,

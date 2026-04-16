@@ -1,32 +1,58 @@
 import { notFound } from "next/navigation";
-import { auth } from "@/lib/auth";
-import { db } from "@/lib/db";
-import { getClass } from "@/lib/classes";
-import { getCourse } from "@/lib/courses";
-import { listTopicsByCourse } from "@/lib/topics";
-import { listClassMembers } from "@/lib/class-memberships";
+import { api } from "@/lib/api-client";
 import { parseLessonContent } from "@/lib/lesson-content";
 import { LessonRenderer } from "@/components/lesson/lesson-renderer";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import Link from "next/link";
 import { buttonVariants } from "@/components/ui/button";
 
+interface ClassDetail {
+  id: string;
+  title: string;
+  term: string;
+  courseId: string;
+}
+
+interface CourseDetail {
+  id: string;
+  title: string;
+}
+
+interface TopicItem {
+  id: string;
+  title: string;
+  description: string;
+  lessonContent: string;
+}
+
+interface SessionItem {
+  id: string;
+  status: string;
+  startedAt: string;
+  participantCount: number;
+}
+
 export default async function StudentClassDetailPage({
   params,
 }: {
   params: Promise<{ id: string }>;
 }) {
-  const session = await auth();
   const { id } = await params;
-  const cls = await getClass(db, id);
-  if (!cls) notFound();
 
-  const members = await listClassMembers(db, id);
-  const isEnrolled = members.some((m) => m.userId === session!.user.id);
-  if (!isEnrolled && !session!.user.isPlatformAdmin) notFound();
+  let cls: ClassDetail;
+  try {
+    cls = await api<ClassDetail>(`/api/classes/${id}`);
+  } catch {
+    notFound();
+  }
 
-  const course = await getCourse(db, cls.courseId);
-  const topics = course ? await listTopicsByCourse(db, course.id) : [];
+  const [course, topics, sessions] = await Promise.all([
+    api<CourseDetail>(`/api/courses/${cls.courseId}`).catch(() => null),
+    api<TopicItem[]>(`/api/courses/${cls.courseId}/topics`).catch(() => []),
+    api<SessionItem[]>(`/api/sessions/by-class/${id}`).catch(() => []),
+  ]);
+
+  const activeSession = sessions.find((s) => s.status === "active");
 
   return (
     <div className="p-6 space-y-6">
@@ -37,13 +63,30 @@ export default async function StudentClassDetailPage({
             {course?.title || ""} · {cls.term || "No term"}
           </p>
         </div>
-        <Link
-          href={`/dashboard/classrooms/${id}/editor`}
-          className={buttonVariants()}
-        >
-          Open Editor
-        </Link>
       </div>
+
+      {activeSession && (
+        <Link href={`/student/classes/${id}/session/${activeSession.id}`}>
+          <Card className="border-green-500 bg-green-50 dark:bg-green-950/20 hover:border-green-600 transition-colors cursor-pointer">
+            <CardHeader>
+              <CardTitle className="text-lg text-green-700 dark:text-green-400">
+                Live Session — Join Now
+              </CardTitle>
+              <CardDescription>
+                Started {new Date(activeSession.startedAt).toLocaleTimeString()} · {activeSession.participantCount} students online
+              </CardDescription>
+            </CardHeader>
+          </Card>
+        </Link>
+      )}
+
+      {!activeSession && (
+        <Card>
+          <CardContent className="py-6 text-center text-muted-foreground">
+            <p>No live session right now. Your teacher will start one soon.</p>
+          </CardContent>
+        </Card>
+      )}
 
       {topics.length > 0 && (
         <div className="space-y-4">
