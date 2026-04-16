@@ -10,7 +10,7 @@ import (
 
 type LiveSession struct {
 	ID          string     `json:"id"`
-	ClassroomID string     `json:"classroomId"`
+	ClassID string     `json:"classId"`
 	TeacherID   string     `json:"teacherId"`
 	Status      string     `json:"status"`
 	Settings    string     `json:"settings"`
@@ -51,7 +51,7 @@ type SessionTopicWithDetails struct {
 }
 
 type CreateSessionInput struct {
-	ClassroomID string `json:"classroomId"`
+	ClassID string `json:"classId"`
 	TeacherID   string `json:"teacherId"`
 	Settings    string `json:"settings"`
 }
@@ -64,11 +64,11 @@ func NewSessionStore(db *sql.DB) *SessionStore {
 	return &SessionStore{db: db}
 }
 
-const sessionColumns = `id, classroom_id, teacher_id, status, settings, started_at, ended_at`
+const sessionColumns = `id, class_id, teacher_id, status, settings, started_at, ended_at`
 
 func scanSession(row interface{ Scan(...any) error }) (*LiveSession, error) {
 	var s LiveSession
-	err := row.Scan(&s.ID, &s.ClassroomID, &s.TeacherID, &s.Status, &s.Settings, &s.StartedAt, &s.EndedAt)
+	err := row.Scan(&s.ID, &s.ClassID, &s.TeacherID, &s.Status, &s.Settings, &s.StartedAt, &s.EndedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -88,8 +88,8 @@ func (s *SessionStore) CreateSession(ctx context.Context, input CreateSessionInp
 	// End any active session for this classroom
 	now := time.Now()
 	_, err = tx.ExecContext(ctx,
-		`UPDATE live_sessions SET status = 'ended', ended_at = $1 WHERE classroom_id = $2 AND status = 'active'`,
-		now, input.ClassroomID)
+		`UPDATE live_sessions SET status = 'ended', ended_at = $1 WHERE class_id = $2 AND status = 'active'`,
+		now, input.ClassID)
 	if err != nil {
 		return nil, err
 	}
@@ -102,11 +102,11 @@ func (s *SessionStore) CreateSession(ctx context.Context, input CreateSessionInp
 
 	var session LiveSession
 	err = tx.QueryRowContext(ctx,
-		`INSERT INTO live_sessions (id, classroom_id, teacher_id, status, settings, started_at)
+		`INSERT INTO live_sessions (id, class_id, teacher_id, status, settings, started_at)
 		 VALUES ($1, $2, $3, 'active', $4, $5)
 		 RETURNING `+sessionColumns,
-		id, input.ClassroomID, input.TeacherID, settings, now,
-	).Scan(&session.ID, &session.ClassroomID, &session.TeacherID, &session.Status, &session.Settings, &session.StartedAt, &session.EndedAt)
+		id, input.ClassID, input.TeacherID, settings, now,
+	).Scan(&session.ID, &session.ClassID, &session.TeacherID, &session.Status, &session.Settings, &session.StartedAt, &session.EndedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -122,9 +122,9 @@ func (s *SessionStore) GetSession(ctx context.Context, id string) (*LiveSession,
 		`SELECT `+sessionColumns+` FROM live_sessions WHERE id = $1`, id))
 }
 
-func (s *SessionStore) GetActiveSession(ctx context.Context, classroomID string) (*LiveSession, error) {
+func (s *SessionStore) GetActiveSession(ctx context.Context, classID string) (*LiveSession, error) {
 	return scanSession(s.db.QueryRowContext(ctx,
-		`SELECT `+sessionColumns+` FROM live_sessions WHERE classroom_id = $1 AND status = 'active'`, classroomID))
+		`SELECT `+sessionColumns+` FROM live_sessions WHERE class_id = $1 AND status = 'active'`, classID))
 }
 
 func (s *SessionStore) EndSession(ctx context.Context, id string) (*LiveSession, error) {

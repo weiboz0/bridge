@@ -18,7 +18,8 @@ import (
 type AIHandler struct {
 	Interactions *store.InteractionStore
 	Sessions     *store.SessionStore
-	Classrooms   *store.ClassroomStore
+	Classes      *store.ClassStore
+	Courses      *store.CourseStore
 	Backend      llm.Backend
 	Broadcaster  *events.Broadcaster
 }
@@ -96,21 +97,18 @@ func (h *AIHandler) Chat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get classroom for grade level
-	classroom, err := h.Classrooms.GetClassroom(r.Context(), liveSession.ClassroomID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "Database error")
-		return
-	}
-
+	// Get grade level from class → course chain
 	gradeLevel := "6-8"
-	if classroom != nil {
-		gradeLevel = classroom.GradeLevel
+	cls, err := h.Classes.GetClass(r.Context(), liveSession.ClassID)
+	if err == nil && cls != nil {
+		if course, err := h.Courses.GetCourse(r.Context(), cls.CourseID); err == nil && course != nil {
+			gradeLevel = course.GradeLevel
+		}
 	}
 
 	lang := "python"
-	if classroom != nil && classroom.EditorMode != "" {
-		lang = classroom.EditorMode
+	if nc, err := h.Classes.GetClassroom(r.Context(), liveSession.ClassID); err == nil && nc != nil {
+		lang = nc.EditorMode
 	}
 	systemPrompt := skills.BuildChatSystemPrompt(skills.GradeLevel(gradeLevel), body.Code, lang)
 

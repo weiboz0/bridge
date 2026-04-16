@@ -1179,3 +1179,45 @@ The E2E tests interact with the browser and should not need major changes since 
 
 6. `[WONTFIX]` OrgDashboardStats counts only active members vs TypeScript counts all.
    → Active-only is more correct. Acceptable behavioral difference.
+
+---
+
+## Stage 2 Batch 1 — Post-Execution Report
+
+**Branch:** `feat/021b-convert-pages`
+**PR:** #32
+**Executed:** 2026-04-14
+
+### What was done
+
+- Converted 5 core pages from Drizzle to Go API
+- Added ListClassesByUser store method + GET /api/classes/mine endpoint
+- Added JWE auth bridge (separate PR #31)
+
+### Code Review — Stage 2 Batch 1
+
+#### Review 1
+
+- **Date**: 2026-04-14
+- **Reviewer**: Claude (superpowers:code-reviewer)
+- **PR**: #32
+- **Verdict**: Changes requested (1 critical, 4 important)
+
+**Must Fix**
+
+1. `[FIXED]` Teacher dashboard showed all org classes instead of teacher's own classes.
+   → Changed to use /api/classes/mine filtered by memberRole=instructor.
+
+**Should Fix**
+
+2. `[FIXED]` Root page swallowed all errors including infrastructure failures.
+   → Only catch 401; re-throw everything else.
+
+3. `[FIXED]` Portal shell redirected to /login on any error.
+   → Only redirect on 401; let infrastructure errors propagate.
+
+4. `[FIXED]` Missing tests for ListClassesByUser and ListMyClasses.
+   → Added store integration test + handler auth test.
+
+5. `[FIXED]` Ambiguous column in ListClassesByUser SQL JOIN.
+   → Qualified all columns with table name.

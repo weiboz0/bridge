@@ -1,16 +1,16 @@
-import { db } from "@/lib/db";
-import { countOrganizations } from "@/lib/organizations";
-import { countUsers } from "@/lib/users";
+import { api } from "@/lib/api-client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import Link from "next/link";
 import { buttonVariants } from "@/components/ui/button";
 
+interface AdminStatsResponse {
+  pendingOrgs: number;
+  activeOrgs: number;
+  totalUsers: number;
+}
+
 export default async function AdminDashboard() {
-  const [pendingOrgs, activeOrgs, totalUsers] = await Promise.all([
-    countOrganizations(db, "pending"),
-    countOrganizations(db, "active"),
-    countUsers(db),
-  ]);
+  const { pendingOrgs, activeOrgs, totalUsers } = await api<AdminStatsResponse>("/api/admin/stats");
 
   return (
     <div className="p-6 space-y-6">

@@ -211,6 +211,41 @@ func (s *ClassStore) ListClassesByOrgIDs(ctx context.Context, orgIDs []string) (
 	return classes, rows.Err()
 }
 
+// ClassWithRole includes the user's role in the class.
+type ClassWithRole struct {
+	Class
+	MemberRole string `json:"memberRole"`
+}
+
+// ListClassesByUser returns all classes where the user is a member, with their role.
+func (s *ClassStore) ListClassesByUser(ctx context.Context, userID string) ([]ClassWithRole, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT classes.id, classes.course_id, classes.org_id, classes.title, classes.term,
+		        classes.join_code, classes.status, classes.created_at, classes.updated_at, cm.role
+		 FROM classes
+		 INNER JOIN class_memberships cm ON cm.class_id = classes.id
+		 WHERE cm.user_id = $1 AND classes.status = 'active'
+		 ORDER BY classes.created_at DESC`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var classes []ClassWithRole
+	for rows.Next() {
+		var c ClassWithRole
+		if err := rows.Scan(&c.ID, &c.CourseID, &c.OrgID, &c.Title, &c.Term,
+			&c.JoinCode, &c.Status, &c.CreatedAt, &c.UpdatedAt, &c.MemberRole); err != nil {
+			return nil, err
+		}
+		classes = append(classes, c)
+	}
+	if classes == nil {
+		classes = []ClassWithRole{}
+	}
+	return classes, rows.Err()
+}
+
 func (s *ClassStore) ArchiveClass(ctx context.Context, id string) (*Class, error) {
 	return scanClass(s.db.QueryRowContext(ctx,
 		`UPDATE classes SET status = 'archived', updated_at = $1 WHERE id = $2 RETURNING `+classColumns,

@@ -19,6 +19,7 @@ func (h *ClassHandler) Routes(r chi.Router) {
 	r.Route("/api/classes", func(r chi.Router) {
 		r.Post("/", h.CreateClass)
 		r.Get("/", h.ListClasses)
+		r.Get("/mine", h.ListMyClasses)
 		r.Post("/join", h.JoinClass)
 		r.Route("/{id}", func(r chi.Router) {
 			r.Use(ValidateUUIDParam("id"))
@@ -130,6 +131,22 @@ func (h *ClassHandler) ListClasses(w http.ResponseWriter, r *http.Request) {
 	}
 
 	classes, err := h.Classes.ListClassesByOrg(r.Context(), orgID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	writeJSON(w, http.StatusOK, classes)
+}
+
+// ListMyClasses handles GET /api/classes/mine — user's own classes with role
+func (h *ClassHandler) ListMyClasses(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	classes, err := h.Classes.ListClassesByUser(r.Context(), claims.UserID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return

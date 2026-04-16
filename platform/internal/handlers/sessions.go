@@ -13,7 +13,6 @@ import (
 
 type SessionHandler struct {
 	Sessions    *store.SessionStore
-	Classrooms  *store.ClassroomStore
 	Broadcaster *events.Broadcaster
 }
 
@@ -47,35 +46,20 @@ func (h *SessionHandler) CreateSession(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var body struct {
-		ClassroomID string `json:"classroomId"`
-		Settings    string `json:"settings"`
+		ClassID  string `json:"classId"`
+		Settings string `json:"settings"`
 	}
 	if !decodeJSON(w, r, &body) {
 		return
 	}
-	if body.ClassroomID == "" {
-		writeError(w, http.StatusBadRequest, "classroomId is required")
-		return
-	}
-
-	// Verify user is the classroom teacher
-	classroom, err := h.Classrooms.GetClassroom(r.Context(), body.ClassroomID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "Database error")
-		return
-	}
-	if classroom == nil {
-		writeError(w, http.StatusNotFound, "Classroom not found")
-		return
-	}
-	if !claims.IsPlatformAdmin && classroom.TeacherID != claims.UserID {
-		writeError(w, http.StatusForbidden, "Only the classroom teacher can start a session")
+	if body.ClassID == "" {
+		writeError(w, http.StatusBadRequest, "classId is required")
 		return
 	}
 
 	session, err := h.Sessions.CreateSession(r.Context(), store.CreateSessionInput{
-		ClassroomID: body.ClassroomID,
-		TeacherID:   claims.UserID,
+		ClassID:   body.ClassID,
+		TeacherID: claims.UserID,
 		Settings:    body.Settings,
 	})
 	if err != nil {

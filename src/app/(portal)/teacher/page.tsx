@@ -1,19 +1,18 @@
-import { auth } from "@/lib/auth";
-import { db } from "@/lib/db";
-import { listCoursesByCreator } from "@/lib/courses";
-import { listClassesByUser } from "@/lib/classes";
+import { api } from "@/lib/api-client";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import Link from "next/link";
 import { buttonVariants } from "@/components/ui/button";
 
+interface CourseItem { id: string; title: string }
+interface ClassItem { id: string; title: string; term: string; status: string; memberRole: string }
+
 export default async function TeacherDashboard() {
-  const session = await auth();
-  const [courses, classes] = await Promise.all([
-    listCoursesByCreator(db, session!.user.id),
-    listClassesByUser(db, session!.user.id),
+  const [courses, allClasses] = await Promise.all([
+    api<CourseItem[]>("/api/teacher/courses").then((d) => (d as any).courses ?? []),
+    api<ClassItem[]>("/api/classes/mine"),
   ]);
 
-  const myClasses = classes.filter((c) => c.memberRole === "instructor");
+  const myClasses = allClasses.filter((c) => c.memberRole === "instructor");
 
   return (
     <div className="p-6 space-y-6">

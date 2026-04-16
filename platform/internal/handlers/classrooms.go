@@ -11,6 +11,7 @@ import (
 
 type ClassroomHandler struct {
 	Classrooms *store.ClassroomStore
+	Classes    *store.ClassStore
 	Sessions   *store.SessionStore
 }
 
@@ -19,6 +20,7 @@ func (h *ClassroomHandler) Routes(r chi.Router) {
 		r.Get("/", h.ListClassrooms)
 		r.Post("/", h.CreateClassroom)
 		r.Post("/join", h.JoinClassroom)
+		r.Get("/by-class/{classId}", h.GetClassroomByClass)
 		r.Route("/{id}", func(r chi.Router) {
 			r.Use(ValidateUUIDParam("id"))
 			r.Get("/", h.GetClassroom)
@@ -26,6 +28,28 @@ func (h *ClassroomHandler) Routes(r chi.Router) {
 			r.Get("/active-session", h.GetActiveSession)
 		})
 	})
+}
+
+// GetClassroomByClass handles GET /api/classrooms/by-class/{classId}
+// Returns the new_classrooms record associated with a class (1:1 relationship).
+func (h *ClassroomHandler) GetClassroomByClass(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	classID := chi.URLParam(r, "classId")
+	classroom, err := h.Classes.GetClassroom(r.Context(), classID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if classroom == nil {
+		writeError(w, http.StatusNotFound, "Classroom not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, classroom)
 }
 
 func (h *ClassroomHandler) ListClassrooms(w http.ResponseWriter, r *http.Request) {

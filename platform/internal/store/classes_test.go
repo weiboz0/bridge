@@ -234,3 +234,61 @@ func TestIsValidClassMemberRole(t *testing.T) {
 	assert.False(t, IsValidClassMemberRole("superuser"))
 	assert.False(t, IsValidClassMemberRole(""))
 }
+
+func TestClassStore_ListClassesByUser(t *testing.T) {
+	db := testDB(t)
+	classes := NewClassStore(db)
+	courses := NewCourseStore(db)
+	orgs := NewOrgStore(db)
+	users := NewUserStore(db)
+	ctx := context.Background()
+
+	org := createTestOrg(t, db, orgs, t.Name())
+	teacher := createTestUser(t, db, users, t.Name()+"-teacher")
+	student := createTestUser(t, db, users, t.Name()+"-student")
+	course, _ := courses.CreateCourse(ctx, CreateCourseInput{
+		OrgID: org.ID, CreatedBy: teacher.ID, Title: "User Classes", GradeLevel: "K-5",
+	})
+	t.Cleanup(func() { db.ExecContext(ctx, "DELETE FROM courses WHERE id = $1", course.ID) })
+
+	class, _ := classes.CreateClass(ctx, CreateClassInput{
+		CourseID: course.ID, OrgID: org.ID, Title: "User Class", CreatedBy: teacher.ID,
+	})
+	t.Cleanup(func() {
+		db.ExecContext(ctx, "DELETE FROM class_memberships WHERE class_id = $1", class.ID)
+		db.ExecContext(ctx, "DELETE FROM new_classrooms WHERE class_id = $1", class.ID)
+		db.ExecContext(ctx, "DELETE FROM classes WHERE id = $1", class.ID)
+	})
+
+	// Teacher is auto-added as instructor
+	teacherClasses, err := classes.ListClassesByUser(ctx, teacher.ID)
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, len(teacherClasses), 1)
+	found := false
+	for _, c := range teacherClasses {
+		if c.ID == class.ID {
+			assert.Equal(t, "instructor", c.MemberRole)
+			found = true
+		}
+	}
+	assert.True(t, found, "teacher should see their class")
+
+	// Add student
+	classes.AddClassMember(ctx, AddClassMemberInput{
+		ClassID: class.ID, UserID: student.ID, Role: "student",
+	})
+
+	studentClasses, err := classes.ListClassesByUser(ctx, student.ID)
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, len(studentClasses), 1)
+	for _, c := range studentClasses {
+		if c.ID == class.ID {
+			assert.Equal(t, "student", c.MemberRole)
+		}
+	}
+
+	// User with no classes
+	noClasses, err := classes.ListClassesByUser(ctx, "00000000-0000-0000-0000-000000000000")
+	require.NoError(t, err)
+	assert.Len(t, noClasses, 0)
+}

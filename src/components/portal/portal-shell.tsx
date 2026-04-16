@@ -1,11 +1,14 @@
-import { getEffectiveSession } from "@/lib/impersonate";
-import { db } from "@/lib/db";
-import { getUserMemberships } from "@/lib/org-memberships";
-import { buildUserRoles, isAuthorizedForPortal } from "@/lib/portal/roles";
+import { api, ApiError } from "@/lib/api-client";
 import { getPortalConfig } from "@/lib/portal/nav-config";
 import { Sidebar } from "./sidebar";
 import { redirect } from "next/navigation";
-import type { PortalRole } from "@/lib/portal/types";
+import type { PortalRole, UserRole } from "@/lib/portal/types";
+
+interface PortalAccessResponse {
+  authorized: boolean;
+  userName: string;
+  roles: UserRole[];
+}
 
 interface PortalShellProps {
   portalRole: PortalRole;
@@ -13,16 +16,23 @@ interface PortalShellProps {
 }
 
 export async function PortalShell({ portalRole, children }: PortalShellProps) {
-  const session = await getEffectiveSession();
+  let data: PortalAccessResponse;
+  try {
+    data = await api<PortalAccessResponse>("/api/me/portal-access");
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 401) {
+      redirect("/login");
+    }
+    throw e; // surface infrastructure errors
+  }
 
-  if (!session?.user?.id) {
+  if (!data.authorized) {
     redirect("/login");
   }
 
-  const memberships = await getUserMemberships(db, session.user.id);
-  const roles = buildUserRoles(session.user.isPlatformAdmin, memberships);
-
-  if (!isAuthorizedForPortal(roles, portalRole)) {
+  // Check if user has the required role for this portal
+  const hasRole = data.roles.some((r) => r.role === portalRole);
+  if (!hasRole) {
     redirect("/");
   }
 
@@ -35,8 +45,8 @@ export async function PortalShell({ portalRole, children }: PortalShellProps) {
     <div className="flex min-h-screen">
       <Sidebar
         navItems={config.navItems}
-        userName={session.user.name || "User"}
-        roles={roles}
+        userName={data.userName || "User"}
+        roles={data.roles}
         currentRole={portalRole}
       />
       <main className="flex-1 min-h-screen pb-16 md:pb-0">

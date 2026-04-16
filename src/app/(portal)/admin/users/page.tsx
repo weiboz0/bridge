@@ -1,11 +1,18 @@
-import { db } from "@/lib/db";
+import { api } from "@/lib/api-client";
 import { auth } from "@/lib/auth";
-import { listUsers } from "@/lib/users";
-import { ImpersonateButton } from "@/components/admin/impersonate-button";
+import { UserActions } from "@/components/admin/user-actions";
+
+interface UserItem {
+  id: string;
+  name: string;
+  email: string;
+  isPlatformAdmin: boolean;
+  createdAt: string;
+}
 
 export default async function AdminUsersPage() {
   const session = await auth();
-  const userList = await listUsers(db);
+  const userList = await api<UserItem[]>("/api/admin/users");
 
   return (
     <div className="p-6 space-y-6">
@@ -18,7 +25,7 @@ export default async function AdminUsersPage() {
               <th className="text-left px-4 py-2">Email</th>
               <th className="text-left px-4 py-2">Admin</th>
               <th className="text-left px-4 py-2">Joined</th>
-              <th className="text-left px-4 py-2">Actions</th>
+              <th className="text-right px-4 py-2">Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -30,9 +37,9 @@ export default async function AdminUsersPage() {
                 <td className="px-4 py-2 text-muted-foreground">
                   {new Date(user.createdAt).toLocaleDateString()}
                 </td>
-                <td className="px-4 py-2">
-                  {user.id !== session!.user.id && (
-                    <ImpersonateButton userId={user.id} userName={user.name} />
+                <td className="px-4 py-2 text-right">
+                  {user.id !== session?.user?.id && (
+                    <UserActions userId={user.id} userName={user.name} />
                   )}
                 </td>
               </tr>

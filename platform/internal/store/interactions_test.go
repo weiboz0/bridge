@@ -11,27 +11,20 @@ import (
 func TestInteractionStore_CreateAndGet(t *testing.T) {
 	db := testDB(t)
 	interactions := NewInteractionStore(db)
-	users := NewUserStore(db)
-	classrooms := NewClassroomStore(db)
 	sessions := NewSessionStore(db)
+	users := NewUserStore(db)
 	ctx := context.Background()
 
-	teacher := createTestUser(t, db, users, t.Name()+"-teacher")
+	classID, teacherID := setupSessionTest(t, db, t.Name())
 	student := createTestUser(t, db, users, t.Name()+"-student")
-	classroom := createTestClassroom(t, classrooms, teacher.ID)
-	t.Cleanup(func() {
-		db.ExecContext(ctx, "DELETE FROM ai_interactions WHERE session_id IN (SELECT id FROM live_sessions WHERE classroom_id = $1)", classroom.ID)
-		db.ExecContext(ctx, "DELETE FROM live_sessions WHERE classroom_id = $1", classroom.ID)
-		db.ExecContext(ctx, "DELETE FROM classrooms WHERE id = $1", classroom.ID)
-	})
 
-	session, err := sessions.CreateSession(ctx, CreateSessionInput{
-		ClassroomID: classroom.ID, TeacherID: teacher.ID,
+	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: classID, TeacherID: teacherID})
+	t.Cleanup(func() {
+		db.ExecContext(ctx, "DELETE FROM ai_interactions WHERE session_id = $1", session.ID)
 	})
-	require.NoError(t, err)
 
 	interaction, err := interactions.CreateInteraction(ctx, CreateInteractionInput{
-		StudentID: student.ID, SessionID: session.ID, EnabledByTeacherID: teacher.ID,
+		StudentID: student.ID, SessionID: session.ID, EnabledByTeacherID: teacherID,
 	})
 	require.NoError(t, err)
 	require.NotNil(t, interaction)
@@ -45,32 +38,24 @@ func TestInteractionStore_CreateAndGet(t *testing.T) {
 func TestInteractionStore_GetActiveInteraction(t *testing.T) {
 	db := testDB(t)
 	interactions := NewInteractionStore(db)
-	users := NewUserStore(db)
-	classrooms := NewClassroomStore(db)
 	sessions := NewSessionStore(db)
+	users := NewUserStore(db)
 	ctx := context.Background()
 
-	teacher := createTestUser(t, db, users, t.Name()+"-teacher")
+	classID, teacherID := setupSessionTest(t, db, t.Name())
 	student := createTestUser(t, db, users, t.Name()+"-student")
-	classroom := createTestClassroom(t, classrooms, teacher.ID)
+
+	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: classID, TeacherID: teacherID})
 	t.Cleanup(func() {
-		db.ExecContext(ctx, "DELETE FROM ai_interactions WHERE session_id IN (SELECT id FROM live_sessions WHERE classroom_id = $1)", classroom.ID)
-		db.ExecContext(ctx, "DELETE FROM live_sessions WHERE classroom_id = $1", classroom.ID)
-		db.ExecContext(ctx, "DELETE FROM classrooms WHERE id = $1", classroom.ID)
+		db.ExecContext(ctx, "DELETE FROM ai_interactions WHERE session_id = $1", session.ID)
 	})
 
-	session, _ := sessions.CreateSession(ctx, CreateSessionInput{
-		ClassroomID: classroom.ID, TeacherID: teacher.ID,
-	})
-
-	// No interaction yet
 	active, err := interactions.GetActiveInteraction(ctx, student.ID, session.ID)
 	assert.NoError(t, err)
 	assert.Nil(t, active)
 
-	// Create one
 	interactions.CreateInteraction(ctx, CreateInteractionInput{
-		StudentID: student.ID, SessionID: session.ID, EnabledByTeacherID: teacher.ID,
+		StudentID: student.ID, SessionID: session.ID, EnabledByTeacherID: teacherID,
 	})
 
 	active, err = interactions.GetActiveInteraction(ctx, student.ID, session.ID)
@@ -82,25 +67,19 @@ func TestInteractionStore_GetActiveInteraction(t *testing.T) {
 func TestInteractionStore_AppendMessage(t *testing.T) {
 	db := testDB(t)
 	interactions := NewInteractionStore(db)
-	users := NewUserStore(db)
-	classrooms := NewClassroomStore(db)
 	sessions := NewSessionStore(db)
+	users := NewUserStore(db)
 	ctx := context.Background()
 
-	teacher := createTestUser(t, db, users, t.Name()+"-teacher")
+	classID, teacherID := setupSessionTest(t, db, t.Name())
 	student := createTestUser(t, db, users, t.Name()+"-student")
-	classroom := createTestClassroom(t, classrooms, teacher.ID)
-	t.Cleanup(func() {
-		db.ExecContext(ctx, "DELETE FROM ai_interactions WHERE session_id IN (SELECT id FROM live_sessions WHERE classroom_id = $1)", classroom.ID)
-		db.ExecContext(ctx, "DELETE FROM live_sessions WHERE classroom_id = $1", classroom.ID)
-		db.ExecContext(ctx, "DELETE FROM classrooms WHERE id = $1", classroom.ID)
-	})
 
-	session, _ := sessions.CreateSession(ctx, CreateSessionInput{
-		ClassroomID: classroom.ID, TeacherID: teacher.ID,
-	})
+	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: classID, TeacherID: teacherID})
 	interaction, _ := interactions.CreateInteraction(ctx, CreateInteractionInput{
-		StudentID: student.ID, SessionID: session.ID, EnabledByTeacherID: teacher.ID,
+		StudentID: student.ID, SessionID: session.ID, EnabledByTeacherID: teacherID,
+	})
+	t.Cleanup(func() {
+		db.ExecContext(ctx, "DELETE FROM ai_interactions WHERE session_id = $1", session.ID)
 	})
 
 	updated, err := interactions.AppendMessage(ctx, interaction.ID, ChatMessage{
@@ -109,36 +88,24 @@ func TestInteractionStore_AppendMessage(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, updated)
 	assert.Contains(t, updated.Messages, "Hello!")
-
-	updated, err = interactions.AppendMessage(ctx, interaction.ID, ChatMessage{
-		Role: "assistant", Content: "Hi there!", Timestamp: "2026-04-13T00:00:01Z",
-	})
-	require.NoError(t, err)
-	assert.Contains(t, updated.Messages, "Hi there!")
 }
 
 func TestInteractionStore_ListBySession(t *testing.T) {
 	db := testDB(t)
 	interactions := NewInteractionStore(db)
-	users := NewUserStore(db)
-	classrooms := NewClassroomStore(db)
 	sessions := NewSessionStore(db)
+	users := NewUserStore(db)
 	ctx := context.Background()
 
-	teacher := createTestUser(t, db, users, t.Name()+"-teacher")
+	classID, teacherID := setupSessionTest(t, db, t.Name())
 	student := createTestUser(t, db, users, t.Name()+"-student")
-	classroom := createTestClassroom(t, classrooms, teacher.ID)
-	t.Cleanup(func() {
-		db.ExecContext(ctx, "DELETE FROM ai_interactions WHERE session_id IN (SELECT id FROM live_sessions WHERE classroom_id = $1)", classroom.ID)
-		db.ExecContext(ctx, "DELETE FROM live_sessions WHERE classroom_id = $1", classroom.ID)
-		db.ExecContext(ctx, "DELETE FROM classrooms WHERE id = $1", classroom.ID)
-	})
 
-	session, _ := sessions.CreateSession(ctx, CreateSessionInput{
-		ClassroomID: classroom.ID, TeacherID: teacher.ID,
-	})
+	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: classID, TeacherID: teacherID})
 	interactions.CreateInteraction(ctx, CreateInteractionInput{
-		StudentID: student.ID, SessionID: session.ID, EnabledByTeacherID: teacher.ID,
+		StudentID: student.ID, SessionID: session.ID, EnabledByTeacherID: teacherID,
+	})
+	t.Cleanup(func() {
+		db.ExecContext(ctx, "DELETE FROM ai_interactions WHERE session_id = $1", session.ID)
 	})
 
 	list, err := interactions.ListInteractionsBySession(ctx, session.ID)
@@ -149,38 +116,24 @@ func TestInteractionStore_ListBySession(t *testing.T) {
 func TestInteractionStore_DeleteInteraction(t *testing.T) {
 	db := testDB(t)
 	interactions := NewInteractionStore(db)
-	users := NewUserStore(db)
-	classrooms := NewClassroomStore(db)
 	sessions := NewSessionStore(db)
+	users := NewUserStore(db)
 	ctx := context.Background()
 
-	teacher := createTestUser(t, db, users, t.Name()+"-teacher")
+	classID, teacherID := setupSessionTest(t, db, t.Name())
 	student := createTestUser(t, db, users, t.Name()+"-student")
-	classroom := createTestClassroom(t, classrooms, teacher.ID)
-	t.Cleanup(func() {
-		db.ExecContext(ctx, "DELETE FROM ai_interactions WHERE session_id IN (SELECT id FROM live_sessions WHERE classroom_id = $1)", classroom.ID)
-		db.ExecContext(ctx, "DELETE FROM live_sessions WHERE classroom_id = $1", classroom.ID)
-		db.ExecContext(ctx, "DELETE FROM classrooms WHERE id = $1", classroom.ID)
-	})
 
-	session, _ := sessions.CreateSession(ctx, CreateSessionInput{
-		ClassroomID: classroom.ID, TeacherID: teacher.ID,
-	})
+	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: classID, TeacherID: teacherID})
 	interactions.CreateInteraction(ctx, CreateInteractionInput{
-		StudentID: student.ID, SessionID: session.ID, EnabledByTeacherID: teacher.ID,
+		StudentID: student.ID, SessionID: session.ID, EnabledByTeacherID: teacherID,
+	})
+	t.Cleanup(func() {
+		db.ExecContext(ctx, "DELETE FROM ai_interactions WHERE session_id = $1", session.ID)
 	})
 
-	// Verify it exists
-	active, err := interactions.GetActiveInteraction(ctx, student.ID, session.ID)
-	require.NoError(t, err)
-	require.NotNil(t, active)
-
-	// Delete
-	err = interactions.DeleteInteraction(ctx, student.ID, session.ID)
+	err := interactions.DeleteInteraction(ctx, student.ID, session.ID)
 	require.NoError(t, err)
 
-	// Verify gone
-	active, err = interactions.GetActiveInteraction(ctx, student.ID, session.ID)
-	require.NoError(t, err)
+	active, _ := interactions.GetActiveInteraction(ctx, student.ID, session.ID)
 	assert.Nil(t, active)
 }

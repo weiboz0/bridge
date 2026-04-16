@@ -1,20 +1,28 @@
 import { redirect } from "next/navigation";
-import { getEffectiveSession } from "@/lib/impersonate";
-import { db } from "@/lib/db";
-import { getUserMemberships } from "@/lib/org-memberships";
-import { buildUserRoles, getPrimaryPortalPath } from "@/lib/portal/roles";
+import { api, ApiError } from "@/lib/api-client";
 import Link from "next/link";
 import { buttonVariants } from "@/components/ui/button";
 
-export default async function Home() {
-  const session = await getEffectiveSession();
+interface RolesResponse {
+  authenticated: boolean;
+  primaryPortalPath: string;
+}
 
-  if (session?.user?.id) {
-    // Detect roles and redirect to primary portal
-    const memberships = await getUserMemberships(db, session.user.id);
-    const roles = buildUserRoles(session.user.isPlatformAdmin, memberships);
-    const path = getPrimaryPortalPath(roles);
-    redirect(path);
+export default async function Home() {
+  try {
+    const data = await api<RolesResponse>("/api/me/roles");
+    if (data.authenticated) {
+      redirect(data.primaryPortalPath);
+    }
+  } catch (e) {
+    // Re-throw Next.js redirects
+    if (e instanceof Error && "digest" in e) throw e;
+    // 401 = not authenticated — show landing page
+    if (e instanceof ApiError && e.status === 401) {
+      // expected for unauthenticated users
+    } else {
+      throw e; // surface infrastructure errors
+    }
   }
 
   return (
