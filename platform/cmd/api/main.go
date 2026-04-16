@@ -133,6 +133,12 @@ func main() {
 		sessionH := &handlers.SessionHandler{Sessions: stores.Sessions, Broadcaster: broadcaster}
 		sessionH.Routes(r)
 
+		scheduleH := &handlers.ScheduleHandler{
+			Schedules: stores.Schedules, Sessions: stores.Sessions,
+			Orgs: stores.Orgs, Broadcaster: broadcaster,
+		}
+		scheduleH.Routes(r)
+
 		docH := &handlers.DocumentHandler{Documents: stores.Documents}
 		docH.Routes(r)
 

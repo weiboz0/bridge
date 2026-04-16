@@ -21,6 +21,7 @@ type Stores struct {
 	Interactions *store.InteractionStore
 	Reports      *store.ReportStore
 	Stats        *store.StatsStore
+	Schedules    *store.ScheduleStore
 }
 
 // NewStores creates all stores from a database connection.
@@ -39,5 +40,6 @@ func NewStores(db *sql.DB) *Stores {
 		Interactions: store.NewInteractionStore(db),
 		Reports:      store.NewReportStore(db),
 		Stats:        store.NewStatsStore(db),
+		Schedules:    store.NewScheduleStore(db),
 	}
 }
