@@ -3,6 +3,7 @@ package handlers
 import (
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -16,24 +17,41 @@ type ScheduleHandler struct {
 	Schedules   *store.ScheduleStore
 	Sessions    *store.SessionStore
 	Orgs        *store.OrgStore
+	Classes     *store.ClassStore
 	Broadcaster *events.Broadcaster
 }
 
 func (h *ScheduleHandler) Routes(r chi.Router) {
-	// Nested under classes
 	r.Route("/api/classes/{classId}/schedule", func(r chi.Router) {
 		r.Use(ValidateUUIDParam("classId"))
 		r.Post("/", h.Create)
 		r.Get("/", h.List)
 		r.Get("/upcoming", h.ListUpcoming)
 	})
-	// Top-level for individual schedule operations
 	r.Route("/api/schedule/{id}", func(r chi.Router) {
 		r.Use(ValidateUUIDParam("id"))
 		r.Patch("/", h.Update)
 		r.Delete("/", h.Cancel)
 		r.Post("/start", h.Start)
 	})
+}
+
+// checkScheduleOwner verifies the caller owns the schedule (or is platform admin).
+func (h *ScheduleHandler) checkScheduleOwner(w http.ResponseWriter, r *http.Request, scheduleID string, claims *auth.Claims) *store.ScheduledSession {
+	sched, err := h.Schedules.GetSchedule(r.Context(), scheduleID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return nil
+	}
+	if sched == nil {
+		writeError(w, http.StatusNotFound, "Schedule not found")
+		return nil
+	}
+	if !claims.IsPlatformAdmin && sched.TeacherID != claims.UserID {
+		writeError(w, http.StatusForbidden, "Only the schedule owner can modify this")
+		return nil
+	}
+	return sched
 }
 
 func (h *ScheduleHandler) Create(w http.ResponseWriter, r *http.Request) {
@@ -44,6 +62,31 @@ func (h *ScheduleHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	classID := chi.URLParam(r, "classId")
+
+	// Auth: verify user is teacher/org_admin in the class's org, or platform admin
+	if !claims.IsPlatformAdmin {
+		cls, err := h.Classes.GetClass(r.Context(), classID)
+		if err != nil || cls == nil {
+			writeError(w, http.StatusNotFound, "Class not found")
+			return
+		}
+		roles, err := h.Orgs.GetUserRolesInOrg(r.Context(), cls.OrgID, claims.UserID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "Database error")
+			return
+		}
+		hasRole := false
+		for _, m := range roles {
+			if m.Role == "teacher" || m.Role == "org_admin" {
+				hasRole = true
+				break
+			}
+		}
+		if !hasRole {
+			writeError(w, http.StatusForbidden, "Must be teacher or org admin")
+			return
+		}
+	}
 
 	var body struct {
 		Title          *string  `json:"title"`
@@ -68,6 +111,14 @@ func (h *ScheduleHandler) Create(w http.ResponseWriter, r *http.Request) {
 	if !end.After(start) {
 		writeError(w, http.StatusBadRequest, "scheduledEnd must be after scheduledStart")
 		return
+	}
+
+	// Validate topicIDs are UUIDs
+	for _, id := range body.TopicIDs {
+		if !isValidUUID(id) {
+			writeError(w, http.StatusBadRequest, "Invalid UUID in topicIds: "+id)
+			return
+		}
 	}
 
 	sched, err := h.Schedules.CreateSchedule(r.Context(), store.CreateScheduleInput{
@@ -132,6 +183,9 @@ func (h *ScheduleHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	scheduleID := chi.URLParam(r, "id")
+	if h.checkScheduleOwner(w, r, scheduleID, claims) == nil {
+		return
+	}
 
 	var body store.UpdateScheduleInput
 	if !decodeJSON(w, r, &body) {
@@ -158,6 +212,10 @@ func (h *ScheduleHandler) Cancel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	scheduleID := chi.URLParam(r, "id")
+	if h.checkScheduleOwner(w, r, scheduleID, claims) == nil {
+		return
+	}
+
 	cancelled, err := h.Schedules.CancelSchedule(r.Context(), scheduleID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
@@ -178,10 +236,17 @@ func (h *ScheduleHandler) Start(w http.ResponseWriter, r *http.Request) {
 	}
 
 	scheduleID := chi.URLParam(r, "id")
+	if h.checkScheduleOwner(w, r, scheduleID, claims) == nil {
+		return
+	}
 
-	session, err := h.Schedules.StartScheduledSession(r.Context(), scheduleID, claims.UserID, h.Sessions)
+	session, err := h.Schedules.StartScheduledSession(r.Context(), scheduleID, claims.UserID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "not in planned") {
+			writeError(w, http.StatusNotFound, "Schedule not found or not in planned status")
+		} else {
+			writeError(w, http.StatusInternalServerError, "Failed to start session")
+		}
 		return
 	}
 

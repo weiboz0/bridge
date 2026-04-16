@@ -202,7 +202,7 @@ func (s *ScheduleStore) CancelSchedule(ctx context.Context, id string) (*Schedul
 		time.Now(), id))
 }
 
-func (s *ScheduleStore) StartScheduledSession(ctx context.Context, scheduleID, teacherID string, sessionStore *SessionStore) (*LiveSession, error) {
+func (s *ScheduleStore) StartScheduledSession(ctx context.Context, scheduleID, teacherID string) (*LiveSession, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err

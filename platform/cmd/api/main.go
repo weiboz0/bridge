@@ -134,7 +134,7 @@ func main() {
 		sessionH.Routes(r)
 
 		scheduleH := &handlers.ScheduleHandler{
-			Schedules: stores.Schedules, Sessions: stores.Sessions,
+			Schedules: stores.Schedules, Sessions: stores.Sessions, Classes: stores.Classes,
 			Orgs: stores.Orgs, Broadcaster: broadcaster,
 		}
 		scheduleH.Routes(r)

@@ -139,7 +139,6 @@ func TestScheduleStore_CancelSchedule(t *testing.T) {
 func TestScheduleStore_StartScheduledSession(t *testing.T) {
 	db := testDB(t)
 	schedules := NewScheduleStore(db)
-	sessions := NewSessionStore(db)
 	topics := NewTopicStore(db)
 	courses := NewCourseStore(db)
 	orgs := NewOrgStore(db)
@@ -175,7 +174,7 @@ func TestScheduleStore_StartScheduledSession(t *testing.T) {
 	})
 
 	// Start the scheduled session
-	session, err := schedules.StartScheduledSession(ctx, sched.ID, teacher.ID, sessions)
+	session, err := schedules.StartScheduledSession(ctx, sched.ID, teacher.ID)
 	require.NoError(t, err)
 	require.NotNil(t, session)
 	assert.Equal(t, "active", session.Status)
@@ -187,7 +186,7 @@ func TestScheduleStore_StartScheduledSession(t *testing.T) {
 	assert.Equal(t, session.ID, *updated.LiveSessionID)
 
 	// Topics should be linked
-	linkedTopics, _ := sessions.GetSessionTopics(ctx, session.ID)
+	linkedTopics, _ := NewSessionStore(db).GetSessionTopics(ctx, session.ID)
 	assert.Len(t, linkedTopics, 1)
 	assert.Equal(t, topic.ID, linkedTopics[0].TopicID)
 }
@@ -204,7 +203,6 @@ func TestScheduleStore_GetSchedule_NotFound(t *testing.T) {
 func TestScheduleStore_CompleteScheduledSession(t *testing.T) {
 	db := testDB(t)
 	schedules := NewScheduleStore(db)
-	sessions := NewSessionStore(db)
 	ctx := context.Background()
 
 	classID, teacherID := setupSessionTest(t, db, t.Name())
@@ -218,7 +216,7 @@ func TestScheduleStore_CompleteScheduledSession(t *testing.T) {
 	t.Cleanup(func() { db.ExecContext(ctx, "DELETE FROM scheduled_sessions WHERE id = $1", sched.ID) })
 
 	// Start the scheduled session
-	session, err := schedules.StartScheduledSession(ctx, sched.ID, teacherID, sessions)
+	session, err := schedules.StartScheduledSession(ctx, sched.ID, teacherID)
 	require.NoError(t, err)
 
 	// Complete it
@@ -306,7 +304,6 @@ func TestScheduleStore_CreateWithTopicIDs(t *testing.T) {
 func TestScheduleStore_UpdateSchedule_NonPlanned(t *testing.T) {
 	db := testDB(t)
 	schedules := NewScheduleStore(db)
-	sessions := NewSessionStore(db)
 	ctx := context.Background()
 
 	classID, teacherID := setupSessionTest(t, db, t.Name())
@@ -319,7 +316,7 @@ func TestScheduleStore_UpdateSchedule_NonPlanned(t *testing.T) {
 	t.Cleanup(func() { db.ExecContext(ctx, "DELETE FROM scheduled_sessions WHERE id = $1", sched.ID) })
 
 	// Start the session (moves to in_progress)
-	schedules.StartScheduledSession(ctx, sched.ID, teacherID, sessions)
+	schedules.StartScheduledSession(ctx, sched.ID, teacherID)
 
 	// Try updating — should return nil since it's no longer planned
 	newTitle := "Should Not Work"
