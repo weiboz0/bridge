@@ -130,7 +130,7 @@ func main() {
 		classH := &handlers.ClassHandler{Classes: stores.Classes, Orgs: stores.Orgs, Users: stores.Users}
 		classH.Routes(r)
 
-		sessionH := &handlers.SessionHandler{Sessions: stores.Sessions, Broadcaster: broadcaster}
+		sessionH := &handlers.SessionHandler{Sessions: stores.Sessions, Schedules: stores.Schedules, Broadcaster: broadcaster}
 		sessionH.Routes(r)
 
 		scheduleH := &handlers.ScheduleHandler{
