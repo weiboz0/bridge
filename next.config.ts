@@ -22,6 +22,7 @@ const GO_PROXY_ROUTES = [
   "/api/me/:path*",
   "/api/teacher/:path*",
   "/api/org/:path*",
+  "/api/schedule/:path*",
 ];
 
 const nextConfig: NextConfig = {

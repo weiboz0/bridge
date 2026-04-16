@@ -13,6 +13,7 @@ import (
 
 type SessionHandler struct {
 	Sessions    *store.SessionStore
+	Schedules   *store.ScheduleStore
 	Broadcaster *events.Broadcaster
 }
 
@@ -153,6 +154,11 @@ func (h *SessionHandler) EndSession(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
+	}
+
+	// Complete any linked scheduled session
+	if h.Schedules != nil {
+		h.Schedules.CompleteScheduledSession(r.Context(), sessionID)
 	}
 
 	h.Broadcaster.Emit(sessionID, "session_ended", nil)
