@@ -19,6 +19,8 @@ type SessionHandler struct {
 func (h *SessionHandler) Routes(r chi.Router) {
 	r.Route("/api/sessions", func(r chi.Router) {
 		r.Post("/", h.CreateSession)
+		r.Get("/by-class/{classId}", h.ListByClass)
+		r.Get("/active/{classId}", h.GetActiveByClass)
 		r.Route("/{id}", func(r chi.Router) {
 			r.Use(ValidateUUIDParam("id"))
 			r.Get("/", h.GetSession)
@@ -67,6 +69,41 @@ func (h *SessionHandler) CreateSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, session)
+}
+
+// ListByClass handles GET /api/sessions/by-class/{classId}
+func (h *SessionHandler) ListByClass(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	classID := chi.URLParam(r, "classId")
+	sessions, err := h.Sessions.ListSessionsWithCounts(r.Context(), classID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	writeJSON(w, http.StatusOK, sessions)
+}
+
+// GetActiveByClass handles GET /api/sessions/active/{classId}
+func (h *SessionHandler) GetActiveByClass(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	classID := chi.URLParam(r, "classId")
+	session, err := h.Sessions.GetActiveSession(r.Context(), classID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	// Returns null if no active session
+	writeJSON(w, http.StatusOK, session)
 }
 
 // GetSession handles GET /api/sessions/{id}

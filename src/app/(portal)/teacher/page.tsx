@@ -5,6 +5,7 @@ import { buttonVariants } from "@/components/ui/button";
 
 interface CourseItem { id: string; title: string }
 interface ClassItem { id: string; title: string; term: string; status: string; memberRole: string }
+interface SessionItem { id: string; status: string; participantCount: number }
 
 export default async function TeacherDashboard() {
   const [courses, allClasses] = await Promise.all([
@@ -13,6 +14,15 @@ export default async function TeacherDashboard() {
   ]);
 
   const myClasses = allClasses.filter((c) => c.memberRole === "instructor");
+
+  // Check for active sessions per class
+  const activeSessions = new Map<string, SessionItem>();
+  await Promise.all(
+    myClasses.map(async (cls) => {
+      const session = await api<SessionItem | null>(`/api/sessions/active/${cls.id}`).catch(() => null);
+      if (session) activeSessions.set(cls.id, session);
+    })
+  );
 
   return (
     <div className="p-6 space-y-6">
@@ -44,18 +54,31 @@ export default async function TeacherDashboard() {
 
       {myClasses.length > 0 && (
         <div>
-          <h2 className="text-lg font-semibold mb-3">Active Classes</h2>
+          <h2 className="text-lg font-semibold mb-3">My Classes</h2>
           <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
-            {myClasses.filter((c) => c.status === "active").map((cls) => (
-              <Link key={cls.id} href={`/teacher/classes/${cls.id}`}>
-                <Card className="hover:border-primary transition-colors cursor-pointer">
-                  <CardHeader>
-                    <CardTitle className="text-lg">{cls.title}</CardTitle>
-                    <CardDescription>{cls.term || "No term"}</CardDescription>
-                  </CardHeader>
-                </Card>
-              </Link>
-            ))}
+            {myClasses.map((cls) => {
+              const active = activeSessions.get(cls.id);
+              return (
+                <Link key={cls.id} href={active
+                  ? `/teacher/classes/${cls.id}/session/${active.id}/dashboard`
+                  : `/teacher/classes/${cls.id}`
+                }>
+                  <Card className={`hover:border-primary transition-colors cursor-pointer ${active ? "border-green-500" : ""}`}>
+                    <CardHeader>
+                      <div className="flex items-center justify-between">
+                        <CardTitle className="text-lg">{cls.title}</CardTitle>
+                        {active && (
+                          <span className="text-xs font-medium text-green-600 bg-green-100 dark:bg-green-900/30 dark:text-green-400 px-2 py-0.5 rounded-full">
+                            Live · {active.participantCount}
+                          </span>
+                        )}
+                      </div>
+                      <CardDescription>{cls.term || "No term"}</CardDescription>
+                    </CardHeader>
+                  </Card>
+                </Link>
+              );
+            })}
           </div>
         </div>
       )}
