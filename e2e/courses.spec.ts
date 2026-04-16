@@ -61,4 +61,29 @@ test.describe("Course & Class Management", () => {
       }
     }
   });
+
+  test("teacher can see class join code on class detail page", async ({ page }) => {
+    await page.goto("/teacher/classes");
+    await expect(page.getByRole("heading", { name: "My Classes" })).toBeVisible();
+
+    // Click the first class to open its detail page
+    const classLink = page.locator("a[href*='/teacher/classes/']").first();
+    if (!(await classLink.isVisible({ timeout: 5000 }).catch(() => false))) {
+      test.skip(true, "No classes available");
+      return;
+    }
+
+    await classLink.click();
+    await page.waitForURL(/\/teacher\/classes\//);
+
+    // Verify the "Join Code" card heading is visible
+    await expect(page.locator("text=Join Code")).toBeVisible();
+    await expect(page.locator("text=Share with students")).toBeVisible();
+
+    // Verify the join code is displayed as an 8-character code
+    const codeElement = page.locator(".font-mono.tracking-widest");
+    await expect(codeElement).toBeVisible();
+    const codeText = await codeElement.textContent();
+    expect(codeText!.trim()).toHaveLength(8);
+  });
 });
