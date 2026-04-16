@@ -31,7 +31,7 @@ export function DiffViewer({
           renderSideBySide: true,
           minimap: { enabled: false },
           fontSize: 14,
-          fontFamily: "var(--font-geist-mono), monospace",
+          fontFamily: "'JetBrains Mono', var(--font-mono), monospace",
           lineNumbers: "on",
           scrollBeyondLastLine: false,
           automaticLayout: true,

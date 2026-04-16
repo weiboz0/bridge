@@ -88,7 +88,7 @@ export function CodeEditor({
           readOnly,
           minimap: { enabled: true },
           fontSize: 14,
-          fontFamily: "var(--font-geist-mono), monospace",
+          fontFamily: "'JetBrains Mono', var(--font-mono), monospace",
           lineNumbers: "on",
           bracketPairColorization: { enabled: true },
           autoClosingBrackets: "always",
