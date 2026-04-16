@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -158,7 +159,9 @@ func (h *SessionHandler) EndSession(w http.ResponseWriter, r *http.Request) {
 
 	// Complete any linked scheduled session
 	if h.Schedules != nil {
-		h.Schedules.CompleteScheduledSession(r.Context(), sessionID)
+		if err := h.Schedules.CompleteScheduledSession(r.Context(), sessionID); err != nil {
+			slog.Warn("failed to complete scheduled session", "sessionId", sessionID, "error", err)
+		}
 	}
 
 	h.Broadcaster.Emit(sessionID, "session_ended", nil)
