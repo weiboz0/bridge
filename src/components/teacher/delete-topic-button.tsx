@@ -12,15 +12,19 @@ interface Props {
 export function DeleteTopicButton({ courseId, topicId }: Props) {
   const router = useRouter();
   const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   async function handleDelete() {
+    if (!confirm("Delete this topic?")) return;
     setSubmitting(true);
+    setError(null);
     try {
       const res = await fetch(`/api/courses/${courseId}/topics/${topicId}`, {
         method: "DELETE",
       });
       if (!res.ok) {
-        console.error("Failed to delete topic", res.status);
+        const body = await res.json().catch(() => null);
+        setError(body?.error || `Failed (${res.status})`);
         return;
       }
       router.refresh();
@@ -30,14 +34,17 @@ export function DeleteTopicButton({ courseId, topicId }: Props) {
   }
 
   return (
-    <Button
-      variant="ghost"
-      size="sm"
-      className="text-destructive"
-      disabled={submitting}
-      onClick={handleDelete}
-    >
-      ×
-    </Button>
+    <div className="flex flex-col items-end">
+      <Button
+        variant="ghost"
+        size="sm"
+        className="text-destructive"
+        disabled={submitting}
+        onClick={handleDelete}
+      >
+        ×
+      </Button>
+      {error && <span className="text-xs text-destructive">{error}</span>}
+    </div>
   );
 }

@@ -12,9 +12,11 @@ interface Props {
 export function OrgActions({ orgId, status }: Props) {
   const router = useRouter();
   const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   async function update(next: "active" | "suspended") {
     setPending(true);
+    setError(null);
     try {
       const res = await fetch(`/api/admin/orgs/${orgId}`, {
         method: "PATCH",
@@ -22,7 +24,8 @@ export function OrgActions({ orgId, status }: Props) {
         body: JSON.stringify({ status: next }),
       });
       if (!res.ok) {
-        console.error("Failed to update org", res.status);
+        const body = await res.json().catch(() => null);
+        setError(body?.error || `Failed (${res.status})`);
         return;
       }
       router.refresh();
@@ -31,21 +34,20 @@ export function OrgActions({ orgId, status }: Props) {
     }
   }
 
-  if (status === "pending") {
-    return (
-      <Button size="sm" disabled={pending} onClick={() => update("active")}>
-        Approve
-      </Button>
-    );
-  }
+  if (status !== "pending" && status !== "active") return null;
 
-  if (status === "active") {
-    return (
-      <Button size="sm" variant="destructive" disabled={pending} onClick={() => update("suspended")}>
-        Suspend
-      </Button>
-    );
-  }
-
-  return null;
+  return (
+    <div className="flex flex-col items-end gap-1">
+      {status === "pending" ? (
+        <Button size="sm" disabled={pending} onClick={() => update("active")}>
+          Approve
+        </Button>
+      ) : (
+        <Button size="sm" variant="destructive" disabled={pending} onClick={() => update("suspended")}>
+          Suspend
+        </Button>
+      )}
+      {error && <span className="text-xs text-destructive">{error}</span>}
+    </div>
+  );
 }

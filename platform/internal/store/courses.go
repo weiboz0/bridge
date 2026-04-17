@@ -85,6 +85,20 @@ func (s *CourseStore) GetCourse(ctx context.Context, id string) (*Course, error)
 		`SELECT `+courseColumns+` FROM courses WHERE id = $1`, id))
 }
 
+// UserHasAccessToCourse reports whether the user has any class membership
+// in a class belonging to this course. Used for read-side auth on course
+// endpoints that legitimate non-creators (students, co-teachers) must reach.
+func (s *CourseStore) UserHasAccessToCourse(ctx context.Context, courseID, userID string) (bool, error) {
+	var exists bool
+	err := s.db.QueryRowContext(ctx,
+		`SELECT EXISTS (
+			SELECT 1 FROM class_memberships cm
+			INNER JOIN classes c ON c.id = cm.class_id
+			WHERE c.course_id = $1 AND cm.user_id = $2
+		)`, courseID, userID).Scan(&exists)
+	return exists, err
+}
+
 func (s *CourseStore) ListCoursesByOrg(ctx context.Context, orgID string) ([]Course, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT `+courseColumns+` FROM courses WHERE org_id = $1 ORDER BY created_at DESC`, orgID)

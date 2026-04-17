@@ -234,3 +234,46 @@ func TestCourseStore_CloneCourse_NotFound(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Nil(t, cloned)
 }
+
+func TestCourseStore_UserHasAccessToCourse(t *testing.T) {
+	db := testDB(t)
+	courses := NewCourseStore(db)
+	classes := NewClassStore(db)
+	orgs := NewOrgStore(db)
+	users := NewUserStore(db)
+	ctx := context.Background()
+
+	org := createTestOrg(t, db, orgs, t.Name())
+	creator := createTestUser(t, db, users, t.Name()+"-creator")
+	member := createTestUser(t, db, users, t.Name()+"-member")
+	stranger := createTestUser(t, db, users, t.Name()+"-stranger")
+
+	course, err := courses.CreateCourse(ctx, CreateCourseInput{
+		OrgID: org.ID, CreatedBy: creator.ID, Title: "Access Test", GradeLevel: "K-5", Language: "python",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { db.ExecContext(ctx, "DELETE FROM courses WHERE id = $1", course.ID) })
+
+	class, err := classes.CreateClass(ctx, CreateClassInput{
+		CourseID: course.ID, OrgID: org.ID, Title: "Access Class", Term: "Fall", CreatedBy: creator.ID,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		db.ExecContext(ctx, "DELETE FROM class_memberships WHERE class_id = $1", class.ID)
+		db.ExecContext(ctx, "DELETE FROM new_classrooms WHERE class_id = $1", class.ID)
+		db.ExecContext(ctx, "DELETE FROM classes WHERE id = $1", class.ID)
+	})
+
+	_, err = classes.AddClassMember(ctx, AddClassMemberInput{
+		ClassID: class.ID, UserID: member.ID, Role: "student",
+	})
+	require.NoError(t, err)
+
+	memberHas, err := courses.UserHasAccessToCourse(ctx, course.ID, member.ID)
+	require.NoError(t, err)
+	assert.True(t, memberHas, "member of a class in the course should have access")
+
+	strangerHas, err := courses.UserHasAccessToCourse(ctx, course.ID, stranger.ID)
+	require.NoError(t, err)
+	assert.False(t, strangerHas, "unrelated user should NOT have access")
+}
