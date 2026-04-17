@@ -1221,3 +1221,63 @@ The E2E tests interact with the browser and should not need major changes since 
 
 5. `[FIXED]` Ambiguous column in ListClassesByUser SQL JOIN.
    → Qualified all columns with table name.
+
+---
+
+## Stage 2 Batch 2b — Post-Execution Report
+
+**Branch:** `feat/021c-pages-batch2b`
+**Executed:** 2026-04-17
+
+### What was done
+
+- 8 pages converted from Drizzle to Go API:
+  - Easy 5 (no new endpoints): `teacher/classes`, `student/classes`, `student/code`, `admin/orgs`, `org/`
+  - Teacher course 3 (server actions → client forms): `teacher/courses`, `teacher/courses/[id]`, `teacher/courses/[id]/create-class`
+- 5 new client components: `src/components/admin/org-actions.tsx`, `src/components/teacher/{create-course-form,add-topic-form,delete-topic-button,create-class-form}.tsx`
+- Go change: `ListDocuments` auto-scopes to caller when a non-admin passes no filter (enables `GET /api/documents` for the student code page)
+- Go change: `GetCourse` and `ListTopics` now enforce access (creator, platform admin, or class member)
+- New store method + integration test: `CourseStore.UserHasAccessToCourse`
+
+### Remaining in Stage 2
+
+- Batch 2c: parent portal (3 pages, needs new `/api/parent/children*` endpoints)
+- Batch 2d: session aggregators — teacher session dashboard + student session join (multi-store composition)
+
+### Code Review — Stage 2 Batch 2b
+
+#### Review 1
+
+- **Date**: 2026-04-17
+- **Reviewer**: Claude (general-purpose agent — superpowers agents unavailable this session)
+- **Verdict**: 1 critical, 4 important, 3 minor
+
+**Must Fix**
+
+1. `[FIXED]` `teacher/courses/[id]` regressed access control — old page required creator/platform-admin, new `GET /api/courses/{id}` returns 200 for any authenticated user; any teacher/student who knows a course UUID could load the detail view.
+   → Fixed authoritatively in Go: `GetCourse` and `ListTopics` now require creator, platform admin, or an active class membership in the course. Added `UserHasAccessToCourse` store method with integration test.
+
+**Should Fix**
+
+2. `[FIXED]` `OrgActions` and `DeleteTopicButton` silently failed on non-ok responses — only `console.error`, no UI feedback.
+   → Both components now render the server error message under the button; `DeleteTopicButton` also gained a `confirm()` prompt since the page no longer flashes on server-action success.
+
+3. `[WONTFIX]` `documents_test.go` removed its only non-admin-no-filter test; there is no unit test for the new happy path.
+   → Handler tests here don't use a DB — the only non-trivial tests exercise the auth guard. A full happy-path test requires integration infrastructure that does not exist in this package. The `TestListDocuments_ForbiddenOtherUser` replacement test covers the tightened branch that *does* matter. Follow-up: build out handler integration tests alongside Batch 2d.
+
+4. `[WONTFIX]` `teacher/courses/[id]` fetches `/api/classes/mine` and filters client-side by `courseId` — wasteful at scale and ships unrelated `joinCode` values over the wire.
+   → Dedicated `GET /api/courses/{id}/classes` would be cleaner, but today a teacher has <20 classes in practice. Deferred. Added to follow-up list.
+
+5. `[WONTFIX]` `CreateCourseForm` omits `language` field — courses always default to `python`.
+   → Matches prior behavior; language is set via PATCH later. Not introduced by this batch.
+
+**Nice to Have**
+
+6. `[WONTFIX]` Type-nullability drift: several TS interfaces type fields as `string | null` where the Go struct is non-nullable `string`.
+   → Harmless today (fields are always populated), but worth a cross-cutting hardening pass in a future batch.
+
+7. `[WONTFIX]` No RTL tests for new client components.
+   → Pragmatic deferral — E2E covers the happy paths; component-unit tests would duplicate coverage without catching regressions that E2E misses. Revisit if specific bugs slip through.
+
+8. `[FIXED]` `TestListDocuments_MissingFilter` was stale after the auto-scope reorder.
+   → Renamed to `TestListDocuments_MissingFilter_PlatformAdmin` and added `TestListDocuments_ForbiddenOtherUser` for the forbidden cross-user path.
