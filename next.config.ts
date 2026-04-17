@@ -32,10 +32,12 @@ const nextConfig: NextConfig = {
       source,
       destination: `${GO_API_URL}${source}`,
     }));
+    // Apply rewrites at both phases as belt-and-suspenders: `beforeFiles` covers
+    // routes that collide with an existing Next.js API file (so the proxy wins),
+    // and `fallback` covers routes with no Next.js file at all. Observed on Next 16
+    // + turbopack, routes like /api/schedule/* only proxied reliably with `fallback`.
     return {
-      // beforeFiles: intercept routes that have existing Next.js API files
       beforeFiles: rules,
-      // fallback: catch routes that have NO Next.js API files (e.g., /api/schedule/)
       fallback: rules,
     };
   },

@@ -19,6 +19,7 @@ test.describe("Session Scheduling (API-driven)", () => {
 
   let classId: string;
   let scheduleId: string;
+  const createdScheduleIds: string[] = [];
 
   test.beforeAll(async ({ request }) => {
     // Get a class ID from the teacher's classes
@@ -28,6 +29,13 @@ test.describe("Session Scheduling (API-driven)", () => {
       if (classes.length > 0) {
         classId = classes[0].id;
       }
+    }
+  });
+
+  test.afterAll(async ({ request }) => {
+    // Clean up any schedules still in a cancellable state so tests don't accumulate state.
+    for (const id of createdScheduleIds) {
+      await request.delete(`/api/schedule/${id}`).catch(() => {});
     }
   });
 
@@ -57,12 +65,16 @@ test.describe("Session Scheduling (API-driven)", () => {
     expect(res.status()).toBe(201);
     const schedule = await res.json();
     expect(schedule.id).toBeTruthy();
-    expect(schedule.classId || schedule.class_id).toBe(classId);
+    expect(schedule.classId).toBe(classId);
     scheduleId = schedule.id;
+    createdScheduleIds.push(schedule.id);
   });
 
   test("teacher can list upcoming sessions for a class via API", async ({ request }) => {
     test.skip(!classId, "No classes available");
+    // Must have the id from the create test — if missing, fail loudly rather than
+    // silent-pass on a trivial array-is-array assertion.
+    expect(scheduleId, "create test must have produced a scheduleId").toBeTruthy();
 
     const res = await request.get(`/api/classes/${classId}/schedule/upcoming`);
     expect(res.ok()).toBeTruthy();
@@ -70,13 +82,8 @@ test.describe("Session Scheduling (API-driven)", () => {
     const schedules = await res.json();
     expect(Array.isArray(schedules)).toBeTruthy();
 
-    // If we created a schedule in the previous test, it should appear
-    if (scheduleId) {
-      const found = schedules.some(
-        (s: { id: string }) => s.id === scheduleId
-      );
-      expect(found).toBeTruthy();
-    }
+    const found = schedules.some((s: { id: string }) => s.id === scheduleId);
+    expect(found).toBeTruthy();
   });
 
   test("teacher can cancel a scheduled session via API", async ({ request }) => {
@@ -103,6 +110,7 @@ test.describe("Session Scheduling (API-driven)", () => {
 
     const created = await createRes.json();
     const cancelId = created.id;
+    createdScheduleIds.push(cancelId);
 
     // Cancel the schedule
     const cancelRes = await request.delete(`/api/schedule/${cancelId}`);
@@ -136,6 +144,7 @@ test.describe("Session Scheduling (API-driven)", () => {
 
     const created = await createRes.json();
     const startId = created.id;
+    createdScheduleIds.push(startId);
 
     // Start a session from the schedule
     const startRes = await request.post(`/api/schedule/${startId}/start`);

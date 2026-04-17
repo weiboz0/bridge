@@ -8,8 +8,6 @@ import { ACCOUNTS, loginWithCredentials } from "./helpers";
  * Uses test.describe.serial() since these tests are sequentially dependent.
  */
 
-const ORG_ID = "d386983b-6da4-4cb8-8057-f2aa70d27c07";
-
 test.describe.serial("Session Flow", () => {
   let teacherContext: BrowserContext;
   let studentContext: BrowserContext;
@@ -137,9 +135,13 @@ test.describe.serial("Session Flow", () => {
 
     await endButton.click();
 
-    // Wait for redirect or status change — teacher should be redirected to class page
-    // or the button text should change
-    await page.waitForURL(/\/teacher\/classes\//, { timeout: 10000 });
+    // Should redirect back to the class detail page (no /session/ segment).
+    await page.waitForURL(
+      (url) =>
+        url.pathname.startsWith("/teacher/classes/") &&
+        !url.pathname.includes("/session/"),
+      { timeout: 10000 }
+    );
 
     await page.close();
   });

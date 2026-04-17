@@ -1,5 +1,7 @@
 import { type Page, expect } from "@playwright/test";
 
+// Test accounts. `admin@e2e.test` must exist with is_platform_admin=true —
+// see the "Running E2E Tests" section in docs/setup.md for the one-time SQL snippet.
 export const ACCOUNTS = {
   teacher: { email: "eve@demo.edu", password: "bridge123" },
   student: { email: "alice@demo.edu", password: "bridge123" },

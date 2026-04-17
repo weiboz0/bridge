@@ -89,3 +89,46 @@ DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test bun run test:watch
 ```
 
 > **Note:** Tests run sequentially (`fileParallelism: false`) to prevent database cleanup conflicts between test files.
+
+## Running E2E Tests (Playwright)
+
+Playwright tests hit a live stack: Next.js (3003) + Go platform (8002) + Hocuspocus (4000). Start all three, then:
+
+```bash
+bun run test:e2e              # headless
+bun run test:e2e:ui           # interactive
+```
+
+### Required test accounts
+
+E2E tests expect the following accounts to exist in the dev DB (passwords all `bridge123`):
+
+| Role        | Email                |
+|-------------|----------------------|
+| teacher     | eve@demo.edu         |
+| student     | alice@demo.edu       |
+| student2    | bob@demo.edu         |
+| org admin   | frank@demo.edu       |
+| parent      | diana@demo.edu       |
+| platform admin | admin@e2e.test    |
+
+The `demo.edu` accounts come from the demo seed. The `admin@e2e.test` account must be created once with `is_platform_admin=true`:
+
+```sql
+-- Bcrypt hash for "bridge123" (same hash used by the demo accounts).
+-- Run once in the dev DB:
+INSERT INTO "user" (id, email, name, password_hash, is_platform_admin)
+VALUES (
+  gen_random_uuid(),
+  'admin@e2e.test',
+  'E2E Admin',
+  '<bcrypt-of-bridge123>',
+  true
+);
+```
+
+To generate the bcrypt hash:
+
+```bash
+bun -e "import('bcryptjs').then(b => console.log(b.default.hashSync('bridge123', 10)))"
+```

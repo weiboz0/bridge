@@ -83,9 +83,8 @@ test.describe("Admin Portal", () => {
     const rowCount = await rows.count();
     expect(rowCount).toBeGreaterThan(0);
 
-    // Verify action dropdown (MoreHorizontal button) is visible for non-self users
-    // The button has sr-only text "Actions"
-    const actionButton = page.locator('button:has(> .sr-only:text("Actions"))').first();
+    // Verify action dropdown (MoreHorizontal button) is visible for non-self users.
+    const actionButton = page.getByRole("button", { name: "Actions" }).first();
     if (await actionButton.isVisible({ timeout: 3000 }).catch(() => false)) {
       await actionButton.click();
 

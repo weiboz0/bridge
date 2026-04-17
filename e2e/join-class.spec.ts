@@ -12,6 +12,7 @@ test.describe("Join Class by Code", () => {
     let teacherContext: BrowserContext;
     let student2Context: BrowserContext;
     let joinCode: string;
+    let classId: string;
 
     test.beforeAll(async ({ browser }) => {
       teacherContext = await browser.newContext();
@@ -45,6 +46,9 @@ test.describe("Join Class by Code", () => {
         return;
       }
 
+      const href = await classLink.getAttribute("href");
+      classId = href!.split("/teacher/classes/")[1];
+
       await classLink.click();
       await page.waitForURL(/\/teacher\/classes\//);
 
@@ -66,9 +70,18 @@ test.describe("Join Class by Code", () => {
     });
 
     test("student2 can join a class with the join code", async () => {
-      test.skip(!joinCode, "No join code obtained from previous test");
+      test.skip(!joinCode || !classId, "No join code or classId captured from previous test");
 
       const page = await student2Context.newPage();
+
+      // Check enrollment state before joining. If student2 is already enrolled
+      // (from a prior run), skip to avoid spurious "already enrolled" errors.
+      const preEnrollment = await student2Context.request.get(`/api/classes/${classId}`);
+      if (preEnrollment.ok()) {
+        test.skip(true, "student2 already enrolled in this class");
+        await page.close();
+        return;
+      }
 
       // Navigate to student dashboard where "Join a Class" button is
       await page.goto("/student");
@@ -84,25 +97,18 @@ test.describe("Join Class by Code", () => {
       await expect(codeInput).toBeVisible();
       await codeInput.fill(joinCode);
 
-      // Click "Join" submit button
-      await page.getByRole("button", { name: "Join" }).click();
+      // Submit + wait for the POST to complete
+      const [joinResp] = await Promise.all([
+        page.waitForResponse(
+          (r) => r.url().includes("/join") && r.request().method() === "POST"
+        ),
+        page.getByRole("button", { name: "Join" }).click(),
+      ]);
+      expect(joinResp.ok()).toBeTruthy();
 
-      // After joining, the form should close and the page should refresh
-      // Wait for either the class to appear in the list or the form to disappear
-      await page.waitForTimeout(2000);
-
-      // The class should now appear in the student's dashboard
-      // (or the form should have closed — indicating success)
-      const formStillVisible = await codeInput.isVisible().catch(() => false);
-      if (formStillVisible) {
-        // Check if there's an error message
-        const error = page.locator(".text-destructive");
-        if (await error.isVisible().catch(() => false)) {
-          // Student may already be enrolled — this is OK
-          const errorText = await error.textContent();
-          test.skip(true, `Join failed: ${errorText}`);
-        }
-      }
+      // Verify enrollment: the student should now be able to GET the class detail
+      const postEnrollment = await student2Context.request.get(`/api/classes/${classId}`);
+      expect(postEnrollment.ok()).toBeTruthy();
 
       await page.close();
     });
