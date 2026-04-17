@@ -1,8 +1,15 @@
-import { db } from "@/lib/db";
-import { listOrganizations, updateOrgStatus } from "@/lib/organizations";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { revalidatePath } from "next/cache";
+import { api } from "@/lib/api-client";
+import { Card, CardContent } from "@/components/ui/card";
+import { OrgActions } from "@/components/admin/org-actions";
+
+interface Org {
+  id: string;
+  name: string;
+  type: string;
+  contactEmail: string;
+  slug: string;
+  status: string;
+}
 
 export default async function AdminOrgsPage({
   searchParams,
@@ -10,29 +17,8 @@ export default async function AdminOrgsPage({
   searchParams: Promise<{ status?: string }>;
 }) {
   const { status } = await searchParams;
-  const orgs = await listOrganizations(db, status);
-
-  async function approveOrg(formData: FormData) {
-    "use server";
-    const { auth: getAuth } = await import("@/lib/auth");
-    const session = await getAuth();
-    if (!session?.user?.isPlatformAdmin) return;
-    const orgId = formData.get("orgId") as string;
-    if (!orgId) return;
-    await updateOrgStatus(db, orgId, "active");
-    revalidatePath("/admin/orgs");
-  }
-
-  async function suspendOrg(formData: FormData) {
-    "use server";
-    const { auth: getAuth } = await import("@/lib/auth");
-    const session = await getAuth();
-    if (!session?.user?.isPlatformAdmin) return;
-    const orgId = formData.get("orgId") as string;
-    if (!orgId) return;
-    await updateOrgStatus(db, orgId, "suspended");
-    revalidatePath("/admin/orgs");
-  }
+  const path = status ? `/api/admin/orgs?status=${encodeURIComponent(status)}` : "/api/admin/orgs";
+  const orgs = await api<Org[]>(path);
 
   return (
     <div className="p-6 space-y-6">
@@ -67,18 +53,7 @@ export default async function AdminOrgsPage({
                   }`}>
                     {org.status}
                   </span>
-                  {org.status === "pending" && (
-                    <form action={approveOrg}>
-                      <input type="hidden" name="orgId" value={org.id} />
-                      <Button size="sm" type="submit">Approve</Button>
-                    </form>
-                  )}
-                  {org.status === "active" && (
-                    <form action={suspendOrg}>
-                      <input type="hidden" name="orgId" value={org.id} />
-                      <Button size="sm" variant="destructive" type="submit">Suspend</Button>
-                    </form>
-                  )}
+                  <OrgActions orgId={org.id} status={org.status} />
                 </div>
               </CardContent>
             </Card>

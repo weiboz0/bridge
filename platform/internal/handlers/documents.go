@@ -38,12 +38,9 @@ func (h *DocumentHandler) ListDocuments(w http.ResponseWriter, r *http.Request) 
 		SessionID:   r.URL.Query().Get("sessionId"),
 	}
 
-	if filters.OwnerID == "" && filters.ClassroomID == "" && filters.SessionID == "" {
-		writeError(w, http.StatusBadRequest, "At least one filter (classroomId, studentId, sessionId) is required")
-		return
-	}
-
-	// Non-admin users can only list their own documents
+	// Non-admin callers are scoped to their own documents. If they passed
+	// no filter (or no OwnerID), default to their user ID. This lets a
+	// student list their own code with a plain GET /api/documents.
 	if !claims.IsPlatformAdmin {
 		if filters.OwnerID != "" && filters.OwnerID != claims.UserID {
 			writeError(w, http.StatusForbidden, "Cannot view other users' documents")
@@ -52,6 +49,11 @@ func (h *DocumentHandler) ListDocuments(w http.ResponseWriter, r *http.Request) 
 		if filters.OwnerID == "" {
 			filters.OwnerID = claims.UserID
 		}
+	}
+
+	if filters.OwnerID == "" && filters.ClassroomID == "" && filters.SessionID == "" {
+		writeError(w, http.StatusBadRequest, "At least one filter (classroomId, studentId, sessionId) is required")
+		return
 	}
 
 	docs, err := h.Documents.ListDocuments(r.Context(), filters)
