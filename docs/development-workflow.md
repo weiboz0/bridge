@@ -4,8 +4,6 @@ Follow this process for every plan. Do NOT skip steps or batch them.
 
 For trivial changes (typo fixes, one-line patches), use your judgement — not every change needs the full workflow. But any multi-file feature, refactor, or integration must follow it.
 
-> **Superpowers integration:** Each step lists applicable superpowers skills. These are *tools for meeting the step's requirements*, not replacements. The step's requirements are mandatory whether or not superpowers is installed.
-
 ---
 
 ## Step 1 — Design
@@ -13,7 +11,7 @@ For trivial changes (typo fixes, one-line patches), use your judgement — not e
 Explore the problem space before committing to an approach.
 
 1. Clarify the user's intent — what problem are we solving, what does success look like?
-2. Research constraints: read `docs/architecture/decisions.md`, check relevant code, identify affected systems.
+2. Research constraints: check relevant code, identify affected systems, review existing plans in `docs/plans/`.
 3. Brainstorm approaches. Compare trade-offs. Identify risks.
 4. Get user alignment on the approach before writing a plan.
 
@@ -24,30 +22,21 @@ Explore the problem space before committing to an approach.
 
 **Skip when:** The task is well-defined with an obvious approach (e.g., "add field X to endpoint Y").
 
-| Superpowers skill | When to use |
-|---|---|
-| `brainstorming` | Always for new features, architecture changes, or ambiguous requirements |
-
 ---
 
 ## Step 2 — Plan
 
 Write a concrete execution plan with phases, files, tests, and verification steps.
 
-1. Read `docs/architecture/decisions.md`. Ensure the plan respects all existing rules.
-2. Read existing plans in `docs/plans/` for reusable patterns and established conventions.
-3. Read `TODO.md` for outstanding items relevant to this work.
-4. Write a detailed plan with: phases, file lists, testing plan per phase (files, functions, expected coverage), and verification steps.
-5. Self-review the plan: check for inconsistencies, missing files, stale references, blast radius, naming conflicts, edge cases.
-6. Get user approval.
-7. Save to `docs/plans/` with a numbered prefix (e.g., `docs/plans/006-feature-name.md`). Reference the design spec if one exists.
-8. **Commit the plan file before any implementation code.**
+1. Read existing plans in `docs/plans/` for reusable patterns and established conventions.
+2. Read `TODO.md` for outstanding items relevant to this work.
+3. Write a detailed plan with: phases, file lists, testing plan per phase (files, functions, expected coverage), and verification steps.
+4. Self-review the plan: check for inconsistencies, missing files, stale references, blast radius, naming conflicts, edge cases.
+5. Get user approval.
+6. Save to `docs/plans/` with the next sequential number (e.g., `docs/plans/024-feature-name.md`). Reference the design spec if one exists.
+7. **Commit the plan file before any implementation code.**
 
-**Output:** Committed plan file in `plan/`.
-
-| Superpowers skill | When to use |
-|---|---|
-| `writing-plans` | For structuring the plan with phases and verification steps |
+**Output:** Committed plan file in `docs/plans/`.
 
 ---
 
@@ -59,17 +48,13 @@ For **each phase**:
 
 1. **Implement** — write the code for this phase only.
 2. **Test** — write or update tests following the Testing guidelines. Run all relevant tests. Fix failures before proceeding.
-3. **Self-review** — re-read all modified files. Compare against the plan and `docs/architecture/decisions.md`. Check for consistency, dead code, duplicate logic.
+3. **Self-review** — re-read all modified files. Compare against the plan. Check for consistency, dead code, duplicate logic.
 4. **Document** — update `docs/` and affected `README.md` files for this phase's changes.
 5. **Commit** — only after tests pass and self-review is clean. Commit code, tests, and docs together.
 
-| Superpowers skill | When to use |
-|---|---|
-| `executing-plans` | Single-agent plan execution, following each task step by step |
-| `subagent-driven-development` | Multi-agent parallel execution when tasks are independent |
-| `test-driven-development` | When implementing each unit of work (write test → implement → pass) |
-| `systematic-debugging` | When a test fails or unexpected behavior is encountered |
-| `using-git-worktrees` | When isolation from the current workspace is needed |
+When tasks within a plan are independent and can be implemented without shared state, dispatch them to subagents in parallel via the Agent tool. When tasks have sequential dependencies, execute them in order in the current session.
+
+When a test fails or behavior is unexpected, debug systematically: reproduce the failure deterministically, isolate the smallest case, form a hypothesis, verify by changing one thing at a time. Don't guess at fixes.
 
 ---
 
@@ -82,9 +67,7 @@ After all phases are complete, verify the whole before moving on.
 3. Compare actual test coverage against the plan's testing plan. Add any missing tests.
 4. If issues are found, fix them following the Build step's per-phase process.
 
-| Superpowers skill | When to use |
-|---|---|
-| `verification-before-completion` | Before claiming work is done — runs verification and confirms output |
+Before claiming work is done, run the verification commands and confirm the actual output. Don't assert success without evidence.
 
 ---
 
@@ -97,10 +80,7 @@ Code review catches what self-review misses.
 3. Author addresses each finding: fix the code or explain why not. Respond inline with `→ Response:` and update status to `[FIXED]` or `[WONTFIX]`.
 4. All `[OPEN]` items must be resolved before shipping.
 
-| Superpowers skill | When to use |
-|---|---|
-| `requesting-code-review` | Dispatch the code-reviewer subagent with commit range and context |
-| `receiving-code-review` | When acting on review feedback — ensures rigorous evaluation before implementing suggestions |
+When acting on review feedback, evaluate each finding rigorously before implementing — don't blindly apply suggestions. If a finding is unclear or technically questionable, push back with reasoning rather than agreeing performatively.
 
 ---
 
@@ -109,15 +89,10 @@ Code review catches what self-review misses.
 Wrap up, push, and create the PR.
 
 1. **Update the plan file** with a post-execution report: implementation details, deviations from plan, known limitations, follow-up work.
-2. **Update `docs/architecture/decisions.md`** if new architectural decisions were made.
-3. **Update `TODO.md`** — mark completed items, add new follow-up items.
-4. **Commit** the updated plan and docs.
-5. **Run ALL tests** one final time. Do not proceed if any test fails.
-6. **Push** the branch and **create a PR** via `gh pr create`.
-
-| Superpowers skill | When to use |
-|---|---|
-| `finishing-a-development-branch` | Presents structured options (merge / PR / keep / discard) and handles cleanup |
+2. **Update `TODO.md`** — mark completed items, add new follow-up items.
+3. **Commit** the updated plan and docs.
+4. **Run ALL tests** one final time. Do not proceed if any test fails.
+5. **Push** the branch and **create a PR** via `gh pr create`.
 
 ---
 
