@@ -188,6 +188,7 @@ func main() {
 			Topics:   stores.Topics,
 			Classes:  stores.Classes,
 			Attempts: stores.Attempts,
+			Users:    stores.Users,
 		}
 		teacherProblemH.Routes(r)
 

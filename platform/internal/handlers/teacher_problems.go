@@ -17,6 +17,7 @@ type TeacherProblemHandler struct {
 	Topics   *store.TopicStore
 	Classes  *store.ClassStore
 	Attempts *store.AttemptStore
+	Users    *store.UserStore
 }
 
 func (h *TeacherProblemHandler) Routes(r chi.Router) {
@@ -84,5 +85,23 @@ func (h *TeacherProblemHandler) ListStudentAttempts(w http.ResponseWriter, r *ht
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
 	}
-	writeJSON(w, http.StatusOK, list)
+
+	student, err := h.Users.GetUserByID(r.Context(), studentID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if student == nil {
+		writeError(w, http.StatusNotFound, "Student not found")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"student": map[string]any{
+			"id":    student.ID,
+			"name":  student.Name,
+			"email": student.Email,
+		},
+		"attempts": list,
+	})
 }
