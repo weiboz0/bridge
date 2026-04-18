@@ -1,11 +1,15 @@
-import { auth } from "@/lib/auth";
-import { db } from "@/lib/db";
-import { listDocuments } from "@/lib/documents";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { api } from "@/lib/api-client";
+import { Card, CardContent } from "@/components/ui/card";
+
+interface DocumentItem {
+  id: string;
+  language: string;
+  plainText: string | null;
+  updatedAt: string;
+}
 
 export default async function StudentCodePage() {
-  const session = await auth();
-  const docs = await listDocuments(db, { ownerId: session!.user.id });
+  const docs = await api<DocumentItem[]>("/api/documents");
 
   return (
     <div className="p-6 space-y-6">

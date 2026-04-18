@@ -139,6 +139,7 @@ func (h *CourseHandler) ListCourses(w http.ResponseWriter, r *http.Request) {
 }
 
 // GetCourse handles GET /api/courses/{id}
+// Access: creator, platform admin, or a user with a class membership in the course.
 func (h *CourseHandler) GetCourse(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
@@ -155,6 +156,19 @@ func (h *CourseHandler) GetCourse(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "Not found")
 		return
 	}
+
+	if !claims.IsPlatformAdmin && course.CreatedBy != claims.UserID {
+		hasAccess, err := h.Courses.UserHasAccessToCourse(r.Context(), course.ID, claims.UserID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "Database error")
+			return
+		}
+		if !hasAccess {
+			writeError(w, http.StatusForbidden, "Access denied")
+			return
+		}
+	}
+
 	writeJSON(w, http.StatusOK, course)
 }
 

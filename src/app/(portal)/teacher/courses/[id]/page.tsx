@@ -1,63 +1,55 @@
-import { notFound, redirect } from "next/navigation";
-import { auth } from "@/lib/auth";
-import { db } from "@/lib/db";
-import { getCourse } from "@/lib/courses";
-import { listTopicsByCourse, createTopic, deleteTopic, reorderTopics } from "@/lib/topics";
-import { listClassesByCourse } from "@/lib/classes";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { notFound } from "next/navigation";
+import { api, ApiError } from "@/lib/api-client";
+import { Card, CardContent } from "@/components/ui/card";
 import Link from "next/link";
 import { buttonVariants } from "@/components/ui/button";
-import { revalidatePath } from "next/cache";
+import { AddTopicForm } from "@/components/teacher/add-topic-form";
+import { DeleteTopicButton } from "@/components/teacher/delete-topic-button";
+
+interface Course {
+  id: string;
+  title: string;
+  gradeLevel: string;
+  language: string;
+  createdBy: string;
+}
+
+interface Topic {
+  id: string;
+  title: string;
+  description: string | null;
+}
+
+interface ClassItem {
+  id: string;
+  title: string;
+  term: string | null;
+  status: string;
+  courseId: string;
+  memberRole: string;
+}
 
 export default async function TeacherCourseDetailPage({
   params,
 }: {
   params: Promise<{ id: string }>;
 }) {
-  const session = await auth();
   const { id } = await params;
-  const course = await getCourse(db, id);
-  if (!course) notFound();
-  if (course.createdBy !== session!.user.id && !session!.user.isPlatformAdmin) notFound();
 
-  const [topicList, classList] = await Promise.all([
-    listTopicsByCourse(db, id),
-    listClassesByCourse(db, id),
+  let course: Course;
+  try {
+    course = await api<Course>(`/api/courses/${id}`);
+  } catch (e) {
+    if (e instanceof ApiError && (e.status === 404 || e.status === 403)) notFound();
+    throw e;
+  }
+
+  const [topicList, allClasses] = await Promise.all([
+    api<Topic[]>(`/api/courses/${id}/topics`),
+    api<ClassItem[]>("/api/classes/mine"),
   ]);
 
-  async function handleAddTopic(formData: FormData) {
-    "use server";
-    const { auth: getAuth } = await import("@/lib/auth");
-    const { db: database } = await import("@/lib/db");
-    const { getCourse: get } = await import("@/lib/courses");
-    const { createTopic: create } = await import("@/lib/topics");
-    const sess = await getAuth();
-    if (!sess?.user?.id) return;
-    const c = await get(database, id);
-    if (!c || (c.createdBy !== sess.user.id && !sess.user.isPlatformAdmin)) return;
-    const title = formData.get("title") as string;
-    if (!title) return;
-    await create(database, { courseId: id, title });
-    revalidatePath(`/teacher/courses/${id}`);
-  }
-
-  async function handleDeleteTopic(formData: FormData) {
-    "use server";
-    const { auth: getAuth } = await import("@/lib/auth");
-    const { db: database } = await import("@/lib/db");
-    const { getCourse: get } = await import("@/lib/courses");
-    const { deleteTopic: del } = await import("@/lib/topics");
-    const sess = await getAuth();
-    if (!sess?.user?.id) return;
-    const c = await get(database, id);
-    if (!c || (c.createdBy !== sess.user.id && !sess.user.isPlatformAdmin)) return;
-    const topicId = formData.get("topicId") as string;
-    if (!topicId) return;
-    await del(database, topicId);
-    revalidatePath(`/teacher/courses/${id}`);
-  }
+  const classList = allClasses.filter((c) => c.courseId === id);
 
   return (
     <div className="p-6 space-y-6">
@@ -78,10 +70,7 @@ export default async function TeacherCourseDetailPage({
         <div className="space-y-4">
           <h2 className="text-lg font-semibold">Topics ({topicList.length})</h2>
 
-          <form action={handleAddTopic} className="flex gap-2">
-            <Input name="title" placeholder="New topic title" required className="flex-1" />
-            <Button type="submit" size="sm">Add Topic</Button>
-          </form>
+          <AddTopicForm courseId={id} />
 
           {topicList.length === 0 ? (
             <p className="text-sm text-muted-foreground">No topics yet. Add your first topic above.</p>
@@ -96,10 +85,7 @@ export default async function TeacherCourseDetailPage({
                         <p className="text-sm text-muted-foreground mt-1">{topic.description}</p>
                       )}
                     </Link>
-                    <form action={handleDeleteTopic}>
-                      <input type="hidden" name="topicId" value={topic.id} />
-                      <Button type="submit" variant="ghost" size="sm" className="text-destructive">×</Button>
-                    </form>
+                    <DeleteTopicButton courseId={id} topicId={topic.id} />
                   </CardContent>
                 </Card>
               ))}

@@ -87,6 +87,7 @@ func (h *TopicHandler) CreateTopic(w http.ResponseWriter, r *http.Request) {
 }
 
 // ListTopics handles GET /api/courses/{courseId}/topics
+// Access: creator, platform admin, or a user with a class membership in the course.
 func (h *TopicHandler) ListTopics(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
@@ -95,6 +96,30 @@ func (h *TopicHandler) ListTopics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	courseID := chi.URLParam(r, "courseId")
+
+	if !claims.IsPlatformAdmin {
+		course, err := h.Courses.GetCourse(r.Context(), courseID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "Database error")
+			return
+		}
+		if course == nil {
+			writeError(w, http.StatusNotFound, "Not found")
+			return
+		}
+		if course.CreatedBy != claims.UserID {
+			hasAccess, err := h.Courses.UserHasAccessToCourse(r.Context(), courseID, claims.UserID)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "Database error")
+				return
+			}
+			if !hasAccess {
+				writeError(w, http.StatusForbidden, "Access denied")
+				return
+			}
+		}
+	}
+
 	topics, err := h.Topics.ListTopicsByCourse(r.Context(), courseID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")

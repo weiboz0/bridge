@@ -1,12 +1,17 @@
-import { auth } from "@/lib/auth";
-import { db } from "@/lib/db";
-import { listClassesByUser } from "@/lib/classes";
+import { api } from "@/lib/api-client";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import Link from "next/link";
 
+interface ClassItem {
+  id: string;
+  title: string;
+  term: string | null;
+  status: string;
+  memberRole: string;
+}
+
 export default async function StudentClassesPage() {
-  const session = await auth();
-  const classes = await listClassesByUser(db, session!.user.id);
+  const classes = await api<ClassItem[]>("/api/classes/mine");
   const myClasses = classes.filter((c) => c.memberRole === "student");
 
   return (

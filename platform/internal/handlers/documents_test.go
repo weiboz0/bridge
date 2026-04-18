@@ -18,13 +18,24 @@ func TestListDocuments_NoClaims(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
 }
 
-func TestListDocuments_MissingFilter(t *testing.T) {
+func TestListDocuments_MissingFilter_PlatformAdmin(t *testing.T) {
+	// Platform admins do not auto-scope, so omitting all filters is rejected.
 	h := &DocumentHandler{}
 	req := httptest.NewRequest(http.MethodGet, "/api/documents", nil)
-	req = withClaims(req, &auth.Claims{UserID: "user-1"})
+	req = withClaims(req, &auth.Claims{UserID: "admin-1", IsPlatformAdmin: true})
 	w := httptest.NewRecorder()
 	h.ListDocuments(w, req)
 	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestListDocuments_ForbiddenOtherUser(t *testing.T) {
+	// Non-admin cannot request another user's documents.
+	h := &DocumentHandler{}
+	req := httptest.NewRequest(http.MethodGet, "/api/documents?studentId=other-user", nil)
+	req = withClaims(req, &auth.Claims{UserID: "user-1"})
+	w := httptest.NewRecorder()
+	h.ListDocuments(w, req)
+	assert.Equal(t, http.StatusForbidden, w.Code)
 }
 
 func TestGetDocument_NoClaims(t *testing.T) {
