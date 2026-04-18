@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import type { Problem, TestCase, Attempt } from "@/app/(portal)/student/classes/[id]/problems/[problemId]/page";
 import { SectionLabel, Tag } from "@/components/design/primitives";
 import { ProblemDescription } from "@/components/problem/problem-description";
+import { TestCasesPanel } from "@/components/problem/test-cases-panel";
+import { InputsPanel, type InputSelection } from "@/components/problem/inputs-panel";
 import { CodeEditor } from "@/components/editor/code-editor";
 import { AttemptHeader } from "@/components/problem/attempt-header";
 import { useAutosaveAttempt } from "@/lib/problem/use-autosave-attempt";
@@ -17,14 +19,27 @@ interface Props {
   initialAttemptId: string | null;
 }
 
-export function ProblemShell({ problem, testCases, attempts: initialAttempts, initialAttemptId }: Props) {
-  // The attempts list grows as the user creates new ones. Order by updated_at
-  // DESC (server already sorted the initial page load).
+export function ProblemShell({
+  problem,
+  testCases: initialTestCases,
+  attempts: initialAttempts,
+  initialAttemptId,
+}: Props) {
   const [attempts, setAttempts] = useState<Attempt[]>(initialAttempts);
+  const [testCases, setTestCases] = useState<TestCase[]>(initialTestCases);
+
+  // Default input selection = first example case if one exists, else Custom.
+  const defaultSelection = useMemo<InputSelection>(() => {
+    const firstExample = initialTestCases.find((c) => c.ownerId === null && c.isExample);
+    return firstExample ? { kind: "case", caseId: firstExample.id } : { kind: "custom" };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const [selection, setSelection] = useState<InputSelection>(defaultSelection);
+  const [customStdin, setCustomStdin] = useState("");
 
   const initialAttempt = useMemo(
     () => attempts.find((a) => a.id === initialAttemptId) ?? null,
-    // only on first render — switching is handled via useAutosaveAttempt's setAttempt
+    // only on first render — switching is handled via useAutosaveAttempt.setAttempt
     // eslint-disable-next-line react-hooks/exhaustive-deps
     []
   );
@@ -36,8 +51,7 @@ export function ProblemShell({ problem, testCases, attempts: initialAttempts, in
     language: problem.language,
   });
 
-  // Keep the attempts list in sync with the active attempt's metadata
-  // (title changes, updated_at bumps from autosave).
+  // Keep the attempts list in sync with the active attempt's metadata.
   useEffect(() => {
     if (!attempt) return;
     setAttempts((prev) => {
@@ -53,22 +67,27 @@ export function ProblemShell({ problem, testCases, attempts: initialAttempts, in
     setAttempts((prev) => [created, ...prev]);
     setAttempt(created);
   }
-
   function handleRenamed(updated: Attempt) {
     setAttempts((prev) => prev.map((a) => (a.id === updated.id ? updated : a)));
     if (attempt?.id === updated.id) setAttempt(updated);
   }
 
-  // Editor remounts when the attempt ID changes so Monaco picks up new content.
   const editorKey = attempt?.id ?? "starter";
 
   return (
     <div className="flex h-[calc(100vh-var(--portal-header-height,56px))] overflow-hidden">
-      {/* LEFT — problem description + test cases */}
+      {/* LEFT — problem description + My Test Cases */}
       <aside className="flex w-[32%] min-w-[360px] flex-col border-r border-zinc-200 bg-white">
         <SectionLabel action={<Tag tone="zinc">Problem</Tag>}>Problem</SectionLabel>
-        <div className="flex-1 overflow-auto p-5">
-          <ProblemDescription problem={problem} testCases={testCases} />
+        <div className="flex-1 overflow-auto">
+          <div className="p-5">
+            <ProblemDescription problem={problem} testCases={testCases} />
+          </div>
+          <TestCasesPanel
+            problemId={problem.id}
+            testCases={testCases}
+            onCasesChange={setTestCases}
+          />
         </div>
       </aside>
 
@@ -97,12 +116,20 @@ export function ProblemShell({ problem, testCases, attempts: initialAttempts, in
         </div>
       </section>
 
-      {/* RIGHT — inputs + terminal (Tasks 7, 8) */}
+      {/* RIGHT — inputs + terminal */}
       <aside className="flex w-[28%] min-w-[320px] flex-col border-l border-zinc-200 bg-white">
         <SectionLabel>Inputs</SectionLabel>
-        <div className="p-4 text-sm text-zinc-500">Inputs picker coming in Task 7.</div>
+        <InputsPanel
+          testCases={testCases}
+          selection={selection}
+          customStdin={customStdin}
+          onSelectionChange={setSelection}
+          onCustomStdinChange={setCustomStdin}
+        />
         <SectionLabel>Terminal</SectionLabel>
-        <div className="flex-1 p-4 text-sm text-zinc-500">Run output coming in Task 8.</div>
+        <div className="flex-1 p-4 text-sm text-zinc-500">
+          Run output coming in Task 8.
+        </div>
       </aside>
     </div>
   );
@@ -117,9 +144,7 @@ function SaveIndicator({
 }) {
   const baseCls = "font-mono text-[11px] uppercase tracking-[0.18em] text-zinc-400";
   if (state === "error")
-    return (
-      <span className="font-mono text-[11px] text-rose-700">save failed</span>
-    );
+    return <span className="font-mono text-[11px] text-rose-700">save failed</span>;
   if (state === "saving") return <span className={baseCls}>saving…</span>;
   if (state === "pending") return <span className={baseCls}>unsaved</span>;
   if (!lastSavedAt) return <span className={baseCls}>not yet saved</span>;
