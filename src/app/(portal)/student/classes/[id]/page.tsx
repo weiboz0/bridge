@@ -25,6 +25,12 @@ interface TopicItem {
   lessonContent: string;
 }
 
+interface ProblemItem {
+  id: string;
+  title: string;
+  language: string;
+}
+
 interface SessionItem {
   id: string;
   status: string;
@@ -53,6 +59,15 @@ export default async function StudentClassDetailPage({
   ]);
 
   const activeSession = sessions.find((s) => s.status === "active");
+
+  // Fetch problems per topic. Empty-or-error => empty list for that topic.
+  const problemsByTopic = new Map<string, ProblemItem[]>();
+  await Promise.all(
+    topics.map(async (t) => {
+      const list = await api<ProblemItem[]>(`/api/topics/${t.id}/problems`).catch(() => []);
+      problemsByTopic.set(t.id, list);
+    })
+  );
 
   return (
     <div className="p-6 space-y-6">
@@ -93,6 +108,7 @@ export default async function StudentClassDetailPage({
           <h2 className="text-lg font-semibold">Topics</h2>
           {topics.map((topic, i) => {
             const content = parseLessonContent(topic.lessonContent);
+            const problems = problemsByTopic.get(topic.id) ?? [];
             return (
               <Card key={topic.id}>
                 <CardHeader>
@@ -104,6 +120,27 @@ export default async function StudentClassDetailPage({
                 {content.blocks.length > 0 && (
                   <CardContent>
                     <LessonRenderer content={content} />
+                  </CardContent>
+                )}
+                {problems.length > 0 && (
+                  <CardContent className="border-t pt-3">
+                    <p className="mb-2 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+                      Problems · {problems.length}
+                    </p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {problems.map((p) => (
+                        <Link
+                          key={p.id}
+                          href={`/student/classes/${id}/problems/${p.id}`}
+                          className="inline-flex items-center gap-1.5 rounded-md border border-zinc-200 bg-white px-2.5 py-1 text-sm hover:border-amber-400 hover:text-amber-800"
+                        >
+                          <span className="font-medium tracking-tight">{p.title}</span>
+                          <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
+                            {p.language}
+                          </span>
+                        </Link>
+                      ))}
+                    </div>
                   </CardContent>
                 )}
               </Card>
