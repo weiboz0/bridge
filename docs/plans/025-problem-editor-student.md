@@ -467,4 +467,25 @@ Existing `use-pyodide.test.ts` and `output-panel.test.tsx` still pass after the 
 
 ### Code review
 
-Log captured in the `## Code Review` section below, updated after the reviewer pass.
+See `## Code Review` below.
+
+## Code Review
+
+### Review 1 — self-review
+
+- **Date**: 2026-04-18
+- **Reviewer**: Claude (self-review in-session — no reviewer agent dispatched)
+
+**Must Fix**
+
+1. `[FIXED]` Autosave stomp bug. After `await fetch()` the hook unconditionally wrote `attemptRef.current = updated`. If the user switched attempts during the in-flight save, the PATCH response for the *old* attempt would overwrite the *new* active attempt in local state — visually reverting the editor to the old code.
+   → Added guards around the state-write paths (`attemptRef.current?.id === updated.id` for PATCH, `attemptRef.current === null` for POST). The save still persists to the server correctly; we just don't mirror it into React state when it's no longer the active view. New regression test "does not stomp the active attempt when the user switches mid-save" passes. Fixed in `d0fc251`.
+
+**Should Fix**
+
+None. The scoped deferrals (E2E spec, Yjs on attempts, JS Run) are documented above.
+
+**Nice to Have**
+
+2. `[WONTFIX]` `useMemo(() => ..., [])` with an empty dep array is used to snapshot the initial attempt exactly once; eslint-disable is explicit. An `initialAttempt` prop + `key` prop on the shell would be idiomatic but requires coordination from the page-level server component — not worth the churn now.
+3. `[WONTFIX]` No component test for the Shell end-to-end (only per-component tests + the autosave hook test). The integration flavor is covered by the hook + switcher + editor tests in aggregate.
