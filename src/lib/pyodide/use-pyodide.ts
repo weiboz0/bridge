@@ -7,7 +7,7 @@ interface UsePyodideReturn {
   ready: boolean;
   running: boolean;
   output: OutputLine[];
-  runCode: (code: string) => void;
+  runCode: (code: string, options?: { stdin?: string }) => void;
   clearOutput: () => void;
 }
 
@@ -51,13 +51,16 @@ export function usePyodide(): UsePyodideReturn {
     };
   }, []);
 
-  const runCode = useCallback((code: string) => {
-    if (!workerRef.current || !ready) return;
-    setRunning(true);
-    setOutput([]);
-    const id = crypto.randomUUID();
-    workerRef.current.postMessage({ type: "run", code, id });
-  }, [ready]);
+  const runCode = useCallback(
+    (code: string, options?: { stdin?: string }) => {
+      if (!workerRef.current || !ready) return;
+      setRunning(true);
+      setOutput([]);
+      const id = crypto.randomUUID();
+      workerRef.current.postMessage({ type: "run", code, id, stdin: options?.stdin });
+    },
+    [ready]
+  );
 
   const clearOutput = useCallback(() => {
     setOutput([]);

@@ -5,10 +5,13 @@ import type { Problem, TestCase, Attempt } from "@/app/(portal)/student/classes/
 import { SectionLabel, Tag } from "@/components/design/primitives";
 import { ProblemDescription } from "@/components/problem/problem-description";
 import { TestCasesPanel } from "@/components/problem/test-cases-panel";
-import { InputsPanel, type InputSelection } from "@/components/problem/inputs-panel";
+import { InputsPanel, selectionStdin, type InputSelection } from "@/components/problem/inputs-panel";
 import { CodeEditor } from "@/components/editor/code-editor";
+import { OutputPanel } from "@/components/editor/output-panel";
 import { AttemptHeader } from "@/components/problem/attempt-header";
 import { useAutosaveAttempt } from "@/lib/problem/use-autosave-attempt";
+import { usePyodide } from "@/lib/pyodide/use-pyodide";
+import { Button } from "@/components/ui/button";
 
 interface Props {
   classId: string;
@@ -50,6 +53,18 @@ export function ProblemShell({
     starterCode: problem.starterCode ?? "",
     language: problem.language,
   });
+
+  const pyodide = usePyodide();
+
+  function handleRun() {
+    // Python only for now. Other languages surface a message in the terminal.
+    if (problem.language !== "python") {
+      console.warn(`Run in the browser is Python-only for now; got ${problem.language}`);
+      return;
+    }
+    const stdin = selectionStdin(selection, testCases, customStdin);
+    pyodide.runCode(code, { stdin });
+  }
 
   // Keep the attempts list in sync with the active attempt's metadata.
   useEffect(() => {
@@ -105,6 +120,26 @@ export function ProblemShell({
           flushPending={flush}
           language={problem.language}
           saveIndicator={<SaveIndicator state={saveState} lastSavedAt={lastSavedAt} />}
+          runButton={
+            <Button
+              size="sm"
+              className="bg-amber-600 text-white hover:bg-amber-700"
+              disabled={!pyodide.ready || pyodide.running || problem.language !== "python"}
+              onClick={handleRun}
+              title={
+                problem.language !== "python"
+                  ? "Run in the browser is Python-only for v1"
+                  : !pyodide.ready
+                    ? "Python runtime loading…"
+                    : undefined
+              }
+            >
+              <svg viewBox="0 0 10 10" className="size-2.5">
+                <path fill="currentColor" d="M2 1l6 4-6 4z" />
+              </svg>
+              {pyodide.running ? "Running…" : "Run"}
+            </Button>
+          }
         />
         <div className="min-h-0 flex-1 p-3">
           <CodeEditor
@@ -126,9 +161,22 @@ export function ProblemShell({
           onSelectionChange={setSelection}
           onCustomStdinChange={setCustomStdin}
         />
-        <SectionLabel>Terminal</SectionLabel>
-        <div className="flex-1 p-4 text-sm text-zinc-500">
-          Run output coming in Task 8.
+        <SectionLabel
+          action={
+            pyodide.output.length > 0 ? (
+              <button
+                onClick={pyodide.clearOutput}
+                className="rounded px-1 font-mono text-[10px] uppercase tracking-[0.16em] text-zinc-400 hover:text-zinc-800"
+              >
+                clear
+              </button>
+            ) : null
+          }
+        >
+          Terminal
+        </SectionLabel>
+        <div className="min-h-0 flex-1 p-3">
+          <OutputPanel output={pyodide.output} running={pyodide.running} />
         </div>
       </aside>
     </div>

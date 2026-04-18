@@ -21,6 +21,7 @@ interface Props {
   flushPending: () => Promise<void>;
   language: string;
   saveIndicator: React.ReactNode;
+  runButton: React.ReactNode;
 }
 
 export function AttemptHeader({
@@ -35,6 +36,7 @@ export function AttemptHeader({
   flushPending,
   language,
   saveIndicator,
+  runButton,
 }: Props) {
   const [creating, setCreating] = useState(false);
   const [renaming, setRenaming] = useState(false);
@@ -100,6 +102,7 @@ export function AttemptHeader({
           <span className="font-mono text-[11px]">+</span>
           {creating ? "…" : "New attempt"}
         </Button>
+        {runButton}
       </div>
 
       {error && <span className="ml-2 text-xs text-rose-700">{error}</span>}
