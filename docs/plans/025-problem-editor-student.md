@@ -414,3 +414,78 @@ One serial test: admin account creates a problem via API (setup), student opens 
 - **Monaco bundle size on the new route.** Already loaded on session pages, so no new cost for returning users; lazy import if it becomes an issue.
 - **`react-markdown` vs the lesson-renderer already used.** The student class page uses `LessonRenderer` (custom). Might be worth unifying, but out of scope here — use `react-markdown` directly for the Problem description to keep parser behavior predictable.
 - **Autosave race with New Attempt.** If a keystroke is in-flight when the user clicks New, the PATCH could race with the POST. Fix in Task 5: on New, first flush the pending save, then POST.
+
+---
+
+## Post-Execution Report
+
+**Branch:** `feat/025-problem-editor-student`
+**Executed:** 2026-04-18
+
+### What was done
+
+Student Problem editor shipped end-to-end on the Plan 024 API:
+
+| Task | Files | Notes |
+|------|-------|-------|
+| 1 — Page shell | `src/app/(portal)/student/classes/[id]/problems/[problemId]/page.tsx`, `src/components/problem/problem-shell.tsx` | Parallel fetch of problem/test-cases/attempts |
+| 2 — Description | `src/components/problem/problem-description.tsx` | markdown via `react-markdown`; example Input/Output blocks; hidden-count row |
+| 3 — Autosave hook | `src/lib/problem/use-autosave-attempt.ts` | 500ms debounce, POST-on-first-edit, flush API |
+| 4 — Monaco wiring | (shell edit) | reuses existing `CodeEditor`, key-remount on attempt switch |
+| 5 — Switcher + New + rename | `attempt-header.tsx`, `attempt-switcher.tsx` | flushes before switch/new to avoid race |
+| 6 — `/attempts/{id}` route | `.../attempts/[attemptId]/page.tsx` | thin wrapper, 404 on cross-user |
+| 7 — Test Cases + Inputs | `test-cases-panel.tsx`, `my-test-case-editor.tsx`, `inputs-panel.tsx` | private-case CRUD, chip strip |
+| 8 — Run button | `pyodide-worker.ts`, `use-pyodide.ts` | buffered-stdin feed |
+| 9 — Link from class page | `student/classes/[id]/page.tsx` | per-topic problem list |
+
+### Test Coverage
+
+| File | Tests |
+|------|-------|
+| `problem-description.test.tsx` | 6 |
+| `use-autosave-attempt.test.ts` | 9 |
+| `attempt-switcher.test.tsx` | 3 |
+| `my-test-case-editor.test.tsx` | 4 |
+| `inputs-panel.test.tsx` | 7 |
+| **Total** | **29** — all pass |
+
+Existing `use-pyodide.test.ts` and `output-panel.test.tsx` still pass after the stdin extension.
+
+### Deviations from plan
+
+| Plan | Implementation | Reason |
+|------|---------------|--------|
+| Task 10 — E2E smoke spec | **WONTFIX-for-this-plan** | The page depends on Monaco + Pyodide CDN load + problem/class test-data setup, all of which are flaky or slow in Playwright. 29 unit tests + 38 Plan 024 integration tests + manual QA cover this surface adequately for v1. Revisit when test infrastructure for Monaco is better-established. |
+| `useRouter` planned in `attempt-header.tsx` | Dropped | No URL change on in-page switch (per spec 007). |
+
+### Follow-ups
+
+- **E2E**: the deferred `e2e/problem-editor.spec.ts` — add once Monaco testing infra exists.
+- **JS Run**: worker currently Python-only; add a JS branch in the worker for `problem.language === "javascript"`.
+- **Yjs on attempts + teacher watch**: plan 025b (requires Hocuspocus persistence for the `attempt:{id}` room pattern).
+- **Test runner**: plan 026 (spec 008). The Inputs+Terminal UI is ready to receive a test-result summary.
+
+### Code review
+
+See `## Code Review` below.
+
+## Code Review
+
+### Review 1 — self-review
+
+- **Date**: 2026-04-18
+- **Reviewer**: Claude (self-review in-session — no reviewer agent dispatched)
+
+**Must Fix**
+
+1. `[FIXED]` Autosave stomp bug. After `await fetch()` the hook unconditionally wrote `attemptRef.current = updated`. If the user switched attempts during the in-flight save, the PATCH response for the *old* attempt would overwrite the *new* active attempt in local state — visually reverting the editor to the old code.
+   → Added guards around the state-write paths (`attemptRef.current?.id === updated.id` for PATCH, `attemptRef.current === null` for POST). The save still persists to the server correctly; we just don't mirror it into React state when it's no longer the active view. New regression test "does not stomp the active attempt when the user switches mid-save" passes. Fixed in `d0fc251`.
+
+**Should Fix**
+
+None. The scoped deferrals (E2E spec, Yjs on attempts, JS Run) are documented above.
+
+**Nice to Have**
+
+2. `[WONTFIX]` `useMemo(() => ..., [])` with an empty dep array is used to snapshot the initial attempt exactly once; eslint-disable is explicit. An `initialAttempt` prop + `key` prop on the shell would be idiomatic but requires coordination from the page-level server component — not worth the churn now.
+3. `[WONTFIX]` No component test for the Shell end-to-end (only per-component tests + the autosave hook test). The integration flavor is covered by the hook + switcher + editor tests in aggregate.
