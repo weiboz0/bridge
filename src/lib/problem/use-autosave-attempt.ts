@@ -77,9 +77,12 @@ export function useAutosaveAttempt({
     pendingRef.current = null;
 
     setSaveState("saving");
+    // Capture the target attempt at entry. If the user switches or creates a
+    // new attempt during the await, `attemptRef.current` will change — we must
+    // NOT write the save result onto the now-active attempt.
+    const targetAtEntry = attemptRef.current;
     try {
-      const current = attemptRef.current;
-      if (!current) {
+      if (!targetAtEntry) {
         const res = await fetch(`/api/problems/${problemIdRef.current}/attempts`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -87,20 +90,28 @@ export function useAutosaveAttempt({
         });
         if (!res.ok) throw new Error(`create failed: ${res.status}`);
         const created = (await res.json()) as Attempt;
-        attemptRef.current = created;
-        setAttemptState(created);
-        setLastSavedAt(new Date(created.updatedAt));
+        // Only promote the created attempt to "active" if nothing else did.
+        if (attemptRef.current === null) {
+          attemptRef.current = created;
+          setAttemptState(created);
+          setLastSavedAt(new Date(created.updatedAt));
+        }
       } else {
-        const res = await fetch(`/api/attempts/${current.id}`, {
+        const res = await fetch(`/api/attempts/${targetAtEntry.id}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ plainText: toSave.code }),
         });
         if (!res.ok) throw new Error(`update failed: ${res.status}`);
         const updated = (await res.json()) as Attempt;
-        attemptRef.current = updated;
-        setAttemptState(updated);
-        setLastSavedAt(new Date(updated.updatedAt));
+        // Only mirror the updated row into state if the user is still viewing
+        // this attempt. Otherwise the PATCH has persisted correctly and the
+        // active attempt stays pointed at whatever the user switched to.
+        if (attemptRef.current?.id === updated.id) {
+          attemptRef.current = updated;
+          setAttemptState(updated);
+          setLastSavedAt(new Date(updated.updatedAt));
+        }
       }
       setSaveState("idle");
     } catch (err) {

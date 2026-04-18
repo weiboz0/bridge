@@ -223,6 +223,60 @@ describe("useAutosaveAttempt", () => {
     expect(result.current.code).toBe("second");
   });
 
+  it("does not stomp the active attempt when the user switches mid-save", async () => {
+    // Regression for a race: if a PATCH is in flight and the user switches
+    // attempts before the response arrives, the save's setAttemptState must
+    // NOT overwrite the newly-active attempt.
+    const fetchMock = vi.mocked(fetch);
+
+    const a1 = makeAttempt({ id: "a1", plainText: "v1" });
+    // Build a deferred response for the PATCH so we can control its timing.
+    let resolvePatch!: (v: Response) => void;
+    const patchPromise = new Promise<Response>((r) => { resolvePatch = r; });
+    fetchMock.mockReturnValueOnce(patchPromise);
+
+    const { result } = renderHook(() =>
+      useAutosaveAttempt({
+        problemId: "p1",
+        initialAttempt: a1,
+        starterCode: "",
+        language: "python",
+        debounceMs: 50,
+      })
+    );
+
+    // Edit → queues save for a1.
+    act(() => { result.current.setCode("v1-edited"); });
+    await act(async () => {
+      vi.advanceTimersByTime(50);
+      await Promise.resolve();
+    });
+    // Save is in flight (awaiting our deferred response).
+
+    // User switches to a different attempt while PATCH is in flight.
+    const a2 = makeAttempt({
+      id: "a2",
+      plainText: "second attempt",
+      updatedAt: new Date(Date.now() + 1000).toISOString(),
+    });
+    act(() => { result.current.setAttempt(a2); });
+    expect(result.current.attempt?.id).toBe("a2");
+
+    // PATCH response arrives (points at a1).
+    await act(async () => {
+      resolvePatch(
+        new Response(JSON.stringify({ ...a1, plainText: "v1-edited" }), { status: 200 })
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // The active attempt must still be a2. The PATCH landed in the DB (correct)
+    // but did not stomp the local state.
+    expect(result.current.attempt?.id).toBe("a2");
+    expect(result.current.code).toBe("second attempt");
+  });
+
   it("flush immediately saves any pending edit", async () => {
     const fetchMock = vi.mocked(fetch);
     fetchMock.mockResolvedValueOnce(
