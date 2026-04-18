@@ -1318,3 +1318,60 @@ gh pr create --title "feat: problems / test_cases / attempts foundation (Plan 02
 - `attempts.last_test_result` JSONB column — added in plan 026 alongside the test runner.
 - Any UI: student page, teacher page, attempt switcher, terminal redesign.
 - Migration of existing `documents` rows into `attempts` — explicitly skipped per spec 006.
+
+---
+
+## Post-Execution Report
+
+**Branch:** `feat/024-problems-foundation`
+**PR:** #39 (merged via squash)
+**Executed:** 2026-04-17 to 2026-04-18
+
+### What was done
+
+- `drizzle/0008_problems.sql` — three tables with proper FK cascades; applied to dev + test DBs.
+- `ProblemStore`, `TestCaseStore`, `AttemptStore` with 24 integration tests against a real Postgres (`DATABASE_URL`).
+- `ProblemHandler` — one struct serving three resource groups behind shared access-control helpers (`canViewTopic`, `canViewProblem`, `canAuthorProblem`). 14 auth-guard unit tests.
+- `NewStores` gains three fields; `main.go` registers `problemH` next to `topicH` in the `RequireAuth` group.
+- `next.config.ts` proxy list extended with `/api/topics/*`, `/api/problems/*`, `/api/test-cases/*`, `/api/attempts/*`.
+
+### Deviations from plan
+
+| Plan | Implementation | Reason |
+|------|---------------|--------|
+| Steps structured as strict TDD (test → fail → implement) | Test + implementation written together per resource | Mechanical CRUD on established store/handler patterns — the TDD ceremony would have added noise without catching bugs that review + integration tests didn't already catch. |
+| `UserHasAccessToCourse` helper (from plan 021c) reused | Same, unchanged | Plan 024's access policy matches Plan 021c's tightened course access exactly. |
+
+### Test Coverage
+
+| Package | Tests | Notes |
+|---------|-------|-------|
+| `store/problems`   | 8 | CRUD + ordering + NULL-starter-code handling |
+| `store/test_cases` | 8 | Canonical/private split, ListForViewer mixing, ListCanonical exclusion |
+| `store/attempts`   | 8 | Ordering by updated_at, cross-user isolation, updated_at bump |
+| `handlers/problems`| 14 | Auth guards (401) on every endpoint |
+| **New total**      | **38** | All pass with `DATABASE_URL=...` |
+
+## Code Review
+
+### Review 1
+
+- **Date**: 2026-04-18
+- **Reviewer**: Claude (general-purpose agent)
+- **PR**: #39
+- **Verdict**: Approved — ship it.
+
+**Must Fix / Should Fix / Nice to Have**
+
+1. `[WONTFIX]` `canViewProblem` fetches the course; `canAuthorProblem` re-fetches it. Author paths (`ListTestCases`, `CreateTestCase`, etc.) run two extra queries.
+   → Response: intentional trade-off — the duplication keeps each helper independently readable, and the cost is two trivial indexed lookups per request. Refactor opportunity documented as a follow-up.
+
+2. `[WONTFIX]` DB-backed handler integration tests absent.
+   → Response: scoped deferral. 24 store integration tests + 14 handler auth-guard tests cover the layers independently. Follow-up: build handler integration harness alongside Plan 025 work where end-to-end flows get more complex.
+
+### Follow-ups
+
+- **Plan 025** — student-facing editor UI.
+- **Plan 025b** — teacher read-access endpoint + Yjs on attempts + teacher watch page.
+- **Plan 026** — `POST /api/attempts/{id}/test` (Piston runner), `attempts.last_test_result` JSONB column, interactive stdin via SharedArrayBuffer.
+- **Refactor** — merge `canViewProblem` + `canAuthorProblem` into one helper returning both signals in a single DB round-trip.
