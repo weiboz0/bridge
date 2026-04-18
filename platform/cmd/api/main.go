@@ -127,6 +127,15 @@ func main() {
 		topicH := &handlers.TopicHandler{Topics: stores.Topics, Courses: stores.Courses, Orgs: stores.Orgs}
 		topicH.Routes(r)
 
+		problemH := &handlers.ProblemHandler{
+			Problems:  stores.Problems,
+			TestCases: stores.TestCases,
+			Attempts:  stores.Attempts,
+			Topics:    stores.Topics,
+			Courses:   stores.Courses,
+		}
+		problemH.Routes(r)
+
 		classH := &handlers.ClassHandler{Classes: stores.Classes, Orgs: stores.Orgs, Users: stores.Users}
 		classH.Routes(r)
 

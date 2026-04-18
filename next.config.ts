@@ -23,6 +23,10 @@ const GO_PROXY_ROUTES = [
   "/api/teacher/:path*",
   "/api/org/:path*",
   "/api/schedule/:path*",
+  "/api/topics/:path*",
+  "/api/problems/:path*",
+  "/api/test-cases/:path*",
+  "/api/attempts/:path*",
 ];
 
 const nextConfig: NextConfig = {
