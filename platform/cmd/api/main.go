@@ -183,6 +183,14 @@ func main() {
 		teacherH := &handlers.TeacherHandler{Courses: stores.Courses, Classes: stores.Classes, Orgs: stores.Orgs}
 		teacherH.Routes(r)
 
+		teacherProblemH := &handlers.TeacherProblemHandler{
+			Problems: stores.Problems,
+			Topics:   stores.Topics,
+			Classes:  stores.Classes,
+			Attempts: stores.Attempts,
+		}
+		teacherProblemH.Routes(r)
+
 		orgDashH := &handlers.OrgDashboardHandler{Orgs: stores.Orgs, Courses: stores.Courses, Classes: stores.Classes, Stats: stores.Stats}
 		orgDashH.Routes(r)
 

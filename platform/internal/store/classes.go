@@ -374,6 +374,25 @@ func (s *ClassStore) RemoveClassMember(ctx context.Context, membershipID string)
 	return &m, nil
 }
 
+// TeacherCanViewStudentInCourse reports true when the caller is an instructor
+// of a class whose course is `courseID` AND the given student is a member of
+// the same class. Used to gate teacher access to a student's attempts (and
+// later, the live-watch Yjs room).
+func (s *ClassStore) TeacherCanViewStudentInCourse(ctx context.Context, teacherID, studentID, courseID string) (bool, error) {
+	var exists bool
+	err := s.db.QueryRowContext(ctx,
+		`SELECT EXISTS (
+			SELECT 1
+			FROM class_memberships cm_t
+			INNER JOIN class_memberships cm_s ON cm_s.class_id = cm_t.class_id
+			INNER JOIN classes c ON c.id = cm_t.class_id
+			WHERE cm_t.user_id = $1 AND cm_t.role = 'instructor'
+			  AND cm_s.user_id = $2
+			  AND c.course_id = $3
+		)`, teacherID, studentID, courseID).Scan(&exists)
+	return exists, err
+}
+
 // JoinResult is returned by JoinClassByCode.
 type JoinResult struct {
 	Class      *Class           `json:"class"`
