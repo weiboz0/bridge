@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import type { Problem, TestCase, Attempt } from "@/app/(portal)/student/classes/[id]/problems/[problemId]/page";
 import { SectionLabel, Tag } from "@/components/design/primitives";
+import { ProblemDescription } from "@/components/problem/problem-description";
 
 interface Props {
   classId: string;
@@ -29,10 +30,7 @@ export function ProblemShell({ problem, testCases, attempts, initialAttemptId }:
       <aside className="flex w-[32%] min-w-[360px] flex-col border-r border-zinc-200 bg-white">
         <SectionLabel action={<Tag tone="zinc">Problem</Tag>}>Problem</SectionLabel>
         <div className="flex-1 overflow-auto p-5">
-          <h1 className="text-lg font-semibold tracking-tight">{problem.title}</h1>
-          <p className="mt-2 text-sm text-zinc-500">
-            {testCases.length} test case{testCases.length === 1 ? "" : "s"} visible.
-          </p>
+          <ProblemDescription problem={problem} testCases={testCases} />
         </div>
       </aside>
 
