@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -99,11 +100,11 @@ func (h *AttemptTestHandler) RunTest(w http.ResponseWriter, r *http.Request) {
 	summary := h.executeCases(r.Context(), a.Language, a.PlainText, cases)
 
 	// Persist (best-effort — a write failure shouldn't fail the response).
+	// Log-and-continue so persistence misses are observable in ops without
+	// surfacing as a 5xx to the student, who has already seen their result.
 	if blob, err := json.Marshal(summary); err == nil {
 		if err := h.Attempts.UpdateLastTestResult(r.Context(), attemptID, blob); err != nil {
-			// Log via writeError is overkill for a non-fatal persistence miss.
-			// Fall through and return the summary anyway.
-			_ = err
+			slog.Warn("failed to persist test result", "attemptId", attemptID, "err", err)
 		}
 	}
 
@@ -175,18 +176,22 @@ func (h *AttemptTestHandler) RunCaseDiff(w http.ResponseWriter, r *http.Request)
 // executeCases runs every canonical case in parallel under the per-case + total
 // budgets and returns a summary suitable for JSON encoding.
 func (h *AttemptTestHandler) executeCases(parent context.Context, language, code string, cases []store.TestCase) runSummary {
-	ctx, cancel := context.WithTimeout(parent, totalBudget)
-	defer cancel()
+	// totalCtx tracks the wallclock budget. We check its Err() separately
+	// from the per-case context so we can distinguish "whole test run ran out
+	// of time" (remaining and in-flight cases are 'skipped') from "this
+	// single case hit its 3s cap" ('timeout').
+	totalCtx, cancelTotal := context.WithTimeout(parent, totalBudget)
+	defer cancelTotal()
 
 	results := make([]caseResult, len(cases))
-	g, gctx := errgroup.WithContext(ctx)
+	g, gctx := errgroup.WithContext(totalCtx)
 	g.SetLimit(parallelism)
 
 	var mu sync.Mutex
 	for i, tc := range cases {
 		i, tc := i, tc
 		g.Go(func() error {
-			// Skipped if the parent budget already expired before we got a slot.
+			// Total budget already expired before we got a worker slot.
 			if gctx.Err() != nil {
 				mu.Lock()
 				results[i] = caseResult{CaseID: tc.ID, IsExample: tc.IsExample, Status: "skipped"}
@@ -202,9 +207,15 @@ func (h *AttemptTestHandler) executeCases(parent context.Context, language, code
 
 			r := caseResult{CaseID: tc.ID, IsExample: tc.IsExample, DurationMs: dur}
 			if err != nil {
-				if caseCtx.Err() == context.DeadlineExceeded {
+				// Classify: total-budget exhaustion beats per-case. If the
+				// overall run ran out, mark 'skipped' rather than pretending
+				// each straggler hit its own 3s cap.
+				switch {
+				case totalCtx.Err() == context.DeadlineExceeded:
+					r.Status = "skipped"
+				case caseCtx.Err() == context.DeadlineExceeded:
 					r.Status = "timeout"
-				} else {
+				default:
 					r.Status = "fail"
 					r.Reason = "execution_error"
 				}

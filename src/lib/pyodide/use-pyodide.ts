@@ -35,8 +35,19 @@ export function usePyodide(): UsePyodideReturn {
     const buf = sabBufRef.current;
     if (!control || !buf) return; // SAB not available — legacy path will be used by the worker
     const bytes = new TextEncoder().encode(line);
-    if (bytes.length > buf.length) {
-      console.warn("[pyodide] stdin line exceeds SAB buffer; truncating");
+    const overflowed = bytes.length > buf.length;
+    if (overflowed) {
+      // Surface the truncation to the terminal — silent corruption of a
+      // student's input is confusing. Truncate at a byte boundary; a partial
+      // multi-byte sequence will decode as U+FFFD on the worker side, which
+      // is ugly but at least visible.
+      setOutput((prev) => [
+        ...prev,
+        {
+          type: "stderr",
+          text: `[stdin line truncated to ${buf.length} bytes (was ${bytes.length})]\n`,
+        },
+      ]);
     }
     const writeLen = Math.min(bytes.length, buf.length);
     buf.set(bytes.subarray(0, writeLen));

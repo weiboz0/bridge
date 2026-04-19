@@ -148,6 +148,71 @@ func TestExecuteCases_TimeoutMarksTimeout(t *testing.T) {
 	assert.Equal(t, "timeout", s.Cases[0].Status)
 }
 
+// Total-budget exhaustion must mark in-flight stragglers 'skipped', not
+// 'timeout'. Regression for the case-classification bug caught in code
+// review of plan 026.
+func TestExecuteCases_TotalBudgetExhaustion_MarksSkipped(t *testing.T) {
+	// Temporarily shrink the total budget so this test doesn't have to wait
+	// 12 seconds. (parallelism stays 4 — 5 cases each 2.5s on a 4s total
+	// budget: 4 run, the 5th can't even start; some of the 4 may not finish.)
+	origTotal := totalBudget
+	origPerCase := perCaseTimeout
+	defer func() {
+		// NOTE: vars are const; can't restore. Guard at function level via
+		// overrides inside the handler test isn't set up. Instead, we pick
+		// timings relative to the existing constants so the test remains
+		// valid if they change.
+		_ = origTotal
+		_ = origPerCase
+	}()
+
+	// We need: per-case > total / parallelism so the first batch can't
+	// finish before total expires. perCaseTimeout=3s, totalBudget=12s,
+	// parallelism=4 → 4 cases in parallel each sleeping ~2.8s finish just
+	// before total expires. Add 1 more that gets stuck behind.
+	// Use a stub that sleeps almost perCaseTimeout before returning.
+	sleepDur := perCaseTimeout - 200*time.Millisecond // 2.8s
+	h := &AttemptTestHandler{Piston: &stubPiston{
+		respond: func(_, _, _ string) (*sandbox.PistonExecuteResponse, error) {
+			time.Sleep(sleepDur)
+			return makeStubResp("done"), nil
+		},
+	}}
+	// 5 cases at parallelism=4 means one waits. With 4 running near-simultaneously
+	// for ~2.8s each, the 5th starts after the first finishes at ~2.8s.
+	// It needs another 2.8s → would finish at 5.6s. Total budget 12s, so
+	// normally all finish. To force budget exhaustion, run 10 cases:
+	// 10 * 2.8s / 4 parallelism = 7s (best case); with overhead, should finish
+	// but we can't count on it. Better: override totalBudget via a shorter
+	// parent context passed in.
+	parent, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+	cases := make([]store.TestCase, 8)
+	for i := range cases {
+		cases[i] = caseFor("c"+string(rune('0'+i)), "x", ptrStr("done"), i%2 == 0)
+	}
+	s := h.executeCases(parent, "python", "code", cases)
+
+	// After 1s parent context expires: the first 4 cases still have 1.8s to
+	// go so they get cancelled → skipped (since totalCtx derives from parent
+	// AND wraps in its own totalBudget; parent expires first). The remaining
+	// 4 never get a worker slot so they're skipped too.
+	skipped := 0
+	for _, r := range s.Cases {
+		if r.Status == "skipped" {
+			skipped++
+		}
+	}
+	assert.GreaterOrEqual(t, skipped, 4, "at least 4 cases should be marked skipped when parent ctx expires")
+	// And NOT marked timeout: timeout requires caseCtx.Err() && !totalCtx.Err()
+	// which doesn't happen when the parent blew the lid off.
+	for _, r := range s.Cases {
+		if r.Status == "timeout" {
+			t.Errorf("case %s marked timeout but parent ctx was exhausted → expected skipped", r.CaseID)
+		}
+	}
+}
+
 func TestExecuteCases_PersistsValidJSON(t *testing.T) {
 	h := &AttemptTestHandler{Piston: &stubPiston{
 		respond: func(_, _, stdin string) (*sandbox.PistonExecuteResponse, error) {

@@ -342,4 +342,34 @@ Existing `output-panel.test.tsx` + `use-pyodide.test.ts` still pass after the SA
 
 ## Code Review
 
-(To be added after the reviewer pass / self-review.)
+### Review 1
+
+- **Date**: 2026-04-19
+- **Reviewer**: Claude (general-purpose agent)
+- **PR**: #44
+- **Verdict**: Changes requested (1 critical, 1 important, 1 minor)
+
+**Must Fix**
+
+1. `[FIXED]` `executeCases` mis-classified cases when the total budget expired — they were marked `"timeout"` (because per-case `caseCtx.Err() == DeadlineExceeded` triggered first) instead of `"skipped"` per spec 008.
+   → Reordered the classification switch so `totalCtx.Err() == DeadlineExceeded` wins over `caseCtx.Err()`. Total-budget exhaustion now correctly marks in-flight stragglers and not-yet-started cases as `skipped`. Added `TestExecuteCases_TotalBudgetExhaustion_MarksSkipped` — 1s parent deadline + 8 cases each sleeping 2.8s; at least 4 end up `skipped`, none `timeout`.
+
+**Should Fix**
+
+2. `[FIXED]` SAB stdin silently truncated lines > 64KB with only a `console.warn`.
+   → `writeStdinLine` in `use-pyodide.ts` now emits a visible stderr `OutputLine` `[stdin line truncated to N bytes (was M)]` so the student sees what happened. Still truncates to fit SAB.
+
+**Nice to Have**
+
+3. `[FIXED]` `UpdateLastTestResult` DB-write failure was invisible (`_ = err` with no log).
+   → Replaced with `slog.Warn("failed to persist test result", ...)` so ops can observe persistence misses without 5xx-ing the student.
+
+**Clean confirmations (per-item from the review checklist)**
+
+- SAB memory ordering — sequential consistency on the control word; length is written before state=1, worker reads length after wait returns.
+- Awareness subscription cleanup — effect deps `[provider]`, re-runs on provider swap, `aware.off(sync)` fires on the old provider.
+- Student broadcast timing — React 18 batches settle `output` before the `running: true→false` transition effect runs.
+- Teacher `canDiff=false` wiring — confirmed.
+- `UpdateLastTestResult` does not bump `updated_at` — SQL omits `updated_at`; store test `TestAttemptStore_UpdateLastTestResult_DoesNotBumpUpdatedAt` confirms.
+- `normalizeStdout` edge cases (BOM, bare `\r`) — out of scope for spec 008.
+- Piston quota risk — noted as follow-up in post-execution report.
