@@ -32,15 +32,23 @@ export function ImpersonateBanner() {
   }
 
   return (
-    <div className="fixed top-0 left-0 right-0 z-50 bg-yellow-500 text-yellow-950 text-center py-1 px-4 text-sm font-medium flex items-center justify-center gap-3">
-      <span>Impersonating: {impersonating.targetName}</span>
+    <div className="fixed top-2 right-2 z-50 inline-flex items-center gap-2 rounded-md border border-amber-300/70 bg-amber-50/95 px-2.5 py-1 text-[12px] font-medium text-amber-900 shadow-sm backdrop-blur">
+      <span
+        aria-hidden
+        className="inline-block size-1.5 rounded-full bg-amber-500 animate-pulse"
+      />
+      <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-amber-700/80">
+        impersonating
+      </span>
+      <span className="max-w-[140px] truncate">{impersonating.targetName}</span>
       <Button
-        size="sm"
-        variant="outline"
-        className="h-6 text-xs bg-yellow-400 border-yellow-600 hover:bg-yellow-300"
+        size="xs"
+        variant="ghost"
+        className="h-5 px-1.5 text-[11px] text-amber-800 hover:bg-amber-100"
         onClick={stopImpersonating}
+        title="Stop impersonating"
       >
-        Stop
+        stop
       </Button>
     </div>
   );

@@ -192,6 +192,18 @@ func main() {
 		}
 		teacherProblemH.Routes(r)
 
+		// Test runner — only registered when a Piston backend is configured.
+		if codeExecutor != nil {
+			pistonClient := sandbox.NewPistonClient(cfg.Sandbox.PistonURL)
+			attemptTestH := &handlers.AttemptTestHandler{
+				Attempts:  stores.Attempts,
+				Problems:  stores.Problems,
+				TestCases: stores.TestCases,
+				Piston:    pistonClient,
+			}
+			attemptTestH.Routes(r)
+		}
+
 		orgDashH := &handlers.OrgDashboardHandler{Orgs: stores.Orgs, Courses: stores.Courses, Classes: stores.Classes, Stats: stores.Stats}
 		orgDashH.Routes(r)
 

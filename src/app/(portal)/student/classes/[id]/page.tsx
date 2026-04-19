@@ -52,19 +52,34 @@ export default async function StudentClassDetailPage({
     notFound();
   }
 
+  // Log but don't swallow these fetches — silent catches were hiding 403s
+  // (e.g., if course access check denies a student who IS in the class but
+  // whose membership is in a weird state). Prefer a visible empty section
+  // over a misleading "no content".
+  const logAndDefault = async <T,>(p: Promise<T>, fallback: T, label: string): Promise<T> => {
+    try {
+      return await p;
+    } catch (e) {
+      console.warn(`[student/class] ${label} failed:`, e);
+      return fallback;
+    }
+  };
   const [course, topics, sessions] = await Promise.all([
-    api<CourseDetail>(`/api/courses/${cls.courseId}`).catch(() => null),
-    api<TopicItem[]>(`/api/courses/${cls.courseId}/topics`).catch(() => []),
-    api<SessionItem[]>(`/api/sessions/by-class/${id}`).catch(() => []),
+    logAndDefault(api<CourseDetail>(`/api/courses/${cls.courseId}`), null, "course"),
+    logAndDefault(api<TopicItem[]>(`/api/courses/${cls.courseId}/topics`), [], "topics"),
+    logAndDefault(api<SessionItem[]>(`/api/sessions/by-class/${id}`), [], "sessions"),
   ]);
 
   const activeSession = sessions.find((s) => s.status === "active");
 
-  // Fetch problems per topic. Empty-or-error => empty list for that topic.
   const problemsByTopic = new Map<string, ProblemItem[]>();
   await Promise.all(
     topics.map(async (t) => {
-      const list = await api<ProblemItem[]>(`/api/topics/${t.id}/problems`).catch(() => []);
+      const list = await logAndDefault(
+        api<ProblemItem[]>(`/api/topics/${t.id}/problems`),
+        [] as ProblemItem[],
+        `problems for topic ${t.id}`
+      );
       problemsByTopic.set(t.id, list);
     })
   );
@@ -103,10 +118,16 @@ export default async function StudentClassDetailPage({
         </Card>
       )}
 
-      {topics.length > 0 && (
-        <div className="space-y-4">
-          <h2 className="text-lg font-semibold">Topics</h2>
-          {topics.map((topic, i) => {
+      <div className="space-y-4">
+        <h2 className="text-lg font-semibold">Topics</h2>
+        {topics.length === 0 && (
+          <Card>
+            <CardContent className="py-6 text-center text-muted-foreground">
+              <p>No topics yet.</p>
+            </CardContent>
+          </Card>
+        )}
+        {topics.length > 0 && topics.map((topic, i) => {
             const content = parseLessonContent(topic.lessonContent);
             const problems = problemsByTopic.get(topic.id) ?? [];
             return (
@@ -146,8 +167,7 @@ export default async function StudentClassDetailPage({
               </Card>
             );
           })}
-        </div>
-      )}
+      </div>
     </div>
   );
 }

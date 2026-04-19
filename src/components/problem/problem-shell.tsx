@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSession } from "next-auth/react";
 import type {
   Problem,
@@ -21,6 +21,7 @@ import { AttemptHeader } from "@/components/problem/attempt-header";
 import { useYjsProvider } from "@/lib/yjs/use-yjs-provider";
 import { usePyodide } from "@/lib/pyodide/use-pyodide";
 import { Button } from "@/components/ui/button";
+import { TestResultsCard, type TestRunSummary } from "@/components/problem/test-results-card";
 
 interface Props {
   classId: string;
@@ -67,6 +68,69 @@ export function ProblemShell({
   const [customStdin, setCustomStdin] = useState("");
 
   const pyodide = usePyodide();
+
+  // Test run state — null until the first Test, then the latest summary.
+  const [testResult, setTestResult] = useState<TestRunSummary | null>(null);
+  const [testing, setTesting] = useState(false);
+  const [testError, setTestError] = useState<string | null>(null);
+
+  // After each Run completes, snapshot the output into Hocuspocus awareness so
+  // the teacher's watch page can render a "Last run · Ns ago" card. Capped to
+  // keep the awareness payload small.
+  const prevRunningRef = useRef(false);
+  useEffect(() => {
+    const wasRunning = prevRunningRef.current;
+    prevRunningRef.current = pyodide.running;
+    if (!wasRunning || pyodide.running) return;
+    const stdout = pyodide.output
+      .filter((l) => l.type === "stdout")
+      .map((l) => l.text)
+      .join("")
+      .slice(0, 8 * 1024);
+    const stderr = pyodide.output
+      .filter((l) => l.type === "stderr")
+      .map((l) => l.text)
+      .join("")
+      .slice(0, 8 * 1024);
+    provider?.awareness?.setLocalStateField("lastRun", {
+      stdout,
+      stderr,
+      completedAt: new Date().toISOString(),
+    });
+  }, [pyodide.running, pyodide.output, provider]);
+
+  // Map example caseId -> "Example 1", "Example 2", … for the results card.
+  const exampleLabels = useMemo<Record<string, string>>(() => {
+    const out: Record<string, string> = {};
+    let n = 0;
+    for (const c of testCases) {
+      if (c.ownerId === null && c.isExample) {
+        n += 1;
+        out[c.id] = c.name || `Example ${n}`;
+      }
+    }
+    return out;
+  }, [testCases]);
+
+  async function handleTest() {
+    setTestError(null);
+    setTesting(true);
+    try {
+      const res = await fetch(`/api/attempts/${activeAttemptId}/test`, { method: "POST" });
+      if (!res.ok) {
+        setTestError(`Failed (${res.status})`);
+        return;
+      }
+      const summary = (await res.json()) as TestRunSummary;
+      setTestResult(summary);
+      // Broadcast to teacher watchers via Hocuspocus awareness.
+      provider?.awareness?.setLocalStateField("lastTestResult", summary);
+    } catch (e) {
+      setTestError(String(e));
+    } finally {
+      setTesting(false);
+    }
+  }
 
   function handleRun() {
     if (problem.language !== "python") return;
@@ -157,6 +221,17 @@ export function ProblemShell({
               {pyodide.running ? "Running…" : "Run"}
             </Button>
           }
+          testButton={
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={testing}
+              onClick={handleTest}
+              title="Run all canonical test cases on the server"
+            >
+              {testing ? "Testing…" : "Test"}
+            </Button>
+          }
         />
         <div className="min-h-0 flex-1 p-3">
           <CodeEditor
@@ -179,6 +254,23 @@ export function ProblemShell({
           onSelectionChange={setSelection}
           onCustomStdinChange={setCustomStdin}
         />
+
+        {(testResult || testError) && (
+          <div className="border-t border-zinc-200/80 px-3 py-2">
+            {testError && (
+              <p className="mb-1 text-xs text-rose-700">{testError}</p>
+            )}
+            {testResult && (
+              <TestResultsCard
+                attemptId={activeAttemptId}
+                exampleLabels={exampleLabels}
+                result={testResult}
+                onClose={() => setTestResult(null)}
+              />
+            )}
+          </div>
+        )}
+
         <SectionLabel
           action={
             pyodide.output.length > 0 ? (
@@ -194,7 +286,12 @@ export function ProblemShell({
           Terminal
         </SectionLabel>
         <div className="min-h-0 flex-1 p-3">
-          <OutputPanel output={pyodide.output} running={pyodide.running} />
+          <OutputPanel
+            output={pyodide.output}
+            running={pyodide.running}
+            awaitingInput={pyodide.awaitingInput}
+            onStdin={pyodide.provideStdin}
+          />
         </div>
       </aside>
     </div>

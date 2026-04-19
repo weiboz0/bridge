@@ -294,3 +294,82 @@ Keep the public hook shape — `runCode(code, { stdin })` works for both languag
 - **SAB browser support.** Modern Chromium and Firefox have it. Safari is touchier. K-12 deployment is mostly Chromebooks → fine.
 - **Piston quotas.** A class hammering Test simultaneously could rate-limit our shared Piston instance. Add a per-user concurrency cap in the handler if it becomes an issue (note as follow-up; not in this plan).
 - **Hidden-case info leak via timing.** A student could time a hidden case to infer characteristics. Not a concern for K-12; would be for competitive-prog future. Tracked but deferred.
+
+---
+
+## Post-Execution Report
+
+**Branch:** `feat/026-test-runner-and-stdin`
+**Executed:** 2026-04-18
+
+### What was done
+
+| Task | Files | Notes |
+|------|-------|-------|
+| 1 — Schema + store | `drizzle/0010_attempts_last_test_result.sql`, `platform/internal/store/attempts.go` | column + `UpdateLastTestResult`; embedded as `*json.RawMessage` on Attempt |
+| 2 + 3 — Test + Diff endpoints | `platform/internal/handlers/attempt_run_test_handler.go` | parallel cap 4, per-case 3s + total 12s, LeetCode disclosure, `PistonRunner` interface for testability |
+| 4 — Test button + results card | `attempt-header.tsx`, `test-results-card.tsx`, `problem-shell.tsx` | hidden ordinal labels, on-demand diff, color-coded counter |
+| 5 + 6 — COOP/COEP + SAB stdin | `next.config.ts`, `pyodide-worker.ts`, `use-pyodide.ts`, `output-panel.tsx` | scoped headers; SAB+Atomics protocol with legacy buffered fallback for non-isolated dev |
+| 7 — Teacher snapshot | `problem-shell.tsx`, `teacher-watch-shell.tsx` | broadcasts via existing Hocuspocus awareness — no new server state |
+
+### Deviations from plan
+
+| Plan | Implementation | Reason |
+|------|---------------|--------|
+| Task 8 — JS interactive Run | **Deferred** | Same SAB protocol applies; small follow-up to add a JS execution path in the worker. Run button stays Python-only with a tooltip. |
+| Task 9 — E2E spec for Test happy path | **Deferred** | Playwright + Piston + DB seeding is significant test-infra; current 13+8+5+5 unit/component tests + handler tests cover the layers individually. |
+| Stub-Piston handler tests for happy path | Done as 6 new unit tests (`TestExecuteCases_*`) | The plan expected handler tests with a real DB; we did them as pure-function tests of `executeCases` instead, mocked through `PistonRunner` interface. |
+
+### Test Coverage
+
+| Layer | New tests |
+|-------|-----------|
+| `store/attempts` | 2 (round-trip, updated_at invariant) |
+| `handlers/attempt_run_test_handler` | 8 (auth guards + 6 executeCases paths) |
+| `output-panel` | 5 (awaiting-input branches) |
+| `test-results-card` | 5 (counter, hidden ordinals, diff button, timeout, close) |
+| **Total new** | **20 — all pass** |
+
+Existing `output-panel.test.tsx` + `use-pyodide.test.ts` still pass after the SAB refactor.
+
+### Known gaps / follow-ups
+
+- **JS interactive Run** — replace the worker init to also handle JS via a Function() shim with the same SAB stdin protocol. Same wire format, different interpreter.
+- **Piston rate-limiting** — no per-user concurrency cap on the Test endpoint. Acceptable for current load; add if a class hammering it ever overwhelms our shared Piston.
+- **SAB unit tests** — Atomics.wait can't run in jsdom. The protocol is tested manually; add Playwright coverage later.
+- ~~**Diff endpoint from teacher view**~~ — fixed in self-review: `TestResultsCard` gained a `canDiff` prop; teacher view passes `false` so the show-diff button doesn't render at all. Diff endpoint stays owner-only.
+- **E2E** — deferred per the plan's pattern.
+
+## Code Review
+
+### Review 1
+
+- **Date**: 2026-04-19
+- **Reviewer**: Claude (general-purpose agent)
+- **PR**: #44
+- **Verdict**: Changes requested (1 critical, 1 important, 1 minor)
+
+**Must Fix**
+
+1. `[FIXED]` `executeCases` mis-classified cases when the total budget expired — they were marked `"timeout"` (because per-case `caseCtx.Err() == DeadlineExceeded` triggered first) instead of `"skipped"` per spec 008.
+   → Reordered the classification switch so `totalCtx.Err() == DeadlineExceeded` wins over `caseCtx.Err()`. Total-budget exhaustion now correctly marks in-flight stragglers and not-yet-started cases as `skipped`. Added `TestExecuteCases_TotalBudgetExhaustion_MarksSkipped` — 1s parent deadline + 8 cases each sleeping 2.8s; at least 4 end up `skipped`, none `timeout`.
+
+**Should Fix**
+
+2. `[FIXED]` SAB stdin silently truncated lines > 64KB with only a `console.warn`.
+   → `writeStdinLine` in `use-pyodide.ts` now emits a visible stderr `OutputLine` `[stdin line truncated to N bytes (was M)]` so the student sees what happened. Still truncates to fit SAB.
+
+**Nice to Have**
+
+3. `[FIXED]` `UpdateLastTestResult` DB-write failure was invisible (`_ = err` with no log).
+   → Replaced with `slog.Warn("failed to persist test result", ...)` so ops can observe persistence misses without 5xx-ing the student.
+
+**Clean confirmations (per-item from the review checklist)**
+
+- SAB memory ordering — sequential consistency on the control word; length is written before state=1, worker reads length after wait returns.
+- Awareness subscription cleanup — effect deps `[provider]`, re-runs on provider swap, `aware.off(sync)` fires on the old provider.
+- Student broadcast timing — React 18 batches settle `output` before the `running: true→false` transition effect runs.
+- Teacher `canDiff=false` wiring — confirmed.
+- `UpdateLastTestResult` does not bump `updated_at` — SQL omits `updated_at`; store test `TestAttemptStore_UpdateLastTestResult_DoesNotBumpUpdatedAt` confirms.
+- `normalizeStdout` edge cases (BOM, bare `\r`) — out of scope for spec 008.
+- Piston quota risk — noted as follow-up in post-execution report.

@@ -49,7 +49,11 @@ export async function api<T = unknown>(
   }
 
   if (impersonateCookie) {
-    headers["Cookie"] = `bridge-impersonate=${impersonateCookie}`;
+    // cookies().get() returns a URL-decoded JSON string. Re-encode before
+    // putting it back into a Cookie header — unescaped `"` chars would
+    // otherwise break RFC 6265 parsing on the Go side and silently drop
+    // the impersonation.
+    headers["Cookie"] = `bridge-impersonate=${encodeURIComponent(impersonateCookie)}`;
   }
 
   const url = `${GO_API_URL}${path}`;
