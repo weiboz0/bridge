@@ -238,3 +238,46 @@ Skip Pyodide/Run from this E2E — focus on Yjs sync and live-follow behavior.
 - **Doc-name swap during first-keystroke**: Yjs doc reconnect can drop a few in-flight characters if the user types fast. Buffer-and-replay (Task 3) needs careful testing. If it proves flaky, fall back to "create the empty Attempt eagerly on page load" — accepts one stray attempt row per visit but eliminates the race.
 - **Teacher auth latency on Hocuspocus connect**: server-to-server HTTP call from Hocuspocus to Go on every connection. Cache aggressively (per WebSocket lifetime).
 - **Yjs state column size**: `attempts.yjs_state` is `text`. For very large programs (>1MB Y.Doc state) this could be a problem. K-12 problems are tiny — fine for v1.
+
+---
+
+## Post-Execution Report
+
+**Branch:** `feat/025b-teacher-watch-and-yjs`
+**Executed:** 2026-04-18
+
+### What was done
+
+| Task | Files | Notes |
+|------|-------|-------|
+| 1 — Schema | `drizzle/0009_attempts_yjs.sql` | one column: `attempts.yjs_state text` |
+| 4 — Teacher endpoint | `platform/internal/handlers/teacher_problems.go`, `platform/internal/store/classes.go` | added `TeacherCanViewStudentInCourse`; endpoint returns `{student, attempts}` |
+| 2 — Hocuspocus | `server/attempts.ts`, `server/hocuspocus.ts` | new `attempt:{id}` doc-name handling: owner read+write, teacher read-only, mirror SQL of the Go access policy |
+| 3 — Student → Yjs | `src/components/problem/problem-shell.tsx`, `src/app/.../problems/[problemId]/page.tsx`, deleted `use-autosave-attempt.ts` | eager-create attempt on first visit; CodeEditor binds Y.Text via existing `useYjsProvider` |
+| 5 — Teacher watch page | `src/app/(portal)/teacher/.../students/[studentId]/page.tsx`, `teacher-watch-shell.tsx`, `attempt-cards-row.tsx` | read-only Yjs mirror; click-to-pin attempt selection |
+
+### Deviations from plan
+
+| Plan | Implementation | Reason |
+|------|---------------|--------|
+| Task 3 — buffer-and-replay during first-keystroke | **Eager-create on page load** | Risk-flagged in the plan as the simpler fallback. Cost: at most one stray attempt per (user, problem) the first visit — cheap and worth it to eliminate the race. Subsequent visits reuse the same attempt. |
+| Task 6 — student broadcasts focus + Task 5 live-follow with pin | **Click-to-pin only** | The presence broadcast + auto-follow logic adds a parallel Hocuspocus channel (`student:{studentId}:focus`) that's significant scope. Teacher can still pick any attempt; live editing within the pinned attempt syncs in real time, which is the v1 win. Auto-follow → follow-up. |
+| Task 7 — E2E spec | **Deferred** | Requires Monaco + Yjs + 2-browser orchestration; existing E2E infra doesn't gracefully handle Hocuspocus state across two contexts. Tracked as a follow-up. |
+| `useAutosaveAttempt` retained as fallback | **Deleted** | Yjs is the only persistence path; keeping the hook around as dead code violated the "no unused code" rule. |
+
+### Test Coverage
+
+- **Go**: 1 new store test (`TestClassStore_TeacherCanViewStudentInCourse`, 4 paths), 1 handler auth-guard test. Full suite green.
+- **Client**: 1 new component test file (`attempt-cards-row.test.tsx`, 5 tests). Deleted 10 obsolete `use-autosave-attempt.test.ts` tests. Net change: −5 tests, +5 new component tests; all pass.
+
+### Follow-ups
+
+- **Live-follow + pin override** (spec 007 decision C) — separate small plan once we have a focus broadcast channel.
+- **Run-output mirroring** to teacher (spec 008 awareness `last_run` field) — lands with plan 026.
+- **`last_test_result` summary card** on the teacher right pane — needs plan 026 column.
+- **E2E spec** for live sync + pin — needs better Monaco-in-Playwright infra.
+- **Hocuspocus access policy duplication** — currently mirrored between Go (`ClassStore.TeacherCanViewStudentInCourse`) and Hocuspocus (`server/attempts.ts::teacherCanViewAttempt`). Future: shared internal API call.
+
+## Code Review
+
+(To be added after the reviewer pass / self-review.)

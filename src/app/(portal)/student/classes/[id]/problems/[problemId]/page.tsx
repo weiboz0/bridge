@@ -43,11 +43,25 @@ export default async function StudentProblemPage({
   const { id: classId, problemId } = await params;
 
   try {
-    const [problem, testCases, attempts] = await Promise.all([
+    const [problem, testCases, initialAttempts] = await Promise.all([
       api<Problem>(`/api/problems/${problemId}`),
       api<TestCase[]>(`/api/problems/${problemId}/test-cases`),
       api<Attempt[]>(`/api/problems/${problemId}/attempts`),
     ]);
+
+    // Yjs persistence requires an attempt id at room name. If the student has
+    // never opened this problem we eagerly create one seeded with starter_code
+    // so the editor connects to a real room. Cost: at most one stray empty
+    // attempt per (user, problem) the first time they visit; if they never
+    // edit, the next visit reuses the same one (no further strays).
+    let attempts = initialAttempts;
+    if (attempts.length === 0) {
+      const seed = await api<Attempt>(`/api/problems/${problemId}/attempts`, {
+        method: "POST",
+        body: { plainText: problem.starterCode ?? "", language: problem.language },
+      });
+      attempts = [seed];
+    }
 
     return (
       <ProblemShell
@@ -55,7 +69,7 @@ export default async function StudentProblemPage({
         problem={problem}
         testCases={testCases}
         attempts={attempts}
-        initialAttemptId={attempts[0]?.id ?? null}
+        initialAttemptId={attempts[0]!.id}
       />
     );
   } catch (e) {

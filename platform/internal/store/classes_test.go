@@ -292,3 +292,71 @@ func TestClassStore_ListClassesByUser(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, noClasses, 0)
 }
+
+func TestClassStore_TeacherCanViewStudentInCourse(t *testing.T) {
+	db := testDB(t)
+	classes := NewClassStore(db)
+	courses := NewCourseStore(db)
+	orgs := NewOrgStore(db)
+	users := NewUserStore(db)
+	ctx := context.Background()
+
+	org := createTestOrg(t, db, orgs, t.Name())
+	teacher := createTestUser(t, db, users, t.Name()+"-teacher")
+	student := createTestUser(t, db, users, t.Name()+"-student")
+	stranger := createTestUser(t, db, users, t.Name()+"-stranger")
+
+	course, err := courses.CreateCourse(ctx, CreateCourseInput{
+		OrgID: org.ID, CreatedBy: teacher.ID,
+		Title: "TC View Course", GradeLevel: "K-5", Language: "python",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { db.ExecContext(ctx, "DELETE FROM courses WHERE id = $1", course.ID) })
+
+	otherCourse, err := courses.CreateCourse(ctx, CreateCourseInput{
+		OrgID: org.ID, CreatedBy: teacher.ID,
+		Title: "Other Course", GradeLevel: "K-5", Language: "python",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { db.ExecContext(ctx, "DELETE FROM courses WHERE id = $1", otherCourse.ID) })
+
+	class, err := classes.CreateClass(ctx, CreateClassInput{
+		CourseID: course.ID, OrgID: org.ID, Title: "TC Class", CreatedBy: teacher.ID,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		db.ExecContext(ctx, "DELETE FROM class_memberships WHERE class_id = $1", class.ID)
+		db.ExecContext(ctx, "DELETE FROM new_classrooms WHERE class_id = $1", class.ID)
+		db.ExecContext(ctx, "DELETE FROM classes WHERE id = $1", class.ID)
+	})
+
+	// teacher is instructor, student is student in this class
+	_, err = classes.AddClassMember(ctx, AddClassMemberInput{
+		ClassID: class.ID, UserID: teacher.ID, Role: "instructor",
+	})
+	require.NoError(t, err)
+	_, err = classes.AddClassMember(ctx, AddClassMemberInput{
+		ClassID: class.ID, UserID: student.ID, Role: "student",
+	})
+	require.NoError(t, err)
+
+	// Happy path
+	canView, err := classes.TeacherCanViewStudentInCourse(ctx, teacher.ID, student.ID, course.ID)
+	require.NoError(t, err)
+	assert.True(t, canView, "teacher of a class should see the student in that class")
+
+	// Wrong course
+	wrongCourse, err := classes.TeacherCanViewStudentInCourse(ctx, teacher.ID, student.ID, otherCourse.ID)
+	require.NoError(t, err)
+	assert.False(t, wrongCourse, "teacher does not get access in a different course")
+
+	// Stranger as 'teacher'
+	notTeacher, err := classes.TeacherCanViewStudentInCourse(ctx, stranger.ID, student.ID, course.ID)
+	require.NoError(t, err)
+	assert.False(t, notTeacher, "non-instructor cannot view")
+
+	// Student is not in this teacher's class
+	notStudent, err := classes.TeacherCanViewStudentInCourse(ctx, teacher.ID, stranger.ID, course.ID)
+	require.NoError(t, err)
+	assert.False(t, notStudent, "student must be a member of one of the teacher's classes")
+}
