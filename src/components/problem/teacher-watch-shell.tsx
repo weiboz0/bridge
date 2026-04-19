@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useSession } from "next-auth/react";
 import type {
   Problem,
@@ -12,6 +12,10 @@ import { ProblemDescription } from "@/components/problem/problem-description";
 import { AttemptCardsRow } from "@/components/problem/attempt-cards-row";
 import { CodeEditor } from "@/components/editor/code-editor";
 import { useYjsProvider } from "@/lib/yjs/use-yjs-provider";
+import {
+  TestResultsCard,
+  type TestRunSummary,
+} from "@/components/problem/test-results-card";
 
 interface Props {
   classId: string;
@@ -49,6 +53,51 @@ export function TeacherWatchShell({
 
   // Editor remounts on attempt switch.
   const editorKey = activeAttemptId ?? "none";
+
+  // Awareness subscription — student broadcasts lastRun + lastTestResult
+  // into local awareness state. We mirror them here. Updates re-render via
+  // setSnapshot.
+  const [snapshot, setSnapshot] = useState<{
+    lastRun?: { stdout: string; stderr: string; completedAt: string };
+    lastTestResult?: TestRunSummary;
+  }>({});
+
+  useEffect(() => {
+    if (!provider) return;
+    const aware = provider.awareness;
+    if (!aware) return;
+    const sync = () => {
+      // Find the student's awareness state (anyone with lastRun or lastTestResult).
+      const states = Array.from(aware.getStates().values()) as Array<{
+        lastRun?: { stdout: string; stderr: string; completedAt: string };
+        lastTestResult?: TestRunSummary;
+      }>;
+      const next: typeof snapshot = {};
+      for (const s of states) {
+        if (s.lastRun) next.lastRun = s.lastRun;
+        if (s.lastTestResult) next.lastTestResult = s.lastTestResult;
+      }
+      setSnapshot(next);
+    };
+    aware.on("update", sync);
+    sync();
+    return () => {
+      aware.off("update", sync);
+    };
+  }, [provider]);
+
+  // Build example labels for the snapshot card.
+  const exampleLabels = useMemo<Record<string, string>>(() => {
+    const out: Record<string, string> = {};
+    let n = 0;
+    for (const c of testCases) {
+      if (c.ownerId === null && c.isExample) {
+        n += 1;
+        out[c.id] = c.name || `Example ${n}`;
+      }
+    }
+    return out;
+  }, [testCases]);
 
   return (
     <div className="flex h-[calc(100vh-var(--portal-header-height,56px))] overflow-hidden">
@@ -137,6 +186,40 @@ export function TeacherWatchShell({
           </div>
         )}
       </section>
+
+      {/* RIGHT — student-broadcast snapshot */}
+      <aside className="flex w-[26%] min-w-[280px] flex-col border-l border-zinc-200 bg-white">
+        <SectionLabel>Activity</SectionLabel>
+        <div className="flex-1 overflow-auto p-3 space-y-3">
+          {snapshot.lastRun ? (
+            <div className="rounded-lg border border-zinc-200 bg-zinc-50/50">
+              <div className="flex h-7 items-center justify-between border-b border-zinc-200 px-2.5">
+                <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-500">
+                  Last run · {relTime(snapshot.lastRun.completedAt)}
+                </span>
+              </div>
+              <pre className="px-3 py-2 font-mono text-[12px] leading-[1.55] text-zinc-800 whitespace-pre-wrap">
+                {snapshot.lastRun.stdout || <span className="text-zinc-400">(no stdout)</span>}
+              </pre>
+              {snapshot.lastRun.stderr && (
+                <pre className="border-t border-zinc-200 px-3 py-2 font-mono text-[12px] leading-[1.55] text-rose-700 whitespace-pre-wrap">
+                  {snapshot.lastRun.stderr}
+                </pre>
+              )}
+            </div>
+          ) : (
+            <p className="text-[12px] text-zinc-500">No runs broadcast yet.</p>
+          )}
+
+          {snapshot.lastTestResult && (
+            <TestResultsCard
+              attemptId={activeAttemptId ?? ""}
+              exampleLabels={exampleLabels}
+              result={snapshot.lastTestResult}
+            />
+          )}
+        </div>
+      </aside>
     </div>
   );
 }

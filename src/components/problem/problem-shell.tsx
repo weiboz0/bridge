@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSession } from "next-auth/react";
 import type {
   Problem,
@@ -74,6 +74,31 @@ export function ProblemShell({
   const [testing, setTesting] = useState(false);
   const [testError, setTestError] = useState<string | null>(null);
 
+  // After each Run completes, snapshot the output into Hocuspocus awareness so
+  // the teacher's watch page can render a "Last run · Ns ago" card. Capped to
+  // keep the awareness payload small.
+  const prevRunningRef = useRef(false);
+  useEffect(() => {
+    const wasRunning = prevRunningRef.current;
+    prevRunningRef.current = pyodide.running;
+    if (!wasRunning || pyodide.running) return;
+    const stdout = pyodide.output
+      .filter((l) => l.type === "stdout")
+      .map((l) => l.text)
+      .join("")
+      .slice(0, 8 * 1024);
+    const stderr = pyodide.output
+      .filter((l) => l.type === "stderr")
+      .map((l) => l.text)
+      .join("")
+      .slice(0, 8 * 1024);
+    provider?.awareness?.setLocalStateField("lastRun", {
+      stdout,
+      stderr,
+      completedAt: new Date().toISOString(),
+    });
+  }, [pyodide.running, pyodide.output, provider]);
+
   // Map example caseId -> "Example 1", "Example 2", … for the results card.
   const exampleLabels = useMemo<Record<string, string>>(() => {
     const out: Record<string, string> = {};
@@ -96,7 +121,10 @@ export function ProblemShell({
         setTestError(`Failed (${res.status})`);
         return;
       }
-      setTestResult(await res.json());
+      const summary = (await res.json()) as TestRunSummary;
+      setTestResult(summary);
+      // Broadcast to teacher watchers via Hocuspocus awareness.
+      provider?.awareness?.setLocalStateField("lastTestResult", summary);
     } catch (e) {
       setTestError(String(e));
     } finally {
