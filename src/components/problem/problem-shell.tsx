@@ -258,7 +258,12 @@ export function ProblemShell({
           Terminal
         </SectionLabel>
         <div className="min-h-0 flex-1 p-3">
-          <OutputPanel output={pyodide.output} running={pyodide.running} />
+          <OutputPanel
+            output={pyodide.output}
+            running={pyodide.running}
+            awaitingInput={pyodide.awaitingInput}
+            onStdin={pyodide.provideStdin}
+          />
         </div>
       </aside>
     </div>

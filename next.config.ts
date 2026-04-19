@@ -29,8 +29,29 @@ const GO_PROXY_ROUTES = [
   "/api/attempts/:path*",
 ];
 
+// SharedArrayBuffer (used by the Pyodide stdin protocol) requires the page
+// be cross-origin isolated. Scope these headers to the Problem editor routes
+// only — other routes (sign-in popups, embedded assets) keep their current
+// less-strict policy.
+const COOP_COEP_HEADERS = [
+  { key: "Cross-Origin-Opener-Policy", value: "same-origin" },
+  { key: "Cross-Origin-Embedder-Policy", value: "require-corp" },
+];
+
 const nextConfig: NextConfig = {
   turbopack: {},
+  async headers() {
+    return [
+      {
+        source: "/student/classes/:classId/problems/:rest*",
+        headers: COOP_COEP_HEADERS,
+      },
+      {
+        source: "/teacher/classes/:classId/problems/:rest*",
+        headers: COOP_COEP_HEADERS,
+      },
+    ];
+  },
   async rewrites() {
     const rules = GO_PROXY_ROUTES.map((source) => ({
       source,
