@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -157,4 +158,46 @@ func TestAttemptStore_DeleteAttempt(t *testing.T) {
 	got, err := attempts.GetAttempt(ctx, a.ID)
 	require.NoError(t, err)
 	assert.Nil(t, got)
+}
+
+func TestAttemptStore_UpdateLastTestResult_RoundTrip(t *testing.T) {
+	attempts, p, user, _ := setupAttemptEnv(t, t.Name())
+	ctx := context.Background()
+
+	a, err := attempts.CreateAttempt(ctx, CreateAttemptInput{
+		ProblemID: p.ID, UserID: user.ID, Language: "python",
+	})
+	require.NoError(t, err)
+	assert.Nil(t, a.LastTestResult, "fresh attempt has no test result")
+
+	summary := json.RawMessage(`{"summary":{"passed":2,"failed":1,"skipped":0,"total":3}}`)
+	err = attempts.UpdateLastTestResult(ctx, a.ID, summary)
+	require.NoError(t, err)
+
+	got, err := attempts.GetAttempt(ctx, a.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.NotNil(t, got.LastTestResult)
+	assert.JSONEq(t, string(summary), string(*got.LastTestResult))
+}
+
+func TestAttemptStore_UpdateLastTestResult_DoesNotBumpUpdatedAt(t *testing.T) {
+	attempts, p, user, _ := setupAttemptEnv(t, t.Name())
+	ctx := context.Background()
+
+	a, err := attempts.CreateAttempt(ctx, CreateAttemptInput{
+		ProblemID: p.ID, UserID: user.ID, Language: "python",
+	})
+	require.NoError(t, err)
+
+	originalUpdated := a.UpdatedAt
+	time.Sleep(15 * time.Millisecond)
+
+	err = attempts.UpdateLastTestResult(ctx, a.ID, json.RawMessage(`{"x":1}`))
+	require.NoError(t, err)
+
+	got, err := attempts.GetAttempt(ctx, a.ID)
+	require.NoError(t, err)
+	assert.True(t, got.UpdatedAt.Equal(originalUpdated),
+		"writing a test result must not bump updated_at — Test is not an edit")
 }
