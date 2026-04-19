@@ -216,6 +216,7 @@ export function TeacherWatchShell({
               attemptId={activeAttemptId ?? ""}
               exampleLabels={exampleLabels}
               result={snapshot.lastTestResult}
+              canDiff={false}
             />
           )}
         </div>

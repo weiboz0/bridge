@@ -27,6 +27,9 @@ interface Props {
   exampleLabels: Record<string, string>;
   result: TestRunSummary;
   onClose?: () => void;
+  /** Whether the viewer can fetch the diff endpoint. Owner-only — set to false
+   *  for the teacher snapshot to hide the show-diff button. Defaults to true. */
+  canDiff?: boolean;
 }
 
 /**
@@ -34,7 +37,7 @@ interface Props {
  * `Hidden case N · wrong output`; example-case failures get an "expand"
  * affordance that fetches the diff endpoint and renders side-by-side.
  */
-export function TestResultsCard({ attemptId, exampleLabels, result, onClose }: Props) {
+export function TestResultsCard({ attemptId, exampleLabels, result, onClose, canDiff = true }: Props) {
   // Number the hidden cases for display (their UUIDs aren't useful here).
   let hiddenN = 0;
   const labels = result.cases.map((c) => {
@@ -75,6 +78,7 @@ export function TestResultsCard({ attemptId, exampleLabels, result, onClose }: P
             attemptId={attemptId}
             testCase={c}
             label={labels[i] ?? "Case"}
+            canDiff={canDiff}
           />
         ))}
       </div>
@@ -86,13 +90,15 @@ function CaseRow({
   attemptId,
   testCase,
   label,
+  canDiff,
 }: {
   attemptId: string;
   testCase: TestCaseResult;
   label: string;
+  canDiff: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const canExpand = testCase.status === "fail" && testCase.isExample;
+  const canExpand = canDiff && testCase.status === "fail" && testCase.isExample;
   const statusColor =
     testCase.status === "pass"
       ? "text-emerald-700"
