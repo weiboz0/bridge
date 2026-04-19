@@ -22,6 +22,7 @@ interface Props {
   language: string;
   saveIndicator: React.ReactNode;
   runButton: React.ReactNode;
+  testButton: React.ReactNode;
 }
 
 export function AttemptHeader({
@@ -37,6 +38,7 @@ export function AttemptHeader({
   language,
   saveIndicator,
   runButton,
+  testButton,
 }: Props) {
   const [creating, setCreating] = useState(false);
   const [renaming, setRenaming] = useState(false);
@@ -102,6 +104,7 @@ export function AttemptHeader({
           <span className="font-mono text-[11px]">+</span>
           {creating ? "…" : "New attempt"}
         </Button>
+        {testButton}
         {runButton}
       </div>
 
