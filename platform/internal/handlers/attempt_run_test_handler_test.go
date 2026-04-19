@@ -123,6 +123,29 @@ func TestExecuteCases_NormalizesTrailingNewlineAndCRLF(t *testing.T) {
 	assert.Equal(t, 1, s.Summary.Passed, "trailing newline + CRLF should normalize away")
 }
 
+func TestExecuteCases_NormalizesTrailingWhitespacePerLine(t *testing.T) {
+	// A student prints `Hello, World! ` with an accidental trailing space.
+	// Exact-match would fail; our normalizer trims it.
+	h := &AttemptTestHandler{Piston: &stubPiston{
+		respond: func(_, _, _ string) (*sandbox.PistonExecuteResponse, error) {
+			return makeStubResp("Hello, World! \n"), nil
+		},
+	}}
+	cases := []store.TestCase{caseFor("c1", "x", ptrStr("Hello, World!"), true)}
+	s := h.executeCases(context.Background(), "python", "code", cases)
+	assert.Equal(t, 1, s.Summary.Passed, "stray trailing space should not fail a correct program")
+
+	// Multi-line with trailing spaces on the first line.
+	h2 := &AttemptTestHandler{Piston: &stubPiston{
+		respond: func(_, _, _ string) (*sandbox.PistonExecuteResponse, error) {
+			return makeStubResp("first   \nsecond\n"), nil
+		},
+	}}
+	cases2 := []store.TestCase{caseFor("c1", "x", ptrStr("first\nsecond"), true)}
+	s2 := h2.executeCases(context.Background(), "python", "code", cases2)
+	assert.Equal(t, 1, s2.Summary.Passed, "per-line trailing whitespace trimmed")
+}
+
 func TestExecuteCases_NilExpectedIsInformational(t *testing.T) {
 	h := &AttemptTestHandler{Piston: &stubPiston{
 		respond: func(_, _, _ string) (*sandbox.PistonExecuteResponse, error) {

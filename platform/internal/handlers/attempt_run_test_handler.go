@@ -254,9 +254,19 @@ func (h *AttemptTestHandler) executeCases(parent context.Context, language, code
 	return summary
 }
 
-// normalizeStdout right-trims and normalizes \r\n -> \n so trailing newline
-// differences and Windows line endings don't fail correct programs.
+// normalizeStdout makes the exact-match comparator forgiving of common
+// incidental whitespace differences that shouldn't fail a correct program:
+//   - CRLF normalized to LF (Windows line endings)
+//   - Trailing whitespace stripped from each line (e.g., stray print(" "))
+//   - Trailing blank lines dropped (Python's print adds a final \n)
+//
+// Tighter comparisons (exact-match, numeric tolerance, unordered) belong
+// in future per-problem comparison modes — see docs/design-gaps-problem-workflow.md.
 func normalizeStdout(s string) string {
 	s = strings.ReplaceAll(s, "\r\n", "\n")
-	return strings.TrimRight(s, "\n")
+	lines := strings.Split(s, "\n")
+	for i, line := range lines {
+		lines[i] = strings.TrimRight(line, " \t")
+	}
+	return strings.TrimRight(strings.Join(lines, "\n"), "\n")
 }
