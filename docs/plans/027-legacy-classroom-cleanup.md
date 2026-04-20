@@ -270,3 +270,69 @@ DROP TABLE IF EXISTS classrooms CASCADE;
 - **Drizzle migration order.** Drizzle reads migrations in filename order. The rename (0011) must run before the drop (0012). Filenames already enforce this.
 - **Pre-existing E2E test `access-control.spec.ts`** tests `/dashboard/*` redirect? Unlikely — the modern tests target `/teacher`, `/student`, etc. Verify before Task 1 deletes the pages.
 - **Other Claude Code sessions** may have outdated checkouts and touch deleted files. Usual multi-agent rule: pull before resuming work.
+
+---
+
+## Post-Execution Report
+
+**Branch:** `feat/027-legacy-classroom-cleanup`
+**Executed:** 2026-04-19
+
+### What was done
+
+5 commits, each leaves the tree green:
+
+| Commit | Task | Scope |
+|--------|------|-------|
+| `c33f102` | 027-1 | Deleted 21 legacy frontend + API + test files |
+| `dfcdbae` | 027-2 | Deleted Go `ClassroomHandler`, `ClassroomStore`, its test |
+| `8647c8a` | 027-3+4 | Schema rename `new_classrooms → class_settings` + all Go callers in one atomic commit |
+| `6e9bd7c` | 027-5 | Drizzle schema + seeds + test helpers + cascading cleanup of broken Drizzle tests |
+| `6ef3dab` | 027-6 | Dropped `classrooms` + `classroom_members` tables |
+
+### Deviations from plan
+
+| Plan | Implementation | Reason |
+|------|---------------|--------|
+| Tasks 3 and 4 as separate commits | Merged into one commit | Schema rename without code update leaves the running app broken between commits. Atomic ship eliminated the red window. |
+| Tasks 1 and 5 cleanly separated | Some test-file deletions promoted to Task 1 | `tests/api/classrooms*` and `tests/integration/classrooms-api` broke on Task 1's frontend deletion (they imported deleted routes). Cleanest to delete in same commit. |
+| `tests/integration/sessions-api.test.ts` not planned to delete | Deleted in 027-1 | Imported `@/app/api/classrooms/[id]/active-session` which went with the rest; already in pre-existing failures bucket; legacy Drizzle code, slated for removal either way. |
+| `src/app/api/sessions/route.ts`, `src/app/api/ai/chat/route.ts` not planned | Deleted in 027-5 | Imported the deleted `@/lib/classrooms`; both fully shadowed by the Go proxy (dead code); cleanup momentum. |
+| `tests/api/sessions.test.ts`, `tests/integration/{documents-api, ai-toggle-api}.test.ts` not planned | Deleted in 027-5 | Used `schema.classrooms` (dropped) via `createTestClassroom`; already in pre-existing failures bucket. |
+
+### Test Coverage
+
+| Layer | State |
+|-------|-------|
+| Go full suite | green (`go test ./... -count=1 -timeout 180s` with `DATABASE_URL`) |
+| Vitest | pre-existing failures dropped from ~40 to 13 (3 files — attendance, documents, session-topics, all stale Drizzle tests using `live_sessions.classroom_id` which was renamed in plan 022) |
+| E2E | not re-run (no session-related changes); safe since Hocuspocus doc-name unchanged and the renamed column is transparent to the portal |
+
+### Files removed (total)
+
+| Category | Count |
+|---|---|
+| `/dashboard/*` UI pages | 9 |
+| `/api/classrooms/*` routes | 5 |
+| `src/lib/classrooms.ts`, `session-controls.tsx` | 2 |
+| Go `classrooms.go` files (handler, store, test) | 3 |
+| Legacy Vitest files (direct or cascading) | 6 |
+| Stale Next.js API routes (`/api/sessions/route.ts`, `/api/ai/chat/route.ts`) | 2 |
+| **Total** | **27** |
+
+### Files renamed
+
+- `new_classrooms` table → `class_settings` (DB + Drizzle + Go struct + method)
+- `NewClassroom` struct → `ClassSettings`
+- `GetClassroom` method → `GetClassSettings`
+
+### Tables dropped
+
+- `classrooms` (2 rows)
+- `classroom_members` (2 rows)
+
+### Follow-ups surfaced
+
+- **Legacy portal session pages** (`src/app/(portal)/student/classes/[id]/session/[sessionId]/page.tsx`, and the teacher mirror) still use Drizzle-era `getClass` + `getClassSettings` from `src/lib/classes.ts`. These were not migrated in plan 021 batch 2d. Their migration is a separate plan (call it 021d) aligned with the session refactor in plan 030 from spec 010.
+- **Remaining 13 pre-existing Vitest failures** are in `tests/unit/{attendance,documents,session-topics}.test.ts`, all using `live_sessions.classroom_id` (renamed to `class_id` in plan 022). Slated for removal with the spec 010 session plan.
+- **`.next/types/validator.ts`** cached references to the deleted `/dashboard/*` pages — stale build cache that regenerates on next `bun run dev` or `next build`. Harmless typecheck noise.
