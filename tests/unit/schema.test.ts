@@ -7,8 +7,9 @@ describe("Schema exports", () => {
     expect(schema.authProviders).toBeDefined();
     expect(schema.organizations).toBeDefined();
     expect(schema.orgMemberships).toBeDefined();
-    expect(schema.classrooms).toBeDefined();
-    expect(schema.classroomMembers).toBeDefined();
+    expect(schema.classes).toBeDefined();
+    expect(schema.classMemberships).toBeDefined();
+    expect(schema.classSettings).toBeDefined();
     expect(schema.liveSessions).toBeDefined();
     expect(schema.sessionParticipants).toBeDefined();
     expect(schema.aiInteractions).toBeDefined();

@@ -179,46 +179,6 @@ export const authProviders = pgTable(
   ]
 );
 
-export const classrooms = pgTable(
-  "classrooms",
-  {
-    id: uuid("id").primaryKey().defaultRandom(),
-    teacherId: uuid("teacher_id")
-      .notNull()
-      .references(() => users.id),
-    name: varchar("name", { length: 255 }).notNull(),
-    description: text("description").default(""),
-    gradeLevel: gradeLevelEnum("grade_level").notNull(),
-    editorMode: editorModeEnum("editor_mode").notNull().default("python"),
-    joinCode: varchar("join_code", { length: 10 }).notNull(),
-    createdAt: timestamp("created_at").defaultNow().notNull(),
-    updatedAt: timestamp("updated_at").defaultNow().notNull(),
-  },
-  (table) => [
-    uniqueIndex("classrooms_join_code_idx").on(table.joinCode),
-    index("classrooms_teacher_idx").on(table.teacherId),
-  ]
-);
-
-export const classroomMembers = pgTable(
-  "classroom_members",
-  {
-    classroomId: uuid("classroom_id")
-      .notNull()
-      .references(() => classrooms.id, { onDelete: "cascade" }),
-    userId: uuid("user_id")
-      .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
-    joinedAt: timestamp("joined_at").defaultNow().notNull(),
-  },
-  (table) => [
-    uniqueIndex("classroom_member_unique_idx").on(
-      table.classroomId,
-      table.userId
-    ),
-  ]
-);
-
 export const liveSessions = pgTable(
   "live_sessions",
   {
@@ -395,8 +355,8 @@ export const classMemberships = pgTable(
   ]
 );
 
-export const newClassrooms = pgTable(
-  "new_classrooms",
+export const classSettings = pgTable(
+  "class_settings",
   {
     id: uuid("id").primaryKey().defaultRandom(),
     classId: uuid("class_id")
@@ -408,7 +368,7 @@ export const newClassrooms = pgTable(
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
-    uniqueIndex("new_classrooms_class_idx").on(table.classId),
+    uniqueIndex("class_settings_class_idx").on(table.classId),
   ]
 );
 

@@ -1,5 +1,5 @@
 import { eq } from "drizzle-orm";
-import { classes, classMemberships, newClassrooms, courses, users } from "@/lib/db/schema";
+import { classes, classMemberships, classSettings, courses, users } from "@/lib/db/schema";
 import { generateJoinCode } from "@/lib/utils";
 import type { Database } from "@/lib/db";
 
@@ -29,7 +29,7 @@ export async function createClass(db: Database, input: CreateClassInput) {
     .from(courses)
     .where(eq(courses.id, input.courseId));
 
-  await db.insert(newClassrooms).values({
+  await db.insert(classSettings).values({
     classId: cls.id,
     editorMode: course?.language || "python",
   });
@@ -110,7 +110,7 @@ export async function archiveClass(db: Database, classId: string) {
 export async function getClassroom(db: Database, classId: string) {
   const [classroom] = await db
     .select()
-    .from(newClassrooms)
-    .where(eq(newClassrooms.classId, classId));
+    .from(classSettings)
+    .where(eq(classSettings.classId, classId));
   return classroom || null;
 }
