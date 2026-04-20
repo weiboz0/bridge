@@ -1,16 +1,16 @@
 # Code Review Process
 
-Code review happens after the PR is created (Step G in `docs/development-workflow.md`). The plan file's `## Code Review` section is the communication channel between reviewers and authors. Both parties use the same document — reviewers add findings, authors respond inline.
+Code review happens during Step 5 in `docs/development-workflow.md`. The plan file's `## Code Review` section is the communication channel between reviewers and authors. Both parties use the same document — reviewers add findings, authors respond inline.
 
 ## For reviewers
 
-When performing a code review (via `/review` or on request), append a new review round to the `## Code Review` section in the relevant plan file in `plan/`. Format:
+When performing a code review, append a new review round to the `## Code Review` section in the relevant plan file in `docs/plans/`. Format:
 
 ```markdown
 ### Review N
 
 - **Date**: YYYY-MM-DD
-- **Reviewer**: Claude (or human name)
+- **Reviewer**: Codex, Claude, or human name
 - **PR**: #N — title
 - **Verdict**: Approved / Approved with suggestions / Changes requested
 

@@ -413,7 +413,7 @@ VALUES
   ('00000000-0000-0000-0000-000000400204', '00000000-0000-0000-0000-000000400101', 'bca1b87e-2c20-45d0-9b7a-cd35d9efef36', 'student')      -- charlie
 ON CONFLICT (id) DO NOTHING;
 
-INSERT INTO new_classrooms (id, class_id, editor_mode)
+INSERT INTO class_settings (id, class_id, editor_mode)
 VALUES ('00000000-0000-0000-0000-000000400301', '00000000-0000-0000-0000-000000400101', 'python')
 ON CONFLICT (id) DO NOTHING;
 

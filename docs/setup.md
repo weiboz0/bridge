@@ -82,7 +82,7 @@ Tests use a separate `bridge_test` database that is cleaned between each test.
 DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test bun run test
 
 # Run a specific test file
-DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test bun run test tests/api/classrooms.test.ts
+DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test bun run test tests/unit/classes.test.ts
 
 # Watch mode
 DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test bun run test:watch

@@ -2,7 +2,7 @@ import { notFound } from "next/navigation";
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { getSession } from "@/lib/sessions";
-import { getClass, getClassroom } from "@/lib/classes";
+import { getClass, getClassSettings } from "@/lib/classes";
 import { getCourse } from "@/lib/courses";
 import { listTopicsByCourse } from "@/lib/topics";
 import { listClassMembers } from "@/lib/class-memberships";
@@ -29,7 +29,7 @@ export default async function TeacherSessionDashboardPage({
   const liveSession = await getSession(db, sessionId);
   if (!liveSession) notFound();
 
-  const classroom = await getClassroom(db, classId);
+  const settings = await getClassSettings(db, classId);
   const course = await getCourse(db, cls.courseId);
   const courseTopics = course ? await listTopicsByCourse(db, course.id) : [];
 
@@ -37,8 +37,7 @@ export default async function TeacherSessionDashboardPage({
     <TeacherDashboard
       sessionId={sessionId}
       classId={classId}
-      classroomId={classroom?.id || ""}
-      editorMode={(classroom?.editorMode as "python" | "javascript" | "blockly") || "python"}
+      editorMode={(settings?.editorMode as "python" | "javascript" | "blockly") || "python"}
       courseTopics={courseTopics.map((t) => ({
         topicId: t.id,
         title: t.title,

@@ -21,7 +21,6 @@ import { Button } from "@/components/ui/button";
 interface TeacherDashboardProps {
   sessionId: string;
   classId: string;
-  classroomId: string;
   editorMode: "python" | "javascript" | "blockly";
   courseTopics: Array<{ topicId: string; title: string; lessonContent: unknown }>;
 }
@@ -35,7 +34,6 @@ interface Participant {
 export function TeacherDashboard({
   sessionId,
   classId,
-  classroomId,
   editorMode,
   courseTopics,
 }: TeacherDashboardProps) {

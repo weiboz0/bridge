@@ -29,7 +29,7 @@ func TestAssignmentStore_CreateAndGet(t *testing.T) {
 	})
 	t.Cleanup(func() {
 		db.ExecContext(ctx, "DELETE FROM class_memberships WHERE class_id = $1", class.ID)
-		db.ExecContext(ctx, "DELETE FROM new_classrooms WHERE class_id = $1", class.ID)
+		db.ExecContext(ctx, "DELETE FROM class_settings WHERE class_id = $1", class.ID)
 		db.ExecContext(ctx, "DELETE FROM classes WHERE id = $1", class.ID)
 	})
 
@@ -69,7 +69,7 @@ func TestAssignmentStore_ListByClass(t *testing.T) {
 	t.Cleanup(func() {
 		db.ExecContext(ctx, "DELETE FROM assignments WHERE class_id = $1", class.ID)
 		db.ExecContext(ctx, "DELETE FROM class_memberships WHERE class_id = $1", class.ID)
-		db.ExecContext(ctx, "DELETE FROM new_classrooms WHERE class_id = $1", class.ID)
+		db.ExecContext(ctx, "DELETE FROM class_settings WHERE class_id = $1", class.ID)
 		db.ExecContext(ctx, "DELETE FROM classes WHERE id = $1", class.ID)
 	})
 
@@ -102,7 +102,7 @@ func TestAssignmentStore_DeleteAssignment(t *testing.T) {
 	})
 	t.Cleanup(func() {
 		db.ExecContext(ctx, "DELETE FROM class_memberships WHERE class_id = $1", class.ID)
-		db.ExecContext(ctx, "DELETE FROM new_classrooms WHERE class_id = $1", class.ID)
+		db.ExecContext(ctx, "DELETE FROM class_settings WHERE class_id = $1", class.ID)
 		db.ExecContext(ctx, "DELETE FROM classes WHERE id = $1", class.ID)
 	})
 
@@ -139,7 +139,7 @@ func TestAssignmentStore_SubmissionAndGrade(t *testing.T) {
 		db.ExecContext(ctx, "DELETE FROM submissions WHERE assignment_id IN (SELECT id FROM assignments WHERE class_id = $1)", class.ID)
 		db.ExecContext(ctx, "DELETE FROM assignments WHERE class_id = $1", class.ID)
 		db.ExecContext(ctx, "DELETE FROM class_memberships WHERE class_id = $1", class.ID)
-		db.ExecContext(ctx, "DELETE FROM new_classrooms WHERE class_id = $1", class.ID)
+		db.ExecContext(ctx, "DELETE FROM class_settings WHERE class_id = $1", class.ID)
 		db.ExecContext(ctx, "DELETE FROM classes WHERE id = $1", class.ID)
 	})
 
@@ -209,7 +209,7 @@ func TestAssignmentStore_UpdateAssignment(t *testing.T) {
 	t.Cleanup(func() {
 		db.ExecContext(ctx, "DELETE FROM assignments WHERE class_id = $1", class.ID)
 		db.ExecContext(ctx, "DELETE FROM class_memberships WHERE class_id = $1", class.ID)
-		db.ExecContext(ctx, "DELETE FROM new_classrooms WHERE class_id = $1", class.ID)
+		db.ExecContext(ctx, "DELETE FROM class_settings WHERE class_id = $1", class.ID)
 		db.ExecContext(ctx, "DELETE FROM classes WHERE id = $1", class.ID)
 	})
 

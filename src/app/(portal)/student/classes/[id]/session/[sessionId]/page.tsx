@@ -2,7 +2,7 @@ import { notFound } from "next/navigation";
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { getSession, joinSession } from "@/lib/sessions";
-import { getClass, getClassroom } from "@/lib/classes";
+import { getClass, getClassSettings } from "@/lib/classes";
 import { listClassMembers } from "@/lib/class-memberships";
 import { StudentSession } from "@/components/session/student/student-session";
 
@@ -28,13 +28,13 @@ export default async function StudentSessionPage({
   // Auto-join session (server-side, no HTTP round-trip)
   await joinSession(db, sessionId, session!.user.id);
 
-  const classroom = await getClassroom(db, classId);
+  const settings = await getClassSettings(db, classId);
 
   return (
     <StudentSession
       sessionId={sessionId}
       classId={classId}
-      editorMode={(classroom?.editorMode as "python" | "javascript" | "blockly") || "python"}
+      editorMode={(settings?.editorMode as "python" | "javascript" | "blockly") || "python"}
     />
   );
 }

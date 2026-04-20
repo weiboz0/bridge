@@ -18,13 +18,11 @@ export async function cleanupDatabase() {
   await testDb.delete(schema.aiInteractions);
   await testDb.delete(schema.sessionParticipants);
   await testDb.delete(schema.liveSessions);
-  await testDb.delete(schema.newClassrooms);
+  await testDb.delete(schema.classSettings);
   await testDb.delete(schema.classMemberships);
   await testDb.delete(schema.classes);
   await testDb.delete(schema.topics);
   await testDb.delete(schema.courses);
-  await testDb.delete(schema.classroomMembers);
-  await testDb.delete(schema.classrooms);
   await testDb.delete(schema.orgMemberships);
   await testDb.delete(schema.authProviders);
   await testDb.delete(schema.users);
@@ -79,40 +77,6 @@ export async function createTestUser(
     })
     .returning();
   return user;
-}
-
-export async function createTestClassroom(
-  teacherId: string,
-  overrides: Partial<typeof schema.classrooms.$inferInsert> = {}
-) {
-  const [classroom] = await testDb
-    .insert(schema.classrooms)
-    .values({
-      teacherId,
-      name: "Test Classroom",
-      gradeLevel: "6-8",
-      editorMode: "python",
-      joinCode: nanoid(8),
-      ...overrides,
-    })
-    .returning();
-  return classroom;
-}
-
-export async function createTestSession(
-  classroomId: string,
-  teacherId: string,
-  overrides: Partial<typeof schema.liveSessions.$inferInsert> = {}
-) {
-  const [session] = await testDb
-    .insert(schema.liveSessions)
-    .values({
-      classroomId,
-      teacherId,
-      ...overrides,
-    })
-    .returning();
-  return session;
 }
 
 export async function createTestCourse(

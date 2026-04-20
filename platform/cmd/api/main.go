@@ -160,9 +160,6 @@ func main() {
 		annotH := &handlers.AnnotationHandler{Annotations: stores.Annotations}
 		annotH.Routes(r)
 
-		classroomH := &handlers.ClassroomHandler{Classrooms: stores.Classrooms, Classes: stores.Classes, Sessions: stores.Sessions}
-		classroomH.Routes(r)
-
 		if llmBackend != nil {
 			aiH := &handlers.AIHandler{
 				Interactions: stores.Interactions,

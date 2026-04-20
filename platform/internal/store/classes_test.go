@@ -31,7 +31,7 @@ func TestClassStore_CreateAndGet(t *testing.T) {
 	require.NotNil(t, class)
 	t.Cleanup(func() {
 		db.ExecContext(ctx, "DELETE FROM class_memberships WHERE class_id = $1", class.ID)
-		db.ExecContext(ctx, "DELETE FROM new_classrooms WHERE class_id = $1", class.ID)
+		db.ExecContext(ctx, "DELETE FROM class_settings WHERE class_id = $1", class.ID)
 		db.ExecContext(ctx, "DELETE FROM classes WHERE id = $1", class.ID)
 	})
 
@@ -45,11 +45,11 @@ func TestClassStore_CreateAndGet(t *testing.T) {
 	require.NotNil(t, fetched)
 	assert.Equal(t, class.ID, fetched.ID)
 
-	// Verify new_classroom was created with course language
-	classroom, err := classes.GetClassroom(ctx, class.ID)
+	// Verify class_settings row was created with course language
+	settings, err := classes.GetClassSettings(ctx, class.ID)
 	require.NoError(t, err)
-	require.NotNil(t, classroom)
-	assert.Equal(t, "javascript", classroom.EditorMode)
+	require.NotNil(t, settings)
+	assert.Equal(t, "javascript", settings.EditorMode)
 
 	// Verify creator was added as instructor
 	members, err := classes.ListClassMembers(ctx, class.ID)
@@ -80,7 +80,7 @@ func TestClassStore_ListClassesByOrg(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		db.ExecContext(ctx, "DELETE FROM class_memberships WHERE class_id = $1", class.ID)
-		db.ExecContext(ctx, "DELETE FROM new_classrooms WHERE class_id = $1", class.ID)
+		db.ExecContext(ctx, "DELETE FROM class_settings WHERE class_id = $1", class.ID)
 		db.ExecContext(ctx, "DELETE FROM classes WHERE id = $1", class.ID)
 	})
 
@@ -111,7 +111,7 @@ func TestClassStore_ArchiveClass(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		db.ExecContext(ctx, "DELETE FROM class_memberships WHERE class_id = $1", class.ID)
-		db.ExecContext(ctx, "DELETE FROM new_classrooms WHERE class_id = $1", class.ID)
+		db.ExecContext(ctx, "DELETE FROM class_settings WHERE class_id = $1", class.ID)
 		db.ExecContext(ctx, "DELETE FROM classes WHERE id = $1", class.ID)
 	})
 
@@ -151,7 +151,7 @@ func TestClassStore_JoinClassByCode(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		db.ExecContext(ctx, "DELETE FROM class_memberships WHERE class_id = $1", class.ID)
-		db.ExecContext(ctx, "DELETE FROM new_classrooms WHERE class_id = $1", class.ID)
+		db.ExecContext(ctx, "DELETE FROM class_settings WHERE class_id = $1", class.ID)
 		db.ExecContext(ctx, "DELETE FROM classes WHERE id = $1", class.ID)
 	})
 
@@ -194,7 +194,7 @@ func TestClassStore_AddAndRemoveClassMember(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		db.ExecContext(ctx, "DELETE FROM class_memberships WHERE class_id = $1", class.ID)
-		db.ExecContext(ctx, "DELETE FROM new_classrooms WHERE class_id = $1", class.ID)
+		db.ExecContext(ctx, "DELETE FROM class_settings WHERE class_id = $1", class.ID)
 		db.ExecContext(ctx, "DELETE FROM classes WHERE id = $1", class.ID)
 	})
 
@@ -256,7 +256,7 @@ func TestClassStore_ListClassesByUser(t *testing.T) {
 	})
 	t.Cleanup(func() {
 		db.ExecContext(ctx, "DELETE FROM class_memberships WHERE class_id = $1", class.ID)
-		db.ExecContext(ctx, "DELETE FROM new_classrooms WHERE class_id = $1", class.ID)
+		db.ExecContext(ctx, "DELETE FROM class_settings WHERE class_id = $1", class.ID)
 		db.ExecContext(ctx, "DELETE FROM classes WHERE id = $1", class.ID)
 	})
 
@@ -326,7 +326,7 @@ func TestClassStore_TeacherCanViewStudentInCourse(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		db.ExecContext(ctx, "DELETE FROM class_memberships WHERE class_id = $1", class.ID)
-		db.ExecContext(ctx, "DELETE FROM new_classrooms WHERE class_id = $1", class.ID)
+		db.ExecContext(ctx, "DELETE FROM class_settings WHERE class_id = $1", class.ID)
 		db.ExecContext(ctx, "DELETE FROM classes WHERE id = $1", class.ID)
 	})
 

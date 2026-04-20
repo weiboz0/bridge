@@ -6,7 +6,7 @@
 --   • 4 problems with starter code + description
 --   • Canonical test cases (examples + hidden)
 --   • 1 class with eve as instructor, alice + bob enrolled as students
---   • A new_classrooms row so live sessions work
+--   • A class_settings row so live sessions work
 --
 -- Idempotent: all rows use fixed UUIDs and are inserted with
 -- ON CONFLICT DO NOTHING. Re-running is a no-op.
@@ -155,7 +155,7 @@ VALUES
   ('00000000-0000-0000-0000-000000050003', '00000000-0000-0000-0000-000000040001', '179aee9f-cce3-46f1-ac5f-f5cfbeb0531b', 'student')      -- bob
 ON CONFLICT (id) DO NOTHING;
 
-INSERT INTO new_classrooms (id, class_id, editor_mode)
+INSERT INTO class_settings (id, class_id, editor_mode)
 VALUES ('00000000-0000-0000-0000-000000060001', '00000000-0000-0000-0000-000000040001', 'python')
 ON CONFLICT (id) DO NOTHING;
 

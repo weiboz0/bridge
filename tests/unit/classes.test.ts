@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { testDb, createTestUser, createTestOrg, createTestCourse, createTestClass } from "../helpers";
-import { createClass, getClass, listClassesByOrg, getClassByJoinCode, archiveClass, getClassroom } from "@/lib/classes";
+import { createClass, getClass, listClassesByOrg, getClassByJoinCode, archiveClass, getClassSettings } from "@/lib/classes";
 import { addClassMember, listClassMembers, joinClassByCode } from "@/lib/class-memberships";
 
 describe("class operations", () => {
@@ -14,7 +14,7 @@ describe("class operations", () => {
     course = await createTestCourse(org.id, teacher.id);
   });
 
-  it("creates a class with auto-created classroom and instructor", async () => {
+  it("creates a class with auto-created settings and instructor", async () => {
     const cls = await createClass(testDb, {
       courseId: course.id,
       orgId: org.id,
@@ -24,9 +24,8 @@ describe("class operations", () => {
     expect(cls.id).toBeDefined();
     expect(cls.joinCode).toHaveLength(8);
 
-    // Classroom auto-created
-    const classroom = await getClassroom(testDb, cls.id);
-    expect(classroom).not.toBeNull();
+    const settings = await getClassSettings(testDb, cls.id);
+    expect(settings).not.toBeNull();
 
     // Creator is instructor
     const members = await listClassMembers(testDb, cls.id);
