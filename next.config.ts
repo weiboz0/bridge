@@ -16,7 +16,6 @@ const GO_PROXY_ROUTES = [
   "/api/assignments/:path*",
   "/api/submissions/:path*",
   "/api/annotations/:path*",
-  "/api/classrooms/:path*",
   "/api/ai/:path*",
   "/api/parent/:path*",
   "/api/me/:path*",

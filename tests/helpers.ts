@@ -79,22 +79,6 @@ export async function createTestUser(
   return user;
 }
 
-export async function createTestSession(
-  classroomId: string,
-  teacherId: string,
-  overrides: Partial<typeof schema.liveSessions.$inferInsert> = {}
-) {
-  const [session] = await testDb
-    .insert(schema.liveSessions)
-    .values({
-      classroomId,
-      teacherId,
-      ...overrides,
-    })
-    .returning();
-  return session;
-}
-
 export async function createTestCourse(
   orgId: string,
   createdBy: string,

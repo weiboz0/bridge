@@ -107,10 +107,10 @@ export async function archiveClass(db: Database, classId: string) {
   return cls || null;
 }
 
-export async function getClassroom(db: Database, classId: string) {
-  const [classroom] = await db
+export async function getClassSettings(db: Database, classId: string) {
+  const [settings] = await db
     .select()
     .from(classSettings)
     .where(eq(classSettings.classId, classId));
-  return classroom || null;
+  return settings || null;
 }
