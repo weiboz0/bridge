@@ -260,7 +260,7 @@ func TestCourseStore_UserHasAccessToCourse(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		db.ExecContext(ctx, "DELETE FROM class_memberships WHERE class_id = $1", class.ID)
-		db.ExecContext(ctx, "DELETE FROM new_classrooms WHERE class_id = $1", class.ID)
+		db.ExecContext(ctx, "DELETE FROM class_settings WHERE class_id = $1", class.ID)
 		db.ExecContext(ctx, "DELETE FROM classes WHERE id = $1", class.ID)
 	})
 

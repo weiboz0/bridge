@@ -107,8 +107,8 @@ func (h *AIHandler) Chat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	lang := "python"
-	if nc, err := h.Classes.GetClassroom(r.Context(), liveSession.ClassID); err == nil && nc != nil {
-		lang = nc.EditorMode
+	if cs, err := h.Classes.GetClassSettings(r.Context(), liveSession.ClassID); err == nil && cs != nil {
+		lang = cs.EditorMode
 	}
 	systemPrompt := skills.BuildChatSystemPrompt(skills.GradeLevel(gradeLevel), body.Code, lang)
 

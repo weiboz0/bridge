@@ -160,7 +160,7 @@ func TestScheduleStore_StartScheduledSession(t *testing.T) {
 		db.ExecContext(ctx, "DELETE FROM session_topics WHERE topic_id = $1", topic.ID)
 		db.ExecContext(ctx, "DELETE FROM live_sessions WHERE class_id = $1", class.ID)
 		db.ExecContext(ctx, "DELETE FROM class_memberships WHERE class_id = $1", class.ID)
-		db.ExecContext(ctx, "DELETE FROM new_classrooms WHERE class_id = $1", class.ID)
+		db.ExecContext(ctx, "DELETE FROM class_settings WHERE class_id = $1", class.ID)
 		db.ExecContext(ctx, "DELETE FROM classes WHERE id = $1", class.ID)
 		db.ExecContext(ctx, "DELETE FROM topics WHERE id = $1", topic.ID)
 		db.ExecContext(ctx, "DELETE FROM courses WHERE id = $1", course.ID)
@@ -273,7 +273,7 @@ func TestScheduleStore_CreateWithTopicIDs(t *testing.T) {
 	t.Cleanup(func() {
 		db.ExecContext(ctx, "DELETE FROM scheduled_sessions WHERE class_id = $1", class.ID)
 		db.ExecContext(ctx, "DELETE FROM class_memberships WHERE class_id = $1", class.ID)
-		db.ExecContext(ctx, "DELETE FROM new_classrooms WHERE class_id = $1", class.ID)
+		db.ExecContext(ctx, "DELETE FROM class_settings WHERE class_id = $1", class.ID)
 		db.ExecContext(ctx, "DELETE FROM classes WHERE id = $1", class.ID)
 		db.ExecContext(ctx, "DELETE FROM topics WHERE course_id = $1", course.ID)
 		db.ExecContext(ctx, "DELETE FROM courses WHERE id = $1", course.ID)

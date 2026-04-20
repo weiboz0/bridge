@@ -24,7 +24,9 @@ type Class struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 }
 
-type NewClassroom struct {
+// ClassSettings is the per-class editor configuration (formerly NewClassroom).
+// 1:1 with classes; stored in the class_settings table.
+type ClassSettings struct {
 	ID         string    `json:"id"`
 	ClassID    string    `json:"classId"`
 	EditorMode string    `json:"editorMode"`
@@ -123,9 +125,9 @@ func (s *ClassStore) CreateClass(ctx context.Context, input CreateClassInput) (*
 		editorMode = lang
 	}
 
-	// Create new_classroom (1:1)
+	// Create class_settings row (1:1 with class).
 	_, err = tx.ExecContext(ctx,
-		`INSERT INTO new_classrooms (id, class_id, editor_mode, settings, created_at)
+		`INSERT INTO class_settings (id, class_id, editor_mode, settings, created_at)
 		 VALUES ($1, $2, $3, '{}', $4)`,
 		uuid.New().String(), classID, editorMode, now,
 	)
@@ -257,18 +259,20 @@ func (s *ClassStore) GetClassByJoinCode(ctx context.Context, joinCode string) (*
 		`SELECT `+classColumns+` FROM classes WHERE join_code = $1`, strings.ToUpper(joinCode)))
 }
 
-func (s *ClassStore) GetClassroom(ctx context.Context, classID string) (*NewClassroom, error) {
-	var nc NewClassroom
+// GetClassSettings returns the per-class editor configuration row, or nil if
+// none exists yet (which shouldn't happen in practice — CreateClass writes one).
+func (s *ClassStore) GetClassSettings(ctx context.Context, classID string) (*ClassSettings, error) {
+	var cs ClassSettings
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, class_id, editor_mode, settings, created_at FROM new_classrooms WHERE class_id = $1`, classID,
-	).Scan(&nc.ID, &nc.ClassID, &nc.EditorMode, &nc.Settings, &nc.CreatedAt)
+		`SELECT id, class_id, editor_mode, settings, created_at FROM class_settings WHERE class_id = $1`, classID,
+	).Scan(&cs.ID, &cs.ClassID, &cs.EditorMode, &cs.Settings, &cs.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	return &nc, nil
+	return &cs, nil
 }
 
 // --- Class Memberships ---
