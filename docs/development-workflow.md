@@ -52,7 +52,7 @@ For **each phase**:
 4. **Document** — update `docs/` and affected `README.md` files for this phase's changes.
 5. **Commit** — only after tests pass and self-review is clean. Commit code, tests, and docs together.
 
-When tasks within a plan are independent and can be implemented without shared state, dispatch them to subagents in parallel via the Agent tool. When tasks have sequential dependencies, execute them in order in the current session.
+When tasks within a plan are independent and can be implemented without shared state, dispatch them to subagents in parallel when the current coding environment supports it. When tasks have sequential dependencies, execute them in order in the current session.
 
 When a test fails or behavior is unexpected, debug systematically: reproduce the failure deterministically, isolate the smallest case, form a hypothesis, verify by changing one thing at a time. Don't guess at fixes.
 
@@ -98,7 +98,7 @@ Wrap up, push, and create the PR.
 
 ## Session Handoff Rules
 
-Multiple Claude Code sessions share the same local repository sequentially. To prevent lost work:
+Multiple Claude Code and Codex sessions may share the same local repository sequentially. To prevent lost work:
 
 1. **Commit everything before ending.** Every file change — code, plan files, docs, review findings — must be committed before the session ends. Use `WIP:` prefix for incomplete work. Uncommitted changes are invisible to the next session.
 2. **Push the branch.** Don't leave unpushed commits. The next session may start on a different branch or after a `git pull`.
