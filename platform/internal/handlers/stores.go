@@ -17,7 +17,6 @@ type Stores struct {
 	Documents    *store.DocumentStore
 	Assignments  *store.AssignmentStore
 	Annotations  *store.AnnotationStore
-	Classrooms   *store.ClassroomStore
 	Interactions *store.InteractionStore
 	Reports      *store.ReportStore
 	Stats        *store.StatsStore
@@ -39,7 +38,6 @@ func NewStores(db *sql.DB) *Stores {
 		Documents:    store.NewDocumentStore(db),
 		Assignments:  store.NewAssignmentStore(db),
 		Annotations:  store.NewAnnotationStore(db),
-		Classrooms:   store.NewClassroomStore(db),
 		Interactions: store.NewInteractionStore(db),
 		Reports:      store.NewReportStore(db),
 		Stats:        store.NewStatsStore(db),
