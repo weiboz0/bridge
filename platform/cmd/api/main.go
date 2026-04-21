@@ -139,6 +139,16 @@ func main() {
 		}
 		problemH.Routes(r)
 
+		solutionH := &handlers.SolutionHandler{
+			Problems:      stores.Problems,
+			Solutions:     stores.Solutions,
+			Orgs:          stores.Orgs,
+			TopicProblems: stores.TopicProblems,
+			Topics:        stores.Topics,
+			Courses:       stores.Courses,
+		}
+		solutionH.Routes(r)
+
 		classH := &handlers.ClassHandler{Classes: stores.Classes, Orgs: stores.Orgs, Users: stores.Users}
 		classH.Routes(r)
 
