@@ -154,3 +154,13 @@ func (s *AttemptStore) UpdateLastTestResult(ctx context.Context, attemptID strin
 	)
 	return err
 }
+
+// CountAttemptsByProblem returns the number of attempts that reference a
+// problem. Used by DeleteProblem to enforce the "problem has attempts" guard
+// (409 Conflict instead of silently cascading and destroying student work).
+func (s *AttemptStore) CountAttemptsByProblem(ctx context.Context, problemID string) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM attempts WHERE problem_id = $1`, problemID).Scan(&n)
+	return n, err
+}

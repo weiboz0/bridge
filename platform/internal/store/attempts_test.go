@@ -184,6 +184,37 @@ func TestAttemptStore_UpdateLastTestResult_RoundTrip(t *testing.T) {
 	assert.JSONEq(t, string(summary), string(*got.LastTestResult))
 }
 
+func TestAttemptStore_CountAttemptsByProblem(t *testing.T) {
+	attempts, p, user, _ := setupAttemptEnv(t, t.Name())
+	ctx := context.Background()
+
+	n, err := attempts.CountAttemptsByProblem(ctx, p.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 0, n, "no attempts yet → zero")
+
+	_, err = attempts.CreateAttempt(ctx, CreateAttemptInput{
+		ProblemID: p.ID, UserID: user.ID, Language: "python",
+	})
+	require.NoError(t, err)
+	_, err = attempts.CreateAttempt(ctx, CreateAttemptInput{
+		ProblemID: p.ID, UserID: user.ID, Language: "python", PlainText: "x",
+	})
+	require.NoError(t, err)
+
+	n, err = attempts.CountAttemptsByProblem(ctx, p.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 2, n)
+
+	// Cascade: deleting the problem drops the attempts (FK ON DELETE CASCADE).
+	db := testDB(t)
+	_, err = db.ExecContext(ctx, "DELETE FROM problems WHERE id = $1", p.ID)
+	require.NoError(t, err)
+
+	n, err = attempts.CountAttemptsByProblem(ctx, p.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 0, n, "cascade delete leaves no attempts")
+}
+
 func TestAttemptStore_UpdateLastTestResult_DoesNotBumpUpdatedAt(t *testing.T) {
 	attempts, p, user, _ := setupAttemptEnv(t, t.Name())
 	ctx := context.Background()

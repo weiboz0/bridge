@@ -13,11 +13,12 @@ import (
 // Used by the live-watch UI (plan 025b) and by the Hocuspocus auth
 // callback (server-to-server check that a teacher may read an attempt).
 type TeacherProblemHandler struct {
-	Problems *store.ProblemStore
-	Topics   *store.TopicStore
-	Classes  *store.ClassStore
-	Attempts *store.AttemptStore
-	Users    *store.UserStore
+	Problems      *store.ProblemStore
+	Topics        *store.TopicStore
+	TopicProblems *store.TopicProblemStore
+	Classes       *store.ClassStore
+	Attempts      *store.AttemptStore
+	Users         *store.UserStore
 }
 
 func (h *TeacherProblemHandler) Routes(r chi.Router) {
@@ -28,8 +29,10 @@ func (h *TeacherProblemHandler) Routes(r chi.Router) {
 	})
 }
 
-// canTeacherViewStudent — caller must be a class instructor in the
-// problem's course AND the student must be a member of one such class.
+// canTeacherViewStudent — with scoped problems, a problem may be attached to
+// zero or more topics (via topic_problems). The teacher is permitted to read
+// the student's attempts iff ANY attached topic's course contains a class
+// where the caller is an instructor AND the student is a member.
 func (h *TeacherProblemHandler) canTeacherViewStudent(
 	r *http.Request,
 	problem *store.Problem,
@@ -39,14 +42,31 @@ func (h *TeacherProblemHandler) canTeacherViewStudent(
 	if claims.IsPlatformAdmin {
 		return true, nil
 	}
-	topic, err := h.Topics.GetTopic(r.Context(), problem.TopicID)
+	topicIDs, err := h.TopicProblems.ListTopicsByProblem(r.Context(), problem.ID)
 	if err != nil {
 		return false, err
 	}
-	if topic == nil {
-		return false, nil
+	// Dedup courseIDs so we don't re-hit the same class check for a course
+	// the problem is attached to via multiple topics.
+	seenCourse := map[string]bool{}
+	for _, topicID := range topicIDs {
+		topic, err := h.Topics.GetTopic(r.Context(), topicID)
+		if err != nil {
+			return false, err
+		}
+		if topic == nil || seenCourse[topic.CourseID] {
+			continue
+		}
+		seenCourse[topic.CourseID] = true
+		ok, err := h.Classes.TeacherCanViewStudentInCourse(r.Context(), claims.UserID, studentID, topic.CourseID)
+		if err != nil {
+			return false, err
+		}
+		if ok {
+			return true, nil
+		}
 	}
-	return h.Classes.TeacherCanViewStudentInCourse(r.Context(), claims.UserID, studentID, topic.CourseID)
+	return false, nil
 }
 
 // ListStudentAttempts handles
