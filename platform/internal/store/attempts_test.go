@@ -19,9 +19,12 @@ func setupAttemptEnv(t *testing.T, suffix string) (*AttemptStore, *Problem, *Reg
 	other := createTestUser(t, db, users, suffix+"-other")
 
 	ctx := context.Background()
+	_ = topic // kept for parity with older fixture; no longer used directly
+	scopeID := owner.ID
 	p, err := problems.CreateProblem(ctx, CreateProblemInput{
-		TopicID: topic.ID, CreatedBy: owner.ID,
-		Title: "Attempt Test " + suffix, Language: "python",
+		Scope: "personal", ScopeID: &scopeID, CreatedBy: owner.ID,
+		Title:       "Attempt Test " + suffix,
+		Description: "desc",
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() { db.ExecContext(ctx, "DELETE FROM problems WHERE id = $1", p.ID) })
