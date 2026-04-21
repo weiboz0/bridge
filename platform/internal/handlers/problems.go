@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"context"
 	"encoding/base64"
 	"errors"
 	"net/http"
@@ -87,156 +86,15 @@ func (h *ProblemHandler) Routes(r chi.Router) {
 
 // ---------- access helpers ----------
 
-// authorizedForScope reports whether the caller may author content under the
-// given scope/scopeID. Platform scope requires IsPlatformAdmin; org scope
-// requires an active org_admin or teacher membership in the org; personal
-// scope requires the caller to be the scope owner.
-func (h *ProblemHandler) authorizedForScope(ctx context.Context, c *auth.Claims, scope string, scopeID *string) bool {
-	switch scope {
-	case "platform":
-		return c.IsPlatformAdmin
-	case "org":
-		if scopeID == nil {
-			return false
-		}
-		roles, err := h.Orgs.GetUserRolesInOrg(ctx, *scopeID, c.UserID)
-		if err != nil || len(roles) == 0 {
-			return false
-		}
-		for _, m := range roles {
-			if m.Status == "active" && (m.Role == "org_admin" || m.Role == "teacher") {
-				return true
-			}
-		}
-		return false
-	case "personal":
-		return scopeID != nil && *scopeID == c.UserID
-	default:
-		return false
+// accessDeps constructs a problemAccessDeps from the handler's fields.
+func (h *ProblemHandler) accessDeps() problemAccessDeps {
+	return problemAccessDeps{
+		Problems:      h.Problems,
+		TopicProblems: h.TopicProblems,
+		Topics:        h.Topics,
+		Courses:       h.Courses,
+		Orgs:          h.Orgs,
 	}
-}
-
-// authorizedForProblemEdit loads the problem and delegates to
-// authorizedForScope. A non-admin creator of a personal-scope problem is also
-// always allowed to edit their own problem (covers legacy personal rows whose
-// scope_id differs from created_by, which shouldn't happen in practice but is
-// cheap to support).
-func (h *ProblemHandler) authorizedForProblemEdit(ctx context.Context, c *auth.Claims, problemID string) bool {
-	p, err := h.Problems.GetProblem(ctx, problemID)
-	if err != nil || p == nil {
-		return false
-	}
-	return h.authorizedForProblemEditRow(ctx, c, p)
-}
-
-func (h *ProblemHandler) authorizedForProblemEditRow(ctx context.Context, c *auth.Claims, p *store.Problem) bool {
-	if h.authorizedForScope(ctx, c, p.Scope, p.ScopeID) {
-		return true
-	}
-	return p.Scope == "personal" && p.CreatedBy == c.UserID
-}
-
-// canViewTopic returns true if the caller has read access to the topic's
-// course (platform admin, course creator, or a member of a class in the
-// course). Also returns an HTTP status hint (404 for missing topic/course)
-// so callers can distinguish "not found" from "forbidden" when they care.
-func (h *ProblemHandler) canViewTopic(ctx context.Context, topicID string, claims *auth.Claims) (bool, int, error) {
-	if claims.IsPlatformAdmin {
-		return true, 0, nil
-	}
-	topic, err := h.Topics.GetTopic(ctx, topicID)
-	if err != nil {
-		return false, http.StatusInternalServerError, err
-	}
-	if topic == nil {
-		return false, http.StatusNotFound, nil
-	}
-	course, err := h.Courses.GetCourse(ctx, topic.CourseID)
-	if err != nil {
-		return false, http.StatusInternalServerError, err
-	}
-	if course == nil {
-		return false, http.StatusNotFound, nil
-	}
-	if course.CreatedBy == claims.UserID {
-		return true, 0, nil
-	}
-	hasAccess, err := h.Courses.UserHasAccessToCourse(ctx, course.ID, claims.UserID)
-	if err != nil {
-		return false, http.StatusInternalServerError, err
-	}
-	return hasAccess, 0, nil
-}
-
-// canViewProblem applies the full view matrix:
-//   - platform admin: always true
-//   - platform scope: published/archived visible to anyone
-//   - org scope (published/archived): visible to active org members
-//   - personal scope: visible to the owner
-//   - draft (any scope): visible only to editors
-//   - attachment grant: any attached topic the caller can view grants read
-func (h *ProblemHandler) canViewProblem(ctx context.Context, c *auth.Claims, problemID string) (bool, *store.Problem, int) {
-	p, err := h.Problems.GetProblem(ctx, problemID)
-	if err != nil {
-		return false, nil, http.StatusInternalServerError
-	}
-	if p == nil {
-		return false, nil, http.StatusNotFound
-	}
-	if c.IsPlatformAdmin {
-		return true, p, 0
-	}
-	if h.canViewProblemRow(ctx, c, p) {
-		return true, p, 0
-	}
-	return false, p, 0
-}
-
-func (h *ProblemHandler) canViewProblemRow(ctx context.Context, c *auth.Claims, p *store.Problem) bool {
-	if c.IsPlatformAdmin {
-		return true
-	}
-	// Drafts are editor-only, regardless of scope. Editors include org
-	// admins/teachers, platform admins, and the personal-scope owner.
-	if p.Status == "draft" {
-		return h.authorizedForProblemEditRow(ctx, c, p)
-	}
-	switch p.Scope {
-	case "platform":
-		// Non-draft platform problems are visible to everyone.
-		return p.Status == "published" || p.Status == "archived"
-	case "org":
-		if p.ScopeID == nil {
-			return false
-		}
-		roles, err := h.Orgs.GetUserRolesInOrg(ctx, *p.ScopeID, c.UserID)
-		if err != nil {
-			return false
-		}
-		for _, m := range roles {
-			if m.Status == "active" {
-				return true
-			}
-		}
-	case "personal":
-		if p.ScopeID != nil && *p.ScopeID == c.UserID {
-			return true
-		}
-	}
-	// Attachment grant: if the caller can view any topic the problem is
-	// attached to, that's sufficient (e.g. a student in a class whose topic
-	// pins a cross-org platform/org problem).
-	topicIDs, err := h.TopicProblems.ListTopicsByProblem(ctx, p.ID)
-	if err != nil {
-		return false
-	}
-	for _, topicID := range topicIDs {
-		ok, _, err := h.canViewTopic(ctx, topicID, c)
-		if err == nil && ok {
-			return true
-		}
-	}
-	return false
 }
 
 // ---------- query helpers ----------
@@ -376,7 +234,7 @@ func (h *ProblemHandler) ListProblemsByTopic(w http.ResponseWriter, r *http.Requ
 	}
 	topicID := chi.URLParam(r, "topicId")
 
-	canView, status, err := h.canViewTopic(r.Context(), topicID, claims)
+	canView, status, err := canViewTopic(r.Context(), h.accessDeps(), claims, topicID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
@@ -446,7 +304,7 @@ func (h *ProblemHandler) CreateProblem(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if !h.authorizedForScope(r.Context(), claims, body.Scope, body.ScopeID) {
+	if !authorizedForScope(r.Context(), h.accessDeps(), claims, body.Scope, body.ScopeID) {
 		writeError(w, http.StatusForbidden, "not authorized for scope")
 		return
 	}
@@ -479,7 +337,7 @@ func (h *ProblemHandler) GetProblem(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
-	canView, p, status := h.canViewProblem(r.Context(), claims, chi.URLParam(r, "id"))
+	canView, p, status := canViewProblem(r.Context(), h.accessDeps(), claims, chi.URLParam(r, "id"))
 	if status == http.StatusInternalServerError {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
@@ -511,7 +369,7 @@ func (h *ProblemHandler) UpdateProblem(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "Not found")
 		return
 	}
-	if !h.authorizedForProblemEditRow(r.Context(), claims, p) {
+	if !authorizedForProblemEditRow(r.Context(), h.accessDeps(), claims, p) {
 		writeError(w, http.StatusForbidden, "Not authorized to edit")
 		return
 	}
@@ -566,7 +424,7 @@ func (h *ProblemHandler) DeleteProblem(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "Not found")
 		return
 	}
-	if !h.authorizedForProblemEditRow(r.Context(), claims, p) {
+	if !authorizedForProblemEditRow(r.Context(), h.accessDeps(), claims, p) {
 		writeError(w, http.StatusForbidden, "Not authorized to delete")
 		return
 	}
@@ -624,7 +482,7 @@ func (h *ProblemHandler) setStatus(w http.ResponseWriter, r *http.Request, targe
 		return
 	}
 	id := chi.URLParam(r, "id")
-	if !h.authorizedForProblemEdit(r.Context(), claims, id) {
+	if !authorizedForProblemEdit(r.Context(), h.accessDeps(), claims, id) {
 		writeError(w, http.StatusForbidden, "Not authorized")
 		return
 	}
@@ -693,7 +551,7 @@ func (h *ProblemHandler) ForkProblem(w http.ResponseWriter, r *http.Request) {
 
 	// Source must be visible to the caller. We hide existence via 404 for
 	// unauthorized callers (matches GetProblem behavior).
-	canView, p, status := h.canViewProblem(r.Context(), claims, sourceID)
+	canView, p, status := canViewProblem(r.Context(), h.accessDeps(), claims, sourceID)
 	if status == http.StatusInternalServerError {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
@@ -703,7 +561,7 @@ func (h *ProblemHandler) ForkProblem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !h.authorizedForScope(r.Context(), claims, body.TargetScope, body.TargetScopeID) {
+	if !authorizedForScope(r.Context(), h.accessDeps(), claims, body.TargetScope, body.TargetScopeID) {
 		writeError(w, http.StatusForbidden, "not authorized for target scope")
 		return
 	}
@@ -727,16 +585,18 @@ func (h *ProblemHandler) ForkProblem(w http.ResponseWriter, r *http.Request) {
 
 // ---------- TestCase handlers ----------
 
-// ListTestCases returns canonical-example cases + the caller's private cases
-// to a regular viewer. To an editor (org admin/teacher, platform admin, or
-// personal-scope owner), hidden canonical cases are also returned.
+// ListTestCases returns all test cases visible to the caller. Editors see full
+// content for every case. Non-editors receive hidden canonical cases (owner_id
+// IS NULL and is_example = false) with Stdin and ExpectedStdout blanked out
+// so the client knows the case exists without being able to read the secret
+// I/O.
 func (h *ProblemHandler) ListTestCases(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
 		writeError(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
-	canView, p, status := h.canViewProblem(r.Context(), claims, chi.URLParam(r, "id"))
+	canView, p, status := canViewProblem(r.Context(), h.accessDeps(), claims, chi.URLParam(r, "id"))
 	if status == http.StatusInternalServerError {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
@@ -756,19 +616,18 @@ func (h *ProblemHandler) ListTestCases(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if h.authorizedForProblemEditRow(r.Context(), claims, p) {
-		writeJSON(w, http.StatusOK, all)
-		return
-	}
-
-	out := make([]store.TestCase, 0, len(all))
-	for _, c := range all {
-		if c.OwnerID == nil && !c.IsExample {
-			continue // hidden canonical: redact from non-editor
+	isEditor := authorizedForProblemEditRow(r.Context(), h.accessDeps(), claims, p)
+	if !isEditor {
+		// Shell out hidden canonical cases: include the row but blank the I/O
+		// so students know hidden tests exist without leaking the test data.
+		for i := range all {
+			if all[i].OwnerID == nil && !all[i].IsExample {
+				all[i].Stdin = ""
+				all[i].ExpectedStdout = nil
+			}
 		}
-		out = append(out, c)
 	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, all)
 }
 
 func (h *ProblemHandler) CreateTestCase(w http.ResponseWriter, r *http.Request) {
@@ -777,7 +636,7 @@ func (h *ProblemHandler) CreateTestCase(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
-	canView, p, status := h.canViewProblem(r.Context(), claims, chi.URLParam(r, "id"))
+	canView, p, status := canViewProblem(r.Context(), h.accessDeps(), claims, chi.URLParam(r, "id"))
 	if status == http.StatusInternalServerError {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
@@ -808,7 +667,7 @@ func (h *ProblemHandler) CreateTestCase(w http.ResponseWriter, r *http.Request) 
 		Order:          body.Order,
 	}
 	if body.IsCanonical {
-		if !h.authorizedForProblemEditRow(r.Context(), claims, p) {
+		if !authorizedForProblemEditRow(r.Context(), h.accessDeps(), claims, p) {
 			writeError(w, http.StatusForbidden, "Only the problem editor can add canonical test cases")
 			return
 		}
@@ -855,7 +714,7 @@ func (h *ProblemHandler) testCaseGuard(w http.ResponseWriter, r *http.Request, c
 		writeError(w, http.StatusNotFound, "Not found")
 		return nil
 	}
-	if !h.authorizedForProblemEditRow(r.Context(), claims, p) {
+	if !authorizedForProblemEditRow(r.Context(), h.accessDeps(), claims, p) {
 		writeError(w, http.StatusForbidden, "Only the problem editor can modify canonical cases")
 		return nil
 	}
@@ -910,7 +769,7 @@ func (h *ProblemHandler) ListAttempts(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
-	canView, p, status := h.canViewProblem(r.Context(), claims, chi.URLParam(r, "id"))
+	canView, p, status := canViewProblem(r.Context(), h.accessDeps(), claims, chi.URLParam(r, "id"))
 	if status == http.StatusInternalServerError {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
@@ -933,7 +792,7 @@ func (h *ProblemHandler) CreateAttempt(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
-	canView, p, status := h.canViewProblem(r.Context(), claims, chi.URLParam(r, "id"))
+	canView, p, status := canViewProblem(r.Context(), h.accessDeps(), claims, chi.URLParam(r, "id"))
 	if status == http.StatusInternalServerError {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return

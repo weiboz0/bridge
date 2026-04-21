@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"context"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -39,116 +38,17 @@ func (h *SolutionHandler) Routes(r chi.Router) {
 	})
 }
 
-// ---------- access helpers (duplicated from ProblemHandler; Task 7 extracts) ----------
+// ---------- access helpers ----------
 
-// solAuthorizedForScope mirrors ProblemHandler.authorizedForScope.
-func (h *SolutionHandler) solAuthorizedForScope(ctx context.Context, c *auth.Claims, scope string, scopeID *string) bool {
-	switch scope {
-	case "platform":
-		return c.IsPlatformAdmin
-	case "org":
-		if scopeID == nil {
-			return false
-		}
-		roles, err := h.Orgs.GetUserRolesInOrg(ctx, *scopeID, c.UserID)
-		if err != nil || len(roles) == 0 {
-			return false
-		}
-		for _, m := range roles {
-			if m.Status == "active" && (m.Role == "org_admin" || m.Role == "teacher") {
-				return true
-			}
-		}
-		return false
-	case "personal":
-		return scopeID != nil && *scopeID == c.UserID
-	default:
-		return false
+// accessDeps constructs a problemAccessDeps from the handler's fields.
+func (h *SolutionHandler) accessDeps() problemAccessDeps {
+	return problemAccessDeps{
+		Problems:      h.Problems,
+		TopicProblems: h.TopicProblems,
+		Topics:        h.Topics,
+		Courses:       h.Courses,
+		Orgs:          h.Orgs,
 	}
-}
-
-// canEditProblem mirrors ProblemHandler.authorizedForProblemEdit.
-func (h *SolutionHandler) canEditProblem(ctx context.Context, c *auth.Claims, problemID string) bool {
-	p, err := h.Problems.GetProblem(ctx, problemID)
-	if err != nil || p == nil {
-		return false
-	}
-	if h.solAuthorizedForScope(ctx, c, p.Scope, p.ScopeID) {
-		return true
-	}
-	return p.Scope == "personal" && p.CreatedBy == c.UserID
-}
-
-// canViewTopic mirrors ProblemHandler.canViewTopic.
-func (h *SolutionHandler) canViewTopic(ctx context.Context, topicID string, claims *auth.Claims) (bool, error) {
-	if claims.IsPlatformAdmin {
-		return true, nil
-	}
-	topic, err := h.Topics.GetTopic(ctx, topicID)
-	if err != nil || topic == nil {
-		return false, err
-	}
-	course, err := h.Courses.GetCourse(ctx, topic.CourseID)
-	if err != nil || course == nil {
-		return false, err
-	}
-	if course.CreatedBy == claims.UserID {
-		return true, nil
-	}
-	hasAccess, err := h.Courses.UserHasAccessToCourse(ctx, course.ID, claims.UserID)
-	if err != nil {
-		return false, err
-	}
-	return hasAccess, nil
-}
-
-// canViewProblem mirrors ProblemHandler.canViewProblem. Returns (ok, problem).
-func (h *SolutionHandler) canViewProblem(ctx context.Context, c *auth.Claims, problemID string) (bool, *store.Problem) {
-	p, err := h.Problems.GetProblem(ctx, problemID)
-	if err != nil || p == nil {
-		return false, p
-	}
-	if c.IsPlatformAdmin {
-		return true, p
-	}
-	// Drafts are editor-only.
-	if p.Status == "draft" {
-		ok := h.canEditProblem(ctx, c, p.ID)
-		return ok, p
-	}
-	switch p.Scope {
-	case "platform":
-		return p.Status == "published" || p.Status == "archived", p
-	case "org":
-		if p.ScopeID == nil {
-			break
-		}
-		roles, err := h.Orgs.GetUserRolesInOrg(ctx, *p.ScopeID, c.UserID)
-		if err != nil {
-			break
-		}
-		for _, m := range roles {
-			if m.Status == "active" {
-				return true, p
-			}
-		}
-	case "personal":
-		if p.ScopeID != nil && *p.ScopeID == c.UserID {
-			return true, p
-		}
-	}
-	// Attachment grant.
-	topicIDs, err := h.TopicProblems.ListTopicsByProblem(ctx, p.ID)
-	if err != nil {
-		return false, p
-	}
-	for _, tid := range topicIDs {
-		ok, err := h.canViewTopic(ctx, tid, c)
-		if err == nil && ok {
-			return true, p
-		}
-	}
-	return false, p
 }
 
 // ---------- handlers ----------
@@ -162,7 +62,11 @@ func (h *SolutionHandler) ListSolutions(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	id := chi.URLParam(r, "id")
-	canView, p := h.canViewProblem(r.Context(), claims, id)
+	canView, p, cvStatus := canViewProblem(r.Context(), h.accessDeps(), claims, id)
+	if cvStatus == http.StatusInternalServerError {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
 	if p == nil {
 		writeError(w, http.StatusNotFound, "Not found")
 		return
@@ -171,7 +75,7 @@ func (h *SolutionHandler) ListSolutions(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusNotFound, "Not found")
 		return
 	}
-	includeDrafts := h.canEditProblem(r.Context(), claims, id)
+	includeDrafts := authorizedForProblemEdit(r.Context(), h.accessDeps(), claims, id)
 	list, err := h.Solutions.ListByProblem(r.Context(), id, includeDrafts)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
@@ -189,7 +93,7 @@ func (h *SolutionHandler) CreateSolution(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	id := chi.URLParam(r, "id")
-	if !h.canEditProblem(r.Context(), claims, id) {
+	if !authorizedForProblemEdit(r.Context(), h.accessDeps(), claims, id) {
 		writeError(w, http.StatusForbidden, "Not authorized to edit problem")
 		return
 	}
@@ -239,7 +143,7 @@ func (h *SolutionHandler) UpdateSolution(w http.ResponseWriter, r *http.Request)
 	}
 	id := chi.URLParam(r, "id")
 	solutionID := chi.URLParam(r, "solutionId")
-	if !h.canEditProblem(r.Context(), claims, id) {
+	if !authorizedForProblemEdit(r.Context(), h.accessDeps(), claims, id) {
 		writeError(w, http.StatusForbidden, "Not authorized to edit problem")
 		return
 	}
@@ -276,7 +180,7 @@ func (h *SolutionHandler) DeleteSolution(w http.ResponseWriter, r *http.Request)
 	}
 	id := chi.URLParam(r, "id")
 	solutionID := chi.URLParam(r, "solutionId")
-	if !h.canEditProblem(r.Context(), claims, id) {
+	if !authorizedForProblemEdit(r.Context(), h.accessDeps(), claims, id) {
 		writeError(w, http.StatusForbidden, "Not authorized to edit problem")
 		return
 	}
@@ -318,7 +222,7 @@ func (h *SolutionHandler) setPublished(w http.ResponseWriter, r *http.Request, p
 	}
 	id := chi.URLParam(r, "id")
 	solutionID := chi.URLParam(r, "solutionId")
-	if !h.canEditProblem(r.Context(), claims, id) {
+	if !authorizedForProblemEdit(r.Context(), h.accessDeps(), claims, id) {
 		writeError(w, http.StatusForbidden, "Not authorized to edit problem")
 		return
 	}
