@@ -24,6 +24,9 @@ interface Props {
   student: { id: string; name: string; email: string };
   attempts: Attempt[];
   initialAttemptId: string | null;
+  /** Editor language derived from class settings (plan 028: problems no
+   *  longer carry a top-level language field). */
+  language: string;
 }
 
 export function TeacherWatchShell({
@@ -32,6 +35,7 @@ export function TeacherWatchShell({
   student,
   attempts,
   initialAttemptId,
+  language,
 }: Props) {
   const { data: session } = useSession();
   const teacherId = session?.user?.id ?? "";
@@ -106,7 +110,7 @@ export function TeacherWatchShell({
         <SectionLabel action={<Tag tone="zinc">Problem</Tag>}>Problem</SectionLabel>
         <div className="flex-1 overflow-auto">
           <div className="p-5">
-            <ProblemDescription problem={problem} testCases={testCases} />
+            <ProblemDescription problem={problem} testCases={testCases} language={language} />
           </div>
           <div className="mx-5 mb-5 rounded-lg border border-zinc-200 bg-zinc-50/60 p-3">
             <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-500">
@@ -173,7 +177,7 @@ export function TeacherWatchShell({
               <CodeEditor
                 key={editorKey}
                 initialCode={activeAttempt.plainText}
-                language={problem.language}
+                language={language}
                 yText={yText}
                 provider={provider}
                 readOnly

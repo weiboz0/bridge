@@ -1,4 +1,6 @@
 import { notFound } from "next/navigation";
+import { db } from "@/lib/db";
+import { getClassSettings } from "@/lib/classes";
 import { api, ApiError } from "@/lib/api-client";
 import { TeacherWatchShell } from "@/components/problem/teacher-watch-shell";
 import type {
@@ -20,13 +22,21 @@ export default async function TeacherWatchStudentPage({
   const { id: classId, problemId, studentId } = await params;
 
   try {
-    const [problem, testCases, payload] = await Promise.all([
+    const [problem, testCases, payload, classSettings] = await Promise.all([
       api<Problem>(`/api/problems/${problemId}`),
       api<TestCase[]>(`/api/problems/${problemId}/test-cases`),
       api<StudentAttemptsResponse>(
         `/api/teacher/problems/${problemId}/students/${studentId}/attempts`
       ),
+      getClassSettings(db, classId),
     ]);
+
+    // Derive language from class settings (plan 028: problems no longer carry
+    // a top-level language field).
+    const language = (classSettings?.editorMode ?? "python") as
+      | "python"
+      | "javascript"
+      | "blockly";
 
     return (
       <TeacherWatchShell
@@ -36,6 +46,7 @@ export default async function TeacherWatchStudentPage({
         student={payload.student}
         attempts={payload.attempts}
         initialAttemptId={payload.attempts[0]?.id ?? null}
+        language={language}
       />
     );
   } catch (e) {

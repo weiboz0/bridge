@@ -1,15 +1,15 @@
 import { notFound } from "next/navigation";
+import { db } from "@/lib/db";
+import { getClassSettings } from "@/lib/classes";
 import { api, ApiError } from "@/lib/api-client";
 import { ProblemShell } from "@/components/problem/problem-shell";
 
 interface Problem {
   id: string;
-  topicId: string;
   title: string;
   description: string;
-  starterCode: string | null;
-  language: string;
-  order: number;
+  /** JSONB object keyed by language: { python: "...", javascript: "..." } */
+  starterCode: Record<string, string> | null;
   createdBy: string;
 }
 
@@ -43,11 +43,22 @@ export default async function StudentProblemPage({
   const { id: classId, problemId } = await params;
 
   try {
-    const [problem, testCases, initialAttempts] = await Promise.all([
+    const [problem, testCases, initialAttempts, classSettings] = await Promise.all([
       api<Problem>(`/api/problems/${problemId}`),
       api<TestCase[]>(`/api/problems/${problemId}/test-cases`),
       api<Attempt[]>(`/api/problems/${problemId}/attempts`),
+      getClassSettings(db, classId),
     ]);
+
+    // Derive language from class settings (not from problem — problems no
+    // longer carry a top-level language field since plan 028).
+    const language = (classSettings?.editorMode ?? "python") as
+      | "python"
+      | "javascript"
+      | "blockly";
+
+    // Starter code is now a JSONB object keyed by language.
+    const starter = problem.starterCode?.[language] ?? "";
 
     // Yjs persistence requires an attempt id at room name. If the student has
     // never opened this problem we eagerly create one seeded with starter_code
@@ -58,7 +69,7 @@ export default async function StudentProblemPage({
     if (attempts.length === 0) {
       const seed = await api<Attempt>(`/api/problems/${problemId}/attempts`, {
         method: "POST",
-        body: { plainText: problem.starterCode ?? "", language: problem.language },
+        body: { plainText: starter, language },
       });
       attempts = [seed];
     }
@@ -70,6 +81,8 @@ export default async function StudentProblemPage({
         testCases={testCases}
         attempts={attempts}
         initialAttemptId={attempts[0]!.id}
+        language={language}
+        starterCode={starter}
       />
     );
   } catch (e) {
