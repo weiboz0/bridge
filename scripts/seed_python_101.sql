@@ -1,5 +1,5 @@
 -- Python 101 demo course — a full teachable unit exercising the new
--- Problem / Attempt / Test workflow (plans 024–026).
+-- Problem / Attempt / Test workflow (plans 024–026, 028).
 --
 -- Structure:
 --   Course: Python 101 — Introduction to Programming
@@ -57,18 +57,21 @@ VALUES
 ON CONFLICT (id) DO NOTHING;
 
 -- =========================================================
--- Problems
+-- Problems (new schema: scope, scope_id, starter_code as jsonb)
 -- =========================================================
--- Starter code uses dollar-quoting ($py$...$py$) so we can include
--- newlines, backticks, and quotes without escaping gymnastics.
--- Description uses $md$...$md$.
+-- scope      = 'org'
+-- scope_id   = 'd386983b-6da4-4cb8-8057-f2aa70d27c07'  (Bridge Demo School)
+-- created_by = 'd0d3b031-a483-4214-97fb-48c9584f4dcb'  (eve@demo.edu)
+-- starter_code is jsonb: jsonb_build_object('python', '<code>')
+-- No topic_id, language, or "order" columns.
 
 -- ---- Topic 1: Hello, World ----
 
-INSERT INTO problems (id, topic_id, title, description, starter_code, language, "order", created_by) VALUES
+INSERT INTO problems (id, scope, scope_id, title, description, starter_code, difficulty, grade_level, tags, status, created_by) VALUES
   (
     '00000000-0000-0000-0000-000000220101',
-    '00000000-0000-0000-0000-000000110001',
+    'org',
+    'd386983b-6da4-4cb8-8057-f2aa70d27c07',
     'Hello, World',
     $md$Print the exact text:
 
@@ -77,13 +80,15 @@ Hello, World!
 ```
 
 Use the `print` function. No input.$md$,
-    $py$print("Hello, World!")
-$py$,
-    'python', 0, 'd0d3b031-a483-4214-97fb-48c9584f4dcb'
+    jsonb_build_object('python', $py$print("Hello, World!")
+$py$),
+    'easy', '9-12', ARRAY['output', 'print'], 'published',
+    'd0d3b031-a483-4214-97fb-48c9584f4dcb'
   ),
   (
     '00000000-0000-0000-0000-000000220102',
-    '00000000-0000-0000-0000-000000110001',
+    'org',
+    'd386983b-6da4-4cb8-8057-f2aa70d27c07',
     'Three Lines',
     $md$Print three lines exactly:
 
@@ -93,32 +98,36 @@ line 2
 line 3
 ```
 $md$,
-    $py$# Print each line on its own line.
-$py$,
-    'python', 1, 'd0d3b031-a483-4214-97fb-48c9584f4dcb'
+    jsonb_build_object('python', $py$# Print each line on its own line.
+$py$),
+    'easy', '9-12', ARRAY['output', 'print'], 'published',
+    'd0d3b031-a483-4214-97fb-48c9584f4dcb'
   )
   ON CONFLICT (id) DO NOTHING;
 
 -- ---- Topic 2: Variables & Input ----
 
-INSERT INTO problems (id, topic_id, title, description, starter_code, language, "order", created_by) VALUES
+INSERT INTO problems (id, scope, scope_id, title, description, starter_code, difficulty, grade_level, tags, status, created_by) VALUES
   (
     '00000000-0000-0000-0000-000000220201',
-    '00000000-0000-0000-0000-000000110002',
+    'org',
+    'd386983b-6da4-4cb8-8057-f2aa70d27c07',
     'Greet by Name',
     $md$Read a single name from input and greet that person.
 
 **Input:** one line with the name.
 
 **Output:** `Hello, {name}!` (exactly, with the exclamation mark).$md$,
-    $py$name = input()
+    jsonb_build_object('python', $py$name = input()
 print(f"Hello, {name}!")
-$py$,
-    'python', 0, 'd0d3b031-a483-4214-97fb-48c9584f4dcb'
+$py$),
+    'easy', '9-12', ARRAY['input', 'variables', 'strings'], 'published',
+    'd0d3b031-a483-4214-97fb-48c9584f4dcb'
   ),
   (
     '00000000-0000-0000-0000-000000220202',
-    '00000000-0000-0000-0000-000000110002',
+    'org',
+    'd386983b-6da4-4cb8-8057-f2aa70d27c07',
     'Name Then Age',
     $md$Read a name and an age (each on their own line). Print a sentence:
 
@@ -137,20 +146,22 @@ Ada
 Ada is 23 years old.
 ```
 $md$,
-    $py$name = input()
+    jsonb_build_object('python', $py$name = input()
 age = input()
 # Use an f-string to combine them into one sentence.
-$py$,
-    'python', 1, 'd0d3b031-a483-4214-97fb-48c9584f4dcb'
+$py$),
+    'easy', '9-12', ARRAY['input', 'variables', 'strings'], 'published',
+    'd0d3b031-a483-4214-97fb-48c9584f4dcb'
   )
   ON CONFLICT (id) DO NOTHING;
 
 -- ---- Topic 3: Numbers & Arithmetic ----
 
-INSERT INTO problems (id, topic_id, title, description, starter_code, language, "order", created_by) VALUES
+INSERT INTO problems (id, scope, scope_id, title, description, starter_code, difficulty, grade_level, tags, status, created_by) VALUES
   (
     '00000000-0000-0000-0000-000000220301',
-    '00000000-0000-0000-0000-000000110003',
+    'org',
+    'd386983b-6da4-4cb8-8057-f2aa70d27c07',
     'Sum Two Numbers',
     $md$Read two integers (one per line) and print their sum.
 
@@ -165,15 +176,17 @@ INSERT INTO problems (id, topic_id, title, description, starter_code, language, 
 7
 ```
 $md$,
-    $py$a = int(input())
+    jsonb_build_object('python', $py$a = int(input())
 b = int(input())
 print(a + b)
-$py$,
-    'python', 0, 'd0d3b031-a483-4214-97fb-48c9584f4dcb'
+$py$),
+    'easy', '9-12', ARRAY['arithmetic', 'integers'], 'published',
+    'd0d3b031-a483-4214-97fb-48c9584f4dcb'
   ),
   (
     '00000000-0000-0000-0000-000000220302',
-    '00000000-0000-0000-0000-000000110003',
+    'org',
+    'd386983b-6da4-4cb8-8057-f2aa70d27c07',
     'Area of a Rectangle',
     $md$Read a width and height (integers, one per line). Print the area.
 
@@ -190,20 +203,22 @@ Inputs will always be integers, so the area is an integer too.
 15
 ```
 $md$,
-    $py$w = int(input())
+    jsonb_build_object('python', $py$w = int(input())
 h = int(input())
 # Multiply and print.
-$py$,
-    'python', 1, 'd0d3b031-a483-4214-97fb-48c9584f4dcb'
+$py$),
+    'easy', '9-12', ARRAY['arithmetic', 'integers'], 'published',
+    'd0d3b031-a483-4214-97fb-48c9584f4dcb'
   )
   ON CONFLICT (id) DO NOTHING;
 
 -- ---- Topic 4: Conditionals ----
 
-INSERT INTO problems (id, topic_id, title, description, starter_code, language, "order", created_by) VALUES
+INSERT INTO problems (id, scope, scope_id, title, description, starter_code, difficulty, grade_level, tags, status, created_by) VALUES
   (
     '00000000-0000-0000-0000-000000220401',
-    '00000000-0000-0000-0000-000000110004',
+    'org',
+    'd386983b-6da4-4cb8-8057-f2aa70d27c07',
     'Even or Odd',
     $md$Read an integer and print `Even` if it's even, `Odd` if it's odd.
 
@@ -212,32 +227,36 @@ INSERT INTO problems (id, topic_id, title, description, starter_code, language, 
 **Example 2 — Input:** `7` → **Output:** `Odd`
 
 Watch your capitalization — the output is case-sensitive.$md$,
-    $py$n = int(input())
+    jsonb_build_object('python', $py$n = int(input())
 # Hint: use n % 2
-$py$,
-    'python', 0, 'd0d3b031-a483-4214-97fb-48c9584f4dcb'
+$py$),
+    'easy', '9-12', ARRAY['conditionals', 'modulo'], 'published',
+    'd0d3b031-a483-4214-97fb-48c9584f4dcb'
   ),
   (
     '00000000-0000-0000-0000-000000220402',
-    '00000000-0000-0000-0000-000000110004',
+    'org',
+    'd386983b-6da4-4cb8-8057-f2aa70d27c07',
     'Pass or Fail',
     $md$Grading: a student passes if their score is 60 or higher. Read a score (integer 0–100) and print `Pass` or `Fail`.$md$,
-    $py$score = int(input())
+    jsonb_build_object('python', $py$score = int(input())
 if score >= 60:
     print("Pass")
 else:
     print("Fail")
-$py$,
-    'python', 1, 'd0d3b031-a483-4214-97fb-48c9584f4dcb'
+$py$),
+    'easy', '9-12', ARRAY['conditionals'], 'published',
+    'd0d3b031-a483-4214-97fb-48c9584f4dcb'
   )
   ON CONFLICT (id) DO NOTHING;
 
 -- ---- Topic 5: Loops ----
 
-INSERT INTO problems (id, topic_id, title, description, starter_code, language, "order", created_by) VALUES
+INSERT INTO problems (id, scope, scope_id, title, description, starter_code, difficulty, grade_level, tags, status, created_by) VALUES
   (
     '00000000-0000-0000-0000-000000220501',
-    '00000000-0000-0000-0000-000000110005',
+    'org',
+    'd386983b-6da4-4cb8-8057-f2aa70d27c07',
     'Count to N',
     $md$Read a positive integer N. Print the integers 1 through N, each on its own line.
 
@@ -251,15 +270,17 @@ INSERT INTO problems (id, topic_id, title, description, starter_code, language, 
 4
 ```
 $md$,
-    $py$n = int(input())
+    jsonb_build_object('python', $py$n = int(input())
 for i in range(1, n + 1):
     print(i)
-$py$,
-    'python', 0, 'd0d3b031-a483-4214-97fb-48c9584f4dcb'
+$py$),
+    'easy', '9-12', ARRAY['loops', 'range'], 'published',
+    'd0d3b031-a483-4214-97fb-48c9584f4dcb'
   ),
   (
     '00000000-0000-0000-0000-000000220502',
-    '00000000-0000-0000-0000-000000110005',
+    'org',
+    'd386983b-6da4-4cb8-8057-f2aa70d27c07',
     'FizzBuzz (short)',
     $md$Read a positive integer N. For each integer from 1 to N, print:
 
@@ -269,35 +290,39 @@ $py$,
 - Otherwise print the number itself
 
 Each value goes on its own line. Classic interview question.$md$,
-    $py$n = int(input())
+    jsonb_build_object('python', $py$n = int(input())
 for i in range(1, n + 1):
     # Decide what to print for i.
     pass
-$py$,
-    'python', 1, 'd0d3b031-a483-4214-97fb-48c9584f4dcb'
+$py$),
+    'medium', '9-12', ARRAY['loops', 'conditionals', 'modulo'], 'published',
+    'd0d3b031-a483-4214-97fb-48c9584f4dcb'
   )
   ON CONFLICT (id) DO NOTHING;
 
 -- ---- Topic 6: Lists ----
 
-INSERT INTO problems (id, topic_id, title, description, starter_code, language, "order", created_by) VALUES
+INSERT INTO problems (id, scope, scope_id, title, description, starter_code, difficulty, grade_level, tags, status, created_by) VALUES
   (
     '00000000-0000-0000-0000-000000220601',
-    '00000000-0000-0000-0000-000000110006',
+    'org',
+    'd386983b-6da4-4cb8-8057-f2aa70d27c07',
     'Sum of a List',
     $md$Read one line of space-separated integers. Print their sum.
 
 **Input:** `3 1 4 1 5 9 2 6`
 
 **Output:** `31`$md$,
-    $py$nums = list(map(int, input().split()))
+    jsonb_build_object('python', $py$nums = list(map(int, input().split()))
 print(sum(nums))
-$py$,
-    'python', 0, 'd0d3b031-a483-4214-97fb-48c9584f4dcb'
+$py$),
+    'easy', '9-12', ARRAY['lists', 'builtins'], 'published',
+    'd0d3b031-a483-4214-97fb-48c9584f4dcb'
   ),
   (
     '00000000-0000-0000-0000-000000220602',
-    '00000000-0000-0000-0000-000000110006',
+    'org',
+    'd386983b-6da4-4cb8-8057-f2aa70d27c07',
     'Max in a List',
     $md$Read one line of space-separated integers and print the largest one.
 
@@ -306,12 +331,179 @@ $py$,
 **Output:** `11`
 
 Don't use Python's `max` — practice writing the loop yourself.$md$,
-    $py$nums = list(map(int, input().split()))
+    jsonb_build_object('python', $py$nums = list(map(int, input().split()))
 # Walk through nums and track the largest value seen.
-$py$,
-    'python', 1, 'd0d3b031-a483-4214-97fb-48c9584f4dcb'
+$py$),
+    'medium', '9-12', ARRAY['lists', 'loops'], 'published',
+    'd0d3b031-a483-4214-97fb-48c9584f4dcb'
   )
   ON CONFLICT (id) DO NOTHING;
+
+-- =========================================================
+-- topic_problems — attach each problem to its topic
+-- =========================================================
+-- sort_order matches the old "order" column value.
+-- attached_by = eve@demo.edu
+
+INSERT INTO topic_problems (topic_id, problem_id, sort_order, attached_by) VALUES
+  -- Topic 1: Hello, World
+  ('00000000-0000-0000-0000-000000110001', '00000000-0000-0000-0000-000000220101', 0, 'd0d3b031-a483-4214-97fb-48c9584f4dcb'),
+  ('00000000-0000-0000-0000-000000110001', '00000000-0000-0000-0000-000000220102', 1, 'd0d3b031-a483-4214-97fb-48c9584f4dcb'),
+  -- Topic 2: Variables & Input
+  ('00000000-0000-0000-0000-000000110002', '00000000-0000-0000-0000-000000220201', 0, 'd0d3b031-a483-4214-97fb-48c9584f4dcb'),
+  ('00000000-0000-0000-0000-000000110002', '00000000-0000-0000-0000-000000220202', 1, 'd0d3b031-a483-4214-97fb-48c9584f4dcb'),
+  -- Topic 3: Numbers & Arithmetic
+  ('00000000-0000-0000-0000-000000110003', '00000000-0000-0000-0000-000000220301', 0, 'd0d3b031-a483-4214-97fb-48c9584f4dcb'),
+  ('00000000-0000-0000-0000-000000110003', '00000000-0000-0000-0000-000000220302', 1, 'd0d3b031-a483-4214-97fb-48c9584f4dcb'),
+  -- Topic 4: Conditionals
+  ('00000000-0000-0000-0000-000000110004', '00000000-0000-0000-0000-000000220401', 0, 'd0d3b031-a483-4214-97fb-48c9584f4dcb'),
+  ('00000000-0000-0000-0000-000000110004', '00000000-0000-0000-0000-000000220402', 1, 'd0d3b031-a483-4214-97fb-48c9584f4dcb'),
+  -- Topic 5: Loops
+  ('00000000-0000-0000-0000-000000110005', '00000000-0000-0000-0000-000000220501', 0, 'd0d3b031-a483-4214-97fb-48c9584f4dcb'),
+  ('00000000-0000-0000-0000-000000110005', '00000000-0000-0000-0000-000000220502', 1, 'd0d3b031-a483-4214-97fb-48c9584f4dcb'),
+  -- Topic 6: Lists
+  ('00000000-0000-0000-0000-000000110006', '00000000-0000-0000-0000-000000220601', 0, 'd0d3b031-a483-4214-97fb-48c9584f4dcb'),
+  ('00000000-0000-0000-0000-000000110006', '00000000-0000-0000-0000-000000220602', 1, 'd0d3b031-a483-4214-97fb-48c9584f4dcb')
+ON CONFLICT DO NOTHING;
+
+-- =========================================================
+-- problem_solutions — one canonical Python solution per problem
+-- =========================================================
+-- Solution UUID scheme: 55PPNN where PP = topic (01..06), NN = problem index.
+-- Fixed UUIDs ensure ON CONFLICT (id) DO NOTHING is truly idempotent.
+
+INSERT INTO problem_solutions (id, problem_id, language, title, code, is_published, created_by) VALUES
+  -- 1.1 Hello, World
+  (
+    '00000000-0000-0000-0000-000000550101',
+    '00000000-0000-0000-0000-000000220101', 'python', 'Canonical solution',
+    $sol$print("Hello, World!")
+$sol$,
+    true, 'd0d3b031-a483-4214-97fb-48c9584f4dcb'
+  ),
+  -- 1.2 Three Lines
+  (
+    '00000000-0000-0000-0000-000000550102',
+    '00000000-0000-0000-0000-000000220102', 'python', 'Canonical solution',
+    $sol$print("line 1")
+print("line 2")
+print("line 3")
+$sol$,
+    true, 'd0d3b031-a483-4214-97fb-48c9584f4dcb'
+  ),
+  -- 2.1 Greet by Name
+  (
+    '00000000-0000-0000-0000-000000550201',
+    '00000000-0000-0000-0000-000000220201', 'python', 'Canonical solution',
+    $sol$name = input()
+print(f"Hello, {name}!")
+$sol$,
+    true, 'd0d3b031-a483-4214-97fb-48c9584f4dcb'
+  ),
+  -- 2.2 Name Then Age
+  (
+    '00000000-0000-0000-0000-000000550202',
+    '00000000-0000-0000-0000-000000220202', 'python', 'Canonical solution',
+    $sol$name = input()
+age = input()
+print(f"{name} is {age} years old.")
+$sol$,
+    true, 'd0d3b031-a483-4214-97fb-48c9584f4dcb'
+  ),
+  -- 3.1 Sum Two Numbers
+  (
+    '00000000-0000-0000-0000-000000550301',
+    '00000000-0000-0000-0000-000000220301', 'python', 'Canonical solution',
+    $sol$a = int(input())
+b = int(input())
+print(a + b)
+$sol$,
+    true, 'd0d3b031-a483-4214-97fb-48c9584f4dcb'
+  ),
+  -- 3.2 Area of a Rectangle
+  (
+    '00000000-0000-0000-0000-000000550302',
+    '00000000-0000-0000-0000-000000220302', 'python', 'Canonical solution',
+    $sol$w = int(input())
+h = int(input())
+print(w * h)
+$sol$,
+    true, 'd0d3b031-a483-4214-97fb-48c9584f4dcb'
+  ),
+  -- 4.1 Even or Odd
+  (
+    '00000000-0000-0000-0000-000000550401',
+    '00000000-0000-0000-0000-000000220401', 'python', 'Canonical solution',
+    $sol$n = int(input())
+if n % 2 == 0:
+    print("Even")
+else:
+    print("Odd")
+$sol$,
+    true, 'd0d3b031-a483-4214-97fb-48c9584f4dcb'
+  ),
+  -- 4.2 Pass or Fail
+  (
+    '00000000-0000-0000-0000-000000550402',
+    '00000000-0000-0000-0000-000000220402', 'python', 'Canonical solution',
+    $sol$score = int(input())
+if score >= 60:
+    print("Pass")
+else:
+    print("Fail")
+$sol$,
+    true, 'd0d3b031-a483-4214-97fb-48c9584f4dcb'
+  ),
+  -- 5.1 Count to N
+  (
+    '00000000-0000-0000-0000-000000550501',
+    '00000000-0000-0000-0000-000000220501', 'python', 'Canonical solution',
+    $sol$n = int(input())
+for i in range(1, n + 1):
+    print(i)
+$sol$,
+    true, 'd0d3b031-a483-4214-97fb-48c9584f4dcb'
+  ),
+  -- 5.2 FizzBuzz
+  (
+    '00000000-0000-0000-0000-000000550502',
+    '00000000-0000-0000-0000-000000220502', 'python', 'Canonical solution',
+    $sol$n = int(input())
+for i in range(1, n + 1):
+    if i % 15 == 0:
+        print("FizzBuzz")
+    elif i % 3 == 0:
+        print("Fizz")
+    elif i % 5 == 0:
+        print("Buzz")
+    else:
+        print(i)
+$sol$,
+    true, 'd0d3b031-a483-4214-97fb-48c9584f4dcb'
+  ),
+  -- 6.1 Sum of a List
+  (
+    '00000000-0000-0000-0000-000000550601',
+    '00000000-0000-0000-0000-000000220601', 'python', 'Canonical solution',
+    $sol$nums = list(map(int, input().split()))
+print(sum(nums))
+$sol$,
+    true, 'd0d3b031-a483-4214-97fb-48c9584f4dcb'
+  ),
+  -- 6.2 Max in a List
+  (
+    '00000000-0000-0000-0000-000000550602',
+    '00000000-0000-0000-0000-000000220602', 'python', 'Canonical solution',
+    $sol$nums = list(map(int, input().split()))
+best = nums[0]
+for n in nums[1:]:
+    if n > best:
+        best = n
+print(best)
+$sol$,
+    true, 'd0d3b031-a483-4214-97fb-48c9584f4dcb'
+  )
+ON CONFLICT (id) DO NOTHING;
 
 -- =========================================================
 -- Test cases
@@ -427,15 +619,25 @@ COMMIT;
 \echo '=== Python 101 seed complete ==='
 
 SELECT
-  (SELECT COUNT(*) FROM problems WHERE topic_id IN (
-    SELECT id FROM topics WHERE course_id = '00000000-0000-0000-0000-00000aa00001'
-  )) AS problems,
+  (SELECT COUNT(*) FROM problems WHERE scope = 'org' AND scope_id = 'd386983b-6da4-4cb8-8057-f2aa70d27c07'
+    AND id IN (SELECT problem_id FROM topic_problems WHERE topic_id IN (
+      SELECT id FROM topics WHERE course_id = '00000000-0000-0000-0000-00000aa00001'
+    ))
+  ) AS problems,
   (SELECT COUNT(*) FROM test_cases WHERE problem_id IN (
-    SELECT id FROM problems WHERE topic_id IN (
+    SELECT problem_id FROM topic_problems WHERE topic_id IN (
       SELECT id FROM topics WHERE course_id = '00000000-0000-0000-0000-00000aa00001'
     )
   )) AS test_cases,
-  (SELECT COUNT(*) FROM topics WHERE course_id = '00000000-0000-0000-0000-00000aa00001') AS topics;
+  (SELECT COUNT(*) FROM topics WHERE course_id = '00000000-0000-0000-0000-00000aa00001') AS topics,
+  (SELECT COUNT(*) FROM topic_problems WHERE topic_id IN (
+    SELECT id FROM topics WHERE course_id = '00000000-0000-0000-0000-00000aa00001'
+  )) AS topic_problem_links,
+  (SELECT COUNT(*) FROM problem_solutions WHERE problem_id IN (
+    SELECT problem_id FROM topic_problems WHERE topic_id IN (
+      SELECT id FROM topics WHERE course_id = '00000000-0000-0000-0000-00000aa00001'
+    )
+  )) AS solutions;
 
 \echo ''
 \echo 'Class URL (alice@demo.edu):'

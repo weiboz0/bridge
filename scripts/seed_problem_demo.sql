@@ -1,10 +1,12 @@
--- Demo seed for the Problem / Attempt workflow (plans 024–026).
+-- Demo seed for the Problem / Attempt workflow (plans 024–026, 028).
 --
 -- Creates:
 --   • 1 course (under Bridge Demo School, authored by eve@demo.edu)
 --   • 2 topics (Warm-ups, Arrays)
 --   • 4 problems with starter code + description
 --   • Canonical test cases (examples + hidden)
+--   • topic_problems — topic-to-problem attachments (new in plan 028)
+--   • problem_solutions — one canonical solution per problem (new in plan 028)
 --   • 1 class with eve as instructor, alice + bob enrolled as students
 --   • A class_settings row so live sessions work
 --
@@ -62,49 +64,96 @@ VALUES
   )
 ON CONFLICT (id) DO NOTHING;
 
--- ---------- Problems ----------
+-- ---------- Problems (new schema: scope, scope_id, starter_code as jsonb) ----------
+-- scope      = 'org'
+-- scope_id   = 'd386983b-6da4-4cb8-8057-f2aa70d27c07'  (Bridge Demo School)
+-- created_by = 'd0d3b031-a483-4214-97fb-48c9584f4dcb'  (eve@demo.edu)
+-- starter_code is jsonb: jsonb_build_object('python', '<code>')
+-- No topic_id, language, or "order" columns.
 
-INSERT INTO problems (id, topic_id, title, description, starter_code, language, "order", created_by)
+INSERT INTO problems (id, scope, scope_id, title, description, starter_code, difficulty, grade_level, tags, status, created_by)
 VALUES
   (
     '00000000-0000-0000-0000-000000020001',
-    '00000000-0000-0000-0000-000000010001',
+    'org',
+    'd386983b-6da4-4cb8-8057-f2aa70d27c07',
     'Hello, name',
     E'Read a name from standard input and greet that person.\n\n**Input:** a single line containing the name.\n\n**Output:** `Hello, {name}!`',
-    E'name = input()\nprint(f"Hello, {name}!")\n',
-    'python',
-    0,
+    jsonb_build_object('python', E'name = input()\nprint(f"Hello, {name}!")\n'),
+    'easy', '9-12', ARRAY['input', 'strings'], 'published',
     'd0d3b031-a483-4214-97fb-48c9584f4dcb'
   ),
   (
     '00000000-0000-0000-0000-000000020002',
-    '00000000-0000-0000-0000-000000010001',
+    'org',
+    'd386983b-6da4-4cb8-8057-f2aa70d27c07',
     'Sum two numbers',
     E'Read two integers from standard input (one per line) and print their sum.\n\n**Input:**\n```\n3\n4\n```\n\n**Output:** `7`',
-    E'a = int(input())\nb = int(input())\nprint(a + b)\n',
-    'python',
-    1,
+    jsonb_build_object('python', E'a = int(input())\nb = int(input())\nprint(a + b)\n'),
+    'easy', '9-12', ARRAY['arithmetic', 'integers'], 'published',
     'd0d3b031-a483-4214-97fb-48c9584f4dcb'
   ),
   (
     '00000000-0000-0000-0000-000000020003',
-    '00000000-0000-0000-0000-000000010002',
+    'org',
+    'd386983b-6da4-4cb8-8057-f2aa70d27c07',
     'List average',
     E'Read a list of integers on a single line (space-separated) and print the average to one decimal place.\n\n**Input:** `4 2 7 11 15`\n\n**Output:** `7.8`',
-    E'nums = list(map(int, input().split()))\nprint(f"{sum(nums)/len(nums):.1f}")\n',
-    'python',
-    0,
+    jsonb_build_object('python', E'nums = list(map(int, input().split()))\nprint(f"{sum(nums)/len(nums):.1f}")\n'),
+    'easy', '9-12', ARRAY['lists', 'arithmetic'], 'published',
     'd0d3b031-a483-4214-97fb-48c9584f4dcb'
   ),
   (
     '00000000-0000-0000-0000-000000020004',
-    '00000000-0000-0000-0000-000000010002',
+    'org',
+    'd386983b-6da4-4cb8-8057-f2aa70d27c07',
     'Two Sum',
     E'Given a list of integers and a target number, return the indices of the two numbers that add up to the target.\n\n**Input:** two lines — the list of integers, then the target.\n\n**Output:** two indices separated by a space, in any order.\n\nExactly one solution is guaranteed per input; elements are not reused.',
-    E'def solve(nums, target):\n    seen = {}\n    for i, n in enumerate(nums):\n        if target - n in seen:\n            return seen[target - n], i\n        seen[n] = i\n\nnums = list(map(int, input().split()))\ntarget = int(input())\na, b = solve(nums, target)\nprint(a, b)\n',
-    'python',
-    1,
+    jsonb_build_object('python', E'def solve(nums, target):\n    seen = {}\n    for i, n in enumerate(nums):\n        if target - n in seen:\n            return seen[target - n], i\n        seen[n] = i\n\nnums = list(map(int, input().split()))\ntarget = int(input())\na, b = solve(nums, target)\nprint(a, b)\n'),
+    'hard', '9-12', ARRAY['lists', 'hash-map', 'algorithms'], 'published',
     'd0d3b031-a483-4214-97fb-48c9584f4dcb'
+  )
+ON CONFLICT (id) DO NOTHING;
+
+-- ---------- topic_problems — attach each problem to its topic ----------
+
+INSERT INTO topic_problems (topic_id, problem_id, sort_order, attached_by) VALUES
+  -- Warm-ups
+  ('00000000-0000-0000-0000-000000010001', '00000000-0000-0000-0000-000000020001', 0, 'd0d3b031-a483-4214-97fb-48c9584f4dcb'),
+  ('00000000-0000-0000-0000-000000010001', '00000000-0000-0000-0000-000000020002', 1, 'd0d3b031-a483-4214-97fb-48c9584f4dcb'),
+  -- Arrays
+  ('00000000-0000-0000-0000-000000010002', '00000000-0000-0000-0000-000000020003', 0, 'd0d3b031-a483-4214-97fb-48c9584f4dcb'),
+  ('00000000-0000-0000-0000-000000010002', '00000000-0000-0000-0000-000000020004', 1, 'd0d3b031-a483-4214-97fb-48c9584f4dcb')
+ON CONFLICT DO NOTHING;
+
+-- ---------- problem_solutions — one canonical Python solution per problem ----------
+-- Solution UUID scheme: 55D00N where D=demo, N=problem index (1–4).
+-- Fixed UUIDs ensure ON CONFLICT (id) DO NOTHING is truly idempotent.
+
+INSERT INTO problem_solutions (id, problem_id, language, title, code, is_published, created_by) VALUES
+  (
+    '00000000-0000-0000-0000-00000055d001',
+    '00000000-0000-0000-0000-000000020001', 'python', 'Canonical solution',
+    E'name = input()\nprint(f"Hello, {name}!")\n',
+    true, 'd0d3b031-a483-4214-97fb-48c9584f4dcb'
+  ),
+  (
+    '00000000-0000-0000-0000-00000055d002',
+    '00000000-0000-0000-0000-000000020002', 'python', 'Canonical solution',
+    E'a = int(input())\nb = int(input())\nprint(a + b)\n',
+    true, 'd0d3b031-a483-4214-97fb-48c9584f4dcb'
+  ),
+  (
+    '00000000-0000-0000-0000-00000055d003',
+    '00000000-0000-0000-0000-000000020003', 'python', 'Canonical solution',
+    E'nums = list(map(int, input().split()))\nprint(f"{sum(nums)/len(nums):.1f}")\n',
+    true, 'd0d3b031-a483-4214-97fb-48c9584f4dcb'
+  ),
+  (
+    '00000000-0000-0000-0000-00000055d004',
+    '00000000-0000-0000-0000-000000020004', 'python', 'Canonical solution',
+    E'def solve(nums, target):\n    seen = {}\n    for i, n in enumerate(nums):\n        if target - n in seen:\n            return seen[target - n], i\n        seen[n] = i\n\nnums = list(map(int, input().split()))\ntarget = int(input())\na, b = solve(nums, target)\nprint(a, b)\n',
+    true, 'd0d3b031-a483-4214-97fb-48c9584f4dcb'
   )
 ON CONFLICT (id) DO NOTHING;
 
@@ -168,10 +217,13 @@ COMMIT;
 SELECT 'course' AS kind, id::text, title FROM courses WHERE id = '00000000-0000-0000-0000-0000000aa001'
 UNION ALL SELECT 'class' AS kind, id::text, title FROM classes WHERE id = '00000000-0000-0000-0000-000000040001'
 UNION ALL SELECT 'topic ' || sort_order::text, id::text, title FROM topics WHERE course_id = '00000000-0000-0000-0000-0000000aa001'
-UNION ALL SELECT 'problem ' || "order"::text, id::text, title FROM problems WHERE topic_id IN (
-  '00000000-0000-0000-0000-000000010001',
-  '00000000-0000-0000-0000-000000010002'
-)
+UNION ALL SELECT 'problem ' || tp.sort_order::text, p.id::text, p.title
+  FROM problems p
+  JOIN topic_problems tp ON tp.problem_id = p.id
+  WHERE tp.topic_id IN (
+    '00000000-0000-0000-0000-000000010001',
+    '00000000-0000-0000-0000-000000010002'
+  )
 ORDER BY kind;
 
 \echo ''
