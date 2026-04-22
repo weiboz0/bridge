@@ -167,6 +167,33 @@ Reviewers append findings here following `docs/code-review.md`. Author responds 
 
 Focused review after implementation did not uncover unresolved 030a bugs beyond the verification caveats already recorded in the post-execution report.
 
+### Review 2
+
+- **Date**: 2026-04-22
+- **Reviewer**: Claude
+- **Commits**: `c8d25b5..cab2d1b` (2 implementation commits + 1 plan split + 1 028-fixup)
+- **Verdict**: Approved with suggestions
+
+**Full test verification:** Go suite all green (handlers 27s, store 13s, all 12 packages pass). Vitest 269 passed / 11 skipped / 0 failures. Schema rename grep clean — zero `live_sessions` or `liveSessions` references in `platform/`, `src/`, or `tests/`.
+
+**Should Fix**
+
+1. `[OPEN]` `UpdateParticipantStatus` default branch writes invalid enum values. `platform/internal/store/sessions.go:258` — the default query `SET status = $1` runs for any status value not matching `"needs_help"` or `"active"`. Passing the old enum values `"idle"` or the literal string `"needs_help"` through the default path would attempt to write a value not in the `participant_status` enum (`invited`, `present`, `left`). Current callers only pass `"needs_help"` / `"active"` (which hit the switch cases), so this doesn't fire today. But the function signature accepts `string` with no validation — a future caller passing `"present"` or `"left"` through the default branch would succeed, but `"idle"` would crash. Add a validation guard or restructure to reject unknown values early.
+
+**Nice to Have**
+
+2. `[OPEN]` `Vitest` and `tsc --noEmit` were not verified by the implementing agent (post-execution report notes `bun` not installed and Node missing `styleText`). This review ran both successfully — Vitest passes and `tsc` has only pre-existing unrelated errors. No action needed, but the implementing agent should verify its own work.
+
+3. `[OPEN]` The Go `LiveSession` struct name is still `LiveSession` (not renamed to `Session`). `platform/internal/store/sessions.go:11` — the table was renamed from `live_sessions` to `sessions`, but the Go type is still `LiveSession`. This is a cosmetic inconsistency. The plan explicitly deferred struct renames as out of scope for 030a, so this is expected — but should be tracked for 030b or later.
+
+**No issues found for:**
+- Migration 0014 is idempotent and handles all edge cases (enum rename with guard, column rename with IF EXISTS, type swap via v2 pattern)
+- help_requested_at backfill correctly converts old `needs_help` rows
+- Session status `active → live` rename applied in Go, Drizzle, and handler checks
+- Participant `student_id → user_id` renamed in SQL + Go scan columns; JSON wire format preserves `studentId` for client compat
+- Foreign key cascade constraints preserved through rename
+- Scheduled session backref compatibility maintained (`live_session_id` column preserved)
+
 ## Post-Execution Report
 
 **Status:** Complete
