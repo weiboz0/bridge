@@ -30,10 +30,15 @@ type ProblemHandler struct {
 }
 
 var (
-	validProblemScopes      = map[string]bool{"platform": true, "org": true, "personal": true}
+	validProblemScopes       = map[string]bool{"platform": true, "org": true, "personal": true}
 	validProblemDifficulties = map[string]bool{"easy": true, "medium": true, "hard": true}
-	validProblemGradeLevels = map[string]bool{"K-5": true, "6-8": true, "9-12": true}
+	validProblemGradeLevels  = map[string]bool{"K-5": true, "6-8": true, "9-12": true}
 )
+
+type problemListResponse struct {
+	Items      []store.Problem `json:"items"`
+	NextCursor *string         `json:"nextCursor,omitempty"`
+}
 
 // maxProblemTitleLen mirrors the DB column limit (varchar(255)).
 const maxProblemTitleLen = 255
@@ -189,7 +194,8 @@ func parseListFilterFromQuery(r *http.Request) (store.ListProblemsFilter, error)
 // ---------- Problem handlers ----------
 
 // ListProblems — GET /api/problems?scope=&difficulty=&gradeLevel=&tags=a,b&q=&limit=&cursor=
-// Returns the accessible set by default (see store.ListProblemsFilter).
+// Returns the accessible browse/search set plus an opaque nextCursor when
+// another page exists.
 func (h *ProblemHandler) ListProblems(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
@@ -216,12 +222,21 @@ func (h *ProblemHandler) ListProblems(w http.ResponseWriter, r *http.Request) {
 	}
 	f.ViewerOrgs = orgIDs(orgs)
 
-	list, err := h.Problems.ListProblems(r.Context(), f)
+	list, hasMore, err := h.Problems.ListProblems(r.Context(), f)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
 	}
-	writeJSON(w, http.StatusOK, list)
+	var nextCursor *string
+	if hasMore && len(list) > 0 {
+		last := list[len(list)-1]
+		c := encodeCursor(last.CreatedAt, last.ID)
+		nextCursor = &c
+	}
+	writeJSON(w, http.StatusOK, problemListResponse{
+		Items:      list,
+		NextCursor: nextCursor,
+	})
 }
 
 // ListProblemsByTopic — GET /api/topics/{topicId}/problems.
@@ -900,4 +915,3 @@ func (h *ProblemHandler) DeleteAttempt(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, deleted)
 }
-

@@ -22,8 +22,8 @@ var ErrInvalidTransition = errors.New("invalid status transition")
 // NULL iff Scope == "platform"; otherwise it points at the owning org or user.
 type Problem struct {
 	ID            string            `json:"id"`
-	Scope         string            `json:"scope"`       // platform | org | personal
-	ScopeID       *string           `json:"scopeId"`     // NULL when scope=platform
+	Scope         string            `json:"scope"`   // platform | org | personal
+	ScopeID       *string           `json:"scopeId"` // NULL when scope=platform
 	Title         string            `json:"title"`
 	Slug          *string           `json:"slug"`
 	Description   string            `json:"description"`
@@ -242,10 +242,12 @@ func (s *ProblemStore) GetProblem(ctx context.Context, id string) (*Problem, err
 
 // ListProblems returns problems matching the filter, paginated by
 // (created_at DESC, id DESC). When Scope is empty the query returns every row
-// the viewer can access (platform published + own-org published + own
-// personal + anything they authored + everything if platform admin); setting
-// Scope explicitly narrows within that accessible set.
-func (s *ProblemStore) ListProblems(ctx context.Context, f ListProblemsFilter) ([]Problem, error) {
+// the viewer can access in browse/search: platform published + own-org
+// published + own non-archived personal + attachment-granted published rows +
+// authored non-archived rows + everything for platform admins. Archived rows
+// are excluded from the default browse/search view unless Status explicitly
+// requests them. The boolean return reports whether a subsequent page exists.
+func (s *ProblemStore) ListProblems(ctx context.Context, f ListProblemsFilter) ([]Problem, bool, error) {
 	where := []string{}
 	args := []any{}
 	idx := 1
@@ -256,22 +258,48 @@ func (s *ProblemStore) ListProblems(ctx context.Context, f ListProblemsFilter) (
 	if f.IsPlatformAdmin {
 		// no-op: platform admins see everything
 	} else {
+		scopeVisibleStatus := "p.status = 'published'"
+		personalVisibleStatus := "p.status <> 'archived'"
+		attachmentVisibleStatus := "p.status = 'published'"
+		authoredVisibleStatus := "p.status <> 'archived'"
+		if f.Status != "" {
+			// Explicit status filters may request archived rows, but attachment
+			// still must not surface drafts to non-editors.
+			scopeVisibleStatus = "p.status <> 'draft'"
+			personalVisibleStatus = "TRUE"
+			attachmentVisibleStatus = "p.status <> 'draft'"
+			authoredVisibleStatus = "TRUE"
+		}
+
 		clauses := []string{
-			"(p.scope = 'platform' AND p.status = 'published')",
+			"(p.scope = 'platform' AND " + scopeVisibleStatus + ")",
 		}
 		// own-org published (if the viewer belongs to any org)
 		if len(f.ViewerOrgs) > 0 {
-			clauses = append(clauses, fmt.Sprintf("(p.scope = 'org' AND p.scope_id = ANY($%d) AND p.status = 'published')", idx))
+			clauses = append(clauses, fmt.Sprintf("(p.scope = 'org' AND p.scope_id = ANY($%d) AND %s)", idx, scopeVisibleStatus))
 			args = append(args, pq.Array(f.ViewerOrgs))
 			idx++
 		}
-		// own personal (draft visible to self)
+		// own personal (draft visible to self; archived only via explicit status)
 		if f.ViewerID != "" {
-			clauses = append(clauses, fmt.Sprintf("(p.scope = 'personal' AND p.scope_id = $%d)", idx))
+			clauses = append(clauses, fmt.Sprintf("(p.scope = 'personal' AND p.scope_id = $%d AND %s)", idx, personalVisibleStatus))
 			args = append(args, f.ViewerID)
 			idx++
-			// authored by viewer in any scope
-			clauses = append(clauses, fmt.Sprintf("(p.created_by = $%d)", idx))
+			// Attachment grant: any problem attached to a topic in a course
+			// where the viewer has a class membership becomes browse-visible.
+			clauses = append(clauses, fmt.Sprintf(`(%s AND EXISTS (
+				SELECT 1
+				FROM topic_problems tp
+				INNER JOIN topics t ON t.id = tp.topic_id
+				INNER JOIN classes c ON c.course_id = t.course_id
+				INNER JOIN class_memberships cm ON cm.class_id = c.id
+				WHERE tp.problem_id = p.id AND cm.user_id = $%d
+			))`, attachmentVisibleStatus, idx))
+			args = append(args, f.ViewerID)
+			idx++
+			// Authored-by-viewer remains visible in browse/search, but archived
+			// rows stay hidden unless explicitly requested.
+			clauses = append(clauses, fmt.Sprintf("(p.created_by = $%d AND %s)", idx, authoredVisibleStatus))
 			args = append(args, f.ViewerID)
 			idx++
 		}
@@ -333,11 +361,11 @@ func (s *ProblemStore) ListProblems(ctx context.Context, f ListProblemsFilter) (
 	if len(where) > 0 {
 		q += ` WHERE ` + strings.Join(where, " AND ")
 	}
-	q += fmt.Sprintf(` ORDER BY p.created_at DESC, p.id DESC LIMIT %d`, limit)
+	q += fmt.Sprintf(` ORDER BY p.created_at DESC, p.id DESC LIMIT %d`, limit+1)
 
 	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer rows.Close()
 
@@ -345,11 +373,19 @@ func (s *ProblemStore) ListProblems(ctx context.Context, f ListProblemsFilter) (
 	for rows.Next() {
 		p, err := scanProblemRow(rows)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		out = append(out, *p)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+
+	hasMore := len(out) > limit
+	if hasMore {
+		out = out[:limit]
+	}
+	return out, hasMore, nil
 }
 
 // ListProblemsByTopic returns the problems attached to a topic, ordered by the

@@ -38,18 +38,23 @@ func integrationDB(t *testing.T) *sql.DB {
 // handful of users wired into them in various roles, plus a fully-built
 // ProblemHandler.
 type problemFixture struct {
-	db         *sql.DB
-	h          *ProblemHandler
-	org1       *store.Org
-	org2       *store.Org
-	admin      *store.RegisteredUser // platform admin
-	teacher1   *store.RegisteredUser // org1 teacher
-	student1   *store.RegisteredUser // org1 student
-	student2   *store.RegisteredUser // org2 student (for cross-org checks)
-	outsider   *store.RegisteredUser // no orgs
-	courseID   string
-	topicID    string
-	classID    string // class for attachment-grant tests
+	db       *sql.DB
+	h        *ProblemHandler
+	org1     *store.Org
+	org2     *store.Org
+	admin    *store.RegisteredUser // platform admin
+	teacher1 *store.RegisteredUser // org1 teacher
+	student1 *store.RegisteredUser // org1 student
+	student2 *store.RegisteredUser // org2 student (for cross-org checks)
+	outsider *store.RegisteredUser // no orgs
+	courseID string
+	topicID  string
+	classID  string // class for attachment-grant tests
+}
+
+type problemListPayload struct {
+	Items      []store.Problem `json:"items"`
+	NextCursor *string         `json:"nextCursor"`
 }
 
 // newProblemFixture builds a clean-slate handler + users + orgs.
@@ -549,15 +554,86 @@ func TestProblemHandler_List_AccessibleDefault(t *testing.T) {
 
 	w := doGet(t, fx.h.ListProblems, "/api/problems", nil, fx.claims(fx.teacher1, false))
 	require.Equal(t, http.StatusOK, w.Code)
-	var list []store.Problem
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &list))
+	var payload problemListPayload
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &payload))
 	ids := map[string]bool{}
-	for _, p := range list {
+	for _, p := range payload.Items {
 		ids[p.ID] = true
 	}
 	assert.True(t, ids[pubPlat.ID])
 	assert.True(t, ids[pubOrg1.ID])
 	assert.False(t, ids[hidden.ID], "org2-draft must not leak to teacher1")
+}
+
+func TestProblemHandler_List_AttachmentGrantVisibleInBrowse(t *testing.T) {
+	fx := newProblemFixture(t, t.Name())
+	otherUID := fx.outsider.ID
+	p := fx.mkProblem(t, "personal", &otherUID, "published", "Attached Personal")
+	ctx := context.Background()
+	_, err := fx.h.TopicProblems.Attach(ctx, fx.topicID, p.ID, 0, fx.teacher1.ID)
+	require.NoError(t, err)
+
+	w := doGet(t, fx.h.ListProblems, "/api/problems", nil, fx.claims(fx.student1, false))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var payload problemListPayload
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &payload))
+	found := false
+	for _, item := range payload.Items {
+		if item.ID == p.ID {
+			found = true
+		}
+	}
+	assert.True(t, found, "attached problem should appear in browse/search results")
+}
+
+func TestProblemHandler_List_DefaultExcludesArchived(t *testing.T) {
+	fx := newProblemFixture(t, t.Name())
+	archived := fx.mkProblem(t, "personal", &fx.student1.ID, "archived", "Archived")
+	published := fx.mkProblem(t, "personal", &fx.student1.ID, "published", "Published")
+
+	w := doGet(t, fx.h.ListProblems, "/api/problems", nil, fx.claims(fx.student1, false))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var payload problemListPayload
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &payload))
+	ids := map[string]bool{}
+	for _, item := range payload.Items {
+		ids[item.ID] = true
+	}
+	assert.True(t, ids[published.ID])
+	assert.False(t, ids[archived.ID], "archived rows should stay out of default browse/search")
+}
+
+func TestProblemHandler_List_PaginationReturnsNextCursor(t *testing.T) {
+	fx := newProblemFixture(t, t.Name())
+	p1 := fx.mkProblem(t, "platform", nil, "published", "P1")
+	p2 := fx.mkProblem(t, "platform", nil, "published", "P2")
+	p3 := fx.mkProblem(t, "platform", nil, "published", "P3")
+
+	first := doGet(t, fx.h.ListProblems, "/api/problems?limit=2", nil, fx.claims(fx.teacher1, false))
+	require.Equal(t, http.StatusOK, first.Code)
+
+	var firstPayload problemListPayload
+	require.NoError(t, json.Unmarshal(first.Body.Bytes(), &firstPayload))
+	require.Len(t, firstPayload.Items, 2)
+	require.NotNil(t, firstPayload.NextCursor, "page 1 should advertise a next cursor")
+
+	second := doGet(t, fx.h.ListProblems, "/api/problems?limit=2&cursor="+*firstPayload.NextCursor, nil, fx.claims(fx.teacher1, false))
+	require.Equal(t, http.StatusOK, second.Code)
+
+	var secondPayload problemListPayload
+	require.NoError(t, json.Unmarshal(second.Body.Bytes(), &secondPayload))
+	require.Len(t, secondPayload.Items, 1)
+	assert.Nil(t, secondPayload.NextCursor)
+
+	seen := map[string]bool{}
+	for _, item := range append(firstPayload.Items, secondPayload.Items...) {
+		seen[item.ID] = true
+	}
+	assert.True(t, seen[p1.ID])
+	assert.True(t, seen[p2.ID])
+	assert.True(t, seen[p3.ID])
 }
 
 func TestProblemHandler_List_ScopeFilterInvalid400(t *testing.T) {
@@ -593,4 +669,3 @@ func TestProblemHandler_ListByTopic_NonMember404(t *testing.T) {
 	// The topic and course both exist, so no 404 case here; 403 is the answer.
 	assert.Equal(t, http.StatusForbidden, w.Code)
 }
-

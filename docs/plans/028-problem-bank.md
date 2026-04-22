@@ -1508,3 +1508,23 @@ GH_TOKEN=$(cat .gh-token) gh pr create \
 ## Code Review
 
 Reviewers append findings here following `docs/code-review.md` format. Author responds inline with `→ Response:` and status `[FIXED]` / `[WONTFIX]`.
+
+### Review 1
+
+- **Date**: 2026-04-21
+- **Reviewer**: Codex
+- **PR**: #48 — feat: problem bank — scopes + topic attachment + solutions (plan 028 / spec 009)
+- **Verdict**: Approved
+
+**Must Fix**
+
+1. `[FIXED]` `GET /api/problems` did not implement the attachment-grant branch of the spec, so a problem attached to a viewer's class topic was reachable via detail reads but still absent from browse/search. The missing visibility logic lived in [platform/internal/store/problems.go:243](/home/chris/workshop/Bridge/platform/internal/store/problems.go:243) while the attachment-grant behavior was only enforced in row-level handlers.
+   → Response: Reworked `ProblemStore.ListProblems` to include an attachment-grant `EXISTS` clause keyed by `topic_problems -> topics -> classes -> class_memberships`, and added regressions in [platform/internal/store/problems_test.go:403](/home/chris/workshop/Bridge/platform/internal/store/problems_test.go:403) and [platform/internal/handlers/problems_integration_test.go:568](/home/chris/workshop/Bridge/platform/internal/handlers/problems_integration_test.go:568).
+
+2. `[FIXED]` Browse/search still surfaced archived rows by default for owners/authors, which violated the archive contract ("viewable by direct link, hidden from browse/search"). The default-accessibility branch in [platform/internal/store/problems.go:243](/home/chris/workshop/Bridge/platform/internal/store/problems.go:243) treated personal/authored rows as always list-visible.
+   → Response: Tightened the default accessibility gate so archived rows stay out of the implicit browse/search set unless `status` is requested explicitly, with coverage in [platform/internal/store/problems_test.go:461](/home/chris/workshop/Bridge/platform/internal/store/problems_test.go:461) and [platform/internal/handlers/problems_integration_test.go:590](/home/chris/workshop/Bridge/platform/internal/handlers/problems_integration_test.go:590).
+
+3. `[FIXED]` Cursor pagination was only half implemented: the endpoint accepted `cursor` but returned a bare array, so clients had no legal way to request page 2. The dead-end contract was in [platform/internal/handlers/problems.go:119](/home/chris/workshop/Bridge/platform/internal/handlers/problems.go:119) and [platform/internal/handlers/problems.go:196](/home/chris/workshop/Bridge/platform/internal/handlers/problems.go:196).
+   → Response: Changed `GET /api/problems` to return `{ items, nextCursor }`, added overfetch-based `hasMore` support in the store, and covered the round-trip in [platform/internal/store/problems_test.go:491](/home/chris/workshop/Bridge/platform/internal/store/problems_test.go:491) and [platform/internal/handlers/problems_integration_test.go:608](/home/chris/workshop/Bridge/platform/internal/handlers/problems_integration_test.go:608).
+
+The fixes are isolated to the list path: detail reads, topic listing, and nested resources were left unchanged. Focused Go tests for `internal/store` and `internal/handlers` pass after the patch. DB-backed integration assertions remain in place for environments where `DATABASE_URL` is set.

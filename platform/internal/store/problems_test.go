@@ -383,7 +383,7 @@ func TestProblemStore_ListProblems_AccessibleDefault(t *testing.T) {
 	pPersonal := mustCreateProblem(t, db, store, "personal", &viewerID, "draft", "P-personal "+suffix, viewer.ID, nil)
 	pOtherPersonal := mustCreateProblem(t, db, store, "personal", &author.ID, "draft", "P-other "+suffix, author.ID, nil)
 
-	list, err := store.ListProblems(ctx, ListProblemsFilter{
+	list, _, err := store.ListProblems(ctx, ListProblemsFilter{
 		ViewerID: viewer.ID, ViewerOrgs: []string{orgA.ID}, Limit: 100,
 	})
 	require.NoError(t, err)
@@ -400,6 +400,130 @@ func TestProblemStore_ListProblems_AccessibleDefault(t *testing.T) {
 	assert.False(t, ids[pOtherPersonal.ID], "other user's personal should NOT be visible")
 }
 
+func TestProblemStore_ListProblems_AttachmentGrantIncludesPublishedProblem(t *testing.T) {
+	db, problems, topic, user := setupProblemEnv(t, t.Name())
+	ctx := context.Background()
+
+	users := NewUserStore(db)
+	classes := NewClassStore(db)
+
+	student := createTestUser(t, db, users, t.Name()+"-student")
+
+	var courseID, orgID string
+	require.NoError(t, db.QueryRowContext(ctx,
+		`SELECT t.course_id, c.org_id
+		 FROM topics t
+		 INNER JOIN courses c ON c.id = t.course_id
+		 WHERE t.id = $1`, topic.ID).Scan(&courseID, &orgID))
+
+	class, err := classes.CreateClass(ctx, CreateClassInput{
+		CourseID:  courseID,
+		OrgID:     orgID,
+		Title:     "Section " + t.Name(),
+		Term:      "Fall",
+		CreatedBy: user.ID,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		db.ExecContext(ctx, "DELETE FROM class_memberships WHERE class_id = $1", class.ID)
+		db.ExecContext(ctx, "DELETE FROM class_settings WHERE class_id = $1", class.ID)
+		db.ExecContext(ctx, "DELETE FROM classes WHERE id = $1", class.ID)
+	})
+	_, err = classes.AddClassMember(ctx, AddClassMemberInput{
+		ClassID: class.ID,
+		UserID:  student.ID,
+		Role:    "student",
+	})
+	require.NoError(t, err)
+
+	ownerID := user.ID
+	attached := mustCreateProblem(t, db, problems, "personal", &ownerID, "published", "Attached "+t.Name(), user.ID, nil)
+	_, err = db.ExecContext(ctx,
+		`INSERT INTO topic_problems (topic_id, problem_id, sort_order, attached_by) VALUES ($1, $2, 0, $3)`,
+		topic.ID, attached.ID, user.ID)
+	require.NoError(t, err)
+
+	list, _, err := problems.ListProblems(ctx, ListProblemsFilter{
+		ViewerID: student.ID,
+		Limit:    100,
+	})
+	require.NoError(t, err)
+
+	found := false
+	for _, p := range list {
+		if p.ID == attached.ID {
+			found = true
+		}
+	}
+	assert.True(t, found, "published problem attached to a viewer's course should be browse-visible")
+}
+
+func TestProblemStore_ListProblems_DefaultExcludesArchivedUnlessRequested(t *testing.T) {
+	db, store, _, user := setupProblemEnv(t, t.Name())
+	ctx := context.Background()
+
+	scopeID := user.ID
+	archived := mustCreateProblem(t, db, store, "personal", &scopeID, "archived", "Archived "+t.Name(), user.ID, nil)
+	published := mustCreateProblem(t, db, store, "personal", &scopeID, "published", "Published "+t.Name(), user.ID, nil)
+
+	list, _, err := store.ListProblems(ctx, ListProblemsFilter{
+		ViewerID: user.ID,
+		Limit:    100,
+	})
+	require.NoError(t, err)
+	ids := map[string]bool{}
+	for _, p := range list {
+		ids[p.ID] = true
+	}
+	assert.True(t, ids[published.ID])
+	assert.False(t, ids[archived.ID], "archived problems should stay out of default browse/search")
+
+	archivedOnly, _, err := store.ListProblems(ctx, ListProblemsFilter{
+		ViewerID: user.ID,
+		Status:   "archived",
+		Limit:    100,
+	})
+	require.NoError(t, err)
+	require.Len(t, archivedOnly, 1)
+	assert.Equal(t, archived.ID, archivedOnly[0].ID)
+}
+
+func TestProblemStore_ListProblems_PaginationHasMoreAndCursor(t *testing.T) {
+	db, store, _, user := setupProblemEnv(t, t.Name())
+	ctx := context.Background()
+
+	p1 := mustCreateProblem(t, db, store, "platform", nil, "published", "P1 "+t.Name(), user.ID, nil)
+	p2 := mustCreateProblem(t, db, store, "platform", nil, "published", "P2 "+t.Name(), user.ID, nil)
+	p3 := mustCreateProblem(t, db, store, "platform", nil, "published", "P3 "+t.Name(), user.ID, nil)
+
+	firstPage, hasMore, err := store.ListProblems(ctx, ListProblemsFilter{
+		ViewerID: user.ID,
+		Limit:    2,
+	})
+	require.NoError(t, err)
+	require.Len(t, firstPage, 2)
+	assert.True(t, hasMore, "overfetch should report another page")
+
+	last := firstPage[len(firstPage)-1]
+	secondPage, secondHasMore, err := store.ListProblems(ctx, ListProblemsFilter{
+		ViewerID:        user.ID,
+		Limit:           2,
+		CursorCreatedAt: &last.CreatedAt,
+		CursorID:        &last.ID,
+	})
+	require.NoError(t, err)
+	require.Len(t, secondPage, 1)
+	assert.False(t, secondHasMore)
+
+	seen := map[string]bool{}
+	for _, p := range append(firstPage, secondPage...) {
+		seen[p.ID] = true
+	}
+	assert.True(t, seen[p1.ID])
+	assert.True(t, seen[p2.ID])
+	assert.True(t, seen[p3.ID])
+}
+
 func TestProblemStore_ListProblems_AuthorSeesOwnDraftsAnyScope(t *testing.T) {
 	db := testDB(t)
 	orgs := NewOrgStore(db)
@@ -414,7 +538,7 @@ func TestProblemStore_ListProblems_AuthorSeesOwnDraftsAnyScope(t *testing.T) {
 	// should still see it.
 	draft := mustCreateProblem(t, db, store, "org", &orgA.ID, "draft", "own-draft "+suffix, author.ID, nil)
 
-	list, err := store.ListProblems(ctx, ListProblemsFilter{
+	list, _, err := store.ListProblems(ctx, ListProblemsFilter{
 		ViewerID: author.ID, Limit: 100,
 	})
 	require.NoError(t, err)
@@ -441,7 +565,7 @@ func TestProblemStore_ListProblems_PlatformAdminSeesEverything(t *testing.T) {
 
 	draft := mustCreateProblem(t, db, store, "org", &orgA.ID, "draft", "secret-draft "+suffix, other.ID, nil)
 
-	list, err := store.ListProblems(ctx, ListProblemsFilter{
+	list, _, err := store.ListProblems(ctx, ListProblemsFilter{
 		ViewerID: admin.ID, IsPlatformAdmin: true, Limit: 100,
 	})
 	require.NoError(t, err)
@@ -472,7 +596,7 @@ func TestProblemStore_ListProblems_FilterByScopeAndStatus(t *testing.T) {
 	pub := mustCreateProblem(t, db, store, "org", &orgA.ID, "published", "pub "+suffix, viewer.ID, nil)
 	_ = mustCreateProblem(t, db, store, "platform", nil, "published", "plat "+suffix, viewer.ID, nil)
 
-	list, err := store.ListProblems(ctx, ListProblemsFilter{
+	list, _, err := store.ListProblems(ctx, ListProblemsFilter{
 		Scope: "org", ScopeID: &orgA.ID, Status: "published",
 		ViewerID: viewer.ID, ViewerOrgs: []string{orgA.ID}, Limit: 100,
 	})
@@ -503,7 +627,7 @@ func TestProblemStore_ListProblems_FilterByDifficulty(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { store.DeleteProblem(ctx, hardP.ID) })
 
-	list, err := store.ListProblems(ctx, ListProblemsFilter{
+	list, _, err := store.ListProblems(ctx, ListProblemsFilter{
 		ViewerID: viewer.ID, Difficulty: "hard", Limit: 100,
 	})
 	require.NoError(t, err)
@@ -527,7 +651,7 @@ func TestProblemStore_ListProblems_FilterByTagsAND(t *testing.T) {
 	both := mustCreateProblem(t, db, store, "platform", nil, "published", "both "+suffix, viewer.ID, []string{"arrays", "sorting"})
 	onlyArrays := mustCreateProblem(t, db, store, "platform", nil, "published", "arrays-only "+suffix, viewer.ID, []string{"arrays"})
 
-	list, err := store.ListProblems(ctx, ListProblemsFilter{
+	list, _, err := store.ListProblems(ctx, ListProblemsFilter{
 		ViewerID: viewer.ID, Tags: []string{"arrays", "sorting"}, Limit: 100,
 	})
 	require.NoError(t, err)
@@ -551,7 +675,7 @@ func TestProblemStore_ListProblems_LimitCappedAt100(t *testing.T) {
 	// No problems created — we just verify the query builds and runs with
 	// limit > 100. The actual cap is observable via EXPLAIN, but we can at
 	// least verify it doesn't error.
-	list, err := store.ListProblems(ctx, ListProblemsFilter{
+	list, _, err := store.ListProblems(ctx, ListProblemsFilter{
 		ViewerID: viewer.ID, Limit: 10_000,
 	})
 	require.NoError(t, err)
