@@ -11,7 +11,7 @@ export async function getAttendanceSummary(
   const allSessions = await db
     .select()
     .from(liveSessions)
-    .where(eq(liveSessions.classroomId, classroomId));
+    .where(eq(liveSessions.classId, classroomId));
 
   // Get sessions this student participated in
   const attended = await db
@@ -73,7 +73,7 @@ export async function getActiveSessionForStudent(db: Database, studentId: string
   const active = await db
     .select({
       sessionId: sessionParticipants.sessionId,
-      classroomId: liveSessions.classroomId,
+      classroomId: liveSessions.classId,
       startedAt: liveSessions.startedAt,
     })
     .from(sessionParticipants)
@@ -81,7 +81,7 @@ export async function getActiveSessionForStudent(db: Database, studentId: string
     .where(
       and(
         eq(sessionParticipants.studentId, studentId),
-        eq(liveSessions.status, "active"),
+        eq(liveSessions.status, "live"),
         isNull(sessionParticipants.leftAt)
       )
     )

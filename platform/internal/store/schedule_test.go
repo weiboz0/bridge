@@ -158,7 +158,7 @@ func TestScheduleStore_StartScheduledSession(t *testing.T) {
 	t.Cleanup(func() {
 		db.ExecContext(ctx, "DELETE FROM scheduled_sessions WHERE class_id = $1", class.ID)
 		db.ExecContext(ctx, "DELETE FROM session_topics WHERE topic_id = $1", topic.ID)
-		db.ExecContext(ctx, "DELETE FROM live_sessions WHERE class_id = $1", class.ID)
+		db.ExecContext(ctx, "DELETE FROM sessions WHERE class_id = $1", class.ID)
 		db.ExecContext(ctx, "DELETE FROM class_memberships WHERE class_id = $1", class.ID)
 		db.ExecContext(ctx, "DELETE FROM class_settings WHERE class_id = $1", class.ID)
 		db.ExecContext(ctx, "DELETE FROM classes WHERE id = $1", class.ID)
@@ -177,7 +177,7 @@ func TestScheduleStore_StartScheduledSession(t *testing.T) {
 	session, err := schedules.StartScheduledSession(ctx, sched.ID, teacher.ID)
 	require.NoError(t, err)
 	require.NotNil(t, session)
-	assert.Equal(t, "active", session.Status)
+	assert.Equal(t, "live", session.Status)
 	assert.Equal(t, class.ID, session.ClassID)
 
 	// Schedule should now be in_progress

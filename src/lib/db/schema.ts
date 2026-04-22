@@ -38,14 +38,14 @@ export const editorModeEnum = pgEnum("editor_mode", [
 ]);
 
 export const sessionStatusEnum = pgEnum("session_status", [
-  "active",
+  "live",
   "ended",
 ]);
 
 export const participantStatusEnum = pgEnum("participant_status", [
-  "active",
-  "idle",
-  "needs_help",
+  "invited",
+  "present",
+  "left",
 ]);
 
 export const annotationAuthorTypeEnum = pgEnum("annotation_author_type", [
@@ -180,39 +180,48 @@ export const authProviders = pgTable(
   ]
 );
 
-export const liveSessions = pgTable(
-  "live_sessions",
+export const sessions = pgTable(
+  "sessions",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    classId: uuid("class_id")
-      .notNull()
-      .references(() => classes.id, { onDelete: "cascade" }),
+    classId: uuid("class_id").references(() => classes.id, { onDelete: "cascade" }),
     teacherId: uuid("teacher_id")
       .notNull()
       .references(() => users.id),
-    status: sessionStatusEnum("status").notNull().default("active"),
+    title: varchar("title", { length: 255 }).notNull(),
+    inviteToken: varchar("invite_token", { length: 24 }),
+    inviteExpiresAt: timestamp("invite_expires_at", { withTimezone: true }),
+    scheduledSessionId: uuid("scheduled_session_id"),
+    status: sessionStatusEnum("status").notNull().default("live"),
     settings: jsonb("settings").default({}),
     startedAt: timestamp("started_at").defaultNow().notNull(),
     endedAt: timestamp("ended_at"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [
-    index("live_sessions_class_idx").on(table.classId),
-    index("live_sessions_class_status_idx").on(table.classId, table.status),
+    index("sessions_class_idx").on(table.classId),
+    index("sessions_class_status_idx").on(table.classId, table.status),
   ]
 );
+
+export const liveSessions = sessions;
 
 export const sessionParticipants = pgTable(
   "session_participants",
   {
     sessionId: uuid("session_id")
       .notNull()
-      .references(() => liveSessions.id, { onDelete: "cascade" }),
-    studentId: uuid("student_id")
+      .references(() => sessions.id, { onDelete: "cascade" }),
+    studentId: uuid("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
-    status: participantStatusEnum("status").notNull().default("active"),
-    joinedAt: timestamp("joined_at").defaultNow().notNull(),
+    status: participantStatusEnum("status").notNull().default("present"),
+    joinedAt: timestamp("joined_at"),
     leftAt: timestamp("left_at"),
+    invitedBy: uuid("invited_by").references(() => users.id, { onDelete: "set null" }),
+    invitedAt: timestamp("invited_at", { withTimezone: true }),
+    helpRequestedAt: timestamp("help_requested_at", { withTimezone: true }),
   },
   (table) => [
     uniqueIndex("session_participant_unique_idx").on(
@@ -232,7 +241,7 @@ export const aiInteractions = pgTable(
       .references(() => users.id, { onDelete: "cascade" }),
     sessionId: uuid("session_id")
       .notNull()
-      .references(() => liveSessions.id, { onDelete: "cascade" }),
+      .references(() => sessions.id, { onDelete: "cascade" }),
     enabledByTeacherId: uuid("enabled_by_teacher_id")
       .notNull()
       .references(() => users.id),
@@ -378,7 +387,7 @@ export const sessionTopics = pgTable(
   {
     sessionId: uuid("session_id")
       .notNull()
-      .references(() => liveSessions.id, { onDelete: "cascade" }),
+      .references(() => sessions.id, { onDelete: "cascade" }),
     topicId: uuid("topic_id")
       .notNull()
       .references(() => topics.id, { onDelete: "cascade" }),

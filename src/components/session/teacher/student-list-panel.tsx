@@ -6,6 +6,7 @@ interface Participant {
   studentId: string;
   name: string;
   status: string;
+  helpRequestedAt?: string | null;
 }
 
 interface StudentListPanelProps {
@@ -21,10 +22,16 @@ export function StudentListPanel({
   selectedStudentId,
   onSelectStudent,
 }: StudentListPanelProps) {
-  // Sort: needs_help first, then active, then idle
+  // Sort: hand raised first, then present, invited, and left.
   const sorted = [...participants].sort((a, b) => {
-    const priority: Record<string, number> = { needs_help: 0, active: 1, idle: 2 };
-    return (priority[a.status] ?? 3) - (priority[b.status] ?? 3);
+    const priority = (p: Participant) => {
+      if (p.helpRequestedAt) return 0;
+      if (p.status === "present") return 1;
+      if (p.status === "invited") return 2;
+      if (p.status === "left") return 3;
+      return 4;
+    };
+    return priority(a) - priority(b);
   });
 
   return (
@@ -35,10 +42,11 @@ export function StudentListPanel({
       <div className="flex-1 overflow-auto">
         {sorted.map((p) => {
           const statusColor = {
-            active: "bg-green-500",
-            idle: "bg-yellow-500",
-            needs_help: "bg-red-500",
+            present: "bg-green-500",
+            invited: "bg-blue-500",
+            left: "bg-zinc-400",
           }[p.status] || "bg-gray-500";
+          const dotColor = p.helpRequestedAt ? "bg-red-500" : statusColor;
 
           return (
             <div
@@ -49,9 +57,9 @@ export function StudentListPanel({
               }`}
             >
               <div className="flex items-center gap-2">
-                <span className={`w-2 h-2 rounded-full ${statusColor}`} />
+                <span className={`w-2 h-2 rounded-full ${dotColor}`} />
                 <span className="text-sm truncate">{p.name}</span>
-                {p.status === "needs_help" && <span className="text-xs">✋</span>}
+                {p.helpRequestedAt && <span className="text-xs">✋</span>}
               </div>
               <AiToggleButton sessionId={sessionId} studentId={p.studentId} />
             </div>

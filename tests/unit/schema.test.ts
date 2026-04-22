@@ -10,7 +10,7 @@ describe("Schema exports", () => {
     expect(schema.classes).toBeDefined();
     expect(schema.classMemberships).toBeDefined();
     expect(schema.classSettings).toBeDefined();
-    expect(schema.liveSessions).toBeDefined();
+    expect(schema.sessions).toBeDefined();
     expect(schema.sessionParticipants).toBeDefined();
     expect(schema.aiInteractions).toBeDefined();
     expect(schema.codeAnnotations).toBeDefined();

@@ -3,20 +3,20 @@ import { liveSessions, sessionParticipants, users } from "@/lib/db/schema";
 import type { Database } from "@/lib/db";
 
 interface CreateSessionInput {
-  classroomId: string;
+  classId: string;
   teacherId: string;
   settings?: Record<string, unknown>;
 }
 
 export async function createSession(db: Database, input: CreateSessionInput) {
-  // End any active session for this classroom first
+  // End any live session for this class first
   const [existing] = await db
     .select()
     .from(liveSessions)
     .where(
       and(
-        eq(liveSessions.classroomId, input.classroomId),
-        eq(liveSessions.status, "active")
+        eq(liveSessions.classId, input.classId),
+        eq(liveSessions.status, "live")
       )
     );
 
@@ -29,7 +29,12 @@ export async function createSession(db: Database, input: CreateSessionInput) {
 
   const [session] = await db
     .insert(liveSessions)
-    .values(input)
+    .values({
+      classId: input.classId,
+      teacherId: input.teacherId,
+      title: "Untitled session",
+      settings: input.settings ?? {},
+    })
     .returning();
   return session;
 }
@@ -48,8 +53,8 @@ export async function getActiveSession(db: Database, classroomId: string) {
     .from(liveSessions)
     .where(
       and(
-        eq(liveSessions.classroomId, classroomId),
-        eq(liveSessions.status, "active")
+        eq(liveSessions.classId, classroomId),
+        eq(liveSessions.status, "live")
       )
     );
   return session || null;
@@ -102,6 +107,7 @@ export async function getSessionParticipants(db: Database, sessionId: string) {
       status: sessionParticipants.status,
       joinedAt: sessionParticipants.joinedAt,
       leftAt: sessionParticipants.leftAt,
+      helpRequestedAt: sessionParticipants.helpRequestedAt,
       name: users.name,
       email: users.email,
     })
@@ -114,17 +120,40 @@ export async function updateParticipantStatus(
   db: Database,
   sessionId: string,
   studentId: string,
-  status: "active" | "idle" | "needs_help"
+  status: "active" | "needs_help" | "present" | "left" | "invited"
 ) {
-  const [participant] = await db
-    .update(sessionParticipants)
-    .set({ status })
-    .where(
-      and(
-        eq(sessionParticipants.sessionId, sessionId),
-        eq(sessionParticipants.studentId, studentId)
-      )
-    )
-    .returning();
+  const [participant] =
+    status === "needs_help"
+      ? await db
+          .update(sessionParticipants)
+          .set({ helpRequestedAt: new Date() })
+          .where(
+            and(
+              eq(sessionParticipants.sessionId, sessionId),
+              eq(sessionParticipants.studentId, studentId)
+            )
+          )
+          .returning()
+      : status === "active"
+        ? await db
+            .update(sessionParticipants)
+            .set({ helpRequestedAt: null })
+            .where(
+              and(
+                eq(sessionParticipants.sessionId, sessionId),
+                eq(sessionParticipants.studentId, studentId)
+              )
+            )
+            .returning()
+        : await db
+            .update(sessionParticipants)
+            .set({ status })
+            .where(
+              and(
+                eq(sessionParticipants.sessionId, sessionId),
+                eq(sessionParticipants.studentId, studentId)
+              )
+            )
+            .returning();
   return participant || null;
 }
