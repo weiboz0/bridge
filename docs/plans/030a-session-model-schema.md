@@ -10,7 +10,7 @@
 
 **Spec:** `docs/specs/010-session-model.md`
 
-**Branch:** `feat/010-session-model` (create before implementation; do not build this on `feat/009-problem-bank`)
+**Branch:** `feat/030a-session-model-schema`
 
 **Depends On:** None
 
@@ -159,6 +159,53 @@ This phase fixes the foundation first so later phases can change behavior withou
 
 Reviewers append findings here following `docs/code-review.md`. Author responds inline with `→ Response:` and updates status to `[FIXED]` or `[WONTFIX]`.
 
+### Review 1
+
+- **Date**: 2026-04-22
+- **Reviewer**: Codex
+- **Verdict**: No findings
+
+Focused review after implementation did not uncover unresolved 030a bugs beyond the verification caveats already recorded in the post-execution report.
+
 ## Post-Execution Report
 
-Populate during Step 6 of `docs/development-workflow.md` after this phase ships.
+**Status:** Complete
+
+**Implemented**
+
+- Added [drizzle/0014_session_model.sql](/home/chris/workshop/Bridge/drizzle/0014_session_model.sql) to rename `live_sessions` to `sessions`, rename `session_participants.student_id` to `user_id`, add the new session metadata columns, add `help_requested_at`, and convert the session/participant status enums to the spec-010 vocabulary.
+- Updated Go session and schedule stores plus handlers to read/write `sessions`, emit `status="live"`, and keep the existing help-queue API working via `help_requested_at` instead of overloading participant lifecycle state.
+- Updated the session-related Drizzle schema and TS helpers to use `sessions` and `sessionParticipants.userId` internally while preserving existing wire payload keys like `studentId` where callers still depend on them.
+- Updated student/teacher session UI components so raised-hand state is derived from `helpRequestedAt`, not `status === "needs_help"`.
+
+**Verification**
+
+- Applied `0014` to both local databases:
+  - `psql postgresql://work@127.0.0.1:5432/bridge_test -f drizzle/0014_session_model.sql`
+  - `psql postgresql://work@127.0.0.1:5432/bridge -f drizzle/0014_session_model.sql`
+- Focused backend verification passed:
+  - `env DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test GOCACHE=/tmp/magicburg-go-build-cache go test ./internal/store -run 'TestSessionStore_|TestScheduleStore_|TestInteractionStore_' -count=1`
+  - `env GOCACHE=/tmp/magicburg-go-build-cache go test ./internal/handlers -run 'TestCreateSession|TestGetSession|TestJoinSession|TestLeaveSession|TestGetParticipants|TestToggleHelp|TestToggleBroadcast' -count=1`
+- Broad Go verification passed:
+  - `env DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test GOCACHE=/tmp/magicburg-go-build-cache go test ./... -count=1 -timeout 120s`
+- Session-rename grep is clean for runtime code:
+  - `rg -n "live_sessions|session_participants\\.student_id|sessionParticipants\\.studentId|FROM live_sessions|UPDATE live_sessions|INSERT INTO live_sessions|DELETE FROM live_sessions" platform src tests -S`
+
+**Verification Caveats**
+
+- `node_modules/.bin/tsc --noEmit` still fails, but the remaining errors are pre-existing and outside 030a:
+  - stale `.next/types` validator output referencing deleted dashboard/classroom files
+  - unrelated `src/components/admin/user-actions.tsx`
+  - unrelated `tests/unit/annotations.test.ts`
+  - unrelated `tests/unit/lesson-content.test.ts`
+- `bun run test` was not runnable in this shell because `bun` is not installed.
+- `node_modules/.bin/vitest run tests/unit/schema.test.ts` is blocked by the local Node runtime lacking `node:util.styleText`, so Vitest-level JS verification could not be completed here.
+
+**Deviations From Plan**
+
+- The external HTTP/session event payloads still use `studentId` for compatibility in 030a even though the database and internal schema now use `user_id` / `userId`.
+- The help-queue caller surface still passes `"active"` / `"needs_help"` through `updateParticipantStatus`, but those values are now treated as compatibility shims over `help_requested_at` instead of stored participant lifecycle statuses.
+
+**Follow-Up**
+
+- 030b can now build on `sessions`, `invite_token`, `invite_expires_at`, and `help_requested_at` without further schema rename work.

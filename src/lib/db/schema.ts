@@ -205,15 +205,13 @@ export const sessions = pgTable(
   ]
 );
 
-export const liveSessions = sessions;
-
 export const sessionParticipants = pgTable(
   "session_participants",
   {
     sessionId: uuid("session_id")
       .notNull()
       .references(() => sessions.id, { onDelete: "cascade" }),
-    studentId: uuid("user_id")
+    userId: uuid("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
     status: participantStatusEnum("status").notNull().default("present"),
@@ -226,7 +224,7 @@ export const sessionParticipants = pgTable(
   (table) => [
     uniqueIndex("session_participant_unique_idx").on(
       table.sessionId,
-      table.studentId
+      table.userId
     ),
     index("session_participants_session_idx").on(table.sessionId),
   ]

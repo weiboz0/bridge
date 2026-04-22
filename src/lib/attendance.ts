@@ -1,5 +1,5 @@
 import { eq, and, desc, isNull } from "drizzle-orm";
-import { liveSessions, sessionParticipants, sessionTopics, topics } from "@/lib/db/schema";
+import { sessions, sessionParticipants, sessionTopics, topics } from "@/lib/db/schema";
 import type { Database } from "@/lib/db";
 
 export async function getAttendanceSummary(
@@ -10,14 +10,14 @@ export async function getAttendanceSummary(
   // Get all sessions for this classroom
   const allSessions = await db
     .select()
-    .from(liveSessions)
-    .where(eq(liveSessions.classId, classroomId));
+    .from(sessions)
+    .where(eq(sessions.classId, classroomId));
 
   // Get sessions this student participated in
   const attended = await db
     .select({ sessionId: sessionParticipants.sessionId })
     .from(sessionParticipants)
-    .where(eq(sessionParticipants.studentId, studentId));
+    .where(eq(sessionParticipants.userId, studentId));
 
   const attendedIds = new Set(attended.map((a) => a.sessionId));
   const classSessionIds = new Set(allSessions.map((s) => s.id));
@@ -41,14 +41,14 @@ export async function getSessionHistory(
       sessionId: sessionParticipants.sessionId,
       joinedAt: sessionParticipants.joinedAt,
       leftAt: sessionParticipants.leftAt,
-      status: liveSessions.status,
-      startedAt: liveSessions.startedAt,
-      endedAt: liveSessions.endedAt,
+      status: sessions.status,
+      startedAt: sessions.startedAt,
+      endedAt: sessions.endedAt,
     })
     .from(sessionParticipants)
-    .innerJoin(liveSessions, eq(sessionParticipants.sessionId, liveSessions.id))
-    .where(eq(sessionParticipants.studentId, studentId))
-    .orderBy(desc(liveSessions.startedAt))
+    .innerJoin(sessions, eq(sessionParticipants.sessionId, sessions.id))
+    .where(eq(sessionParticipants.userId, studentId))
+    .orderBy(desc(sessions.startedAt))
     .limit(limit);
 
   // Get topics for each session
@@ -73,15 +73,15 @@ export async function getActiveSessionForStudent(db: Database, studentId: string
   const active = await db
     .select({
       sessionId: sessionParticipants.sessionId,
-      classroomId: liveSessions.classId,
-      startedAt: liveSessions.startedAt,
+      classroomId: sessions.classId,
+      startedAt: sessions.startedAt,
     })
     .from(sessionParticipants)
-    .innerJoin(liveSessions, eq(sessionParticipants.sessionId, liveSessions.id))
+    .innerJoin(sessions, eq(sessionParticipants.sessionId, sessions.id))
     .where(
       and(
-        eq(sessionParticipants.studentId, studentId),
-        eq(liveSessions.status, "live"),
+        eq(sessionParticipants.userId, studentId),
+        eq(sessions.status, "live"),
         isNull(sessionParticipants.leftAt)
       )
     )
