@@ -25,6 +25,21 @@ const server = new Server({
     const parts = documentName.split(":");
 
     // Existing session document — student/teacher live editor.
+    //
+    // TODO (030b follow-up): This check is permissive. It allows any authenticated
+    // user whose token matches the `userId:role` format to open any session document
+    // they are nominally the owner of, without verifying they actually have a
+    // `session_participants` row or a valid invite token. Plan 030b added token-based
+    // session joins (via `POST /api/s/{token}/join`), which creates the participant
+    // row on the Go side — so a properly joined user will already have access at the
+    // DB level. However, Hocuspocus cannot verify that here because it has no direct
+    // access to the Go session store. A forged `userId:role` token could theoretically
+    // open any session document whose `docOwner` matches the forged userId.
+    //
+    // The real fix is to call Go's `CanAccessSession` helper from here (or a purpose-
+    // built lightweight Go endpoint) on every WebSocket upgrade. That network hop was
+    // deferred in 030b because the risk is pre-existing and not introduced by the
+    // invite-token flow. Track this as a Hocuspocus auth hardening follow-up (030c+).
     if (parts[0] === "session" && parts[2] === "user") {
       const docOwner = parts[3];
       if (role !== "teacher" && role !== "user" && role !== "parent" && userId !== docOwner) {
