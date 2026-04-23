@@ -138,6 +138,23 @@ func TestSessionStore_UpdateParticipantStatus(t *testing.T) {
 	assert.Equal(t, "present", updated.Status)
 }
 
+func TestSessionStore_UpdateParticipantStatusRejectsUnknownStatus(t *testing.T) {
+	db := testDB(t)
+	sessions := NewSessionStore(db)
+	users := NewUserStore(db)
+	classID, teacherID := setupSessionTest(t, db, t.Name())
+	student := createTestUser(t, db, users, t.Name()+"-student")
+	ctx := context.Background()
+
+	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: classID, TeacherID: teacherID})
+	sessions.JoinSession(ctx, session.ID, student.ID)
+
+	updated, err := sessions.UpdateParticipantStatus(ctx, session.ID, student.ID, "idle")
+	require.Error(t, err)
+	assert.Nil(t, updated)
+	assert.EqualError(t, err, `unsupported participant status "idle"`)
+}
+
 func TestSessionStore_GetActiveSession(t *testing.T) {
 	db := testDB(t)
 	sessions := NewSessionStore(db)

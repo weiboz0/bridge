@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -271,6 +272,9 @@ func (s *SessionStore) UpdateParticipantStatus(ctx context.Context, sessionID, s
 			WHERE session_id = $1 AND user_id = $2
 			RETURNING session_id, user_id, status, joined_at, left_at, help_requested_at`
 		args = []any{sessionID, studentID}
+	case "invited", "present", "left":
+	default:
+		return nil, fmt.Errorf("unsupported participant status %q", status)
 	}
 	err := s.db.QueryRowContext(ctx, query, args...).Scan(&p.SessionID, &p.StudentID, &p.Status, &p.JoinedAt, &p.LeftAt, &p.HelpRequestedAt)
 	if err == sql.ErrNoRows {

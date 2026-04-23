@@ -178,13 +178,13 @@ Focused review after implementation did not uncover unresolved 030a bugs beyond 
 
 **Should Fix**
 
-1. `[OPEN]` `UpdateParticipantStatus` default branch writes invalid enum values. `platform/internal/store/sessions.go:258` — the default query `SET status = $1` runs for any status value not matching `"needs_help"` or `"active"`. Passing the old enum values `"idle"` or the literal string `"needs_help"` through the default path would attempt to write a value not in the `participant_status` enum (`invited`, `present`, `left`). Current callers only pass `"needs_help"` / `"active"` (which hit the switch cases), so this doesn't fire today. But the function signature accepts `string` with no validation — a future caller passing `"present"` or `"left"` through the default branch would succeed, but `"idle"` would crash. Add a validation guard or restructure to reject unknown values early.
+1. `[FIXED]` `UpdateParticipantStatus` default branch wrote invalid enum values. `platform/internal/store/sessions.go` now validates the accepted lifecycle statuses (`invited`, `present`, `left`) plus the compatibility shims (`active`, `needs_help`) and rejects anything else before issuing SQL. `platform/internal/store/sessions_test.go` now covers the regression by asserting `"idle"` returns `unsupported participant status "idle"` instead of leaking a database enum error.
 
 **Nice to Have**
 
-2. `[OPEN]` `Vitest` and `tsc --noEmit` were not verified by the implementing agent (post-execution report notes `bun` not installed and Node missing `styleText`). This review ran both successfully — Vitest passes and `tsc` has only pre-existing unrelated errors. No action needed, but the implementing agent should verify its own work.
+2. `[WONTFIX]` `Vitest` and `tsc --noEmit` were not verified by the implementing agent. The review already supplied the missing evidence: Vitest passed, and `tsc --noEmit` only reported pre-existing unrelated errors. No product code change is required for 030a, so this stays as a process note rather than a follow-up task.
 
-3. `[OPEN]` The Go `LiveSession` struct name is still `LiveSession` (not renamed to `Session`). `platform/internal/store/sessions.go:11` — the table was renamed from `live_sessions` to `sessions`, but the Go type is still `LiveSession`. This is a cosmetic inconsistency. The plan explicitly deferred struct renames as out of scope for 030a, so this is expected — but should be tracked for 030b or later.
+3. `[WONTFIX]` The Go `LiveSession` struct name is still `LiveSession`. This is a cosmetic inconsistency, but the 030a plan explicitly deferred broad type renames to keep the schema migration slice small and compatible. Leaving the type name in place avoids churn in this phase; any rename belongs in a later cleanup phase if it still matters after 030b+.
 
 **No issues found for:**
 - Migration 0014 is idempotent and handles all edge cases (enum rename with guard, column rename with IF EXISTS, type swap via v2 pattern)
