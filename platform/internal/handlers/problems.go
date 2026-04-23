@@ -70,11 +70,6 @@ func (h *ProblemHandler) Routes(r chi.Router) {
 		r.Post("/attempts", h.CreateAttempt)
 	})
 
-	r.Route("/api/topics/{topicId}/problems", func(r chi.Router) {
-		r.Use(ValidateUUIDParam("topicId"))
-		r.Get("/", h.ListProblemsByTopic)
-	})
-
 	r.Route("/api/test-cases/{id}", func(r chi.Router) {
 		r.Use(ValidateUUIDParam("id"))
 		r.Patch("/", h.UpdateTestCase)

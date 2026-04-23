@@ -26,6 +26,7 @@ const GO_PROXY_ROUTES = [
   "/api/problems/:path*",
   "/api/test-cases/:path*",
   "/api/attempts/:path*",
+  "/api/s/:path*",
 ];
 
 // SharedArrayBuffer (used by the Pyodide stdin protocol) requires the page

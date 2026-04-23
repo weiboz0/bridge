@@ -178,7 +178,8 @@ func TestScheduleStore_StartScheduledSession(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, session)
 	assert.Equal(t, "live", session.Status)
-	assert.Equal(t, class.ID, session.ClassID)
+	require.NotNil(t, session.ClassID)
+	assert.Equal(t, class.ID, *session.ClassID)
 
 	// Schedule should now be in_progress
 	updated, _ := schedules.GetSchedule(ctx, sched.ID)

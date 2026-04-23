@@ -33,9 +33,10 @@ func (h *TopicProblemHandler) accessDeps() problemAccessDeps {
 	}
 }
 
-func (h *TopicProblemHandler) Routes(r chi.Router) {
+func (h *TopicProblemHandler) Routes(r chi.Router, listHandler func(http.ResponseWriter, *http.Request)) {
 	r.Route("/api/topics/{topicId}/problems", func(r chi.Router) {
 		r.Use(ValidateUUIDParam("topicId"))
+		r.Get("/", listHandler)
 		r.Post("/", h.AttachProblem)
 	})
 	r.Route("/api/topics/{topicId}/problems/{problemId}", func(r chi.Router) {
