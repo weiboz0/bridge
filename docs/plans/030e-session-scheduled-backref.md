@@ -82,4 +82,12 @@ Reviewers append findings here following `docs/code-review.md`. Author responds 
 
 ## Post-Execution Report
 
-Populate during Step 6 of `docs/development-workflow.md` after this phase ships.
+Implemented Task 2 and Task 3 on branch `feat/030e-scheduled-backref` after Task 1 landed at commit `702b596`.
+
+- Added `drizzle/0015_scheduled_session_backref_cleanup.sql` to drop the `scheduled_sessions.live_session_id` foreign key, any indexes on `live_session_id`, and the column itself.
+- The migration is idempotent by design: it runs inside a single `BEGIN`/`COMMIT` transaction, looks up the foreign key name dynamically from `pg_constraint`, drops matching indexes with `DROP INDEX IF EXISTS`, and finishes with `ALTER TABLE ... DROP COLUMN IF EXISTS`.
+- `docs/api.md` and `src/lib/db/schema.ts` were checked for remaining `live_session_id` / `liveSessionId` usage in session or schedule surfaces. No in-scope replacements were needed because those references were already gone.
+- Remaining non-migration `live_session_id` references were found and fixed in `platform/internal/store/schedule.go`, `platform/internal/store/schedule_test.go`, and `platform/internal/handlers/schedule_test.go`. The store no longer writes the dropped backref column, and the tests no longer depend on mutating it.
+- Reference sweep result: `grep -rn 'live_session_id' platform/ src/ tests/` returned no hits after those fixes.
+- Migration execution could not be completed in this sandbox. Both `psql postgresql://work@127.0.0.1:5432/bridge ...` and the fallback Unix-socket form failed with `Operation not permitted` when opening the connection, so the migration and post-migration `\d scheduled_sessions | grep live_session_id` check remain to be run in an environment that permits local socket access.
+- Test execution was attempted twice. The user-provided root-level `go test ./...` command failed immediately because `/home/chris/workshop/Bridge` is not the Go module root. Re-running from `platform/` with `DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test TEST_DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test GOCACHE=/tmp/bridge-go-build-cache go test ./... -count=1 -timeout 180s` got past the cache issue, but the suite still failed because this sandbox blocks TCP listeners and TCP connections (`socket: operation not permitted`) used by the DB-backed tests and `httptest`.

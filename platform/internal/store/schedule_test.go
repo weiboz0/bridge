@@ -192,9 +192,6 @@ func TestScheduleStore_StartScheduledSession(t *testing.T) {
 	require.NotNil(t, scheduledSessionID)
 	assert.Equal(t, sched.ID, *scheduledSessionID)
 
-	_, err = db.ExecContext(ctx, `UPDATE scheduled_sessions SET live_session_id = NULL WHERE id = $1`, sched.ID)
-	require.NoError(t, err)
-
 	refetched, err := schedules.GetSchedule(ctx, sched.ID)
 	require.NoError(t, err)
 	require.NotNil(t, refetched.LiveSessionID)
@@ -232,9 +229,6 @@ func TestScheduleStore_CompleteScheduledSession(t *testing.T) {
 
 	// Start the scheduled session
 	session, err := schedules.StartScheduledSession(ctx, sched.ID, teacherID)
-	require.NoError(t, err)
-
-	_, err = db.ExecContext(ctx, `UPDATE scheduled_sessions SET live_session_id = NULL WHERE id = $1`, sched.ID)
 	require.NoError(t, err)
 
 	// Complete it

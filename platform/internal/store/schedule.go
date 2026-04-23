@@ -50,9 +50,9 @@ func NewScheduleStore(db *sql.DB) *ScheduleStore {
 	return &ScheduleStore{db: db}
 }
 
-const scheduleColumns = `id, class_id, teacher_id, title, scheduled_start, scheduled_end, recurrence, topic_ids, NULL::uuid AS live_session_id, status, created_at, updated_at`
+const scheduleColumns = `id, class_id, teacher_id, title, scheduled_start, scheduled_end, recurrence, topic_ids, NULL::uuid AS linked_session_id, status, created_at, updated_at`
 const scheduleReadColumns = `scheduled_sessions.id, scheduled_sessions.class_id, scheduled_sessions.teacher_id, scheduled_sessions.title, scheduled_sessions.scheduled_start, scheduled_sessions.scheduled_end, scheduled_sessions.recurrence, scheduled_sessions.topic_ids,
-	(SELECT sessions.id FROM sessions WHERE sessions.scheduled_session_id = scheduled_sessions.id ORDER BY sessions.started_at DESC, sessions.id DESC LIMIT 1) AS live_session_id,
+	(SELECT sessions.id FROM sessions WHERE sessions.scheduled_session_id = scheduled_sessions.id ORDER BY sessions.started_at DESC, sessions.id DESC LIMIT 1) AS linked_session_id,
 	scheduled_sessions.status, scheduled_sessions.created_at, scheduled_sessions.updated_at`
 
 func scanSchedule(row interface{ Scan(...any) error }) (*ScheduledSession, error) {
@@ -273,8 +273,8 @@ func (s *ScheduleStore) StartScheduledSession(ctx context.Context, scheduleID, t
 
 	// Update schedule entry
 	_, err = tx.ExecContext(ctx,
-		`UPDATE scheduled_sessions SET status = 'in_progress', live_session_id = $1, updated_at = $2 WHERE id = $3`,
-		sessionID, now, scheduleID)
+		`UPDATE scheduled_sessions SET status = 'in_progress', updated_at = $1 WHERE id = $2`,
+		now, scheduleID)
 	if err != nil {
 		return nil, err
 	}

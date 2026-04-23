@@ -201,9 +201,6 @@ func TestScheduleHandler_List_UsesSessionScheduledBackref(t *testing.T) {
 	session, err := schedules.StartScheduledSession(ctx, sched.ID, teacher.ID)
 	require.NoError(t, err)
 
-	_, err = db.ExecContext(ctx, `UPDATE scheduled_sessions SET live_session_id = NULL WHERE id = $1`, sched.ID)
-	require.NoError(t, err)
-
 	h := &ScheduleHandler{Schedules: schedules}
 	req := httptest.NewRequest(http.MethodGet, "/api/classes/"+class.ID+"/schedule", nil)
 	req = withChiParams(req, map[string]string{"classId": class.ID})
