@@ -4,7 +4,6 @@ import { parseLessonContent } from "@/lib/lesson-content";
 import { LessonRenderer } from "@/components/lesson/lesson-renderer";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import Link from "next/link";
-import { buttonVariants } from "@/components/ui/button";
 
 interface ClassDetail {
   id: string;
@@ -70,7 +69,7 @@ export default async function StudentClassDetailPage({
     logAndDefault(api<SessionItem[]>(`/api/sessions/by-class/${id}`), [], "sessions"),
   ]);
 
-  const activeSession = sessions.find((s) => s.status === "active");
+  const activeSession = sessions.find((s) => s.status === "live" || s.status === "active");
 
   const problemsByTopic = new Map<string, ProblemItem[]>();
   await Promise.all(
@@ -96,7 +95,7 @@ export default async function StudentClassDetailPage({
       </div>
 
       {activeSession && (
-        <Link href={`/student/classes/${id}/session/${activeSession.id}`}>
+        <Link href={`/student/sessions/${activeSession.id}`}>
           <Card className="border-green-500 bg-green-50 dark:bg-green-950/20 hover:border-green-600 transition-colors cursor-pointer">
             <CardHeader>
               <CardTitle className="text-lg text-green-700 dark:text-green-400">

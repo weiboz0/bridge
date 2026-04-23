@@ -39,19 +39,87 @@ Course/class APIs are served by the Go platform service. See `platform/README.md
 
 ## Sessions
 
-The current session API is still the class-bound surface from earlier plans, but its underlying schema was updated in Plan 030a:
+The canonical session API supports both class-linked sessions and orphan sessions:
 
 - session rows now live in the `sessions` table, not `live_sessions`
+- `classId` is nullable; `null` means an orphan session
 - live session status is `"live"` or `"ended"`
 - participant lifecycle status is `"invited"`, `"present"`, or `"left"`
 - raised-hand/help-queue state is no longer stored in participant `status`; it is tracked separately and exposed through the existing help-queue endpoints
 
-Compatibility notes for the current API:
+Compatibility notes:
 
 - Existing HTTP payloads still use `studentId` in participant/event payloads.
 - `POST /api/sessions/{id}/join` still returns `studentId` in the response payload when applicable.
 - `GET /api/sessions/{id}/help-queue` still returns the raised-hand queue, but internally it is backed by `help_requested_at` rather than a `"needs_help"` participant status.
 - `POST /api/sessions/{id}/end` ends a session (moved from `PATCH /api/sessions/{id}` in Plan 030b).
+- `GET /api/sessions/by-class/{classId}` and `GET /api/sessions/active/{classId}` remain available as compatibility wrappers for class-scoped surfaces.
+
+### `POST /api/sessions`
+
+Create a live session.
+
+**Request:**
+```json
+{
+  "title": "Office hours",
+  "classId": "uuid-or-null",
+  "settings": "{\"mode\":\"collaborative\"}"
+}
+```
+
+**Auth:**
+- Orphan sessions (`classId` omitted or `null`): any teacher or platform admin
+- Class-linked sessions: class instructor, org admin for the class org, or platform admin
+
+**Validation:**
+- `title`: required
+- `classId`: optional
+- `settings`: optional, defaults to `"{}"`
+
+**Responses:**
+- `201` — Created session object
+- `400` — Invalid JSON or missing `title`
+- `401` — Not authenticated
+- `403` — Not authorized to create the requested session
+- `404` — `classId` does not exist
+
+### `GET /api/sessions`
+
+List sessions ordered by `startedAt DESC`, with cursor pagination.
+
+**Query parameters:**
+- `teacherId` — optional; defaults to the caller's user ID. Only platform admins may query another teacher's sessions.
+- `classId` — optional; limits results to one class
+- `status` — optional; `"live"` or `"ended"`
+- `limit` — optional; default `20`, max `100`
+- `cursor` — optional opaque cursor from the prior response's `nextCursor`
+
+**Response (`200`):**
+```json
+{
+  "items": [
+    {
+      "id": "uuid",
+      "classId": null,
+      "teacherId": "uuid",
+      "title": "Office hours",
+      "status": "live",
+      "settings": "{}",
+      "startedAt": "2026-04-23T19:00:00Z",
+      "endedAt": null
+    }
+  ],
+  "nextCursor": "opaque-cursor"
+}
+```
+
+`nextCursor` is omitted when there is no subsequent page.
+
+**Errors:**
+- `400` — Invalid `limit` or malformed `cursor`
+- `401` — Not authenticated
+- `403` — Non-admin attempting to query another teacher's sessions
 
 ## Session Participants (Direct Add/Revoke)
 

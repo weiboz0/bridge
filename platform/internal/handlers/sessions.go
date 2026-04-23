@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -22,8 +23,14 @@ type SessionHandler struct {
 	Broadcaster *events.Broadcaster
 }
 
+type sessionListResponse struct {
+	Items      []store.LiveSession `json:"items"`
+	NextCursor *string             `json:"nextCursor,omitempty"`
+}
+
 func (h *SessionHandler) Routes(r chi.Router) {
 	r.Route("/api/sessions", func(r chi.Router) {
+		r.Get("/", h.ListSessions)
 		r.Post("/", h.CreateSession)
 		r.Get("/by-class/{classId}", h.ListByClass)
 		r.Get("/active/{classId}", h.GetActiveByClass)
@@ -65,27 +72,114 @@ func (h *SessionHandler) CreateSession(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var body struct {
-		ClassID  string `json:"classId"`
-		Settings string `json:"settings"`
+		Title    string  `json:"title"`
+		ClassID  *string `json:"classId"`
+		Settings string  `json:"settings"`
 	}
 	if !decodeJSON(w, r, &body) {
 		return
 	}
-	if body.ClassID == "" {
-		writeError(w, http.StatusBadRequest, "classId is required")
+	if body.Title == "" {
+		writeError(w, http.StatusBadRequest, "title is required")
 		return
+	}
+
+	if body.ClassID == nil {
+		if !claims.IsPlatformAdmin {
+			ok, err := h.isTeacherOrOrgAdmin(r, claims.UserID)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "Database error")
+				return
+			}
+			if !ok {
+				writeError(w, http.StatusForbidden, "Must be teacher or platform admin")
+				return
+			}
+		}
+	} else {
+		if _, ok := h.authorizeSessionCreateForClass(w, r, *body.ClassID, claims); !ok {
+			return
+		}
 	}
 
 	session, err := h.Sessions.CreateSession(r.Context(), store.CreateSessionInput{
 		ClassID:   body.ClassID,
 		TeacherID: claims.UserID,
-		Settings:    body.Settings,
+		Title:     body.Title,
+		Settings:  body.Settings,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Failed to create session")
 		return
 	}
 	writeJSON(w, http.StatusCreated, session)
+}
+
+func parseSessionListFilterFromQuery(r *http.Request) (store.ListSessionsFilter, error) {
+	q := r.URL.Query()
+	f := store.ListSessionsFilter{
+		TeacherID: q.Get("teacherId"),
+		Status:    q.Get("status"),
+	}
+	if classID := q.Get("classId"); classID != "" {
+		f.ClassID = &classID
+	}
+	if limit := q.Get("limit"); limit != "" {
+		n, err := strconv.Atoi(limit)
+		if err != nil {
+			return f, errors.New("limit must be an integer")
+		}
+		f.Limit = n
+	}
+	if cursor := q.Get("cursor"); cursor != "" {
+		startedAt, id, err := decodeCursor(cursor)
+		if err != nil {
+			return f, err
+		}
+		f.CursorStartedAt = startedAt
+		f.CursorID = id
+	}
+	return f, nil
+}
+
+// ListSessions handles GET /api/sessions?teacherId=&classId=&status=&limit=&cursor=
+func (h *SessionHandler) ListSessions(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	filter, err := parseSessionListFilterFromQuery(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid query: "+err.Error())
+		return
+	}
+
+	if filter.TeacherID == "" {
+		filter.TeacherID = claims.UserID
+	} else if !claims.IsPlatformAdmin && filter.TeacherID != claims.UserID {
+		writeError(w, http.StatusForbidden, "Cannot list another teacher's sessions")
+		return
+	}
+
+	sessions, hasMore, err := h.Sessions.ListSessions(r.Context(), filter)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+
+	var nextCursor *string
+	if hasMore && len(sessions) > 0 {
+		last := sessions[len(sessions)-1]
+		cursor := encodeCursor(last.StartedAt, last.ID)
+		nextCursor = &cursor
+	}
+
+	writeJSON(w, http.StatusOK, sessionListResponse{
+		Items:      sessions,
+		NextCursor: nextCursor,
+	})
 }
 
 // ListByClass handles GET /api/sessions/by-class/{classId}
@@ -549,6 +643,88 @@ func (h *SessionHandler) isSessionOwner(w http.ResponseWriter, r *http.Request, 
 	return session, true
 }
 
+func (h *SessionHandler) isInstructor(r *http.Request, classID, userID string) (bool, error) {
+	if h.Classes == nil {
+		return false, errors.New("class store unavailable")
+	}
+	members, err := h.Classes.ListClassMembers(r.Context(), classID)
+	if err != nil {
+		return false, err
+	}
+	for _, m := range members {
+		if m.UserID == userID && m.Role == "instructor" {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (h *SessionHandler) isTeacherOrOrgAdmin(r *http.Request, userID string) (bool, error) {
+	if h.Orgs == nil {
+		return false, errors.New("org store unavailable")
+	}
+	memberships, err := h.Orgs.GetUserMemberships(r.Context(), userID)
+	if err != nil {
+		return false, err
+	}
+	for _, m := range memberships {
+		if m.Status != "active" || m.OrgStatus != "active" {
+			continue
+		}
+		if m.Role == "teacher" || m.Role == "org_admin" {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (h *SessionHandler) authorizeSessionCreateForClass(w http.ResponseWriter, r *http.Request, classID string, claims *auth.Claims) (*store.Class, bool) {
+	if h.Classes == nil {
+		writeError(w, http.StatusInternalServerError, "Class store unavailable")
+		return nil, false
+	}
+
+	class, err := h.Classes.GetClass(r.Context(), classID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return nil, false
+	}
+	if class == nil {
+		writeError(w, http.StatusNotFound, "Class not found")
+		return nil, false
+	}
+	if claims.IsPlatformAdmin {
+		return class, true
+	}
+
+	isInstructor, err := h.isInstructor(r, classID, claims.UserID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return nil, false
+	}
+	if isInstructor {
+		return class, true
+	}
+
+	if h.Orgs == nil {
+		writeError(w, http.StatusInternalServerError, "Org store unavailable")
+		return nil, false
+	}
+	roles, err := h.Orgs.GetUserRolesInOrg(r.Context(), class.OrgID, claims.UserID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return nil, false
+	}
+	for _, role := range roles {
+		if role.Role == "org_admin" {
+			return class, true
+		}
+	}
+
+	writeError(w, http.StatusForbidden, "Must be instructor or org admin for this class")
+	return nil, false
+}
+
 // isSessionAuthority checks whether the caller has "authority" over a session:
 // platform admin, session teacher, class instructor/ta, or org admin (if session is class-bound).
 // It fetches the session and returns it; on failure it writes the error response.
@@ -685,9 +861,9 @@ func (h *SessionHandler) PatchSession(w http.ResponseWriter, r *http.Request) {
 
 	// Use json.RawMessage so we can distinguish "absent" from "null" for inviteExpiresAt.
 	var body struct {
-		Title           *string          `json:"title"`
-		Settings        *string          `json:"settings"`
-		InviteExpiresAt json.RawMessage  `json:"inviteExpiresAt,omitempty"`
+		Title           *string         `json:"title"`
+		Settings        *string         `json:"settings"`
+		InviteExpiresAt json.RawMessage `json:"inviteExpiresAt,omitempty"`
 	}
 	if !decodeJSON(w, r, &body) {
 		return

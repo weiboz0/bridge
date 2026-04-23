@@ -1,79 +1,191 @@
+import Link from "next/link";
 import { api } from "@/lib/api-client";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import Link from "next/link";
+import { StartSessionButton } from "@/components/teacher/start-session-button";
 import { buttonVariants } from "@/components/ui/button";
 
-interface CourseItem { id: string; title: string }
-interface ClassItem { id: string; title: string; term: string; status: string; memberRole: string }
-interface SessionItem { id: string; status: string; participantCount: number }
+interface CourseItem {
+  id: string;
+  title: string;
+}
+
+interface ClassItem {
+  id: string;
+  title: string;
+  term: string;
+  status: string;
+  memberRole: string;
+}
+
+interface SessionItem {
+  id: string;
+  classId: string | null;
+  title: string;
+  status: string;
+  startedAt: string;
+  endedAt: string | null;
+}
+
+interface SessionListResponse {
+  items: SessionItem[];
+  nextCursor?: string | null;
+}
+
+function formatTimestamp(value: string) {
+  return new Date(value).toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
 
 export default async function TeacherDashboard() {
-  const [courses, allClasses] = await Promise.all([
-    api<CourseItem[]>("/api/teacher/courses").then((d) => (d as any).courses ?? []),
+  const [coursesResponse, allClasses, sessionList] = await Promise.all([
+    api<{ courses?: CourseItem[] }>("/api/teacher/courses").catch(() => ({ courses: [] })),
     api<ClassItem[]>("/api/classes/mine"),
+    api<SessionListResponse>("/api/sessions?limit=20"),
   ]);
 
-  const myClasses = allClasses.filter((c) => c.memberRole === "instructor");
+  const courses = coursesResponse.courses ?? [];
+  const myClasses = allClasses.filter((classItem) => classItem.memberRole === "instructor");
+  const mySessions = sessionList.items ?? [];
 
-  // Check for active sessions per class
   const activeSessions = new Map<string, SessionItem>();
-  await Promise.all(
-    myClasses.map(async (cls) => {
-      const session = await api<SessionItem | null>(`/api/sessions/active/${cls.id}`).catch(() => null);
-      if (session) activeSessions.set(cls.id, session);
-    })
-  );
+  for (const session of mySessions) {
+    if (session.classId && session.status === "live" && !activeSessions.has(session.classId)) {
+      activeSessions.set(session.classId, session);
+    }
+  }
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="space-y-6 p-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Teacher Dashboard</h1>
-        <Link href="/teacher/courses" className={buttonVariants()}>
+        <h1 className="text-2xl font-bold text-zinc-900">Teacher Dashboard</h1>
+        <Link
+          href="/teacher/courses"
+          className={buttonVariants({
+            className: "bg-zinc-900 text-white hover:bg-zinc-800",
+          })}
+        >
           Create Course
         </Link>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2">
-        <Card>
+      <div className="grid gap-4 md:grid-cols-3">
+        <Card className="border-zinc-200 bg-white">
           <CardHeader>
-            <CardTitle className="text-sm text-muted-foreground">My Courses</CardTitle>
+            <CardTitle className="text-sm text-zinc-500">My Courses</CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="text-3xl font-bold">{courses.length}</p>
+            <p className="text-3xl font-bold text-zinc-900">{courses.length}</p>
           </CardContent>
         </Card>
-        <Card>
+        <Card className="border-zinc-200 bg-white">
           <CardHeader>
-            <CardTitle className="text-sm text-muted-foreground">My Classes</CardTitle>
+            <CardTitle className="text-sm text-zinc-500">My Classes</CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="text-3xl font-bold">{myClasses.length}</p>
+            <p className="text-3xl font-bold text-zinc-900">{myClasses.length}</p>
+          </CardContent>
+        </Card>
+        <Card className="border-zinc-200 bg-white">
+          <CardHeader>
+            <CardTitle className="text-sm text-zinc-500">My Sessions</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-3xl font-bold text-zinc-900">{mySessions.length}</p>
           </CardContent>
         </Card>
       </div>
 
+      <Card className="border-zinc-200 bg-white">
+        <CardHeader className="gap-4 md:flex-row md:items-center md:justify-between">
+          <div className="space-y-1">
+            <CardTitle className="text-lg text-zinc-900">Sessions</CardTitle>
+            <CardDescription className="text-zinc-500">
+              Start an independent session or reopen one of your recent sessions.
+            </CardDescription>
+          </div>
+          <StartSessionButton
+            mode="orphan"
+            buttonLabel="Start Session"
+            defaultTitle="Office hours"
+          />
+        </CardHeader>
+        <CardContent>
+          {mySessions.length === 0 ? (
+            <div className="rounded-lg border border-dashed border-zinc-200 bg-zinc-50 px-4 py-6 text-sm text-zinc-500">
+              No sessions yet. Start a standalone session for office hours, small-group support,
+              or ad hoc help.
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {mySessions.map((session) => {
+                const isLive = session.status === "live";
+                const sessionLabel = session.classId ? "Class session" : "Independent session";
+
+                return (
+                  <Link key={session.id} href={`/teacher/sessions/${session.id}`} className="block">
+                    <div className="flex items-center justify-between rounded-lg border border-zinc-200 bg-white px-4 py-3 transition-colors hover:bg-zinc-50">
+                      <div className="space-y-1">
+                        <p className="font-medium text-zinc-900">{session.title}</p>
+                        <p className="text-sm text-zinc-500">
+                          {sessionLabel} · Started {formatTimestamp(session.startedAt)}
+                          {session.endedAt ? ` · Ended ${formatTimestamp(session.endedAt)}` : ""}
+                        </p>
+                      </div>
+                      <span
+                        className={
+                          isLive
+                            ? "rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700"
+                            : "rounded-full bg-zinc-100 px-2.5 py-1 text-xs font-medium text-zinc-600"
+                        }
+                      >
+                        {isLive ? "Live" : "Ended"}
+                      </span>
+                    </div>
+                  </Link>
+                );
+              })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
       {myClasses.length > 0 && (
         <div>
-          <h2 className="text-lg font-semibold mb-3">My Classes</h2>
+          <h2 className="mb-3 text-lg font-semibold text-zinc-900">My Classes</h2>
           <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
-            {myClasses.map((cls) => {
-              const active = activeSessions.get(cls.id);
+            {myClasses.map((classItem) => {
+              const activeSession = activeSessions.get(classItem.id);
+
               return (
-                <Link key={cls.id} href={active
-                  ? `/teacher/classes/${cls.id}/session/${active.id}/dashboard`
-                  : `/teacher/classes/${cls.id}`
-                }>
-                  <Card className={`hover:border-primary transition-colors cursor-pointer ${active ? "border-green-500" : ""}`}>
+                <Link
+                  key={classItem.id}
+                  href={
+                    activeSession
+                      ? `/teacher/sessions/${activeSession.id}`
+                      : `/teacher/classes/${classItem.id}`
+                  }
+                >
+                  <Card
+                    className={`cursor-pointer border-zinc-200 bg-white transition-colors hover:border-zinc-300 ${
+                      activeSession ? "border-emerald-400" : ""
+                    }`}
+                  >
                     <CardHeader>
-                      <div className="flex items-center justify-between">
-                        <CardTitle className="text-lg">{cls.title}</CardTitle>
-                        {active && (
-                          <span className="text-xs font-medium text-green-600 bg-green-100 dark:bg-green-900/30 dark:text-green-400 px-2 py-0.5 rounded-full">
-                            Live · {active.participantCount}
+                      <div className="flex items-center justify-between gap-3">
+                        <CardTitle className="text-lg text-zinc-900">{classItem.title}</CardTitle>
+                        {activeSession && (
+                          <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">
+                            Live
                           </span>
                         )}
                       </div>
-                      <CardDescription>{cls.term || "No term"}</CardDescription>
+                      <CardDescription className="text-zinc-500">
+                        {classItem.term || "No term"}
+                      </CardDescription>
                     </CardHeader>
                   </Card>
                 </Link>

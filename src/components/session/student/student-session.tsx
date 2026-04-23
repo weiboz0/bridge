@@ -21,7 +21,8 @@ interface SessionTopic {
 
 interface StudentSessionProps {
   sessionId: string;
-  classId: string;
+  classId: string | null;
+  returnPath?: string;
   editorMode: "python" | "javascript" | "blockly";
   starterCode?: string;
 }
@@ -29,6 +30,7 @@ interface StudentSessionProps {
 export function StudentSession({
   sessionId,
   classId,
+  returnPath,
   editorMode,
   starterCode = "",
 }: StudentSessionProps) {
@@ -78,10 +80,10 @@ export function StudentSession({
     eventSource.addEventListener("broadcast_started", () => setBroadcastActive(true));
     eventSource.addEventListener("broadcast_ended", () => setBroadcastActive(false));
     eventSource.addEventListener("session_ended", () => {
-      window.location.href = `/student/classes/${classId}`;
+      window.location.href = returnPath ?? (classId ? `/student/classes/${classId}` : "/student");
     });
     return () => eventSource.close();
-  }, [sessionId, classId, userId]);
+  }, [sessionId, classId, returnPath, userId]);
 
   const lessonPanel = topics.length > 0 ? (
     <div className="overflow-auto p-4 space-y-4">

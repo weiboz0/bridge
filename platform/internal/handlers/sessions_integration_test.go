@@ -21,19 +21,26 @@ import (
 
 // sessionFixture is the world a session integration test runs against.
 type sessionFixture struct {
-	db          *sql.DB
-	h           *SessionHandler
-	router      chi.Router
-	orgs        *store.OrgStore
-	classes     *store.ClassStore
-	teacher     *store.RegisteredUser
-	student     *store.RegisteredUser
-	otherUser   *store.RegisteredUser // not a participant or teacher
-	orgID       string
-	classID     string
-	sessionID   string
-	session     *store.LiveSession
+	db        *sql.DB
+	h         *SessionHandler
+	router    chi.Router
+	orgs      *store.OrgStore
+	classes   *store.ClassStore
+	teacher   *store.RegisteredUser
+	student   *store.RegisteredUser
+	otherUser *store.RegisteredUser // not a participant or teacher
+	orgID     string
+	classID   string
+	sessionID string
+	session   *store.LiveSession
 }
+
+type sessionListPayload struct {
+	Items      []store.LiveSession `json:"items"`
+	NextCursor *string             `json:"nextCursor"`
+}
+
+func strPtr(s string) *string { return &s }
 
 func newSessionFixture(t *testing.T, suffix string) *sessionFixture {
 	t.Helper()
@@ -61,6 +68,8 @@ func newSessionFixture(t *testing.T, suffix string) *sessionFixture {
 		Type: "school", ContactEmail: suffix + "@example.com", ContactName: "Admin",
 	})
 	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, "UPDATE organizations SET status = 'active' WHERE id = $1", org.ID)
+	require.NoError(t, err)
 	t.Cleanup(func() {
 		db.ExecContext(ctx, "DELETE FROM org_memberships WHERE org_id = $1", org.ID)
 		db.ExecContext(ctx, "DELETE FROM organizations WHERE id = $1", org.ID)
@@ -72,6 +81,9 @@ func newSessionFixture(t *testing.T, suffix string) *sessionFixture {
 		})
 		require.NoError(t, err)
 		t.Cleanup(func() {
+			db.ExecContext(ctx, "DELETE FROM session_topics WHERE session_id IN (SELECT id FROM sessions WHERE teacher_id = $1)", u.ID)
+			db.ExecContext(ctx, "DELETE FROM session_participants WHERE session_id IN (SELECT id FROM sessions WHERE teacher_id = $1)", u.ID)
+			db.ExecContext(ctx, "DELETE FROM sessions WHERE teacher_id = $1", u.ID)
 			db.ExecContext(ctx, "DELETE FROM session_participants WHERE user_id = $1", u.ID)
 			db.ExecContext(ctx, "DELETE FROM auth_providers WHERE user_id = $1", u.ID)
 			db.ExecContext(ctx, "DELETE FROM users WHERE id = $1", u.ID)
@@ -109,7 +121,9 @@ func newSessionFixture(t *testing.T, suffix string) *sessionFixture {
 
 	// Create a live session
 	session, err := sessions.CreateSession(ctx, store.CreateSessionInput{
-		ClassID: class.ID, TeacherID: teacher.ID,
+		ClassID:   strPtr(class.ID),
+		TeacherID: teacher.ID,
+		Title:     "Fixture session",
 	})
 	require.NoError(t, err)
 
@@ -138,6 +152,18 @@ func (fx *sessionFixture) claims(u *store.RegisteredUser, admin bool) *auth.Clai
 	return &auth.Claims{UserID: u.ID, Email: u.Email, Name: u.Name, IsPlatformAdmin: admin}
 }
 
+func (fx *sessionFixture) createSession(t *testing.T, input store.CreateSessionInput) *store.LiveSession {
+	t.Helper()
+	session, err := fx.h.Sessions.CreateSession(context.Background(), input)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		fx.db.ExecContext(context.Background(), "DELETE FROM session_topics WHERE session_id = $1", session.ID)
+		fx.db.ExecContext(context.Background(), "DELETE FROM session_participants WHERE session_id = $1", session.ID)
+		fx.db.ExecContext(context.Background(), "DELETE FROM sessions WHERE id = $1", session.ID)
+	})
+	return session
+}
+
 // doRequest executes a request through the Chi router with auth claims injected.
 func (fx *sessionFixture) doRequest(t *testing.T, method, path string, body any, claims *auth.Claims) *httptest.ResponseRecorder {
 	t.Helper()
@@ -156,6 +182,111 @@ func (fx *sessionFixture) doRequest(t *testing.T, method, path string, body any,
 	w := httptest.NewRecorder()
 	fx.router.ServeHTTP(w, req)
 	return w
+}
+
+// ------------------- POST /api/sessions + GET /api/sessions -------------------
+
+func TestSessionHandler_CreateSession_Orphan201(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+
+	w := fx.doRequest(t, http.MethodPost, "/api/sessions", map[string]any{
+		"title": "Office hours",
+	}, fx.claims(fx.teacher, false))
+	require.Equal(t, http.StatusCreated, w.Code, "body=%s", w.Body.String())
+
+	var session store.LiveSession
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &session))
+	assert.Equal(t, fx.teacher.ID, session.TeacherID)
+	assert.Equal(t, "Office hours", session.Title)
+	assert.Nil(t, session.ClassID)
+}
+
+func TestSessionHandler_GetSession_OrphanAccessibleByCreator(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+
+	createResp := fx.doRequest(t, http.MethodPost, "/api/sessions", map[string]any{
+		"title": "Office hours",
+	}, fx.claims(fx.teacher, false))
+	require.Equal(t, http.StatusCreated, createResp.Code, "body=%s", createResp.Body.String())
+
+	var created store.LiveSession
+	require.NoError(t, json.Unmarshal(createResp.Body.Bytes(), &created))
+
+	getResp := fx.doRequest(t, http.MethodGet, "/api/sessions/"+created.ID, nil, fx.claims(fx.teacher, false))
+	assert.Equal(t, http.StatusOK, getResp.Code)
+}
+
+func TestSessionHandler_GetSession_OrphanRandomUser404(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+
+	createResp := fx.doRequest(t, http.MethodPost, "/api/sessions", map[string]any{
+		"title": "Office hours",
+	}, fx.claims(fx.teacher, false))
+	require.Equal(t, http.StatusCreated, createResp.Code, "body=%s", createResp.Body.String())
+
+	var created store.LiveSession
+	require.NoError(t, json.Unmarshal(createResp.Body.Bytes(), &created))
+
+	getResp := fx.doRequest(t, http.MethodGet, "/api/sessions/"+created.ID, nil, fx.claims(fx.otherUser, false))
+	assert.Equal(t, http.StatusNotFound, getResp.Code)
+}
+
+func TestSessionHandler_ListSessions_DefaultsToCaller(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+
+	ownOrphan := fx.createSession(t, store.CreateSessionInput{
+		TeacherID: fx.teacher.ID,
+		Title:     "Own orphan",
+	})
+	otherTeacherSession := fx.createSession(t, store.CreateSessionInput{
+		TeacherID: fx.otherUser.ID,
+		Title:     "Other orphan",
+	})
+
+	w := fx.doRequest(t, http.MethodGet, "/api/sessions", nil, fx.claims(fx.teacher, false))
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+
+	var payload sessionListPayload
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &payload))
+	require.Len(t, payload.Items, 2)
+
+	gotIDs := []string{payload.Items[0].ID, payload.Items[1].ID}
+	assert.Contains(t, gotIDs, fx.sessionID)
+	assert.Contains(t, gotIDs, ownOrphan.ID)
+	assert.NotContains(t, gotIDs, otherTeacherSession.ID)
+	for _, item := range payload.Items {
+		assert.Equal(t, fx.teacher.ID, item.TeacherID)
+	}
+}
+
+func TestSessionHandler_ListSessions_ClassFilterOnlyReturnsClassLinkedSessions(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+
+	classSession := fx.createSession(t, store.CreateSessionInput{
+		ClassID:   strPtr(fx.classID),
+		TeacherID: fx.teacher.ID,
+		Title:     "Second class session",
+	})
+	orphanSession := fx.createSession(t, store.CreateSessionInput{
+		TeacherID: fx.teacher.ID,
+		Title:     "Own orphan",
+	})
+
+	w := fx.doRequest(t, http.MethodGet, "/api/sessions?classId="+fx.classID, nil, fx.claims(fx.teacher, false))
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+
+	var payload sessionListPayload
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &payload))
+	require.Len(t, payload.Items, 2)
+
+	gotIDs := []string{payload.Items[0].ID, payload.Items[1].ID}
+	assert.Contains(t, gotIDs, fx.sessionID)
+	assert.Contains(t, gotIDs, classSession.ID)
+	assert.NotContains(t, gotIDs, orphanSession.ID)
+	for _, item := range payload.Items {
+		require.NotNil(t, item.ClassID)
+		assert.Equal(t, fx.classID, *item.ClassID)
+	}
 }
 
 // ------------------- PATCH /api/sessions/{id} -------------------
