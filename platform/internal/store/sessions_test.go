@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"testing"
 	"time"
 
@@ -550,4 +551,243 @@ func TestSessionStore_CanAccessSession_NoAccess(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, allowed)
 	assert.Equal(t, "not_found", reason)
+}
+
+// --- Direct-Add Participant Tests ---
+
+func TestSessionStore_AddParticipant_NewUser(t *testing.T) {
+	db := testDB(t)
+	sessions := NewSessionStore(db)
+	users := NewUserStore(db)
+	classID, teacherID := setupSessionTest(t, db, t.Name())
+	student := createTestUser(t, db, users, t.Name()+"-student")
+	ctx := context.Background()
+
+	session, err := sessions.CreateSession(ctx, CreateSessionInput{ClassID: classID, TeacherID: teacherID})
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		db.ExecContext(ctx, "DELETE FROM session_participants WHERE session_id = $1 AND user_id = $2", session.ID, student.ID)
+	})
+
+	p, err := sessions.AddParticipant(ctx, session.ID, student.ID, teacherID)
+	require.NoError(t, err)
+	require.NotNil(t, p)
+	assert.Equal(t, session.ID, p.SessionID)
+	assert.Equal(t, student.ID, p.StudentID)
+	assert.Equal(t, "invited", p.Status)
+	require.NotNil(t, p.InvitedBy)
+	assert.Equal(t, teacherID, *p.InvitedBy)
+	require.NotNil(t, p.InvitedAt)
+	assert.Nil(t, p.JoinedAt, "invited participant should not have joined_at")
+}
+
+func TestSessionStore_AddParticipant_AlreadyPresent(t *testing.T) {
+	db := testDB(t)
+	sessions := NewSessionStore(db)
+	users := NewUserStore(db)
+	classID, teacherID := setupSessionTest(t, db, t.Name())
+	student := createTestUser(t, db, users, t.Name()+"-student")
+	ctx := context.Background()
+
+	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: classID, TeacherID: teacherID})
+	t.Cleanup(func() {
+		db.ExecContext(ctx, "DELETE FROM session_participants WHERE session_id = $1 AND user_id = $2", session.ID, student.ID)
+	})
+
+	// Join as present first
+	joined, err := sessions.JoinSession(ctx, session.ID, student.ID)
+	require.NoError(t, err)
+	require.NotNil(t, joined)
+	assert.Equal(t, "present", joined.Status)
+
+	// AddParticipant should be a no-op, returning existing row
+	p, err := sessions.AddParticipant(ctx, session.ID, student.ID, teacherID)
+	require.NoError(t, err)
+	require.NotNil(t, p)
+	assert.Equal(t, "present", p.Status, "status should remain present")
+	assert.Nil(t, p.InvitedBy, "invited_by should remain nil for self-joined participant")
+}
+
+func TestSessionStore_AddParticipant_ReInviteAfterLeft(t *testing.T) {
+	db := testDB(t)
+	sessions := NewSessionStore(db)
+	users := NewUserStore(db)
+	classID, teacherID := setupSessionTest(t, db, t.Name())
+	student := createTestUser(t, db, users, t.Name()+"-student")
+	ctx := context.Background()
+
+	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: classID, TeacherID: teacherID})
+	t.Cleanup(func() {
+		db.ExecContext(ctx, "DELETE FROM session_participants WHERE session_id = $1 AND user_id = $2", session.ID, student.ID)
+	})
+
+	// Join and leave
+	sessions.JoinSession(ctx, session.ID, student.ID)
+	sessions.LeaveSession(ctx, session.ID, student.ID)
+
+	// Re-invite after leaving
+	p, err := sessions.AddParticipant(ctx, session.ID, student.ID, teacherID)
+	require.NoError(t, err)
+	require.NotNil(t, p)
+	assert.Equal(t, "invited", p.Status, "left participant should be re-invited")
+	require.NotNil(t, p.InvitedBy)
+	assert.Equal(t, teacherID, *p.InvitedBy)
+	assert.Nil(t, p.LeftAt, "left_at should be cleared on re-invite")
+}
+
+func TestSessionStore_AddParticipantByEmail_HappyPath(t *testing.T) {
+	db := testDB(t)
+	sessions := NewSessionStore(db)
+	users := NewUserStore(db)
+	classID, teacherID := setupSessionTest(t, db, t.Name())
+	student := createTestUser(t, db, users, t.Name()+"-student")
+	ctx := context.Background()
+
+	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: classID, TeacherID: teacherID})
+	t.Cleanup(func() {
+		db.ExecContext(ctx, "DELETE FROM session_participants WHERE session_id = $1 AND user_id = $2", session.ID, student.ID)
+	})
+
+	email := t.Name() + "-student@example.com"
+	p, err := sessions.AddParticipantByEmail(ctx, session.ID, email, teacherID)
+	require.NoError(t, err)
+	require.NotNil(t, p)
+	assert.Equal(t, student.ID, p.StudentID)
+	assert.Equal(t, "invited", p.Status)
+}
+
+func TestSessionStore_AddParticipantByEmail_NotFound(t *testing.T) {
+	db := testDB(t)
+	sessions := NewSessionStore(db)
+	classID, teacherID := setupSessionTest(t, db, t.Name())
+	ctx := context.Background()
+
+	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: classID, TeacherID: teacherID})
+
+	p, err := sessions.AddParticipantByEmail(ctx, session.ID, "nonexistent@example.com", teacherID)
+	assert.Nil(t, p)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrUserNotFound))
+}
+
+func TestSessionStore_RemoveParticipant(t *testing.T) {
+	db := testDB(t)
+	sessions := NewSessionStore(db)
+	users := NewUserStore(db)
+	classID, teacherID := setupSessionTest(t, db, t.Name())
+	student := createTestUser(t, db, users, t.Name()+"-student")
+	ctx := context.Background()
+
+	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: classID, TeacherID: teacherID})
+
+	// Add participant
+	sessions.AddParticipant(ctx, session.ID, student.ID, teacherID)
+
+	// Remove
+	removed, err := sessions.RemoveParticipant(ctx, session.ID, student.ID)
+	require.NoError(t, err)
+	assert.True(t, removed, "should delete existing participant row")
+
+	// Remove again — no-op
+	removed, err = sessions.RemoveParticipant(ctx, session.ID, student.ID)
+	require.NoError(t, err)
+	assert.False(t, removed, "should return false when no row to delete")
+
+	// Verify access is revoked
+	allowed, reason, err := sessions.CanAccessSession(ctx, session.ID, student.ID)
+	require.NoError(t, err)
+	assert.False(t, allowed)
+	assert.Equal(t, "no_access", reason)
+}
+
+func TestSessionStore_PromoteToPresent(t *testing.T) {
+	db := testDB(t)
+	sessions := NewSessionStore(db)
+	users := NewUserStore(db)
+	classID, teacherID := setupSessionTest(t, db, t.Name())
+	student := createTestUser(t, db, users, t.Name()+"-student")
+	ctx := context.Background()
+
+	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: classID, TeacherID: teacherID})
+	t.Cleanup(func() {
+		db.ExecContext(ctx, "DELETE FROM session_participants WHERE session_id = $1 AND user_id = $2", session.ID, student.ID)
+	})
+
+	// Add as invited
+	sessions.AddParticipant(ctx, session.ID, student.ID, teacherID)
+
+	// Promote
+	p, err := sessions.PromoteToPresent(ctx, session.ID, student.ID)
+	require.NoError(t, err)
+	require.NotNil(t, p)
+	assert.Equal(t, "present", p.Status)
+	require.NotNil(t, p.JoinedAt, "joined_at should be set after promotion")
+}
+
+func TestSessionStore_PromoteToPresent_AlreadyPresent(t *testing.T) {
+	db := testDB(t)
+	sessions := NewSessionStore(db)
+	users := NewUserStore(db)
+	classID, teacherID := setupSessionTest(t, db, t.Name())
+	student := createTestUser(t, db, users, t.Name()+"-student")
+	ctx := context.Background()
+
+	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: classID, TeacherID: teacherID})
+	t.Cleanup(func() {
+		db.ExecContext(ctx, "DELETE FROM session_participants WHERE session_id = $1 AND user_id = $2", session.ID, student.ID)
+	})
+
+	// Join directly as present
+	sessions.JoinSession(ctx, session.ID, student.ID)
+
+	// Promote — should be no-op, returning existing row
+	p, err := sessions.PromoteToPresent(ctx, session.ID, student.ID)
+	require.NoError(t, err)
+	require.NotNil(t, p)
+	assert.Equal(t, "present", p.Status)
+}
+
+func TestSessionStore_CanAccessSession_InvitedParticipant(t *testing.T) {
+	db := testDB(t)
+	sessions := NewSessionStore(db)
+	users := NewUserStore(db)
+	classID, teacherID := setupSessionTest(t, db, t.Name())
+	student := createTestUser(t, db, users, t.Name()+"-student")
+	ctx := context.Background()
+
+	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: classID, TeacherID: teacherID})
+	t.Cleanup(func() {
+		db.ExecContext(ctx, "DELETE FROM session_participants WHERE session_id = $1 AND user_id = $2", session.ID, student.ID)
+	})
+
+	// Add as invited (not yet present)
+	sessions.AddParticipant(ctx, session.ID, student.ID, teacherID)
+
+	// Should still have access
+	allowed, reason, err := sessions.CanAccessSession(ctx, session.ID, student.ID)
+	require.NoError(t, err)
+	assert.True(t, allowed)
+	assert.Equal(t, "participant", reason)
+}
+
+func TestSessionStore_CanAccessSession_RevokedParticipant(t *testing.T) {
+	db := testDB(t)
+	sessions := NewSessionStore(db)
+	users := NewUserStore(db)
+	classID, teacherID := setupSessionTest(t, db, t.Name())
+	student := createTestUser(t, db, users, t.Name()+"-student")
+	ctx := context.Background()
+
+	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: classID, TeacherID: teacherID})
+
+	// Add then remove
+	sessions.AddParticipant(ctx, session.ID, student.ID, teacherID)
+	sessions.RemoveParticipant(ctx, session.ID, student.ID)
+
+	// Should have no access
+	allowed, reason, err := sessions.CanAccessSession(ctx, session.ID, student.ID)
+	require.NoError(t, err)
+	assert.False(t, allowed)
+	assert.Equal(t, "no_access", reason)
 }

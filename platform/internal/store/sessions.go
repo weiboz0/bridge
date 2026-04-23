@@ -12,11 +12,12 @@ import (
 	"github.com/google/uuid"
 )
 
-// Sentinel errors for token-based session join.
+// Sentinel errors for token-based session join and direct-add.
 var (
 	ErrTokenNotFound = errors.New("invite token not found")
 	ErrTokenExpired  = errors.New("invite token expired")
 	ErrSessionEnded  = errors.New("session has ended")
+	ErrUserNotFound  = errors.New("user not found")
 )
 
 type LiveSession struct {
@@ -36,8 +37,10 @@ type SessionParticipant struct {
 	SessionID       string     `json:"sessionId"`
 	StudentID       string     `json:"studentId"`
 	Status          string     `json:"status"`
-	JoinedAt        time.Time  `json:"joinedAt"`
-	LeftAt          *time.Time `json:"leftAt"`
+	InvitedBy       *string    `json:"invitedBy,omitempty"`
+	InvitedAt       *time.Time `json:"invitedAt,omitempty"`
+	JoinedAt        *time.Time `json:"joinedAt,omitempty"`
+	LeftAt          *time.Time `json:"leftAt,omitempty"`
 	HelpRequestedAt *time.Time `json:"helpRequestedAt,omitempty"`
 }
 
@@ -45,8 +48,10 @@ type ParticipantWithUser struct {
 	SessionID       string     `json:"sessionId"`
 	StudentID       string     `json:"studentId"`
 	Status          string     `json:"status"`
-	JoinedAt        time.Time  `json:"joinedAt"`
-	LeftAt          *time.Time `json:"leftAt"`
+	InvitedBy       *string    `json:"invitedBy,omitempty"`
+	InvitedAt       *time.Time `json:"invitedAt,omitempty"`
+	JoinedAt        *time.Time `json:"joinedAt,omitempty"`
+	LeftAt          *time.Time `json:"leftAt,omitempty"`
 	HelpRequestedAt *time.Time `json:"helpRequestedAt,omitempty"`
 	Name            string     `json:"name"`
 	Email           string     `json:"email"`
@@ -81,6 +86,7 @@ func NewSessionStore(db *sql.DB) *SessionStore {
 }
 
 const sessionColumns = `id, class_id, teacher_id, title, status, settings, invite_token, invite_expires_at, started_at, ended_at`
+const participantColumns = `session_id, user_id, status, invited_by, invited_at, joined_at, left_at, help_requested_at`
 
 func scanSession(row interface{ Scan(...any) error }) (*LiveSession, error) {
 	var s LiveSession
@@ -93,6 +99,19 @@ func scanSession(row interface{ Scan(...any) error }) (*LiveSession, error) {
 		return nil, err
 	}
 	return &s, nil
+}
+
+func scanParticipant(row interface{ Scan(...any) error }) (*SessionParticipant, error) {
+	var p SessionParticipant
+	err := row.Scan(&p.SessionID, &p.StudentID, &p.Status, &p.InvitedBy, &p.InvitedAt,
+		&p.JoinedAt, &p.LeftAt, &p.HelpRequestedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &p, nil
 }
 
 func (s *SessionStore) CreateSession(ctx context.Context, input CreateSessionInput) (*LiveSession, error) {
@@ -238,47 +257,32 @@ func (s *SessionStore) EndSession(ctx context.Context, id string) (*LiveSession,
 }
 
 func (s *SessionStore) JoinSession(ctx context.Context, sessionID, studentID string) (*SessionParticipant, error) {
-	var p SessionParticipant
-	err := s.db.QueryRowContext(ctx,
+	return scanParticipant(s.db.QueryRowContext(ctx,
 		`INSERT INTO session_participants (session_id, user_id, status, joined_at)
 		 VALUES ($1, $2, 'present', $3)
 		 ON CONFLICT DO NOTHING
-		 RETURNING session_id, user_id, status, joined_at, left_at, help_requested_at`,
+		 RETURNING `+participantColumns,
 		sessionID, studentID, time.Now(),
-	).Scan(&p.SessionID, &p.StudentID, &p.Status, &p.JoinedAt, &p.LeftAt, &p.HelpRequestedAt)
-	if err == sql.ErrNoRows {
-		return nil, nil // already joined
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &p, nil
+	))
 }
 
 func (s *SessionStore) LeaveSession(ctx context.Context, sessionID, studentID string) (*SessionParticipant, error) {
-	var p SessionParticipant
-	err := s.db.QueryRowContext(ctx,
-		`UPDATE session_participants SET left_at = $1
+	return scanParticipant(s.db.QueryRowContext(ctx,
+		`UPDATE session_participants SET status = 'left', left_at = $1
 		 WHERE session_id = $2 AND user_id = $3 AND left_at IS NULL
-		 RETURNING session_id, user_id, status, joined_at, left_at, help_requested_at`,
+		 RETURNING `+participantColumns,
 		time.Now(), sessionID, studentID,
-	).Scan(&p.SessionID, &p.StudentID, &p.Status, &p.JoinedAt, &p.LeftAt, &p.HelpRequestedAt)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &p, nil
+	))
 }
 
 func (s *SessionStore) GetSessionParticipants(ctx context.Context, sessionID string) ([]ParticipantWithUser, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT sp.session_id, sp.user_id, sp.status, sp.joined_at, sp.left_at, sp.help_requested_at, u.name, u.email
+		`SELECT sp.session_id, sp.user_id, sp.status, sp.invited_by, sp.invited_at,
+		        sp.joined_at, sp.left_at, sp.help_requested_at, u.name, u.email
 		 FROM session_participants sp
 		 INNER JOIN users u ON sp.user_id = u.id
 		 WHERE sp.session_id = $1
-		 ORDER BY sp.joined_at`, sessionID)
+		 ORDER BY sp.joined_at NULLS LAST`, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -287,7 +291,8 @@ func (s *SessionStore) GetSessionParticipants(ctx context.Context, sessionID str
 	var participants []ParticipantWithUser
 	for rows.Next() {
 		var p ParticipantWithUser
-		if err := rows.Scan(&p.SessionID, &p.StudentID, &p.Status, &p.JoinedAt, &p.LeftAt, &p.HelpRequestedAt, &p.Name, &p.Email); err != nil {
+		if err := rows.Scan(&p.SessionID, &p.StudentID, &p.Status, &p.InvitedBy, &p.InvitedAt,
+			&p.JoinedAt, &p.LeftAt, &p.HelpRequestedAt, &p.Name, &p.Email); err != nil {
 			return nil, err
 		}
 		participants = append(participants, p)
@@ -299,35 +304,115 @@ func (s *SessionStore) GetSessionParticipants(ctx context.Context, sessionID str
 }
 
 func (s *SessionStore) UpdateParticipantStatus(ctx context.Context, sessionID, studentID, status string) (*SessionParticipant, error) {
-	var p SessionParticipant
 	query := `UPDATE session_participants SET status = $1 WHERE session_id = $2 AND user_id = $3
-		RETURNING session_id, user_id, status, joined_at, left_at, help_requested_at`
+		RETURNING ` + participantColumns
 	args := []any{status, sessionID, studentID}
 	switch status {
 	case "needs_help":
 		query = `UPDATE session_participants
 			SET help_requested_at = $1
 			WHERE session_id = $2 AND user_id = $3
-			RETURNING session_id, user_id, status, joined_at, left_at, help_requested_at`
+			RETURNING ` + participantColumns
 		args = []any{time.Now(), sessionID, studentID}
 	case "active":
 		query = `UPDATE session_participants
 			SET help_requested_at = NULL
 			WHERE session_id = $1 AND user_id = $2
-			RETURNING session_id, user_id, status, joined_at, left_at, help_requested_at`
+			RETURNING ` + participantColumns
 		args = []any{sessionID, studentID}
 	case "invited", "present", "left":
 	default:
 		return nil, fmt.Errorf("unsupported participant status %q", status)
 	}
-	err := s.db.QueryRowContext(ctx, query, args...).Scan(&p.SessionID, &p.StudentID, &p.Status, &p.JoinedAt, &p.LeftAt, &p.HelpRequestedAt)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
+	return scanParticipant(s.db.QueryRowContext(ctx, query, args...))
+}
+
+// --- Direct-Add Participant Methods ---
+
+// AddParticipant inserts a participant with status 'invited'. If the user
+// already has a row and their status is 'left', they are re-invited. If their
+// status is 'invited' or 'present', the existing row is returned unchanged.
+func (s *SessionStore) AddParticipant(ctx context.Context, sessionID, userID, invitedBy string) (*SessionParticipant, error) {
+	now := time.Now()
+	return scanParticipant(s.db.QueryRowContext(ctx,
+		`INSERT INTO session_participants (session_id, user_id, status, invited_by, invited_at, joined_at)
+		 VALUES ($1, $2, 'invited', $3, $4, NULL)
+		 ON CONFLICT (session_id, user_id) DO UPDATE SET
+			status = CASE
+				WHEN session_participants.status = 'left' THEN 'invited'::participant_status
+				ELSE session_participants.status
+			END,
+			invited_by = CASE
+				WHEN session_participants.status = 'left' THEN EXCLUDED.invited_by
+				ELSE session_participants.invited_by
+			END,
+			invited_at = CASE
+				WHEN session_participants.status = 'left' THEN EXCLUDED.invited_at
+				ELSE session_participants.invited_at
+			END,
+			left_at = CASE
+				WHEN session_participants.status = 'left' THEN NULL
+				ELSE session_participants.left_at
+			END
+		 RETURNING `+participantColumns,
+		sessionID, userID, invitedBy, now,
+	))
+}
+
+// AddParticipantByEmail looks up a user by email and calls AddParticipant.
+// Returns ErrUserNotFound if the email does not match any user.
+func (s *SessionStore) AddParticipantByEmail(ctx context.Context, sessionID, email, invitedBy string) (*SessionParticipant, error) {
+	userStore := NewUserStore(s.db)
+	user, err := userStore.GetUserByEmail(ctx, email)
 	if err != nil {
 		return nil, err
 	}
-	return &p, nil
+	if user == nil {
+		return nil, ErrUserNotFound
+	}
+	return s.AddParticipant(ctx, sessionID, user.ID, invitedBy)
+}
+
+// RemoveParticipant deletes the participant row entirely.
+// Returns true if a row was deleted.
+func (s *SessionStore) RemoveParticipant(ctx context.Context, sessionID, userID string) (bool, error) {
+	res, err := s.db.ExecContext(ctx,
+		`DELETE FROM session_participants WHERE session_id = $1 AND user_id = $2`,
+		sessionID, userID)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
+// PromoteToPresent sets an invited or left participant to 'present' and records
+// joined_at. If the participant is already present, the existing row is returned.
+func (s *SessionStore) PromoteToPresent(ctx context.Context, sessionID, userID string) (*SessionParticipant, error) {
+	now := time.Now()
+	// Try to promote — only if status is 'invited' or 'left'
+	p, err := scanParticipant(s.db.QueryRowContext(ctx,
+		`UPDATE session_participants
+		 SET status = 'present', joined_at = $1
+		 WHERE session_id = $2 AND user_id = $3 AND status IN ('invited', 'left')
+		 RETURNING `+participantColumns,
+		now, sessionID, userID,
+	))
+	if err != nil {
+		return nil, err
+	}
+	if p != nil {
+		return p, nil
+	}
+	// No rows updated — either already present or not found. Fetch existing.
+	return scanParticipant(s.db.QueryRowContext(ctx,
+		`SELECT `+participantColumns+` FROM session_participants
+		 WHERE session_id = $1 AND user_id = $2`,
+		sessionID, userID,
+	))
 }
 
 // --- Session Topics ---
@@ -546,16 +631,18 @@ func (s *SessionStore) JoinSessionByToken(ctx context.Context, sessionID, userID
 		`INSERT INTO session_participants (session_id, user_id, status, joined_at)
 		 VALUES ($1, $2, 'present', $3)
 		 ON CONFLICT (session_id, user_id) DO NOTHING
-		 RETURNING session_id, user_id, status, joined_at, left_at, help_requested_at`,
+		 RETURNING `+participantColumns,
 		sessionID, userID, time.Now(),
-	).Scan(&p.SessionID, &p.StudentID, &p.Status, &p.JoinedAt, &p.LeftAt, &p.HelpRequestedAt)
+	).Scan(&p.SessionID, &p.StudentID, &p.Status, &p.InvitedBy, &p.InvitedAt,
+		&p.JoinedAt, &p.LeftAt, &p.HelpRequestedAt)
 	if err == sql.ErrNoRows {
 		// Already a participant — fetch existing row
 		err = tx.QueryRowContext(ctx,
-			`SELECT session_id, user_id, status, joined_at, left_at, help_requested_at
+			`SELECT `+participantColumns+`
 			 FROM session_participants WHERE session_id = $1 AND user_id = $2`,
 			sessionID, userID,
-		).Scan(&p.SessionID, &p.StudentID, &p.Status, &p.JoinedAt, &p.LeftAt, &p.HelpRequestedAt)
+		).Scan(&p.SessionID, &p.StudentID, &p.Status, &p.InvitedBy, &p.InvitedAt,
+			&p.JoinedAt, &p.LeftAt, &p.HelpRequestedAt)
 		if err != nil {
 			return nil, err
 		}
