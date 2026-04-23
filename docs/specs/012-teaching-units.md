@@ -182,7 +182,7 @@ In a child overlay document, any block that represents net-new content (not an o
 
 When a unit has a `unit_overlays` row (it inherits from a parent), its **rendered document** is computed:
 
-1. Load the parent's blocks from `unit_revisions` at `parent_revision_id`, or from `unit_documents` of the parent's latest `classroom_ready`/`coach_ready` revision if `parent_revision_id IS NULL` (floating).
+1. Load the parent's blocks from `unit_revisions.blocks` at `parent_revision_id`, or — if `parent_revision_id IS NULL` (floating) — from the parent's most recent `unit_revisions` row whose publish transition landed it in `classroom_ready` or `coach_ready`. The floating anchor is always a published revision, never the mutable `unit_documents.blocks`: floating means "follow the parent's publishes," not "follow the parent's drafts."
 2. Load the child's own `unit_documents.blocks`. Every child block carries `attrs.parentId` — either an id of a parent block (anchor) or `null` (append-to-end).
 3. Build the output by walking the parent's block sequence, inserting child-anchored blocks after their anchor:
    ```
@@ -261,7 +261,7 @@ The projection runs **after** overlay composition and **before** final HTML rend
 ### Authoring UX (the editor)
 
 - **Default mode:** block editor with a slash-command insertion palette (`/problem`, `/teacher-note`, `/live-cue`). The editor renders blocks with their own UI — `problem-ref` shows the embedded problem with difficulty/tags, not raw JSON.
-- **Power-user mode:** "View markdown" toggle renders a subset of the document as markdown (prose + problem-ref as a callout, teacher-notes stripped). Imports accept markdown and hydrate back to blocks using `remark/unified` as the boundary.
+- **Power-user mode:** "View markdown" toggle renders a subset of the document as markdown (prose + problem-ref as a callout). Blocks that don't have a markdown rendering (`teacher-note`, `live-cue`, `assignment-variant`, `test-case-ref`, `solution-ref`) are **serialized as opaque HTML comments** carrying their full JSON payload: `<!-- block:<id> kind=teacher-note payload=<base64-json> -->`. On re-import, the markdown reader finds the comment, decodes the payload, and re-inserts the block unchanged — so an edit-then-reimport cycle cannot silently drop non-markdown blocks. Imports that use `remark/unified` as the boundary pass these comments through verbatim.
 - **AI drafting:** a separate "Draft with AI" panel accepts intent ("6th grade, while loops, 45 min, 3 problems easy→medium"). Calls the Claude API with structured tool use (`create_unit`, `add_problem_draft`, `add_teacher_note`, `add_live_cue`). The response streams into the editor as a fresh draft the teacher reviews and publishes.
 - **Realtime co-editing:** Yjs + `y-prosemirror` binding. Two teachers can author a unit together live. Uses the same Hocuspocus service as code collaboration.
 - **Preview:** toggle to a student view projection without leaving the editor. Shows exactly what a class member will see when the unit is delivered.
@@ -352,7 +352,7 @@ Each plan ships independently and leaves the app working. Earlier plans don't de
 ## Follow-ups referenced but out of scope here
 
 - **Session → unit pinning** (replaces or augments `session_topics`) → follow-up after plans 031–033 land.
-- **Assignment-variant grading flow** integration with the existing `submissions` pipeline → plan 032 or its own plan.
+- **Assignment-variant grading flow** integration with the existing `submissions` pipeline → sequenced as a follow-up after plan 033 (where the block type lands); may become its own plan or fold into a later rollout phase.
 - **Moderated community library** → post-MVP spec.
 - **Standards-based curriculum mapping** (CSTA / CSTA+) → post-MVP spec once content catalog matures.
 - **Offline editing / local-first sync** → would layer on Yjs cleanly but is out of scope for v1.
