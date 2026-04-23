@@ -26,6 +26,9 @@ const server = new Server({
 
     // Existing session document — student/teacher live editor.
     //
+    // TODO(030c): Direct-add access was extended in 030c. The Hocuspocus auth check should verify
+    // session membership via Go's CanAccessSession endpoint in a follow-up (same gap noted in 030b).
+    //
     // TODO (030b follow-up): This check is permissive. It allows any authenticated
     // user whose token matches the `userId:role` format to open any session document
     // they are nominally the owner of, without verifying they actually have a
