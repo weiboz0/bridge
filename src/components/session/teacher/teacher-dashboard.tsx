@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
 import { usePanelLayout } from "@/lib/hooks/use-panel-layout";
@@ -17,6 +17,7 @@ import { AnnotationList } from "@/components/annotations/annotation-list";
 import { EditorSwitcher } from "@/components/editor/editor-switcher";
 import { parseLessonContent } from "@/lib/lesson-content";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 
 interface TeacherDashboardProps {
   sessionId: string;
@@ -28,10 +29,54 @@ interface TeacherDashboardProps {
 }
 
 interface Participant {
+  userId: string;
   studentId: string;
   name: string;
   status: string;
+  invitedBy?: string | null;
   helpRequestedAt?: string | null;
+}
+
+interface ParticipantResponse {
+  userId?: string;
+  studentId?: string;
+  name?: string | null;
+  email?: string | null;
+  status?: string;
+  invitedBy?: string | null;
+  helpRequestedAt?: string | null;
+}
+
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function normalizeParticipantStatus(status?: string) {
+  if (status === "present" || status === "invited" || status === "left") {
+    return status;
+  }
+  if (status === "active" || status === "needs_help") {
+    return "present";
+  }
+  if (status === "idle") {
+    return "invited";
+  }
+  return "present";
+}
+
+function normalizeParticipant(participant: ParticipantResponse): Participant | null {
+  const userId = participant.userId ?? participant.studentId;
+  if (!userId) {
+    return null;
+  }
+
+  return {
+    userId,
+    studentId: userId,
+    name: participant.name?.trim() || participant.email?.trim() || userId,
+    status: normalizeParticipantStatus(participant.status),
+    invitedBy: participant.invitedBy ?? null,
+    helpRequestedAt: participant.helpRequestedAt ?? null,
+  };
 }
 
 export function TeacherDashboard({
@@ -50,11 +95,13 @@ export function TeacherDashboard({
   const [selectedStudent, setSelectedStudent] = useState<string | null>(null);
   const [aiInteractions, setAiInteractions] = useState<any[]>([]);
   const [annotations, setAnnotations] = useState<any[]>([]);
+  const [participantLookup, setParticipantLookup] = useState("");
+  const [participantLookupError, setParticipantLookupError] = useState<string | null>(null);
+  const [isAddingParticipant, setIsAddingParticipant] = useState(false);
 
   const userId = session?.user?.id || "";
   const token = `${userId}:teacher`;
 
-  // Selected student Yjs document
   const selectedDocName = selectedStudent
     ? `session:${sessionId}:user:${selectedStudent}`
     : "";
@@ -63,69 +110,89 @@ export function TeacherDashboard({
     token,
   });
 
-  // Poll participants
-  useEffect(() => {
-    async function fetchParticipants() {
-      const res = await fetch(`/api/sessions/${sessionId}/participants`);
-      if (res.ok) setParticipants(await res.json());
+  const fetchParticipants = useCallback(async () => {
+    const res = await fetch(`/api/sessions/${sessionId}/participants`);
+    if (!res.ok) {
+      return [];
     }
-    fetchParticipants();
+
+    const data = await res.json();
+    const nextParticipants = Array.isArray(data)
+      ? data
+          .map((participant) => normalizeParticipant(participant as ParticipantResponse))
+          .filter((participant): participant is Participant => participant !== null)
+      : [];
+
+    setParticipants(nextParticipants);
+    return nextParticipants;
+  }, [sessionId]);
+
+  useEffect(() => {
+    void fetchParticipants();
     const interval = setInterval(fetchParticipants, 3000);
     return () => clearInterval(interval);
-  }, [sessionId]);
+  }, [fetchParticipants]);
 
-  // SSE events
   useEffect(() => {
     const eventSource = new EventSource(`/api/sessions/${sessionId}/events`);
-    eventSource.addEventListener("student_joined", (e) => {
-        const data = JSON.parse(e.data);
-      setParticipants((prev) => {
-        if (prev.some((p) => p.studentId === data.studentId)) return prev;
-        return [...prev, { studentId: data.studentId, name: data.name, status: "present" }];
-      });
-    });
-    eventSource.addEventListener("student_left", (e) => {
-      const data = JSON.parse(e.data);
-      setParticipants((prev) => prev.filter((p) => p.studentId !== data.studentId));
-    });
-    return () => eventSource.close();
-  }, [sessionId]);
+    const refreshParticipants = () => {
+      void fetchParticipants();
+    };
 
-  // Poll AI interactions
+    eventSource.addEventListener("student_joined", refreshParticipants);
+    eventSource.addEventListener("student_left", refreshParticipants);
+
+    return () => eventSource.close();
+  }, [fetchParticipants, sessionId]);
+
+  useEffect(() => {
+    if (selectedStudent && !participants.some((participant) => participant.userId === selectedStudent)) {
+      setSelectedStudent(null);
+      setMode((currentMode) => (currentMode === "collaborate" ? "grid" : currentMode));
+    }
+  }, [participants, selectedStudent]);
+
   useEffect(() => {
     async function fetchAI() {
       const res = await fetch(`/api/ai/interactions?sessionId=${sessionId}`);
       if (res.ok) {
         const data = await res.json();
-        setAiInteractions(data.map((i: any) => ({
-          id: i.id,
-          studentId: i.studentId,
-          studentName: participants.find((p) => p.studentId === i.studentId)?.name || "Unknown",
-          messageCount: Array.isArray(i.messages) ? i.messages.length : 0,
-          createdAt: i.createdAt,
+        setAiInteractions(data.map((interaction: any) => ({
+          id: interaction.id,
+          studentId: interaction.studentId,
+          studentName:
+            participants.find((participant) => participant.userId === interaction.studentId)?.name ||
+            "Unknown",
+          messageCount: Array.isArray(interaction.messages) ? interaction.messages.length : 0,
+          createdAt: interaction.createdAt,
         })));
       }
     }
+
     if (participants.length > 0) {
-      fetchAI();
+      void fetchAI();
       const interval = setInterval(fetchAI, 5000);
       return () => clearInterval(interval);
     }
   }, [sessionId, participants]);
 
-  // Fetch annotations for selected student
   const fetchAnnotations = useCallback(async () => {
     if (!selectedStudent) return;
+
     const docId = `session:${sessionId}:user:${selectedStudent}`;
     const res = await fetch(`/api/annotations?documentId=${encodeURIComponent(docId)}`);
-    if (res.ok) setAnnotations(await res.json());
+    if (res.ok) {
+      setAnnotations(await res.json());
+    }
   }, [selectedStudent, sessionId]);
 
-  useEffect(() => { fetchAnnotations(); }, [fetchAnnotations]);
+  useEffect(() => {
+    void fetchAnnotations();
+  }, [fetchAnnotations]);
 
   async function deleteAnnotation(id: string) {
     await fetch(`/api/annotations/${id}`, { method: "DELETE" });
-    fetchAnnotations();
+    void fetchAnnotations();
   }
 
   const endSession = useCallback(async () => {
@@ -133,27 +200,64 @@ export function TeacherDashboard({
     router.push(`/teacher/classes/${classId}`);
   }, [sessionId, classId, router]);
 
-  // When student is selected, switch to collaborate mode
   function handleSelectStudent(id: string) {
     setSelectedStudent(id);
     setMode("collaborate");
   }
 
-  // Render main area based on mode
+  async function handleAddParticipant(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    const lookupValue = participantLookup.trim();
+    if (!lookupValue) {
+      return;
+    }
+
+    setIsAddingParticipant(true);
+    setParticipantLookupError(null);
+
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/participants`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(
+          UUID_PATTERN.test(lookupValue)
+            ? { userId: lookupValue }
+            : { email: lookupValue }
+        ),
+      });
+
+      if (res.ok) {
+        setParticipantLookup("");
+        await fetchParticipants();
+        return;
+      }
+
+      if (res.status === 404) {
+        setParticipantLookupError("User not found");
+        return;
+      }
+
+      setParticipantLookupError("Unable to add participant");
+    } finally {
+      setIsAddingParticipant(false);
+    }
+  }
+
   function renderMainArea() {
     switch (mode) {
       case "presentation": {
-        const topicContents = courseTopics.map((t) => parseLessonContent(t.lessonContent));
+        const topicContents = courseTopics.map((topic) => parseLessonContent(topic.lessonContent));
         return (
-          <div className="p-4 overflow-auto h-full space-y-6">
-            {courseTopics.map((t, i) => (
-              <div key={t.topicId}>
-                <h3 className="text-lg font-semibold mb-2">{t.title}</h3>
-                <LessonRenderer content={topicContents[i]} />
+          <div className="h-full space-y-6 overflow-auto p-4">
+            {courseTopics.map((topic, index) => (
+              <div key={topic.topicId}>
+                <h3 className="mb-2 text-lg font-semibold">{topic.title}</h3>
+                <LessonRenderer content={topicContents[index]} />
               </div>
             ))}
             {courseTopics.length === 0 && (
-              <p className="text-muted-foreground text-center py-8">
+              <p className="py-8 text-center text-muted-foreground">
                 No topics linked to this session yet.
               </p>
             )}
@@ -163,7 +267,7 @@ export function TeacherDashboard({
 
       case "grid":
         return (
-          <div className="p-4 overflow-auto h-full">
+          <div className="h-full overflow-auto p-4">
             <StudentGrid
               sessionId={sessionId}
               participants={participants}
@@ -176,28 +280,37 @@ export function TeacherDashboard({
       case "collaborate": {
         if (!selectedStudent) {
           return (
-            <div className="flex items-center justify-center h-full text-muted-foreground">
+            <div className="flex h-full items-center justify-center text-muted-foreground">
               <p>Select a student from the list to collaborate.</p>
             </div>
           );
         }
-        const student = participants.find((p) => p.studentId === selectedStudent);
+
+        const student = participants.find((participant) => participant.userId === selectedStudent);
         const docId = `session:${sessionId}:user:${selectedStudent}`;
+
         return (
           <div className="flex h-full">
-            <div className="flex-1 flex flex-col">
-              <div className="flex items-center gap-2 px-4 py-2 border-b">
-                <Button variant="ghost" size="sm" onClick={() => { setSelectedStudent(null); setMode("grid"); }}>
+            <div className="flex flex-1 flex-col">
+              <div className="flex items-center gap-2 border-b px-4 py-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    setSelectedStudent(null);
+                    setMode("grid");
+                  }}
+                >
                   ← Back
                 </Button>
                 <span className="font-medium">{student?.name || "Student"}</span>
-                <span className={`w-2 h-2 rounded-full ${connected ? "bg-green-500" : "bg-red-500"}`} />
+                <span className={`h-2 w-2 rounded-full ${connected ? "bg-green-500" : "bg-red-500"}`} />
               </div>
-              <div className="flex-1 min-h-0 p-4">
+              <div className="min-h-0 flex-1 p-4">
                 <CodeEditor yText={yText} provider={provider} language={editorMode} />
               </div>
             </div>
-            <div className="w-72 border-l p-3 space-y-3 overflow-auto">
+            <div className="w-72 space-y-3 overflow-auto border-l p-3">
               <h3 className="text-sm font-medium">Annotations</h3>
               <AnnotationForm documentId={docId} onCreated={fetchAnnotations} />
               <AnnotationList annotations={annotations} onDelete={deleteAnnotation} />
@@ -208,15 +321,18 @@ export function TeacherDashboard({
 
       case "broadcast":
         return (
-          <div className="p-4 h-full">
-            <EditorSwitcher editorMode={editorMode} initialCode="# Broadcast your code to all students" />
+          <div className="h-full p-4">
+            <EditorSwitcher
+              editorMode={editorMode}
+              initialCode="# Broadcast your code to all students"
+            />
           </div>
         );
     }
   }
 
   return (
-    <div className="flex flex-col h-screen">
+    <div className="flex h-screen flex-col">
       <TeacherHeader
         sessionId={sessionId}
         studentCount={participants.length}
@@ -229,28 +345,57 @@ export function TeacherDashboard({
         rightVisible={layout.rightVisible}
       />
 
-      <div className="flex flex-1 min-h-0">
-        {/* Left: Student List */}
+      <div className="flex min-h-0 flex-1">
         {layout.leftVisible && (
-          <div className="border-r" style={{ width: `${layout.leftWidth}%` }}>
-            <StudentListPanel
-              sessionId={sessionId}
-              participants={participants}
-              selectedStudentId={selectedStudent}
-              onSelectStudent={handleSelectStudent}
-            />
+          <div
+            className="flex min-h-0 flex-col border-r"
+            style={{ width: `${layout.leftWidth}%` }}
+          >
+            <div className="min-h-0 flex-1">
+              <StudentListPanel
+                sessionId={sessionId}
+                participants={participants}
+                selectedStudentId={selectedStudent}
+                onSelectStudent={handleSelectStudent}
+                onParticipantsChanged={fetchParticipants}
+              />
+            </div>
+            <div className="border-t border-zinc-200 bg-zinc-50/40 p-3">
+              <form className="space-y-2" onSubmit={handleAddParticipant}>
+                <div className="flex items-center gap-2">
+                  <Input
+                    value={participantLookup}
+                    onChange={(event) => {
+                      setParticipantLookup(event.target.value);
+                      if (participantLookupError) {
+                        setParticipantLookupError(null);
+                      }
+                    }}
+                    placeholder="Email or user ID"
+                    className="border-zinc-200 bg-white text-zinc-900 placeholder:text-zinc-400"
+                  />
+                  <Button
+                    type="submit"
+                    variant="outline"
+                    className="border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50 hover:text-zinc-900"
+                    disabled={isAddingParticipant || participantLookup.trim().length === 0}
+                  >
+                    Add
+                  </Button>
+                </div>
+                {participantLookupError && (
+                  <p className="text-xs text-red-600">{participantLookupError}</p>
+                )}
+              </form>
+            </div>
           </div>
         )}
 
-        {/* Center: Main Area */}
-        <div className="flex-1 flex flex-col min-h-0">
-          <div className="flex-1 min-h-0">
-            {renderMainArea()}
-          </div>
+        <div className="flex min-h-0 flex-1 flex-col">
+          <div className="min-h-0 flex-1">{renderMainArea()}</div>
           <ModeToolbar activeMode={mode} onModeChange={setMode} />
         </div>
 
-        {/* Right: AI Assistant */}
         {layout.rightVisible && (
           <div className="border-l" style={{ width: `${layout.rightWidth}%` }}>
             <AiAssistantPanel sessionId={sessionId} aiInteractions={aiInteractions} />
