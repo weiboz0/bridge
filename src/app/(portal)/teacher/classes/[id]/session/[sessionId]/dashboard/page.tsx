@@ -43,6 +43,8 @@ export default async function TeacherSessionDashboardPage({
         title: t.title,
         lessonContent: t.lessonContent,
       }))}
+      inviteToken={liveSession.inviteToken ?? null}
+      inviteExpiresAt={liveSession.inviteExpiresAt?.toISOString() ?? null}
     />
   );
 }

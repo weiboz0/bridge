@@ -23,6 +23,8 @@ interface TeacherDashboardProps {
   classId: string;
   editorMode: "python" | "javascript" | "blockly";
   courseTopics: Array<{ topicId: string; title: string; lessonContent: unknown }>;
+  inviteToken?: string | null;
+  inviteExpiresAt?: string | null;
 }
 
 interface Participant {
@@ -37,6 +39,8 @@ export function TeacherDashboard({
   classId,
   editorMode,
   courseTopics,
+  inviteToken,
+  inviteExpiresAt,
 }: TeacherDashboardProps) {
   const router = useRouter();
   const { data: session } = useSession();
@@ -125,7 +129,7 @@ export function TeacherDashboard({
   }
 
   const endSession = useCallback(async () => {
-    await fetch(`/api/sessions/${sessionId}`, { method: "PATCH" });
+    await fetch(`/api/sessions/${sessionId}/end`, { method: "POST" });
     router.push(`/teacher/classes/${classId}`);
   }, [sessionId, classId, router]);
 
@@ -216,6 +220,8 @@ export function TeacherDashboard({
       <TeacherHeader
         sessionId={sessionId}
         studentCount={participants.length}
+        inviteToken={inviteToken}
+        inviteExpiresAt={inviteExpiresAt}
         onEndSession={endSession}
         onToggleLeft={toggleLeft}
         onToggleRight={toggleRight}

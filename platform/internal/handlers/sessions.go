@@ -2,8 +2,10 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -26,7 +28,8 @@ func (h *SessionHandler) Routes(r chi.Router) {
 		r.Route("/{id}", func(r chi.Router) {
 			r.Use(ValidateUUIDParam("id"))
 			r.Get("/", h.GetSession)
-			r.Patch("/", h.EndSession)
+			r.Patch("/", h.PatchSession)
+			r.Post("/end", h.EndSession)
 			r.Post("/join", h.JoinSession)
 			r.Post("/leave", h.LeaveSession)
 			r.Get("/participants", h.GetParticipants)
@@ -37,8 +40,13 @@ func (h *SessionHandler) Routes(r chi.Router) {
 			r.Get("/topics", h.GetSessionTopics)
 			r.Post("/topics", h.LinkSessionTopic)
 			r.Delete("/topics", h.UnlinkSessionTopic)
+			r.Post("/rotate-invite", h.RotateInviteToken)
+			r.Delete("/invite", h.RevokeInviteToken)
 		})
 	})
+
+	// Token-based session join — separate route tree but still inside RequireAuth.
+	r.Post("/api/s/{token}/join", h.JoinSessionByToken)
 }
 
 // CreateSession handles POST /api/sessions
@@ -128,7 +136,7 @@ func (h *SessionHandler) GetSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, session)
 }
 
-// EndSession handles PATCH /api/sessions/{id}
+// EndSession handles POST /api/sessions/{id}/end
 func (h *SessionHandler) EndSession(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
@@ -492,4 +500,182 @@ func (h *SessionHandler) UnlinkSessionTopic(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"success": true})
+}
+
+// isSessionOwner checks that the caller is the session teacher or a platform admin.
+// Returns the session and true if authorized, or nil and false (with error written) if not.
+func (h *SessionHandler) isSessionOwner(w http.ResponseWriter, r *http.Request, sessionID string, claims *auth.Claims) (*store.LiveSession, bool) {
+	session, err := h.Sessions.GetSession(r.Context(), sessionID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return nil, false
+	}
+	if session == nil {
+		writeError(w, http.StatusNotFound, "Not found")
+		return nil, false
+	}
+	if session.TeacherID != claims.UserID && !claims.IsPlatformAdmin {
+		writeError(w, http.StatusForbidden, "Only the session teacher can perform this action")
+		return nil, false
+	}
+	return session, true
+}
+
+// PatchSession handles PATCH /api/sessions/{id} — update mutable fields (title, settings, invite_expires_at).
+func (h *SessionHandler) PatchSession(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	sessionID := chi.URLParam(r, "id")
+	if _, ok := h.isSessionOwner(w, r, sessionID, claims); !ok {
+		return
+	}
+
+	// Use json.RawMessage so we can distinguish "absent" from "null" for inviteExpiresAt.
+	var body struct {
+		Title           *string          `json:"title"`
+		Settings        *string          `json:"settings"`
+		InviteExpiresAt json.RawMessage  `json:"inviteExpiresAt,omitempty"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+
+	input := store.UpdateSessionInput{
+		Title:    body.Title,
+		Settings: body.Settings,
+	}
+
+	// Parse inviteExpiresAt: present string → set, JSON null → clear, absent → leave unchanged.
+	if len(body.InviteExpiresAt) > 0 {
+		if string(body.InviteExpiresAt) == "null" {
+			input.ClearInviteExpiry = true
+		} else {
+			var ts string
+			if err := json.Unmarshal(body.InviteExpiresAt, &ts); err != nil {
+				writeError(w, http.StatusBadRequest, "Invalid inviteExpiresAt: must be RFC3339 string or null")
+				return
+			}
+			t, err := time.Parse(time.RFC3339, ts)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "Invalid inviteExpiresAt: must be RFC3339")
+				return
+			}
+			input.InviteExpiresAt = &t
+		}
+	}
+
+	updated, err := h.Sessions.UpdateSession(r.Context(), sessionID, input)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if updated == nil {
+		writeError(w, http.StatusNotFound, "Not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, updated)
+}
+
+// RotateInviteToken handles POST /api/sessions/{id}/rotate-invite.
+func (h *SessionHandler) RotateInviteToken(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	sessionID := chi.URLParam(r, "id")
+	if _, ok := h.isSessionOwner(w, r, sessionID, claims); !ok {
+		return
+	}
+
+	updated, err := h.Sessions.RotateInviteToken(r.Context(), sessionID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to rotate invite token")
+		return
+	}
+	if updated == nil {
+		writeError(w, http.StatusNotFound, "Not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, updated)
+}
+
+// RevokeInviteToken handles DELETE /api/sessions/{id}/invite.
+func (h *SessionHandler) RevokeInviteToken(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	sessionID := chi.URLParam(r, "id")
+	if _, ok := h.isSessionOwner(w, r, sessionID, claims); !ok {
+		return
+	}
+
+	_, err := h.Sessions.RevokeInviteToken(r.Context(), sessionID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to revoke invite token")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// JoinSessionByToken handles POST /api/s/{token}/join.
+func (h *SessionHandler) JoinSessionByToken(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	token := chi.URLParam(r, "token")
+	if token == "" {
+		writeError(w, http.StatusBadRequest, "Token is required")
+		return
+	}
+
+	session, err := h.Sessions.GetSessionByToken(r.Context(), token)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if session == nil {
+		writeError(w, http.StatusNotFound, "Invalid invite link")
+		return
+	}
+
+	participant, err := h.Sessions.JoinSessionByToken(r.Context(), session.ID, claims.UserID, token)
+	if err != nil {
+		if errors.Is(err, store.ErrTokenNotFound) {
+			writeError(w, http.StatusNotFound, "Invalid invite link")
+			return
+		}
+		if errors.Is(err, store.ErrTokenExpired) {
+			writeError(w, http.StatusGone, "Invite link has expired")
+			return
+		}
+		if errors.Is(err, store.ErrSessionEnded) {
+			writeError(w, http.StatusGone, "Session has ended")
+			return
+		}
+		slog.Error("JoinSessionByToken failed", "error", err, "sessionId", session.ID)
+		writeError(w, http.StatusInternalServerError, "Failed to join session")
+		return
+	}
+
+	h.Broadcaster.Emit(session.ID, "student_joined", map[string]string{
+		"studentId": claims.UserID, "name": claims.Name,
+	})
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"sessionId":   session.ID,
+		"classId":     session.ClassID,
+		"participant": participant,
+	})
 }

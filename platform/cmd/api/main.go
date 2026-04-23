@@ -156,7 +156,7 @@ func main() {
 			Courses:       stores.Courses,
 			Orgs:          stores.Orgs,
 		}
-		topicProblemH.Routes(r)
+		topicProblemH.Routes(r, problemH.ListProblemsByTopic)
 
 		classH := &handlers.ClassHandler{Classes: stores.Classes, Orgs: stores.Orgs, Users: stores.Users}
 		classH.Routes(r)

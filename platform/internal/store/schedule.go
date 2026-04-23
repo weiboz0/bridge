@@ -248,10 +248,11 @@ func (s *ScheduleStore) StartScheduledSession(ctx context.Context, scheduleID, t
 		   '{}',
 		   $4
 		 )
-		 RETURNING id, class_id, teacher_id, status, settings, started_at, ended_at`,
+		 RETURNING `+sessionColumns,
 		sessionID, sched.ClassID, teacherID, now, sched.Title,
-	).Scan(&session.ID, &session.ClassID, &session.TeacherID, &session.Status,
-		&session.Settings, &session.StartedAt, &session.EndedAt)
+	).Scan(&session.ID, &session.ClassID, &session.TeacherID, &session.Title, &session.Status,
+		&session.Settings, &session.InviteToken, &session.InviteExpiresAt,
+		&session.StartedAt, &session.EndedAt)
 	if err != nil {
 		return nil, err
 	}

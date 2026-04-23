@@ -99,16 +99,20 @@ func (h *AIHandler) Chat(w http.ResponseWriter, r *http.Request) {
 
 	// Get grade level from class → course chain
 	gradeLevel := "6-8"
-	cls, err := h.Classes.GetClass(r.Context(), liveSession.ClassID)
-	if err == nil && cls != nil {
-		if course, err := h.Courses.GetCourse(r.Context(), cls.CourseID); err == nil && course != nil {
-			gradeLevel = course.GradeLevel
+	if liveSession.ClassID != nil {
+		cls, err := h.Classes.GetClass(r.Context(), *liveSession.ClassID)
+		if err == nil && cls != nil {
+			if course, err := h.Courses.GetCourse(r.Context(), cls.CourseID); err == nil && course != nil {
+				gradeLevel = course.GradeLevel
+			}
 		}
 	}
 
 	lang := "python"
-	if cs, err := h.Classes.GetClassSettings(r.Context(), liveSession.ClassID); err == nil && cs != nil {
-		lang = cs.EditorMode
+	if liveSession.ClassID != nil {
+		if cs, err := h.Classes.GetClassSettings(r.Context(), *liveSession.ClassID); err == nil && cs != nil {
+			lang = cs.EditorMode
+		}
 	}
 	systemPrompt := skills.BuildChatSystemPrompt(skills.GradeLevel(gradeLevel), body.Code, lang)
 
