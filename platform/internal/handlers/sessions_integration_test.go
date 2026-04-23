@@ -68,6 +68,8 @@ func newSessionFixture(t *testing.T, suffix string) *sessionFixture {
 		Type: "school", ContactEmail: suffix + "@example.com", ContactName: "Admin",
 	})
 	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, "UPDATE organizations SET status = 'active' WHERE id = $1", org.ID)
+	require.NoError(t, err)
 	t.Cleanup(func() {
 		db.ExecContext(ctx, "DELETE FROM org_memberships WHERE org_id = $1", org.ID)
 		db.ExecContext(ctx, "DELETE FROM organizations WHERE id = $1", org.ID)
