@@ -204,6 +204,33 @@ func (s *SessionStore) ListSessionsWithCounts(ctx context.Context, classID strin
 	return sessions, rows.Err()
 }
 
+// UpdateSessionInput describes mutable session fields for a partial update.
+type UpdateSessionInput struct {
+	Title           *string    `json:"title"`
+	Settings        *string    `json:"settings"`
+	InviteExpiresAt *time.Time `json:"inviteExpiresAt"`
+	// ClearInviteExpiry is true when the caller explicitly sets inviteExpiresAt to null.
+	ClearInviteExpiry bool `json:"-"`
+}
+
+// UpdateSession performs a partial update on the mutable session fields
+// (title, settings, invite_expires_at). Only non-nil fields are applied.
+func (s *SessionStore) UpdateSession(ctx context.Context, id string, input UpdateSessionInput) (*LiveSession, error) {
+	return scanSession(s.db.QueryRowContext(ctx,
+		`UPDATE sessions SET
+			title = COALESCE($1, title),
+			settings = COALESCE($2, settings),
+			invite_expires_at = CASE
+				WHEN $4 THEN NULL
+				WHEN $3::timestamptz IS NOT NULL THEN $3
+				ELSE invite_expires_at
+			END,
+			updated_at = now()
+		 WHERE id = $5
+		 RETURNING `+sessionColumns,
+		input.Title, input.Settings, input.InviteExpiresAt, input.ClearInviteExpiry, id))
+}
+
 func (s *SessionStore) EndSession(ctx context.Context, id string) (*LiveSession, error) {
 	return scanSession(s.db.QueryRowContext(ctx,
 		`UPDATE sessions SET status = 'ended', ended_at = $1 WHERE id = $2 RETURNING `+sessionColumns,

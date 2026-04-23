@@ -125,7 +125,7 @@ export function TeacherDashboard({
   }
 
   const endSession = useCallback(async () => {
-    await fetch(`/api/sessions/${sessionId}`, { method: "PATCH" });
+    await fetch(`/api/sessions/${sessionId}/end`, { method: "POST" });
     router.push(`/teacher/classes/${classId}`);
   }, [sessionId, classId, router]);
 
