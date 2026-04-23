@@ -51,3 +51,151 @@ Compatibility notes for the current API:
 - Existing HTTP payloads still use `studentId` in participant/event payloads.
 - `POST /api/sessions/{id}/join` still returns `studentId` in the response payload when applicable.
 - `GET /api/sessions/{id}/help-queue` still returns the raised-hand queue, but internally it is backed by `help_requested_at` rather than a `"needs_help"` participant status.
+- `POST /api/sessions/{id}/end` ends a session (moved from `PATCH /api/sessions/{id}` in Plan 030b).
+
+## Session Participants (Direct Add/Revoke)
+
+Teachers (and class instructors, org admins, platform admins) can directly add or remove participants from a session without requiring a join code or invite token.
+
+### `POST /api/sessions/{id}/participants`
+
+Add a participant directly by user ID or email.
+
+**Auth:** Session teacher, class instructor/ta (if session is class-bound), org admin, or platform admin.
+
+**Request (one of):**
+```json
+{ "userId": "uuid" }
+```
+```json
+{ "email": "user@example.com" }
+```
+
+**Response (`201`):**
+```json
+{
+  "sessionId": "uuid",
+  "studentId": "uuid",
+  "status": "invited",
+  "invitedBy": "teacher-uuid",
+  "invitedAt": "2026-01-15T12:00:00Z",
+  "joinedAt": null,
+  "leftAt": null
+}
+```
+
+Adding a user who is already a participant is idempotent (returns 201 with the existing row). If a participant previously left, they are re-invited.
+
+**Errors:**
+- `400` — Neither `userId` nor `email` provided
+- `401` — Not authenticated
+- `403` — Not authorized
+- `404` — Session not found, or user not found (when using `email`)
+
+### `DELETE /api/sessions/{id}/participants/{userId}`
+
+Remove a participant from the session entirely (deletes the participant row).
+
+**Auth:** Same as add (session teacher, class instructor/ta, org admin, platform admin).
+
+**Responses:**
+- `204` — Participant removed (no body)
+- `401` — Not authenticated
+- `403` — Not authorized
+- `404` — Session not found, or participant not found
+
+## Session Access Control
+
+### `GET /api/sessions/{id}` (tightened)
+
+Fetch a session by ID. Access is now restricted:
+- Session teacher: always allowed
+- Class member (any role, if session is class-bound): allowed
+- Session participant (invited or present): allowed
+- Platform admin: always allowed
+- Anyone else: returns **404** (does not leak session existence)
+
+### `GET /api/sessions/{id}/participants` (tightened)
+
+Fetch the participant roster. Restricted to authority roles only:
+- Session teacher, class instructor/ta, org admin, platform admin: allowed
+- Regular participants and other users: **403**
+
+## Session Invites
+
+Invite tokens allow students to join a session via a shareable link without needing to be pre-enrolled in the class. All invite endpoints require authentication.
+
+### `PATCH /api/sessions/{id}`
+
+Update mutable session fields. Only the session teacher or a platform admin can call this.
+
+**Request:**
+```json
+{
+  "title": "New title",
+  "settings": "{\"key\":\"value\"}",
+  "inviteExpiresAt": "2026-01-15T12:00:00Z"
+}
+```
+
+All fields are optional. Send `"inviteExpiresAt": null` to clear the expiry (open lobby).
+
+**Responses:**
+- `200` — Updated session object
+- `403` — Not the session teacher
+- `404` — Session not found
+
+### `POST /api/sessions/{id}/rotate-invite`
+
+Generate a new invite token, invalidating any previous token immediately. Only the session teacher or a platform admin can call this.
+
+**Request:** empty body
+
+**Response (`200`):**
+```json
+{
+  "id": "...",
+  "inviteToken": "newRandomToken24chars",
+  "inviteExpiresAt": null,
+  "..."
+}
+```
+
+**Errors:**
+- `403` — Not the session teacher
+- `404` — Session not found
+
+### `DELETE /api/sessions/{id}/invite`
+
+Revoke the invite token entirely, making any existing invite links dead.
+
+**Responses:**
+- `204` — Token revoked (no body)
+- `403` — Not the session teacher
+- `404` — Session not found
+
+### `POST /api/s/{token}/join`
+
+Join a session using an invite token. The user must be logged in.
+
+**Request:** empty body
+
+**Response (`200`):**
+```json
+{
+  "sessionId": "uuid",
+  "classId": "uuid-or-null",
+  "participant": {
+    "sessionId": "uuid",
+    "studentId": "uuid",
+    "status": "present",
+    "joinedAt": "2026-01-15T12:00:00Z",
+    "leftAt": null
+  }
+}
+```
+
+**Errors:**
+- `401` — Not authenticated
+- `404` — Invalid or unknown invite token
+- `410` — Invite link expired or session has ended
