@@ -79,8 +79,7 @@ export default function JoinByTokenPage() {
         `/student/classes/${state.classId}/session/${state.sessionId}`
       );
     } else {
-      // Orphan session (no class) — future support
-      router.replace(`/student/session/${state.sessionId}`);
+      router.replace(`/student/sessions/${state.sessionId}`);
     }
   }, [state, router]);
 

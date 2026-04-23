@@ -21,7 +21,8 @@ import { Input } from "@/components/ui/input";
 
 interface TeacherDashboardProps {
   sessionId: string;
-  classId: string;
+  classId: string | null;
+  returnPath?: string;
   editorMode: "python" | "javascript" | "blockly";
   courseTopics: Array<{ topicId: string; title: string; lessonContent: unknown }>;
   inviteToken?: string | null;
@@ -45,6 +46,30 @@ interface ParticipantResponse {
   status?: string;
   invitedBy?: string | null;
   helpRequestedAt?: string | null;
+}
+
+interface AiInteractionResponse {
+  id: string;
+  studentId: string;
+  messages?: unknown[];
+  createdAt: string;
+}
+
+interface AiInteractionSummary {
+  id: string;
+  studentId: string;
+  studentName: string;
+  messageCount: number;
+  createdAt: string;
+}
+
+interface AnnotationItem {
+  id: string;
+  lineStart: string;
+  lineEnd: string;
+  content: string;
+  authorType: "teacher" | "ai";
+  createdAt: string;
 }
 
 const UUID_PATTERN =
@@ -82,6 +107,7 @@ function normalizeParticipant(participant: ParticipantResponse): Participant | n
 export function TeacherDashboard({
   sessionId,
   classId,
+  returnPath,
   editorMode,
   courseTopics,
   inviteToken,
@@ -93,8 +119,8 @@ export function TeacherDashboard({
   const [mode, setMode] = useState<DashboardMode>("grid");
   const [participants, setParticipants] = useState<Participant[]>([]);
   const [selectedStudent, setSelectedStudent] = useState<string | null>(null);
-  const [aiInteractions, setAiInteractions] = useState<any[]>([]);
-  const [annotations, setAnnotations] = useState<any[]>([]);
+  const [aiInteractions, setAiInteractions] = useState<AiInteractionSummary[]>([]);
+  const [annotations, setAnnotations] = useState<AnnotationItem[]>([]);
   const [participantLookup, setParticipantLookup] = useState("");
   const [participantLookupError, setParticipantLookupError] = useState<string | null>(null);
   const [isAddingParticipant, setIsAddingParticipant] = useState(false);
@@ -156,8 +182,8 @@ export function TeacherDashboard({
     async function fetchAI() {
       const res = await fetch(`/api/ai/interactions?sessionId=${sessionId}`);
       if (res.ok) {
-        const data = await res.json();
-        setAiInteractions(data.map((interaction: any) => ({
+        const data = (await res.json()) as AiInteractionResponse[];
+        setAiInteractions(data.map((interaction) => ({
           id: interaction.id,
           studentId: interaction.studentId,
           studentName:
@@ -182,7 +208,7 @@ export function TeacherDashboard({
     const docId = `session:${sessionId}:user:${selectedStudent}`;
     const res = await fetch(`/api/annotations?documentId=${encodeURIComponent(docId)}`);
     if (res.ok) {
-      setAnnotations(await res.json());
+      setAnnotations((await res.json()) as AnnotationItem[]);
     }
   }, [selectedStudent, sessionId]);
 
@@ -197,8 +223,8 @@ export function TeacherDashboard({
 
   const endSession = useCallback(async () => {
     await fetch(`/api/sessions/${sessionId}/end`, { method: "POST" });
-    router.push(`/teacher/classes/${classId}`);
-  }, [sessionId, classId, router]);
+    router.push(returnPath ?? (classId ? `/teacher/classes/${classId}` : "/teacher"));
+  }, [sessionId, classId, returnPath, router]);
 
   function handleSelectStudent(id: string) {
     setSelectedStudent(id);
