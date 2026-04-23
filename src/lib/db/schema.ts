@@ -11,6 +11,7 @@ import {
   boolean,
   integer,
   doublePrecision,
+  primaryKey,
 } from "drizzle-orm/pg-core";
 
 // --- Enums ---
@@ -37,14 +38,14 @@ export const editorModeEnum = pgEnum("editor_mode", [
 ]);
 
 export const sessionStatusEnum = pgEnum("session_status", [
-  "active",
+  "live",
   "ended",
 ]);
 
 export const participantStatusEnum = pgEnum("participant_status", [
-  "active",
-  "idle",
-  "needs_help",
+  "invited",
+  "present",
+  "left",
 ]);
 
 export const annotationAuthorTypeEnum = pgEnum("annotation_author_type", [
@@ -179,24 +180,28 @@ export const authProviders = pgTable(
   ]
 );
 
-export const liveSessions = pgTable(
-  "live_sessions",
+export const sessions = pgTable(
+  "sessions",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    classId: uuid("class_id")
-      .notNull()
-      .references(() => classes.id, { onDelete: "cascade" }),
+    classId: uuid("class_id").references(() => classes.id, { onDelete: "cascade" }),
     teacherId: uuid("teacher_id")
       .notNull()
       .references(() => users.id),
-    status: sessionStatusEnum("status").notNull().default("active"),
+    title: varchar("title", { length: 255 }).notNull(),
+    inviteToken: varchar("invite_token", { length: 24 }),
+    inviteExpiresAt: timestamp("invite_expires_at", { withTimezone: true }),
+    scheduledSessionId: uuid("scheduled_session_id"),
+    status: sessionStatusEnum("status").notNull().default("live"),
     settings: jsonb("settings").default({}),
     startedAt: timestamp("started_at").defaultNow().notNull(),
     endedAt: timestamp("ended_at"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [
-    index("live_sessions_class_idx").on(table.classId),
-    index("live_sessions_class_status_idx").on(table.classId, table.status),
+    index("sessions_class_idx").on(table.classId),
+    index("sessions_class_status_idx").on(table.classId, table.status),
   ]
 );
 
@@ -205,18 +210,21 @@ export const sessionParticipants = pgTable(
   {
     sessionId: uuid("session_id")
       .notNull()
-      .references(() => liveSessions.id, { onDelete: "cascade" }),
-    studentId: uuid("student_id")
+      .references(() => sessions.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
-    status: participantStatusEnum("status").notNull().default("active"),
-    joinedAt: timestamp("joined_at").defaultNow().notNull(),
+    status: participantStatusEnum("status").notNull().default("present"),
+    joinedAt: timestamp("joined_at"),
     leftAt: timestamp("left_at"),
+    invitedBy: uuid("invited_by").references(() => users.id, { onDelete: "set null" }),
+    invitedAt: timestamp("invited_at", { withTimezone: true }),
+    helpRequestedAt: timestamp("help_requested_at", { withTimezone: true }),
   },
   (table) => [
     uniqueIndex("session_participant_unique_idx").on(
       table.sessionId,
-      table.studentId
+      table.userId
     ),
     index("session_participants_session_idx").on(table.sessionId),
   ]
@@ -231,7 +239,7 @@ export const aiInteractions = pgTable(
       .references(() => users.id, { onDelete: "cascade" }),
     sessionId: uuid("session_id")
       .notNull()
-      .references(() => liveSessions.id, { onDelete: "cascade" }),
+      .references(() => sessions.id, { onDelete: "cascade" }),
     enabledByTeacherId: uuid("enabled_by_teacher_id")
       .notNull()
       .references(() => users.id),
@@ -377,7 +385,7 @@ export const sessionTopics = pgTable(
   {
     sessionId: uuid("session_id")
       .notNull()
-      .references(() => liveSessions.id, { onDelete: "cascade" }),
+      .references(() => sessions.id, { onDelete: "cascade" }),
     topicId: uuid("topic_id")
       .notNull()
       .references(() => topics.id, { onDelete: "cascade" }),
@@ -455,6 +463,132 @@ export const submissions = pgTable(
     index("submissions_assignment_idx").on(table.assignmentId),
     index("submissions_student_idx").on(table.studentId),
   ]
+);
+
+// --- Problem Bank ---
+
+// NOTE: 0013 creates these as varchar(16) CHECK'd columns, not true PG enums,
+// to keep the migration additive. We expose Drizzle enums purely for TS
+// type-narrowing — the DB column remains varchar. If the codebase later
+// converts to true enums, keep the TS names aligned.
+export const problemScopeEnum = pgEnum("problem_scope", [
+  "platform",
+  "org",
+  "personal",
+]);
+export const problemDifficultyEnum = pgEnum("problem_difficulty", [
+  "easy",
+  "medium",
+  "hard",
+]);
+export const problemStatusEnum = pgEnum("problem_status", [
+  "draft",
+  "published",
+  "archived",
+]);
+
+export const problems = pgTable(
+  "problems",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    scope: varchar("scope", { length: 16 })
+      .$type<"platform" | "org" | "personal">()
+      .notNull(),
+    scopeId: uuid("scope_id"),
+    title: varchar("title", { length: 255 }).notNull(),
+    slug: varchar("slug", { length: 255 }),
+    description: text("description").notNull(),
+    starterCode: jsonb("starter_code")
+      .$type<Record<string, string>>()
+      .notNull()
+      .default({}),
+    difficulty: varchar("difficulty", { length: 16 })
+      .$type<"easy" | "medium" | "hard">()
+      .notNull()
+      .default("easy"),
+    gradeLevel: varchar("grade_level", { length: 8 }).$type<
+      "K-5" | "6-8" | "9-12" | null
+    >(),
+    tags: text("tags").array().notNull().default([]),
+    status: varchar("status", { length: 16 })
+      .$type<"draft" | "published" | "archived">()
+      .notNull()
+      .default("draft"),
+    forkedFrom: uuid("forked_from"),
+    timeLimitMs: integer("time_limit_ms"),
+    memoryLimitMb: integer("memory_limit_mb"),
+    createdBy: uuid("created_by")
+      .notNull()
+      .references(() => users.id),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => ({
+    scopeStatusIdx: index("problems_scope_scope_id_status_idx").on(
+      t.scope,
+      t.scopeId,
+      t.status
+    ),
+    createdByIdx: index("problems_created_by_idx").on(t.createdBy),
+  })
+);
+
+export const topicProblems = pgTable(
+  "topic_problems",
+  {
+    topicId: uuid("topic_id")
+      .notNull()
+      .references(() => topics.id, { onDelete: "cascade" }),
+    problemId: uuid("problem_id")
+      .notNull()
+      .references(() => problems.id, { onDelete: "cascade" }),
+    sortOrder: integer("sort_order").notNull().default(0),
+    attachedBy: uuid("attached_by")
+      .notNull()
+      .references(() => users.id),
+    attachedAt: timestamp("attached_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.topicId, t.problemId] }),
+    problemIdx: index("topic_problems_problem_idx").on(t.problemId),
+  })
+);
+
+export const problemSolutions = pgTable(
+  "problem_solutions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    problemId: uuid("problem_id")
+      .notNull()
+      .references(() => problems.id, { onDelete: "cascade" }),
+    language: varchar("language", { length: 32 }).notNull(),
+    title: varchar("title", { length: 120 }),
+    code: text("code").notNull(),
+    notes: text("notes"),
+    approachTags: text("approach_tags").array().notNull().default([]),
+    isPublished: boolean("is_published").notNull().default(false),
+    createdBy: uuid("created_by")
+      .notNull()
+      .references(() => users.id),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => ({
+    problemLangIdx: index("problem_solutions_problem_language_idx").on(
+      t.problemId,
+      t.language
+    ),
+  })
 );
 
 // --- Parent Reports ---

@@ -42,11 +42,15 @@ Frontend proxies Go routes via `next.config.ts` rewrites (`GO_PROXY_ROUTES`). Al
 - Stores accept `*db.DB`; handlers use `ValidateUUIDParam` middleware for path IDs
 - Error handling: return `(result, error)`, log with `slog`
 - Timestamps: `time.RFC3339`
+- **Production-quality code required.** Go code must cover the SAME business logic, edge cases, fallback chains, defensive patterns, and generalization as the Python implementation — not just the happy path. Do NOT strip defensive logic, pre-validation, health probes, retry paths, or fallback chains in the name of Go minimalism or YAGNI. When porting from Python, read the Python implementation's INTERNAL logic (not just the API shape) and port ALL defensive paths. When writing new Go code with no Python counterpart, handle: what happens on failure? partial input? upstream down? concurrent access? empty collections? Think like a production SRE, not a tutorial writer.
 
 ### General
 - Follow existing patterns in the codebase — check how similar features are implemented before writing new code.
 - Never hardcode secrets or credentials. Secrets go in `.env`, non-secret config in config files.
 - When modifying any logic, proactively search the codebase for similar patterns that should receive the same change. Do not wait to be asked — audit related handlers, components, and utilities for consistency.
+- **Never defer fixes without a follow-up plan.** If a known issue is identified during implementation, fix it NOW in the same commit/PR. Do NOT label it "acceptable trade-off", "follow-up", "TODO", or "deferred" unless a concrete follow-up plan has been drafted in `docs/plans/` with a plan number, scope, and phases. Unfiled deferrals rot — they become invisible tech debt that surfaces only during live user testing.
+- **Always implement the long-term solution, not the short-term workaround.** When two approaches exist — a quick hack that unblocks now vs a proper fix that solves the root cause — choose the proper fix. Short-term workarounds create architectural debt that compounds across plans (e.g., dual agentic loops, dual streaming states, dual event channels). If the proper fix is genuinely too large for the current scope, draft the follow-up plan immediately and get user approval before shipping the workaround.
+
 
 ## Testing
 

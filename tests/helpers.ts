@@ -17,7 +17,7 @@ export async function cleanupDatabase() {
   await testDb.delete(schema.codeAnnotations);
   await testDb.delete(schema.aiInteractions);
   await testDb.delete(schema.sessionParticipants);
-  await testDb.delete(schema.liveSessions);
+  await testDb.delete(schema.sessions);
   await testDb.delete(schema.classSettings);
   await testDb.delete(schema.classMemberships);
   await testDb.delete(schema.classes);

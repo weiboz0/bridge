@@ -23,7 +23,7 @@ export default async function StudentSessionPage({
   if (!isEnrolled && !session!.user.isPlatformAdmin) notFound();
 
   const liveSession = await getSession(db, sessionId);
-  if (!liveSession || liveSession.status !== "active") notFound();
+  if (!liveSession || liveSession.status !== "live") notFound();
 
   // Auto-join session (server-side, no HTTP round-trip)
   await joinSession(db, sessionId, session!.user.id);

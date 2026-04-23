@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -19,21 +20,23 @@ type LiveSession struct {
 }
 
 type SessionParticipant struct {
-	SessionID string     `json:"sessionId"`
-	StudentID string     `json:"studentId"`
-	Status    string     `json:"status"`
-	JoinedAt  time.Time  `json:"joinedAt"`
-	LeftAt    *time.Time `json:"leftAt"`
+	SessionID       string     `json:"sessionId"`
+	StudentID       string     `json:"studentId"`
+	Status          string     `json:"status"`
+	JoinedAt        time.Time  `json:"joinedAt"`
+	LeftAt          *time.Time `json:"leftAt"`
+	HelpRequestedAt *time.Time `json:"helpRequestedAt,omitempty"`
 }
 
 type ParticipantWithUser struct {
-	SessionID string     `json:"sessionId"`
-	StudentID string     `json:"studentId"`
-	Status    string     `json:"status"`
-	JoinedAt  time.Time  `json:"joinedAt"`
-	LeftAt    *time.Time `json:"leftAt"`
-	Name      string     `json:"name"`
-	Email     string     `json:"email"`
+	SessionID       string     `json:"sessionId"`
+	StudentID       string     `json:"studentId"`
+	Status          string     `json:"status"`
+	JoinedAt        time.Time  `json:"joinedAt"`
+	LeftAt          *time.Time `json:"leftAt"`
+	HelpRequestedAt *time.Time `json:"helpRequestedAt,omitempty"`
+	Name            string     `json:"name"`
+	Email           string     `json:"email"`
 }
 
 type SessionTopic struct {
@@ -85,10 +88,10 @@ func (s *SessionStore) CreateSession(ctx context.Context, input CreateSessionInp
 	}
 	defer tx.Rollback()
 
-	// End any active session for this classroom
+	// End any live session for this classroom
 	now := time.Now()
 	_, err = tx.ExecContext(ctx,
-		`UPDATE live_sessions SET status = 'ended', ended_at = $1 WHERE class_id = $2 AND status = 'active'`,
+		`UPDATE sessions SET status = 'ended', ended_at = $1 WHERE class_id = $2 AND status = 'live'`,
 		now, input.ClassID)
 	if err != nil {
 		return nil, err
@@ -102,8 +105,8 @@ func (s *SessionStore) CreateSession(ctx context.Context, input CreateSessionInp
 
 	var session LiveSession
 	err = tx.QueryRowContext(ctx,
-		`INSERT INTO live_sessions (id, class_id, teacher_id, status, settings, started_at)
-		 VALUES ($1, $2, $3, 'active', $4, $5)
+		`INSERT INTO sessions (id, class_id, teacher_id, title, status, settings, started_at)
+		 VALUES ($1, $2, $3, COALESCE((SELECT title FROM classes WHERE id = $2), 'Untitled session'), 'live', $4, $5)
 		 RETURNING `+sessionColumns,
 		id, input.ClassID, input.TeacherID, settings, now,
 	).Scan(&session.ID, &session.ClassID, &session.TeacherID, &session.Status, &session.Settings, &session.StartedAt, &session.EndedAt)
@@ -119,18 +122,18 @@ func (s *SessionStore) CreateSession(ctx context.Context, input CreateSessionInp
 
 func (s *SessionStore) GetSession(ctx context.Context, id string) (*LiveSession, error) {
 	return scanSession(s.db.QueryRowContext(ctx,
-		`SELECT `+sessionColumns+` FROM live_sessions WHERE id = $1`, id))
+		`SELECT `+sessionColumns+` FROM sessions WHERE id = $1`, id))
 }
 
 func (s *SessionStore) GetActiveSession(ctx context.Context, classID string) (*LiveSession, error) {
 	return scanSession(s.db.QueryRowContext(ctx,
-		`SELECT `+sessionColumns+` FROM live_sessions WHERE class_id = $1 AND status = 'active'`, classID))
+		`SELECT `+sessionColumns+` FROM sessions WHERE class_id = $1 AND status = 'live'`, classID))
 }
 
 // ListSessionsByClass returns all sessions for a class, most recent first.
 func (s *SessionStore) ListSessionsByClass(ctx context.Context, classID string) ([]LiveSession, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT `+sessionColumns+` FROM live_sessions WHERE class_id = $1 ORDER BY started_at DESC`, classID)
+		`SELECT `+sessionColumns+` FROM sessions WHERE class_id = $1 ORDER BY started_at DESC`, classID)
 	if err != nil {
 		return nil, err
 	}
@@ -161,7 +164,7 @@ func (s *SessionStore) ListSessionsWithCounts(ctx context.Context, classID strin
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT ls.id, ls.class_id, ls.teacher_id, ls.status, ls.settings, ls.started_at, ls.ended_at,
 		        COALESCE((SELECT count(*) FROM session_participants sp WHERE sp.session_id = ls.id), 0)
-		 FROM live_sessions ls
+		 FROM sessions ls
 		 WHERE ls.class_id = $1
 		 ORDER BY ls.started_at DESC`, classID)
 	if err != nil {
@@ -186,19 +189,19 @@ func (s *SessionStore) ListSessionsWithCounts(ctx context.Context, classID strin
 
 func (s *SessionStore) EndSession(ctx context.Context, id string) (*LiveSession, error) {
 	return scanSession(s.db.QueryRowContext(ctx,
-		`UPDATE live_sessions SET status = 'ended', ended_at = $1 WHERE id = $2 RETURNING `+sessionColumns,
+		`UPDATE sessions SET status = 'ended', ended_at = $1 WHERE id = $2 RETURNING `+sessionColumns,
 		time.Now(), id))
 }
 
 func (s *SessionStore) JoinSession(ctx context.Context, sessionID, studentID string) (*SessionParticipant, error) {
 	var p SessionParticipant
 	err := s.db.QueryRowContext(ctx,
-		`INSERT INTO session_participants (session_id, student_id, status, joined_at)
-		 VALUES ($1, $2, 'active', $3)
+		`INSERT INTO session_participants (session_id, user_id, status, joined_at)
+		 VALUES ($1, $2, 'present', $3)
 		 ON CONFLICT DO NOTHING
-		 RETURNING session_id, student_id, status, joined_at, left_at`,
+		 RETURNING session_id, user_id, status, joined_at, left_at, help_requested_at`,
 		sessionID, studentID, time.Now(),
-	).Scan(&p.SessionID, &p.StudentID, &p.Status, &p.JoinedAt, &p.LeftAt)
+	).Scan(&p.SessionID, &p.StudentID, &p.Status, &p.JoinedAt, &p.LeftAt, &p.HelpRequestedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil // already joined
 	}
@@ -212,10 +215,10 @@ func (s *SessionStore) LeaveSession(ctx context.Context, sessionID, studentID st
 	var p SessionParticipant
 	err := s.db.QueryRowContext(ctx,
 		`UPDATE session_participants SET left_at = $1
-		 WHERE session_id = $2 AND student_id = $3 AND left_at IS NULL
-		 RETURNING session_id, student_id, status, joined_at, left_at`,
+		 WHERE session_id = $2 AND user_id = $3 AND left_at IS NULL
+		 RETURNING session_id, user_id, status, joined_at, left_at, help_requested_at`,
 		time.Now(), sessionID, studentID,
-	).Scan(&p.SessionID, &p.StudentID, &p.Status, &p.JoinedAt, &p.LeftAt)
+	).Scan(&p.SessionID, &p.StudentID, &p.Status, &p.JoinedAt, &p.LeftAt, &p.HelpRequestedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -227,9 +230,9 @@ func (s *SessionStore) LeaveSession(ctx context.Context, sessionID, studentID st
 
 func (s *SessionStore) GetSessionParticipants(ctx context.Context, sessionID string) ([]ParticipantWithUser, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT sp.session_id, sp.student_id, sp.status, sp.joined_at, sp.left_at, u.name, u.email
+		`SELECT sp.session_id, sp.user_id, sp.status, sp.joined_at, sp.left_at, sp.help_requested_at, u.name, u.email
 		 FROM session_participants sp
-		 INNER JOIN users u ON sp.student_id = u.id
+		 INNER JOIN users u ON sp.user_id = u.id
 		 WHERE sp.session_id = $1
 		 ORDER BY sp.joined_at`, sessionID)
 	if err != nil {
@@ -240,7 +243,7 @@ func (s *SessionStore) GetSessionParticipants(ctx context.Context, sessionID str
 	var participants []ParticipantWithUser
 	for rows.Next() {
 		var p ParticipantWithUser
-		if err := rows.Scan(&p.SessionID, &p.StudentID, &p.Status, &p.JoinedAt, &p.LeftAt, &p.Name, &p.Email); err != nil {
+		if err := rows.Scan(&p.SessionID, &p.StudentID, &p.Status, &p.JoinedAt, &p.LeftAt, &p.HelpRequestedAt, &p.Name, &p.Email); err != nil {
 			return nil, err
 		}
 		participants = append(participants, p)
@@ -253,12 +256,27 @@ func (s *SessionStore) GetSessionParticipants(ctx context.Context, sessionID str
 
 func (s *SessionStore) UpdateParticipantStatus(ctx context.Context, sessionID, studentID, status string) (*SessionParticipant, error) {
 	var p SessionParticipant
-	err := s.db.QueryRowContext(ctx,
-		`UPDATE session_participants SET status = $1
-		 WHERE session_id = $2 AND student_id = $3
-		 RETURNING session_id, student_id, status, joined_at, left_at`,
-		status, sessionID, studentID,
-	).Scan(&p.SessionID, &p.StudentID, &p.Status, &p.JoinedAt, &p.LeftAt)
+	query := `UPDATE session_participants SET status = $1 WHERE session_id = $2 AND user_id = $3
+		RETURNING session_id, user_id, status, joined_at, left_at, help_requested_at`
+	args := []any{status, sessionID, studentID}
+	switch status {
+	case "needs_help":
+		query = `UPDATE session_participants
+			SET help_requested_at = $1
+			WHERE session_id = $2 AND user_id = $3
+			RETURNING session_id, user_id, status, joined_at, left_at, help_requested_at`
+		args = []any{time.Now(), sessionID, studentID}
+	case "active":
+		query = `UPDATE session_participants
+			SET help_requested_at = NULL
+			WHERE session_id = $1 AND user_id = $2
+			RETURNING session_id, user_id, status, joined_at, left_at, help_requested_at`
+		args = []any{sessionID, studentID}
+	case "invited", "present", "left":
+	default:
+		return nil, fmt.Errorf("unsupported participant status %q", status)
+	}
+	err := s.db.QueryRowContext(ctx, query, args...).Scan(&p.SessionID, &p.StudentID, &p.Status, &p.JoinedAt, &p.LeftAt, &p.HelpRequestedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}

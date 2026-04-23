@@ -33,9 +33,8 @@ func (h *DocumentHandler) ListDocuments(w http.ResponseWriter, r *http.Request) 
 	}
 
 	filters := store.DocumentFilters{
-		OwnerID:     r.URL.Query().Get("studentId"),
-		ClassroomID: r.URL.Query().Get("classroomId"),
-		SessionID:   r.URL.Query().Get("sessionId"),
+		OwnerID:   r.URL.Query().Get("studentId"),
+		SessionID: r.URL.Query().Get("sessionId"),
 	}
 
 	// Non-admin callers are scoped to their own documents. If they passed
@@ -51,8 +50,8 @@ func (h *DocumentHandler) ListDocuments(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	if filters.OwnerID == "" && filters.ClassroomID == "" && filters.SessionID == "" {
-		writeError(w, http.StatusBadRequest, "At least one filter (classroomId, studentId, sessionId) is required")
+	if filters.OwnerID == "" && filters.SessionID == "" {
+		writeError(w, http.StatusBadRequest, "At least one filter (studentId, sessionId) is required")
 		return
 	}
 

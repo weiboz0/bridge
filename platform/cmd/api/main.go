@@ -128,13 +128,35 @@ func main() {
 		topicH.Routes(r)
 
 		problemH := &handlers.ProblemHandler{
-			Problems:  stores.Problems,
-			TestCases: stores.TestCases,
-			Attempts:  stores.Attempts,
-			Topics:    stores.Topics,
-			Courses:   stores.Courses,
+			Problems:      stores.Problems,
+			TestCases:     stores.TestCases,
+			Attempts:      stores.Attempts,
+			Solutions:     stores.Solutions,
+			TopicProblems: stores.TopicProblems,
+			Topics:        stores.Topics,
+			Courses:       stores.Courses,
+			Orgs:          stores.Orgs,
 		}
 		problemH.Routes(r)
+
+		solutionH := &handlers.SolutionHandler{
+			Problems:      stores.Problems,
+			Solutions:     stores.Solutions,
+			Orgs:          stores.Orgs,
+			TopicProblems: stores.TopicProblems,
+			Topics:        stores.Topics,
+			Courses:       stores.Courses,
+		}
+		solutionH.Routes(r)
+
+		topicProblemH := &handlers.TopicProblemHandler{
+			Problems:      stores.Problems,
+			TopicProblems: stores.TopicProblems,
+			Topics:        stores.Topics,
+			Courses:       stores.Courses,
+			Orgs:          stores.Orgs,
+		}
+		topicProblemH.Routes(r)
 
 		classH := &handlers.ClassHandler{Classes: stores.Classes, Orgs: stores.Orgs, Users: stores.Users}
 		classH.Routes(r)
@@ -181,11 +203,12 @@ func main() {
 		teacherH.Routes(r)
 
 		teacherProblemH := &handlers.TeacherProblemHandler{
-			Problems: stores.Problems,
-			Topics:   stores.Topics,
-			Classes:  stores.Classes,
-			Attempts: stores.Attempts,
-			Users:    stores.Users,
+			Problems:      stores.Problems,
+			Topics:        stores.Topics,
+			TopicProblems: stores.TopicProblems,
+			Classes:       stores.Classes,
+			Attempts:      stores.Attempts,
+			Users:         stores.Users,
 		}
 		teacherProblemH.Routes(r)
 

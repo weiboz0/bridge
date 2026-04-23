@@ -31,6 +31,11 @@ interface Props {
   /** Attempt to load on first render. Server eagerly created one if needed,
    *  so this is always non-null in the student route. */
   initialAttemptId: string;
+  /** Editor language derived from class settings (plan 028: problems no
+   *  longer carry a top-level language field). */
+  language: string;
+  /** Resolved starter code for this language (problem.starterCode[language] ?? ""). */
+  starterCode: string;
 }
 
 export function ProblemShell({
@@ -38,6 +43,8 @@ export function ProblemShell({
   testCases: initialTestCases,
   attempts: initialAttempts,
   initialAttemptId,
+  language,
+  starterCode,
 }: Props) {
   const { data: session } = useSession();
   const userId = session?.user?.id ?? "";
@@ -133,7 +140,7 @@ export function ProblemShell({
   }
 
   function handleRun() {
-    if (problem.language !== "python") return;
+    if (language !== "python") return;
     // Y.Text holds the live editor contents; toString() always reflects the
     // most recent state, even mid-typing.
     const code = yText?.toString() ?? activeAttempt?.plainText ?? "";
@@ -173,7 +180,7 @@ export function ProblemShell({
         <SectionLabel action={<Tag tone="zinc">Problem</Tag>}>Problem</SectionLabel>
         <div className="flex-1 overflow-auto">
           <div className="p-5">
-            <ProblemDescription problem={problem} testCases={testCases} />
+            <ProblemDescription problem={problem} testCases={testCases} language={language} />
           </div>
           <TestCasesPanel
             problemId={problem.id}
@@ -199,16 +206,16 @@ export function ProblemShell({
             // layer. Keep the prop for API stability with the autosave-era
             // signature.
           }}
-          language={problem.language}
+          language={language}
           saveIndicator={<SyncIndicator connected={connected} />}
           runButton={
             <Button
               size="sm"
               className="bg-amber-600 text-white hover:bg-amber-700"
-              disabled={!pyodide.ready || pyodide.running || problem.language !== "python"}
+              disabled={!pyodide.ready || pyodide.running || language !== "python"}
               onClick={handleRun}
               title={
-                problem.language !== "python"
+                language !== "python"
                   ? "Run in the browser is Python-only for v1"
                   : !pyodide.ready
                     ? "Python runtime loading…"
@@ -236,8 +243,8 @@ export function ProblemShell({
         <div className="min-h-0 flex-1 p-3">
           <CodeEditor
             key={editorKey}
-            initialCode={activeAttempt?.plainText ?? problem.starterCode ?? ""}
-            language={problem.language}
+            initialCode={activeAttempt?.plainText ?? starterCode}
+            language={language}
             yText={yText}
             provider={provider}
           />

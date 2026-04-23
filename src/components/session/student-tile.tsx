@@ -11,6 +11,7 @@ interface StudentTileProps {
   studentId: string;
   studentName: string;
   status: string;
+  helpRequestedAt?: string | null;
   token: string;
   onClick: () => void;
 }
@@ -20,6 +21,7 @@ export function StudentTile({
   studentId,
   studentName,
   status,
+  helpRequestedAt,
   token,
   onClick,
 }: StudentTileProps) {
@@ -75,10 +77,11 @@ export function StudentTile({
   }, [sessionId, studentId, token]);
 
   const statusColor = {
-    active: "bg-green-500",
-    idle: "bg-yellow-500",
-    needs_help: "bg-red-500",
+    present: "bg-green-500",
+    invited: "bg-blue-500",
+    left: "bg-zinc-400",
   }[status] || "bg-gray-500";
+  const dotColor = helpRequestedAt ? "bg-red-500" : statusColor;
 
   return (
     <div
@@ -89,7 +92,7 @@ export function StudentTile({
         <span className="text-xs font-medium truncate">{studentName}</span>
         <div className="flex items-center gap-1">
           <AiToggleButton sessionId={sessionId} studentId={studentId} />
-          <span className={`w-2 h-2 rounded-full ${statusColor}`} />
+          <span className={`w-2 h-2 rounded-full ${dotColor}`} />
         </div>
       </div>
       <div

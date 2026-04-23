@@ -26,9 +26,12 @@ func setupTestCaseEnv(t *testing.T, suffix string) (
 	other = createTestUser(t, db, users, suffix+"-other")
 
 	ctx := context.Background()
+	_ = topic // retained for parity with the older fixture
+	scopeID := user.ID
 	p, err := problems.CreateProblem(ctx, CreateProblemInput{
-		TopicID: topic.ID, CreatedBy: user.ID,
-		Title: "TC Problem " + suffix, Language: "python",
+		Scope: "personal", ScopeID: &scopeID, CreatedBy: user.ID,
+		Title:       "TC Problem " + suffix,
+		Description: "desc",
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() { db.ExecContext(ctx, "DELETE FROM problems WHERE id = $1", p.ID) })

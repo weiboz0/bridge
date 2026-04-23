@@ -81,6 +81,7 @@ All three services are required for E2E tests: Next.js on port 3003, Go platform
 - Stores accept `*db.DB`; handlers use `ValidateUUIDParam` middleware for path IDs
 - Return `(result, error)`, log with `slog`
 - Use `time.RFC3339` consistently
+- Match the production behavior, not just the API shape. When porting from Python, carry over defensive logic, validation, fallback chains, retries, health checks, and edge-case handling rather than reimplementing a happy-path-only version. When building new Go code from scratch, think through failure modes, partial input, upstream outages, concurrency, and empty-data cases up front.
 - Every new Go API endpoint should have integration coverage for happy path, auth, error cases, and cross-user isolation.
 
 ### General
@@ -89,6 +90,8 @@ All three services are required for E2E tests: Next.js on port 3003, Go platform
 - If a fix applies to one handler, picker, store, or UI flow, check siblings proactively.
 - Never hardcode secrets or credentials. Secrets belong in `.env`; non-secret config belongs in config files.
 - Keep shared logic in one source of truth.
+- Do not defer known issues without a concrete follow-up plan. If you identify a real bug or gap during implementation, either fix it in the same unit of work or document the follow-up immediately in a numbered plan under `docs/plans/` before shipping.
+- Prefer the long-term fix over the short-term workaround. Avoid shipping tactical hacks that create parallel code paths or architectural debt unless the user has explicitly accepted that tradeoff and the follow-up plan is already written.
 
 ## Testing Expectations
 

@@ -10,7 +10,7 @@ describe("Schema exports", () => {
     expect(schema.classes).toBeDefined();
     expect(schema.classMemberships).toBeDefined();
     expect(schema.classSettings).toBeDefined();
-    expect(schema.liveSessions).toBeDefined();
+    expect(schema.sessions).toBeDefined();
     expect(schema.sessionParticipants).toBeDefined();
     expect(schema.aiInteractions).toBeDefined();
     expect(schema.codeAnnotations).toBeDefined();
@@ -53,5 +53,12 @@ describe("Schema exports", () => {
     expect(columns).toContain("role");
     expect(columns).toContain("status");
     expect(columns).toContain("invitedBy");
+  });
+
+  it("problems has scope fields + topic_problems + problem_solutions", () => {
+    expect(schema.problems.scope).toBeDefined();
+    expect(schema.problems.starterCode).toBeDefined();
+    expect(schema.topicProblems.problemId).toBeDefined();
+    expect(schema.problemSolutions.isPublished).toBeDefined();
   });
 });

@@ -1,7 +1,12 @@
 package handlers
 
 import (
+	"encoding/base64"
+	"errors"
 	"net/http"
+	"strconv"
+	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -9,39 +14,65 @@ import (
 	"github.com/weiboz0/bridge/platform/internal/store"
 )
 
-// ProblemHandler serves three related resources that share access-control
-// helpers: problems, test_cases, and attempts.
+// ProblemHandler serves the problem bank and its nested test-case/attempt
+// resources. Access control is scope-based: a problem belongs to one of
+// "platform", "org", or "personal", and the handler enforces who can read /
+// edit / publish / fork based on that scope plus the viewer's org memberships.
 type ProblemHandler struct {
-	Problems  *store.ProblemStore
-	TestCases *store.TestCaseStore
-	Attempts  *store.AttemptStore
-	Topics    *store.TopicStore
-	Courses   *store.CourseStore
+	Problems      *store.ProblemStore
+	TestCases     *store.TestCaseStore
+	Attempts      *store.AttemptStore
+	Solutions     *store.ProblemSolutionStore
+	TopicProblems *store.TopicProblemStore
+	Topics        *store.TopicStore
+	Courses       *store.CourseStore
+	Orgs          *store.OrgStore
 }
 
-var validProblemLanguages = map[string]bool{
-	"python": true, "javascript": true, "blockly": true,
+var (
+	validProblemScopes       = map[string]bool{"platform": true, "org": true, "personal": true}
+	validProblemDifficulties = map[string]bool{"easy": true, "medium": true, "hard": true}
+	validProblemGradeLevels  = map[string]bool{"K-5": true, "6-8": true, "9-12": true}
+)
+
+type problemListResponse struct {
+	Items      []store.Problem `json:"items"`
+	NextCursor *string         `json:"nextCursor,omitempty"`
 }
+
+// maxProblemTitleLen mirrors the DB column limit (varchar(255)).
+const maxProblemTitleLen = 255
+
+// maxProblemTagLen caps the length of each tag string so callers can't stuff
+// arbitrary prose into the tags column.
+const maxProblemTagLen = 64
 
 func (h *ProblemHandler) Routes(r chi.Router) {
-	// Under a topic: list + create problems
-	r.Route("/api/topics/{topicId}/problems", func(r chi.Router) {
-		r.Use(ValidateUUIDParam("topicId"))
+	r.Route("/api/problems", func(r chi.Router) {
 		r.Get("/", h.ListProblems)
 		r.Post("/", h.CreateProblem)
 	})
 
-	// Individual problem + nested resources
 	r.Route("/api/problems/{id}", func(r chi.Router) {
 		r.Use(ValidateUUIDParam("id"))
 		r.Get("/", h.GetProblem)
 		r.Patch("/", h.UpdateProblem)
 		r.Delete("/", h.DeleteProblem)
 
+		r.Post("/publish", h.PublishProblem)
+		r.Post("/archive", h.ArchiveProblem)
+		r.Post("/unarchive", h.UnarchiveProblem)
+		r.Post("/fork", h.ForkProblem)
+
 		r.Get("/test-cases", h.ListTestCases)
 		r.Post("/test-cases", h.CreateTestCase)
 		r.Get("/attempts", h.ListAttempts)
 		r.Post("/attempts", h.CreateAttempt)
+	})
+
+	r.Route("/api/topics/{topicId}/problems", func(r chi.Router) {
+		r.Use(ValidateUUIDParam("topicId"))
+		r.Get("/", h.ListProblemsByTopic)
 	})
 
 	r.Route("/api/test-cases/{id}", func(r chi.Router) {
@@ -60,100 +91,157 @@ func (h *ProblemHandler) Routes(r chi.Router) {
 
 // ---------- access helpers ----------
 
-// canViewTopic returns true if the caller has read access to the topic's
-// course (creator, platform admin, or active class member in the course).
-func (h *ProblemHandler) canViewTopic(r *http.Request, topicID string, claims *auth.Claims) (bool, int, error) {
-	if claims.IsPlatformAdmin {
-		return true, 0, nil
+// accessDeps constructs a problemAccessDeps from the handler's fields.
+func (h *ProblemHandler) accessDeps() problemAccessDeps {
+	return problemAccessDeps{
+		Problems:      h.Problems,
+		TopicProblems: h.TopicProblems,
+		Topics:        h.Topics,
+		Courses:       h.Courses,
+		Orgs:          h.Orgs,
 	}
-	topic, err := h.Topics.GetTopic(r.Context(), topicID)
-	if err != nil {
-		return false, http.StatusInternalServerError, err
-	}
-	if topic == nil {
-		return false, http.StatusNotFound, nil
-	}
-	course, err := h.Courses.GetCourse(r.Context(), topic.CourseID)
-	if err != nil {
-		return false, http.StatusInternalServerError, err
-	}
-	if course == nil {
-		return false, http.StatusNotFound, nil
-	}
-	if course.CreatedBy == claims.UserID {
-		return true, 0, nil
-	}
-	hasAccess, err := h.Courses.UserHasAccessToCourse(r.Context(), course.ID, claims.UserID)
-	if err != nil {
-		return false, http.StatusInternalServerError, err
-	}
-	return hasAccess, 0, nil
 }
 
-// canViewProblem returns (canView, course, problem). The returned course
-// lets the caller check author rights without a second lookup.
-func (h *ProblemHandler) canViewProblem(r *http.Request, problemID string, claims *auth.Claims) (bool, *store.Problem, *store.Course, int, error) {
-	p, err := h.Problems.GetProblem(r.Context(), problemID)
-	if err != nil {
-		return false, nil, nil, http.StatusInternalServerError, err
+// ---------- query helpers ----------
+
+// orgIDs extracts the OrgIDs from a slice of UserMembershipWithOrg. Used to
+// populate ListProblemsFilter.ViewerOrgs.
+func orgIDs(ms []store.UserMembershipWithOrg) []string {
+	out := make([]string, 0, len(ms))
+	for _, m := range ms {
+		if m.Status == "active" {
+			out = append(out, m.OrgID)
+		}
 	}
-	if p == nil {
-		return false, nil, nil, http.StatusNotFound, nil
-	}
-	if claims.IsPlatformAdmin || p.CreatedBy == claims.UserID {
-		return true, p, nil, 0, nil
-	}
-	topic, err := h.Topics.GetTopic(r.Context(), p.TopicID)
-	if err != nil {
-		return false, nil, nil, http.StatusInternalServerError, err
-	}
-	if topic == nil {
-		return false, nil, nil, http.StatusNotFound, nil
-	}
-	course, err := h.Courses.GetCourse(r.Context(), topic.CourseID)
-	if err != nil {
-		return false, nil, nil, http.StatusInternalServerError, err
-	}
-	if course == nil {
-		return false, nil, nil, http.StatusNotFound, nil
-	}
-	if course.CreatedBy == claims.UserID {
-		return true, p, course, 0, nil
-	}
-	hasAccess, err := h.Courses.UserHasAccessToCourse(r.Context(), course.ID, claims.UserID)
-	if err != nil {
-		return false, nil, nil, http.StatusInternalServerError, err
-	}
-	return hasAccess, p, course, 0, nil
+	return out
 }
 
-// canAuthorProblem returns true if the caller can create/modify canonical
-// content under a problem (the problem's creator, the course's creator,
-// or a platform admin).
-func (h *ProblemHandler) canAuthorProblem(r *http.Request, p *store.Problem, claims *auth.Claims) (bool, int, error) {
-	if claims.IsPlatformAdmin || p.CreatedBy == claims.UserID {
-		return true, 0, nil
+// encodeCursor packs (createdAt, id) into a base64url string suitable for
+// echoing back to the client. The format is an intentionally-opaque
+// "createdAt|id" pair — we may add a version prefix later.
+func encodeCursor(createdAt time.Time, id string) string {
+	s := createdAt.UTC().Format(time.RFC3339Nano) + "|" + id
+	return base64.RawURLEncoding.EncodeToString([]byte(s))
+}
+
+// decodeCursor reverses encodeCursor. Returns (nil, nil) for empty input.
+// Malformed cursors return an error — callers should map to 400.
+func decodeCursor(raw string) (*time.Time, *string, error) {
+	if raw == "" {
+		return nil, nil, nil
 	}
-	topic, err := h.Topics.GetTopic(r.Context(), p.TopicID)
+	b, err := base64.RawURLEncoding.DecodeString(raw)
 	if err != nil {
-		return false, http.StatusInternalServerError, err
+		return nil, nil, err
 	}
-	if topic == nil {
-		return false, http.StatusNotFound, nil
+	parts := strings.SplitN(string(b), "|", 2)
+	if len(parts) != 2 {
+		return nil, nil, errors.New("cursor: expected createdAt|id")
 	}
-	course, err := h.Courses.GetCourse(r.Context(), topic.CourseID)
+	t, err := time.Parse(time.RFC3339Nano, parts[0])
 	if err != nil {
-		return false, http.StatusInternalServerError, err
+		return nil, nil, err
 	}
-	if course == nil {
-		return false, http.StatusNotFound, nil
+	id := parts[1]
+	return &t, &id, nil
+}
+
+// parseListFilterFromQuery pulls the supported query params (scope,
+// difficulty, gradeLevel, tags, q, limit, cursor) off the request URL into a
+// store.ListProblemsFilter. Viewer fields (ViewerID, ViewerOrgs,
+// IsPlatformAdmin) are NOT populated here — the handler fills them from
+// claims. Unknown params are silently ignored.
+func parseListFilterFromQuery(r *http.Request) (store.ListProblemsFilter, error) {
+	q := r.URL.Query()
+	f := store.ListProblemsFilter{
+		Scope:      q.Get("scope"),
+		Difficulty: q.Get("difficulty"),
+		GradeLevel: q.Get("gradeLevel"),
+		Search:     q.Get("q"),
+		Status:     q.Get("status"),
 	}
-	return course.CreatedBy == claims.UserID, 0, nil
+	if s := q.Get("scopeId"); s != "" {
+		f.ScopeID = &s
+	}
+	if tagsRaw := q.Get("tags"); tagsRaw != "" {
+		tags := []string{}
+		for _, t := range strings.Split(tagsRaw, ",") {
+			t = strings.TrimSpace(t)
+			if t != "" {
+				tags = append(tags, t)
+			}
+		}
+		f.Tags = tags
+	}
+	if l := q.Get("limit"); l != "" {
+		n, err := strconv.Atoi(l)
+		if err != nil {
+			return f, errors.New("limit must be an integer")
+		}
+		f.Limit = n
+	}
+	if c := q.Get("cursor"); c != "" {
+		ts, id, err := decodeCursor(c)
+		if err != nil {
+			return f, err
+		}
+		f.CursorCreatedAt = ts
+		f.CursorID = id
+	}
+	return f, nil
 }
 
 // ---------- Problem handlers ----------
 
+// ListProblems — GET /api/problems?scope=&difficulty=&gradeLevel=&tags=a,b&q=&limit=&cursor=
+// Returns the accessible browse/search set plus an opaque nextCursor when
+// another page exists.
 func (h *ProblemHandler) ListProblems(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	f, err := parseListFilterFromQuery(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid query: "+err.Error())
+		return
+	}
+	if f.Scope != "" && !validProblemScopes[f.Scope] {
+		writeError(w, http.StatusBadRequest, "scope must be platform, org, or personal")
+		return
+	}
+
+	f.ViewerID = claims.UserID
+	f.IsPlatformAdmin = claims.IsPlatformAdmin
+	orgs, err := h.Orgs.GetUserMemberships(r.Context(), claims.UserID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	f.ViewerOrgs = orgIDs(orgs)
+
+	list, hasMore, err := h.Problems.ListProblems(r.Context(), f)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	var nextCursor *string
+	if hasMore && len(list) > 0 {
+		last := list[len(list)-1]
+		c := encodeCursor(last.CreatedAt, last.ID)
+		nextCursor = &c
+	}
+	writeJSON(w, http.StatusOK, problemListResponse{
+		Items:      list,
+		NextCursor: nextCursor,
+	})
+}
+
+// ListProblemsByTopic — GET /api/topics/{topicId}/problems.
+// Returns the attached problems (in sort_order) for a topic the caller can view.
+func (h *ProblemHandler) ListProblemsByTopic(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
 		writeError(w, http.StatusUnauthorized, "Unauthorized")
@@ -161,7 +249,7 @@ func (h *ProblemHandler) ListProblems(w http.ResponseWriter, r *http.Request) {
 	}
 	topicID := chi.URLParam(r, "topicId")
 
-	canView, status, err := h.canViewTopic(r, topicID, claims)
+	canView, status, err := canViewTopic(r.Context(), h.accessDeps(), claims, topicID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
@@ -183,68 +271,73 @@ func (h *ProblemHandler) ListProblems(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, list)
 }
 
+// CreateProblem — POST /api/problems.
+// Authorization depends on the requested scope (see authorizedForScope).
 func (h *ProblemHandler) CreateProblem(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
 		writeError(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
-	topicID := chi.URLParam(r, "topicId")
-
-	// Only the course creator (or platform admin) may author problems.
-	topic, err := h.Topics.GetTopic(r.Context(), topicID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "Database error")
-		return
-	}
-	if topic == nil {
-		writeError(w, http.StatusNotFound, "Topic not found")
-		return
-	}
-	course, err := h.Courses.GetCourse(r.Context(), topic.CourseID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "Database error")
-		return
-	}
-	if course == nil {
-		writeError(w, http.StatusNotFound, "Course not found")
-		return
-	}
-	if !claims.IsPlatformAdmin && course.CreatedBy != claims.UserID {
-		writeError(w, http.StatusForbidden, "Only the course creator can add problems")
-		return
-	}
-
 	var body struct {
-		Title       string `json:"title"`
-		Description string `json:"description"`
-		StarterCode string `json:"starterCode"`
-		Language    string `json:"language"`
-		Order       int    `json:"order"`
+		Scope         string            `json:"scope"`
+		ScopeID       *string           `json:"scopeId"`
+		Title         string            `json:"title"`
+		Description   string            `json:"description"`
+		StarterCode   map[string]string `json:"starterCode"`
+		Difficulty    string            `json:"difficulty"`
+		GradeLevel    *string           `json:"gradeLevel"`
+		Tags          []string          `json:"tags"`
+		TimeLimitMs   *int              `json:"timeLimitMs"`
+		MemoryLimitMb *int              `json:"memoryLimitMb"`
+		Slug          *string           `json:"slug"`
 	}
 	if !decodeJSON(w, r, &body) {
 		return
 	}
-	if body.Title == "" || len(body.Title) > 255 {
+
+	if !validProblemScopes[body.Scope] {
+		writeError(w, http.StatusBadRequest, "scope must be platform, org, or personal")
+		return
+	}
+	if body.Title == "" || len(body.Title) > maxProblemTitleLen {
 		writeError(w, http.StatusBadRequest, "title is required (max 255 chars)")
 		return
 	}
-	if body.Language == "" {
-		body.Language = course.Language
+	if body.Difficulty != "" && !validProblemDifficulties[body.Difficulty] {
+		writeError(w, http.StatusBadRequest, "difficulty must be easy, medium, or hard")
+		return
 	}
-	if !validProblemLanguages[body.Language] {
-		writeError(w, http.StatusBadRequest, "language must be python, javascript, or blockly")
+	if body.GradeLevel != nil && *body.GradeLevel != "" && !validProblemGradeLevels[*body.GradeLevel] {
+		writeError(w, http.StatusBadRequest, "gradeLevel must be K-5, 6-8, or 9-12")
+		return
+	}
+	for _, t := range body.Tags {
+		if len(t) > maxProblemTagLen {
+			writeError(w, http.StatusBadRequest, "tag exceeds 64-char limit")
+			return
+		}
+	}
+
+	if !authorizedForScope(r.Context(), h.accessDeps(), claims, body.Scope, body.ScopeID) {
+		writeError(w, http.StatusForbidden, "not authorized for scope")
 		return
 	}
 
 	p, err := h.Problems.CreateProblem(r.Context(), store.CreateProblemInput{
-		TopicID:     topicID,
-		CreatedBy:   claims.UserID,
-		Title:       body.Title,
-		Description: body.Description,
-		StarterCode: body.StarterCode,
-		Language:    body.Language,
-		Order:       body.Order,
+		Scope:         body.Scope,
+		ScopeID:       body.ScopeID,
+		Title:         body.Title,
+		Slug:          body.Slug,
+		Description:   body.Description,
+		StarterCode:   body.StarterCode,
+		Difficulty:    body.Difficulty,
+		GradeLevel:    body.GradeLevel,
+		Tags:          body.Tags,
+		Status:        "draft",
+		TimeLimitMs:   body.TimeLimitMs,
+		MemoryLimitMb: body.MemoryLimitMb,
+		CreatedBy:     claims.UserID,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Failed to create problem")
@@ -259,8 +352,8 @@ func (h *ProblemHandler) GetProblem(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
-	canView, p, _, status, err := h.canViewProblem(r, chi.URLParam(r, "id"), claims)
-	if err != nil {
+	canView, p, status := canViewProblem(r.Context(), h.accessDeps(), claims, chi.URLParam(r, "id"))
+	if status == http.StatusInternalServerError {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
 	}
@@ -269,11 +362,7 @@ func (h *ProblemHandler) GetProblem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !canView {
-		if status == http.StatusNotFound {
-			writeError(w, http.StatusNotFound, "Not found")
-			return
-		}
-		writeError(w, http.StatusForbidden, "Access denied")
+		writeError(w, http.StatusNotFound, "Not found") // don't leak existence
 		return
 	}
 	writeJSON(w, http.StatusOK, p)
@@ -295,13 +384,8 @@ func (h *ProblemHandler) UpdateProblem(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "Not found")
 		return
 	}
-	canAuthor, _, err := h.canAuthorProblem(r, p, claims)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "Database error")
-		return
-	}
-	if !canAuthor {
-		writeError(w, http.StatusForbidden, "Only the problem creator can update")
+	if !authorizedForProblemEditRow(r.Context(), h.accessDeps(), claims, p) {
+		writeError(w, http.StatusForbidden, "Not authorized to edit")
 		return
 	}
 
@@ -309,13 +393,23 @@ func (h *ProblemHandler) UpdateProblem(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &body) {
 		return
 	}
-	if body.Title != nil && (*body.Title == "" || len(*body.Title) > 255) {
+	if body.Title != nil && (*body.Title == "" || len(*body.Title) > maxProblemTitleLen) {
 		writeError(w, http.StatusBadRequest, "title must be 1-255 chars")
 		return
 	}
-	if body.Language != nil && !validProblemLanguages[*body.Language] {
-		writeError(w, http.StatusBadRequest, "language must be python, javascript, or blockly")
+	if body.Difficulty != nil && *body.Difficulty != "" && !validProblemDifficulties[*body.Difficulty] {
+		writeError(w, http.StatusBadRequest, "difficulty must be easy, medium, or hard")
 		return
+	}
+	if body.GradeLevel != nil && *body.GradeLevel != "" && !validProblemGradeLevels[*body.GradeLevel] {
+		writeError(w, http.StatusBadRequest, "gradeLevel must be K-5, 6-8, or 9-12")
+		return
+	}
+	for _, t := range body.Tags {
+		if len(t) > maxProblemTagLen {
+			writeError(w, http.StatusBadRequest, "tag exceeds 64-char limit")
+			return
+		}
 	}
 
 	updated, err := h.Problems.UpdateProblem(r.Context(), problemID, body)
@@ -326,6 +420,9 @@ func (h *ProblemHandler) UpdateProblem(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, updated)
 }
 
+// DeleteProblem — strict delete: fails 409 if the problem is attached to any
+// topic OR has any attempts. Callers must detach / let attempts be deleted
+// first.
 func (h *ProblemHandler) DeleteProblem(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
@@ -342,37 +439,180 @@ func (h *ProblemHandler) DeleteProblem(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "Not found")
 		return
 	}
-	canAuthor, _, err := h.canAuthorProblem(r, p, claims)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "Database error")
-		return
-	}
-	if !canAuthor {
-		writeError(w, http.StatusForbidden, "Only the problem creator can delete")
+	if !authorizedForProblemEditRow(r.Context(), h.accessDeps(), claims, p) {
+		writeError(w, http.StatusForbidden, "Not authorized to delete")
 		return
 	}
 
-	deleted, err := h.Problems.DeleteProblem(r.Context(), problemID)
+	topics, err := h.TopicProblems.ListTopicsByProblem(r.Context(), problemID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
 	}
-	writeJSON(w, http.StatusOK, deleted)
+	if len(topics) > 0 {
+		writeError(w, http.StatusConflict, "problem is attached to topics")
+		return
+	}
+	n, err := h.Attempts.CountAttemptsByProblem(r.Context(), problemID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if n > 0 {
+		writeError(w, http.StatusConflict, "problem has attempts")
+		return
+	}
+
+	if _, err := h.Problems.DeleteProblem(r.Context(), problemID); err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// ---------- Lifecycle handlers ----------
+
+// PublishProblem — POST /api/problems/{id}/publish. Moves draft (or archived)
+// → published. Invalid transitions → 409.
+func (h *ProblemHandler) PublishProblem(w http.ResponseWriter, r *http.Request) {
+	h.setStatus(w, r, "published", "already published")
+}
+
+// ArchiveProblem — POST /api/problems/{id}/archive. Moves published → archived.
+func (h *ProblemHandler) ArchiveProblem(w http.ResponseWriter, r *http.Request) {
+	h.setStatus(w, r, "archived", "cannot archive from current status")
+}
+
+// UnarchiveProblem — POST /api/problems/{id}/unarchive. Moves archived →
+// published. ("unarchive" is just a second entry point to the "published"
+// status.)
+func (h *ProblemHandler) UnarchiveProblem(w http.ResponseWriter, r *http.Request) {
+	h.setStatus(w, r, "published", "cannot unarchive — not archived")
+}
+
+func (h *ProblemHandler) setStatus(w http.ResponseWriter, r *http.Request, target, conflictMsg string) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	id := chi.URLParam(r, "id")
+	if !authorizedForProblemEdit(r.Context(), h.accessDeps(), claims, id) {
+		writeError(w, http.StatusForbidden, "Not authorized")
+		return
+	}
+	p, err := h.Problems.SetStatus(r.Context(), id, target)
+	switch {
+	case errors.Is(err, store.ErrInvalidTransition):
+		writeError(w, http.StatusConflict, conflictMsg)
+		return
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	case p == nil:
+		// SetStatus returns (nil, nil) for a missing row; the edit-auth check
+		// above already loaded the problem once, so this is a race (deleted
+		// between calls) — treat as 404.
+		writeError(w, http.StatusNotFound, "Not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, p)
+}
+
+// ForkProblem — POST /api/problems/{id}/fork.
+// Body: { targetScope?, targetScopeId?, title? }. If targetScope is empty, the
+// default target is inferred from the caller's org memberships: exactly one
+// org → "org" / that orgID; otherwise "personal" / callerID.
+func (h *ProblemHandler) ForkProblem(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	sourceID := chi.URLParam(r, "id")
+
+	var body struct {
+		TargetScope   string  `json:"targetScope"`
+		TargetScopeID *string `json:"targetScopeId"`
+		Title         *string `json:"title"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+
+	// Default target inference.
+	if body.TargetScope == "" {
+		orgs, err := h.Orgs.GetUserMemberships(r.Context(), claims.UserID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "Database error")
+			return
+		}
+		activeOrgs := orgIDs(orgs)
+		if len(activeOrgs) == 1 {
+			body.TargetScope = "org"
+			orgID := activeOrgs[0]
+			body.TargetScopeID = &orgID
+		} else {
+			body.TargetScope = "personal"
+			uid := claims.UserID
+			body.TargetScopeID = &uid
+		}
+	}
+
+	if !validProblemScopes[body.TargetScope] {
+		writeError(w, http.StatusBadRequest, "targetScope must be platform, org, or personal")
+		return
+	}
+
+	// Source must be visible to the caller. We hide existence via 404 for
+	// unauthorized callers (matches GetProblem behavior).
+	canView, p, status := canViewProblem(r.Context(), h.accessDeps(), claims, sourceID)
+	if status == http.StatusInternalServerError {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if p == nil || !canView {
+		writeError(w, http.StatusNotFound, "Not found")
+		return
+	}
+
+	if !authorizedForScope(r.Context(), h.accessDeps(), claims, body.TargetScope, body.TargetScopeID) {
+		writeError(w, http.StatusForbidden, "not authorized for target scope")
+		return
+	}
+
+	newP, err := h.Problems.ForkProblem(r.Context(), sourceID, store.ForkTarget{
+		Scope:    body.TargetScope,
+		ScopeID:  body.TargetScopeID,
+		Title:    body.Title,
+		CallerID: claims.UserID,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to fork problem")
+		return
+	}
+	if newP == nil {
+		writeError(w, http.StatusNotFound, "Not found")
+		return
+	}
+	writeJSON(w, http.StatusCreated, newP)
 }
 
 // ---------- TestCase handlers ----------
 
-// ListTestCases returns canonical-example cases + the caller's private cases
-// to a regular viewer. To the problem author (or platform admin), hidden
-// canonical cases are also returned so the author can edit them.
+// ListTestCases returns all test cases visible to the caller. Editors see full
+// content for every case. Non-editors receive hidden canonical cases (owner_id
+// IS NULL and is_example = false) with Stdin and ExpectedStdout blanked out
+// so the client knows the case exists without being able to read the secret
+// I/O.
 func (h *ProblemHandler) ListTestCases(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
 		writeError(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
-	canView, p, _, status, err := h.canViewProblem(r, chi.URLParam(r, "id"), claims)
-	if err != nil {
+	canView, p, status := canViewProblem(r.Context(), h.accessDeps(), claims, chi.URLParam(r, "id"))
+	if status == http.StatusInternalServerError {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
 	}
@@ -381,11 +621,7 @@ func (h *ProblemHandler) ListTestCases(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !canView {
-		if status == http.StatusNotFound {
-			writeError(w, http.StatusNotFound, "Not found")
-			return
-		}
-		writeError(w, http.StatusForbidden, "Access denied")
+		writeError(w, http.StatusNotFound, "Not found")
 		return
 	}
 
@@ -395,24 +631,18 @@ func (h *ProblemHandler) ListTestCases(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	canAuthor, _, err := h.canAuthorProblem(r, p, claims)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "Database error")
-		return
-	}
-	if canAuthor {
-		writeJSON(w, http.StatusOK, all)
-		return
-	}
-
-	out := make([]store.TestCase, 0, len(all))
-	for _, c := range all {
-		if c.OwnerID == nil && !c.IsExample {
-			continue // hidden canonical: redact from non-author
+	isEditor := authorizedForProblemEditRow(r.Context(), h.accessDeps(), claims, p)
+	if !isEditor {
+		// Shell out hidden canonical cases: include the row but blank the I/O
+		// so students know hidden tests exist without leaking the test data.
+		for i := range all {
+			if all[i].OwnerID == nil && !all[i].IsExample {
+				all[i].Stdin = ""
+				all[i].ExpectedStdout = nil
+			}
 		}
-		out = append(out, c)
 	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, all)
 }
 
 func (h *ProblemHandler) CreateTestCase(w http.ResponseWriter, r *http.Request) {
@@ -421,21 +651,13 @@ func (h *ProblemHandler) CreateTestCase(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
-	canView, p, _, status, err := h.canViewProblem(r, chi.URLParam(r, "id"), claims)
-	if err != nil {
+	canView, p, status := canViewProblem(r.Context(), h.accessDeps(), claims, chi.URLParam(r, "id"))
+	if status == http.StatusInternalServerError {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
 	}
-	if p == nil {
+	if p == nil || !canView {
 		writeError(w, http.StatusNotFound, "Not found")
-		return
-	}
-	if !canView {
-		if status == http.StatusNotFound {
-			writeError(w, http.StatusNotFound, "Not found")
-			return
-		}
-		writeError(w, http.StatusForbidden, "Access denied")
 		return
 	}
 
@@ -460,13 +682,8 @@ func (h *ProblemHandler) CreateTestCase(w http.ResponseWriter, r *http.Request) 
 		Order:          body.Order,
 	}
 	if body.IsCanonical {
-		canAuthor, _, err := h.canAuthorProblem(r, p, claims)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "Database error")
-			return
-		}
-		if !canAuthor {
-			writeError(w, http.StatusForbidden, "Only the problem creator can add canonical test cases")
+		if !authorizedForProblemEditRow(r.Context(), h.accessDeps(), claims, p) {
+			writeError(w, http.StatusForbidden, "Only the problem editor can add canonical test cases")
 			return
 		}
 		// owner_id stays NULL
@@ -482,8 +699,9 @@ func (h *ProblemHandler) CreateTestCase(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusCreated, c)
 }
 
-// UpdateTestCase / DeleteTestCase share a guard: owner-of-case for private,
-// problem-author for canonical.
+// testCaseGuard loads a test-case and verifies the caller can modify it:
+// private cases require the owner (or platform admin); canonical cases
+// require the problem's editor.
 func (h *ProblemHandler) testCaseGuard(w http.ResponseWriter, r *http.Request, caseID string, claims *auth.Claims) *store.TestCase {
 	c, err := h.TestCases.GetTestCase(r.Context(), caseID)
 	if err != nil {
@@ -501,7 +719,7 @@ func (h *ProblemHandler) testCaseGuard(w http.ResponseWriter, r *http.Request, c
 		}
 		return c
 	}
-	// Canonical — check problem author rights.
+	// Canonical — check problem editor rights.
 	p, err := h.Problems.GetProblem(r.Context(), c.ProblemID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
@@ -511,13 +729,8 @@ func (h *ProblemHandler) testCaseGuard(w http.ResponseWriter, r *http.Request, c
 		writeError(w, http.StatusNotFound, "Not found")
 		return nil
 	}
-	canAuthor, _, err := h.canAuthorProblem(r, p, claims)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "Database error")
-		return nil
-	}
-	if !canAuthor {
-		writeError(w, http.StatusForbidden, "Only the problem creator can modify canonical cases")
+	if !authorizedForProblemEditRow(r.Context(), h.accessDeps(), claims, p) {
+		writeError(w, http.StatusForbidden, "Only the problem editor can modify canonical cases")
 		return nil
 	}
 	return c
@@ -571,21 +784,13 @@ func (h *ProblemHandler) ListAttempts(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
-	canView, p, _, status, err := h.canViewProblem(r, chi.URLParam(r, "id"), claims)
-	if err != nil {
+	canView, p, status := canViewProblem(r.Context(), h.accessDeps(), claims, chi.URLParam(r, "id"))
+	if status == http.StatusInternalServerError {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
 	}
-	if p == nil {
+	if p == nil || !canView {
 		writeError(w, http.StatusNotFound, "Not found")
-		return
-	}
-	if !canView {
-		if status == http.StatusNotFound {
-			writeError(w, http.StatusNotFound, "Not found")
-			return
-		}
-		writeError(w, http.StatusForbidden, "Access denied")
 		return
 	}
 	list, err := h.Attempts.ListByUserAndProblem(r.Context(), p.ID, claims.UserID)
@@ -602,21 +807,13 @@ func (h *ProblemHandler) CreateAttempt(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
-	canView, p, _, status, err := h.canViewProblem(r, chi.URLParam(r, "id"), claims)
-	if err != nil {
+	canView, p, status := canViewProblem(r.Context(), h.accessDeps(), claims, chi.URLParam(r, "id"))
+	if status == http.StatusInternalServerError {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
 	}
-	if p == nil {
+	if p == nil || !canView {
 		writeError(w, http.StatusNotFound, "Not found")
-		return
-	}
-	if !canView {
-		if status == http.StatusNotFound {
-			writeError(w, http.StatusNotFound, "Not found")
-			return
-		}
-		writeError(w, http.StatusForbidden, "Access denied")
 		return
 	}
 
@@ -629,7 +826,9 @@ func (h *ProblemHandler) CreateAttempt(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if body.Language == "" {
-		body.Language = p.Language
+		// Language is now attempt-local (problems carry starter_code keyed by
+		// language but no default) — fall back to python for back-compat.
+		body.Language = "python"
 	}
 	a, err := h.Attempts.CreateAttempt(r.Context(), store.CreateAttemptInput{
 		ProblemID: p.ID,

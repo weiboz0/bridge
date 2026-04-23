@@ -9,16 +9,15 @@ import (
 )
 
 type Document struct {
-	ID          string    `json:"id"`
-	OwnerID     string    `json:"ownerId"`
-	ClassroomID *string   `json:"classroomId"`
-	SessionID   *string   `json:"sessionId"`
-	TopicID     *string   `json:"topicId"`
-	Language    string    `json:"language"`
-	YjsState    *string   `json:"yjsState,omitempty"`
-	PlainText   string    `json:"plainText"`
-	CreatedAt   time.Time `json:"createdAt"`
-	UpdatedAt   time.Time `json:"updatedAt"`
+	ID        string    `json:"id"`
+	OwnerID   string    `json:"ownerId"`
+	SessionID *string   `json:"sessionId"`
+	TopicID   *string   `json:"topicId"`
+	Language  string    `json:"language"`
+	YjsState  *string   `json:"yjsState,omitempty"`
+	PlainText string    `json:"plainText"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
 }
 
 type DocumentContent struct {
@@ -30,9 +29,8 @@ type DocumentContent struct {
 }
 
 type DocumentFilters struct {
-	OwnerID     string
-	ClassroomID string
-	SessionID   string
+	OwnerID   string
+	SessionID string
 }
 
 type DocumentStore struct {
@@ -43,13 +41,13 @@ func NewDocumentStore(db *sql.DB) *DocumentStore {
 	return &DocumentStore{db: db}
 }
 
-const docColumns = `id, owner_id, classroom_id, session_id, topic_id, language, plain_text, created_at, updated_at`
+const docColumns = `id, owner_id, session_id, topic_id, language, plain_text, created_at, updated_at`
 
 func (s *DocumentStore) GetDocument(ctx context.Context, id string) (*Document, error) {
 	var d Document
 	err := s.db.QueryRowContext(ctx,
 		`SELECT `+docColumns+` FROM documents WHERE id = $1`, id,
-	).Scan(&d.ID, &d.OwnerID, &d.ClassroomID, &d.SessionID, &d.TopicID,
+	).Scan(&d.ID, &d.OwnerID, &d.SessionID, &d.TopicID,
 		&d.Language, &d.PlainText, &d.CreatedAt, &d.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -68,11 +66,6 @@ func (s *DocumentStore) ListDocuments(ctx context.Context, filters DocumentFilte
 	if filters.OwnerID != "" {
 		whereClauses = append(whereClauses, fmt.Sprintf("owner_id = $%d", argIdx))
 		args = append(args, filters.OwnerID)
-		argIdx++
-	}
-	if filters.ClassroomID != "" {
-		whereClauses = append(whereClauses, fmt.Sprintf("classroom_id = $%d", argIdx))
-		args = append(args, filters.ClassroomID)
 		argIdx++
 	}
 	if filters.SessionID != "" {
@@ -97,7 +90,7 @@ func (s *DocumentStore) ListDocuments(ctx context.Context, filters DocumentFilte
 	var docs []Document
 	for rows.Next() {
 		var d Document
-		if err := rows.Scan(&d.ID, &d.OwnerID, &d.ClassroomID, &d.SessionID, &d.TopicID,
+		if err := rows.Scan(&d.ID, &d.OwnerID, &d.SessionID, &d.TopicID,
 			&d.Language, &d.PlainText, &d.CreatedAt, &d.UpdatedAt); err != nil {
 			return nil, err
 		}

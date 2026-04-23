@@ -29,6 +29,7 @@ interface Participant {
   studentId: string;
   name: string;
   status: string;
+  helpRequestedAt?: string | null;
 }
 
 export function TeacherDashboard({
@@ -73,10 +74,10 @@ export function TeacherDashboard({
   useEffect(() => {
     const eventSource = new EventSource(`/api/sessions/${sessionId}/events`);
     eventSource.addEventListener("student_joined", (e) => {
-      const data = JSON.parse(e.data);
+        const data = JSON.parse(e.data);
       setParticipants((prev) => {
         if (prev.some((p) => p.studentId === data.studentId)) return prev;
-        return [...prev, { studentId: data.studentId, name: data.name, status: "active" }];
+        return [...prev, { studentId: data.studentId, name: data.name, status: "present" }];
       });
     });
     eventSource.addEventListener("student_left", (e) => {

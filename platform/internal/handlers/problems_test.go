@@ -6,8 +6,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // These tests exercise the auth guard paths — every handler must return 401
@@ -16,21 +18,99 @@ import (
 
 func TestListProblems_NoClaims(t *testing.T) {
 	h := &ProblemHandler{}
-	req := httptest.NewRequest(http.MethodGet, "/api/topics/abc/problems", nil)
-	req = withChiParams(req, map[string]string{"topicId": "abc"})
+	req := httptest.NewRequest(http.MethodGet, "/api/problems", nil)
 	w := httptest.NewRecorder()
 	h.ListProblems(w, req)
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
 }
 
+func TestListProblemsByTopic_NoClaims(t *testing.T) {
+	h := &ProblemHandler{}
+	req := httptest.NewRequest(http.MethodGet, "/api/topics/abc/problems", nil)
+	req = withChiParams(req, map[string]string{"topicId": "abc"})
+	w := httptest.NewRecorder()
+	h.ListProblemsByTopic(w, req)
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
 func TestCreateProblem_NoClaims(t *testing.T) {
 	h := &ProblemHandler{}
-	body, _ := json.Marshal(map[string]string{"title": "x", "language": "python"})
-	req := httptest.NewRequest(http.MethodPost, "/api/topics/abc/problems", bytes.NewReader(body))
-	req = withChiParams(req, map[string]string{"topicId": "abc"})
+	body, _ := json.Marshal(map[string]string{"title": "x", "scope": "personal"})
+	req := httptest.NewRequest(http.MethodPost, "/api/problems", bytes.NewReader(body))
 	w := httptest.NewRecorder()
 	h.CreateProblem(w, req)
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
+func TestPublishProblem_NoClaims(t *testing.T) {
+	h := &ProblemHandler{}
+	req := httptest.NewRequest(http.MethodPost, "/api/problems/abc/publish", nil)
+	req = withChiParams(req, map[string]string{"id": "abc"})
+	w := httptest.NewRecorder()
+	h.PublishProblem(w, req)
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
+func TestArchiveProblem_NoClaims(t *testing.T) {
+	h := &ProblemHandler{}
+	req := httptest.NewRequest(http.MethodPost, "/api/problems/abc/archive", nil)
+	req = withChiParams(req, map[string]string{"id": "abc"})
+	w := httptest.NewRecorder()
+	h.ArchiveProblem(w, req)
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
+func TestUnarchiveProblem_NoClaims(t *testing.T) {
+	h := &ProblemHandler{}
+	req := httptest.NewRequest(http.MethodPost, "/api/problems/abc/unarchive", nil)
+	req = withChiParams(req, map[string]string{"id": "abc"})
+	w := httptest.NewRecorder()
+	h.UnarchiveProblem(w, req)
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
+func TestForkProblem_NoClaims(t *testing.T) {
+	h := &ProblemHandler{}
+	body, _ := json.Marshal(map[string]string{})
+	req := httptest.NewRequest(http.MethodPost, "/api/problems/abc/fork", bytes.NewReader(body))
+	req = withChiParams(req, map[string]string{"id": "abc"})
+	w := httptest.NewRecorder()
+	h.ForkProblem(w, req)
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
+// Pure-function tests for cursor round-trip — exercised without a DB so they
+// run as part of the default `go test ./...`.
+func TestDecodeCursor_EmptyInput(t *testing.T) {
+	ts, id, err := decodeCursor("")
+	require.NoError(t, err)
+	assert.Nil(t, ts)
+	assert.Nil(t, id)
+}
+
+func TestEncodeDecodeCursor_RoundTrip(t *testing.T) {
+	when := time.Date(2026, 1, 2, 3, 4, 5, 678000000, time.UTC)
+	id := "11111111-2222-3333-4444-555555555555"
+	c := encodeCursor(when, id)
+	assert.NotEmpty(t, c)
+	gotTime, gotID, err := decodeCursor(c)
+	require.NoError(t, err)
+	require.NotNil(t, gotTime)
+	require.NotNil(t, gotID)
+	assert.True(t, gotTime.Equal(when), "round-tripped time should equal input")
+	assert.Equal(t, id, *gotID)
+}
+
+func TestDecodeCursor_Malformed(t *testing.T) {
+	_, _, err := decodeCursor("not-base64!!")
+	assert.Error(t, err)
+}
+
+func TestDecodeCursor_MissingSeparator(t *testing.T) {
+	// "nosep" base64-encoded, but no "|"
+	raw := "bm9zZXA"
+	_, _, err := decodeCursor(raw)
+	assert.Error(t, err)
 }
 
 func TestGetProblem_NoClaims(t *testing.T) {

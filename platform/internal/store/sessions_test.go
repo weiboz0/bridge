@@ -31,8 +31,8 @@ func setupSessionTest(t *testing.T, db *sql.DB, suffix string) (classID, teacher
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		db.ExecContext(ctx, "DELETE FROM session_participants WHERE session_id IN (SELECT id FROM live_sessions WHERE class_id = $1)", class.ID)
-		db.ExecContext(ctx, "DELETE FROM live_sessions WHERE class_id = $1", class.ID)
+		db.ExecContext(ctx, "DELETE FROM session_participants WHERE session_id IN (SELECT id FROM sessions WHERE class_id = $1)", class.ID)
+		db.ExecContext(ctx, "DELETE FROM sessions WHERE class_id = $1", class.ID)
 		db.ExecContext(ctx, "DELETE FROM class_memberships WHERE class_id = $1", class.ID)
 		db.ExecContext(ctx, "DELETE FROM class_settings WHERE class_id = $1", class.ID)
 		db.ExecContext(ctx, "DELETE FROM classes WHERE id = $1", class.ID)
@@ -51,7 +51,7 @@ func TestSessionStore_CreateAndGet(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NotNil(t, session)
-	assert.Equal(t, "active", session.Status)
+	assert.Equal(t, "live", session.Status)
 	assert.Equal(t, classID, session.ClassID)
 
 	fetched, err := sessions.GetSession(context.Background(), session.ID)
@@ -105,7 +105,7 @@ func TestSessionStore_JoinAndLeave(t *testing.T) {
 	p, err := sessions.JoinSession(ctx, session.ID, student.ID)
 	require.NoError(t, err)
 	require.NotNil(t, p)
-	assert.Equal(t, "active", p.Status)
+	assert.Equal(t, "present", p.Status)
 
 	dup, err := sessions.JoinSession(ctx, session.ID, student.ID)
 	assert.NoError(t, err)
@@ -135,7 +135,24 @@ func TestSessionStore_UpdateParticipantStatus(t *testing.T) {
 	updated, err := sessions.UpdateParticipantStatus(ctx, session.ID, student.ID, "needs_help")
 	require.NoError(t, err)
 	require.NotNil(t, updated)
-	assert.Equal(t, "needs_help", updated.Status)
+	assert.Equal(t, "present", updated.Status)
+}
+
+func TestSessionStore_UpdateParticipantStatusRejectsUnknownStatus(t *testing.T) {
+	db := testDB(t)
+	sessions := NewSessionStore(db)
+	users := NewUserStore(db)
+	classID, teacherID := setupSessionTest(t, db, t.Name())
+	student := createTestUser(t, db, users, t.Name()+"-student")
+	ctx := context.Background()
+
+	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: classID, TeacherID: teacherID})
+	sessions.JoinSession(ctx, session.ID, student.ID)
+
+	updated, err := sessions.UpdateParticipantStatus(ctx, session.ID, student.ID, "idle")
+	require.Error(t, err)
+	assert.Nil(t, updated)
+	assert.EqualError(t, err, `unsupported participant status "idle"`)
 }
 
 func TestSessionStore_GetActiveSession(t *testing.T) {
@@ -177,7 +194,7 @@ func TestSessionStore_SessionTopics(t *testing.T) {
 	})
 	t.Cleanup(func() {
 		db.ExecContext(ctx, "DELETE FROM session_topics WHERE topic_id = $1", topic.ID)
-		db.ExecContext(ctx, "DELETE FROM live_sessions WHERE class_id = $1", class.ID)
+		db.ExecContext(ctx, "DELETE FROM sessions WHERE class_id = $1", class.ID)
 		db.ExecContext(ctx, "DELETE FROM class_memberships WHERE class_id = $1", class.ID)
 		db.ExecContext(ctx, "DELETE FROM class_settings WHERE class_id = $1", class.ID)
 		db.ExecContext(ctx, "DELETE FROM classes WHERE id = $1", class.ID)

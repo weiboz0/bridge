@@ -20,7 +20,7 @@ export async function POST(
     return NextResponse.json({ error: "Session not found" }, { status: 404 });
   }
 
-  if (liveSession.status !== "active") {
+  if (liveSession.status !== "live") {
     return NextResponse.json({ error: "Session has ended" }, { status: 400 });
   }
 

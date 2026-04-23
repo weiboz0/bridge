@@ -6,9 +6,13 @@ import { Tag } from "@/components/design/primitives";
 interface Props {
   problem: Problem;
   testCases: TestCase[];
+  /** Editor language derived from class settings (plan 028: problems no
+   *  longer carry a top-level language field). Optional — omit to hide the
+   *  language tag (e.g. in contexts where language is not yet resolved). */
+  language?: string;
 }
 
-export function ProblemDescription({ problem, testCases }: Props) {
+export function ProblemDescription({ problem, testCases, language }: Props) {
   // Canonical example cases — what students see inline with the problem.
   const examples = testCases.filter((c) => c.ownerId === null && c.isExample);
 
@@ -20,9 +24,11 @@ export function ProblemDescription({ problem, testCases }: Props) {
   return (
     <div className="space-y-5">
       <div>
-        <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-amber-700/80">
-          {problem.language}
-        </p>
+        {language && (
+          <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-amber-700/80">
+            {language}
+          </p>
+        )}
         <h1 className="mt-1 text-xl font-semibold leading-tight tracking-tight">
           {problem.title}
         </h1>

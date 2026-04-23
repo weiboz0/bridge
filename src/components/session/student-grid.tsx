@@ -6,6 +6,7 @@ interface Participant {
   studentId: string;
   name: string;
   status: string;
+  helpRequestedAt?: string | null;
 }
 
 interface StudentGridProps {
@@ -38,6 +39,7 @@ export function StudentGrid({
           studentId={p.studentId}
           studentName={p.name}
           status={p.status}
+          helpRequestedAt={p.helpRequestedAt}
           token={token}
           onClick={() => onSelectStudent(p.studentId)}
         />

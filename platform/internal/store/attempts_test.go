@@ -19,9 +19,12 @@ func setupAttemptEnv(t *testing.T, suffix string) (*AttemptStore, *Problem, *Reg
 	other := createTestUser(t, db, users, suffix+"-other")
 
 	ctx := context.Background()
+	_ = topic // kept for parity with older fixture; no longer used directly
+	scopeID := owner.ID
 	p, err := problems.CreateProblem(ctx, CreateProblemInput{
-		TopicID: topic.ID, CreatedBy: owner.ID,
-		Title: "Attempt Test " + suffix, Language: "python",
+		Scope: "personal", ScopeID: &scopeID, CreatedBy: owner.ID,
+		Title:       "Attempt Test " + suffix,
+		Description: "desc",
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() { db.ExecContext(ctx, "DELETE FROM problems WHERE id = $1", p.ID) })
@@ -179,6 +182,37 @@ func TestAttemptStore_UpdateLastTestResult_RoundTrip(t *testing.T) {
 	require.NotNil(t, got)
 	require.NotNil(t, got.LastTestResult)
 	assert.JSONEq(t, string(summary), string(*got.LastTestResult))
+}
+
+func TestAttemptStore_CountAttemptsByProblem(t *testing.T) {
+	attempts, p, user, _ := setupAttemptEnv(t, t.Name())
+	ctx := context.Background()
+
+	n, err := attempts.CountAttemptsByProblem(ctx, p.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 0, n, "no attempts yet → zero")
+
+	_, err = attempts.CreateAttempt(ctx, CreateAttemptInput{
+		ProblemID: p.ID, UserID: user.ID, Language: "python",
+	})
+	require.NoError(t, err)
+	_, err = attempts.CreateAttempt(ctx, CreateAttemptInput{
+		ProblemID: p.ID, UserID: user.ID, Language: "python", PlainText: "x",
+	})
+	require.NoError(t, err)
+
+	n, err = attempts.CountAttemptsByProblem(ctx, p.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 2, n)
+
+	// Cascade: deleting the problem drops the attempts (FK ON DELETE CASCADE).
+	db := testDB(t)
+	_, err = db.ExecContext(ctx, "DELETE FROM problems WHERE id = $1", p.ID)
+	require.NoError(t, err)
+
+	n, err = attempts.CountAttemptsByProblem(ctx, p.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 0, n, "cascade delete leaves no attempts")
 }
 
 func TestAttemptStore_UpdateLastTestResult_DoesNotBumpUpdatedAt(t *testing.T) {
