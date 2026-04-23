@@ -15,7 +15,7 @@ export async function GET(
 
   const { id } = await params;
   const participants = await getSessionParticipants(db, id);
-  const helpQueue = participants.filter((p) => p.status === "needs_help");
+  const helpQueue = participants.filter((p) => p.helpRequestedAt);
 
   return NextResponse.json(helpQueue);
 }
@@ -34,9 +34,7 @@ export async function POST(
   const { raised } = body;
 
   const newStatus = raised ? "needs_help" : "active";
-  const participant = await updateParticipantStatus(
-    db, id, session.user.id, newStatus as "active" | "needs_help"
-  );
+  const participant = await updateParticipantStatus(db, id, session.user.id, newStatus);
 
   if (!participant) {
     return NextResponse.json({ error: "Not a participant" }, { status: 404 });

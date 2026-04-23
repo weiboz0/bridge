@@ -186,7 +186,7 @@ func (h *SessionHandler) JoinSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "Not found")
 		return
 	}
-	if session.Status != "active" {
+	if session.Status != "live" {
 		writeError(w, http.StatusBadRequest, "Session has ended")
 		return
 	}
@@ -299,7 +299,7 @@ func (h *SessionHandler) GetHelpQueue(w http.ResponseWriter, r *http.Request) {
 
 	var needsHelp []store.ParticipantWithUser
 	for _, p := range participants {
-		if p.Status == "needs_help" {
+		if p.HelpRequestedAt != nil {
 			needsHelp = append(needsHelp, p)
 		}
 	}
@@ -493,4 +493,3 @@ func (h *SessionHandler) UnlinkSessionTopic(w http.ResponseWriter, r *http.Reque
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"success": true})
 }
-

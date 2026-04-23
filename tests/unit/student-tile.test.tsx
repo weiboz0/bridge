@@ -48,7 +48,7 @@ describe("StudentTile", () => {
     sessionId: "session-1",
     studentId: "student-1",
     studentName: "Alice",
-    status: "active",
+    status: "present",
     token: "test-token",
     onClick: vi.fn(),
   };
@@ -63,13 +63,13 @@ describe("StudentTile", () => {
   });
 
   it("renders status indicator with correct color", () => {
-    const { container } = render(<StudentTile {...defaultProps} status="active" />);
+    const { container } = render(<StudentTile {...defaultProps} status="present" />);
     const dot = container.querySelector(".bg-green-500");
     expect(dot).toBeInTheDocument();
   });
 
-  it("renders needs_help status with red indicator", () => {
-    const { container } = render(<StudentTile {...defaultProps} status="needs_help" />);
+  it("renders raised-hand state with red indicator", () => {
+    const { container } = render(<StudentTile {...defaultProps} helpRequestedAt="2026-04-21T12:00:00Z" />);
     const dot = container.querySelector(".bg-red-500");
     expect(dot).toBeInTheDocument();
   });

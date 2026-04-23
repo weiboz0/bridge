@@ -1,5 +1,5 @@
 import { eq, and, gte, lte, desc } from "drizzle-orm";
-import { parentReports, submissions, aiInteractions, codeAnnotations, liveSessions, sessionParticipants, sessionTopics, topics } from "@/lib/db/schema";
+import { parentReports, submissions, aiInteractions, codeAnnotations, sessions, sessionParticipants, sessionTopics, topics } from "@/lib/db/schema";
 import type { Database } from "@/lib/db";
 import { getReportSystemPrompt, buildReportUserPrompt } from "@/lib/ai/report-prompts";
 import { isAnthropicBackend, getAnthropicClient, getOpenAIClient, getModel } from "@/lib/ai/client";
@@ -22,22 +22,22 @@ export async function generateReport(
   const participations = await db
     .select({ sessionId: sessionParticipants.sessionId })
     .from(sessionParticipants)
-    .innerJoin(liveSessions, eq(sessionParticipants.sessionId, liveSessions.id))
+    .innerJoin(sessions, eq(sessionParticipants.sessionId, sessions.id))
     .where(
       and(
-        eq(sessionParticipants.studentId, studentId),
-        gte(liveSessions.startedAt, periodStart),
-        lte(liveSessions.startedAt, periodEnd)
+        eq(sessionParticipants.userId, studentId),
+        gte(sessions.startedAt, periodStart),
+        lte(sessions.startedAt, periodEnd)
       )
     );
 
   const totalSessions = await db
     .select()
-    .from(liveSessions)
+    .from(sessions)
     .where(
       and(
-        gte(liveSessions.startedAt, periodStart),
-        lte(liveSessions.startedAt, periodEnd)
+        gte(sessions.startedAt, periodStart),
+        lte(sessions.startedAt, periodEnd)
       )
     );
 

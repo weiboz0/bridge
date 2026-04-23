@@ -225,10 +225,10 @@ func (s *ScheduleStore) StartScheduledSession(ctx context.Context, scheduleID, t
 	}
 	sched.TopicIDs = parseUUIDArray(topicIDs)
 
-	// End any active session for this class
+	// End any live session for this class
 	now := time.Now()
 	_, err = tx.ExecContext(ctx,
-		`UPDATE live_sessions SET status = 'ended', ended_at = $1 WHERE class_id = $2 AND status = 'active'`,
+		`UPDATE sessions SET status = 'ended', ended_at = $1 WHERE class_id = $2 AND status = 'live'`,
 		now, sched.ClassID)
 	if err != nil {
 		return nil, err
@@ -238,10 +238,18 @@ func (s *ScheduleStore) StartScheduledSession(ctx context.Context, scheduleID, t
 	sessionID := uuid.New().String()
 	var session LiveSession
 	err = tx.QueryRowContext(ctx,
-		`INSERT INTO live_sessions (id, class_id, teacher_id, status, settings, started_at)
-		 VALUES ($1, $2, $3, 'active', '{}', $4)
+		`INSERT INTO sessions (id, class_id, teacher_id, title, status, settings, started_at)
+		 VALUES (
+		   $1,
+		   $2,
+		   $3,
+		   COALESCE($5, (SELECT title FROM classes WHERE id = $2), 'Untitled session'),
+		   'live',
+		   '{}',
+		   $4
+		 )
 		 RETURNING id, class_id, teacher_id, status, settings, started_at, ended_at`,
-		sessionID, sched.ClassID, teacherID, now,
+		sessionID, sched.ClassID, teacherID, now, sched.Title,
 	).Scan(&session.ID, &session.ClassID, &session.TeacherID, &session.Status,
 		&session.Settings, &session.StartedAt, &session.EndedAt)
 	if err != nil {
