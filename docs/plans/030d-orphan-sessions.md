@@ -111,4 +111,27 @@ Reviewers append findings here following `docs/code-review.md`. Author responds 
 
 ## Post-Execution Report
 
-Populate during Step 6 of `docs/development-workflow.md` after this phase ships.
+**Status:** Complete
+
+**Implemented**
+
+- Store: `CreateSessionInput.ClassID` is now `*string` (nullable). Added `ListSessions` with `ListSessionsFilter` (teacherID, classID, status, cursor pagination). Orphan sessions (class_id NULL) create and retrieve correctly.
+- Handlers: `POST /api/sessions` accepts optional `classId`. Orphan creation authorized for any teacher or platform admin. `GET /api/sessions` returns filtered list defaulting to caller's own sessions; platform admins can query any teacherId.
+- Frontend: Generic routes `/teacher/sessions/{sessionId}` and `/student/sessions/{sessionId}` load sessions independent of class context. Old class-nested routes (`/teacher/classes/{id}/session/{sessionId}/dashboard` and `/student/classes/{id}/session/{sessionId}`) redirect to generic routes. Teacher dashboard page gains orphan session support (sessions list, "Start Session" with just a title). Student session page derives editorMode from class settings when class-linked, defaults to "python" for orphan sessions.
+- TeacherDashboard component updated with nullable `classId`, `returnPath` prop for correct back-navigation from orphan sessions.
+
+**Verification**
+
+- Go full suite: 12 packages green (handlers 50s, store 22s)
+- Vitest: 269 passed / 11 skipped / 0 failures
+- Fixed test fixture: org status was `pending` (default from `CreateOrg`), causing `isTeacherOrOrgAdmin` to reject all orphan session creates. Set to `active` in fixture setup.
+
+**Deviations From Plan**
+
+- Tasks 2 and 3 combined into one commit since the frontend changes are tightly coupled (generic routes + dashboard updates both need the teacher page and start-session-button changes).
+- `start-session-button.tsx` expanded with orphan session mode (title-only creation) rather than just a classId toggle.
+
+**Follow-Up**
+
+- E2E test coverage for orphan session flows (create → join via token → teacher dashboard → end).
+- Hocuspocus auth still uses the permissive token format (deferred since 030b).
