@@ -24,9 +24,12 @@ type sessionFixture struct {
 	db          *sql.DB
 	h           *SessionHandler
 	router      chi.Router
+	orgs        *store.OrgStore
+	classes     *store.ClassStore
 	teacher     *store.RegisteredUser
 	student     *store.RegisteredUser
 	otherUser   *store.RegisteredUser // not a participant or teacher
+	orgID       string
 	classID     string
 	sessionID   string
 	session     *store.LiveSession
@@ -47,6 +50,8 @@ func newSessionFixture(t *testing.T, suffix string) *sessionFixture {
 
 	h := &SessionHandler{
 		Sessions:    sessions,
+		Classes:     classes,
+		Orgs:        orgs,
 		Broadcaster: broadcaster,
 	}
 
@@ -116,9 +121,12 @@ func newSessionFixture(t *testing.T, suffix string) *sessionFixture {
 		db:        db,
 		h:         h,
 		router:    r,
+		orgs:      orgs,
+		classes:   classes,
 		teacher:   teacher,
 		student:   student,
 		otherUser: otherUser,
+		orgID:     org.ID,
 		classID:   class.ID,
 		sessionID: session.ID,
 		session:   session,
@@ -399,4 +407,194 @@ func TestSessionHandler_EndSession_NonTeacher403(t *testing.T) {
 	fx := newSessionFixture(t, t.Name())
 	w := fx.doRequest(t, http.MethodPost, "/api/sessions/"+fx.sessionID+"/end", nil, fx.claims(fx.student, false))
 	assert.Equal(t, http.StatusForbidden, w.Code)
+}
+
+// ------------------- POST /api/sessions/{id}/participants -------------------
+
+func TestSessionHandler_AddParticipant_TeacherAddsByUserId(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	body := map[string]any{"userId": fx.student.ID}
+	w := fx.doRequest(t, http.MethodPost, "/api/sessions/"+fx.sessionID+"/participants", body, fx.claims(fx.teacher, false))
+	require.Equal(t, http.StatusCreated, w.Code, "body=%s", w.Body.String())
+
+	var p store.SessionParticipant
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &p))
+	assert.Equal(t, fx.student.ID, p.StudentID)
+	assert.Equal(t, "invited", p.Status)
+	assert.NotNil(t, p.InvitedBy)
+	assert.Equal(t, fx.teacher.ID, *p.InvitedBy)
+}
+
+func TestSessionHandler_AddParticipant_TeacherAddsByEmail(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	body := map[string]any{"email": fx.student.Email}
+	w := fx.doRequest(t, http.MethodPost, "/api/sessions/"+fx.sessionID+"/participants", body, fx.claims(fx.teacher, false))
+	require.Equal(t, http.StatusCreated, w.Code, "body=%s", w.Body.String())
+
+	var p store.SessionParticipant
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &p))
+	assert.Equal(t, fx.student.ID, p.StudentID)
+}
+
+func TestSessionHandler_AddParticipant_UnknownEmail404(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	body := map[string]any{"email": "nonexistent-user@example.com"}
+	w := fx.doRequest(t, http.MethodPost, "/api/sessions/"+fx.sessionID+"/participants", body, fx.claims(fx.teacher, false))
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func TestSessionHandler_AddParticipant_NonTeacher403(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	body := map[string]any{"userId": fx.otherUser.ID}
+	w := fx.doRequest(t, http.MethodPost, "/api/sessions/"+fx.sessionID+"/participants", body, fx.claims(fx.student, false))
+	assert.Equal(t, http.StatusForbidden, w.Code)
+}
+
+func TestSessionHandler_AddParticipant_PlatformAdmin(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	body := map[string]any{"userId": fx.student.ID}
+	w := fx.doRequest(t, http.MethodPost, "/api/sessions/"+fx.sessionID+"/participants", body, fx.claims(fx.otherUser, true))
+	assert.Equal(t, http.StatusCreated, w.Code)
+}
+
+func TestSessionHandler_AddParticipant_Unauthenticated401(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	body := map[string]any{"userId": fx.student.ID}
+	w := fx.doRequest(t, http.MethodPost, "/api/sessions/"+fx.sessionID+"/participants", body, nil)
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
+func TestSessionHandler_AddParticipant_Idempotent(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	body := map[string]any{"userId": fx.student.ID}
+
+	w1 := fx.doRequest(t, http.MethodPost, "/api/sessions/"+fx.sessionID+"/participants", body, fx.claims(fx.teacher, false))
+	require.Equal(t, http.StatusCreated, w1.Code)
+
+	// Adding the same user again should also succeed (idempotent).
+	w2 := fx.doRequest(t, http.MethodPost, "/api/sessions/"+fx.sessionID+"/participants", body, fx.claims(fx.teacher, false))
+	assert.Equal(t, http.StatusCreated, w2.Code, "second add should be idempotent")
+}
+
+// ------------------- DELETE /api/sessions/{id}/participants/{userId} -------------------
+
+func TestSessionHandler_RemoveParticipant_Teacher(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	ctx := context.Background()
+
+	// Add a participant first
+	_, err := fx.h.Sessions.AddParticipant(ctx, fx.sessionID, fx.student.ID, fx.teacher.ID)
+	require.NoError(t, err)
+
+	w := fx.doRequest(t, http.MethodDelete, "/api/sessions/"+fx.sessionID+"/participants/"+fx.student.ID, nil, fx.claims(fx.teacher, false))
+	assert.Equal(t, http.StatusNoContent, w.Code)
+}
+
+func TestSessionHandler_RemoveParticipant_VerifyAccessRevoked(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	ctx := context.Background()
+
+	// Add student as a participant (direct add, not class member)
+	_, err := fx.h.Sessions.AddParticipant(ctx, fx.sessionID, fx.otherUser.ID, fx.teacher.ID)
+	require.NoError(t, err)
+
+	// Verify access before removal
+	allowed, _, err := fx.h.Sessions.CanAccessSession(ctx, fx.sessionID, fx.otherUser.ID)
+	require.NoError(t, err)
+	assert.True(t, allowed, "participant should have access before removal")
+
+	// Remove the participant
+	w := fx.doRequest(t, http.MethodDelete, "/api/sessions/"+fx.sessionID+"/participants/"+fx.otherUser.ID, nil, fx.claims(fx.teacher, false))
+	require.Equal(t, http.StatusNoContent, w.Code)
+
+	// Verify access is revoked
+	allowed, _, err = fx.h.Sessions.CanAccessSession(ctx, fx.sessionID, fx.otherUser.ID)
+	require.NoError(t, err)
+	assert.False(t, allowed, "participant should lose access after removal")
+}
+
+func TestSessionHandler_RemoveParticipant_NonTeacher403(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	w := fx.doRequest(t, http.MethodDelete, "/api/sessions/"+fx.sessionID+"/participants/"+fx.student.ID, nil, fx.claims(fx.student, false))
+	assert.Equal(t, http.StatusForbidden, w.Code)
+}
+
+func TestSessionHandler_RemoveParticipant_NotFound404(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	// Try to remove a non-existent participant
+	w := fx.doRequest(t, http.MethodDelete, "/api/sessions/"+fx.sessionID+"/participants/"+fx.otherUser.ID, nil, fx.claims(fx.teacher, false))
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+// ------------------- GET /api/sessions/{id} (tightened access) -------------------
+
+func TestSessionHandler_GetSession_AccessTeacher(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	w := fx.doRequest(t, http.MethodGet, "/api/sessions/"+fx.sessionID, nil, fx.claims(fx.teacher, false))
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestSessionHandler_GetSession_AccessClassMember(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	ctx := context.Background()
+
+	// Add student to the class
+	_, err := fx.classes.AddClassMember(ctx, store.AddClassMemberInput{
+		ClassID: fx.classID, UserID: fx.student.ID, Role: "student",
+	})
+	require.NoError(t, err)
+
+	w := fx.doRequest(t, http.MethodGet, "/api/sessions/"+fx.sessionID, nil, fx.claims(fx.student, false))
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestSessionHandler_GetSession_AccessTokenJoinedParticipant(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	ctx := context.Background()
+
+	// Add otherUser as a participant (simulating token join)
+	_, err := fx.h.Sessions.AddParticipant(ctx, fx.sessionID, fx.otherUser.ID, fx.teacher.ID)
+	require.NoError(t, err)
+
+	w := fx.doRequest(t, http.MethodGet, "/api/sessions/"+fx.sessionID, nil, fx.claims(fx.otherUser, false))
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestSessionHandler_GetSession_AccessRandomUser404(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	// otherUser is not teacher, not a class member, not a participant
+	w := fx.doRequest(t, http.MethodGet, "/api/sessions/"+fx.sessionID, nil, fx.claims(fx.otherUser, false))
+	assert.Equal(t, http.StatusNotFound, w.Code, "random user should get 404 (not leak existence)")
+}
+
+func TestSessionHandler_GetSession_AccessPlatformAdmin(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	w := fx.doRequest(t, http.MethodGet, "/api/sessions/"+fx.sessionID, nil, fx.claims(fx.otherUser, true))
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+// ------------------- GET /api/sessions/{id}/participants (tightened roster access) -------------------
+
+func TestSessionHandler_GetParticipants_AccessTeacher(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	w := fx.doRequest(t, http.MethodGet, "/api/sessions/"+fx.sessionID+"/participants", nil, fx.claims(fx.teacher, false))
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestSessionHandler_GetParticipants_AccessRegularParticipant403(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	ctx := context.Background()
+
+	// Add student as a participant
+	_, err := fx.h.Sessions.AddParticipant(ctx, fx.sessionID, fx.student.ID, fx.teacher.ID)
+	require.NoError(t, err)
+
+	w := fx.doRequest(t, http.MethodGet, "/api/sessions/"+fx.sessionID+"/participants", nil, fx.claims(fx.student, false))
+	assert.Equal(t, http.StatusForbidden, w.Code, "regular participant should not read the roster")
+}
+
+func TestSessionHandler_GetParticipants_AccessPlatformAdmin(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	w := fx.doRequest(t, http.MethodGet, "/api/sessions/"+fx.sessionID+"/participants", nil, fx.claims(fx.otherUser, true))
+	assert.Equal(t, http.StatusOK, w.Code)
 }

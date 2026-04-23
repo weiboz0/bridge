@@ -17,6 +17,8 @@ import (
 type SessionHandler struct {
 	Sessions    *store.SessionStore
 	Schedules   *store.ScheduleStore
+	Classes     *store.ClassStore
+	Orgs        *store.OrgStore
 	Broadcaster *events.Broadcaster
 }
 
@@ -40,6 +42,11 @@ func (h *SessionHandler) Routes(r chi.Router) {
 			r.Get("/topics", h.GetSessionTopics)
 			r.Post("/topics", h.LinkSessionTopic)
 			r.Delete("/topics", h.UnlinkSessionTopic)
+			r.Post("/participants", h.AddParticipant)
+			r.Route("/participants/{userId}", func(r chi.Router) {
+				r.Use(ValidateUUIDParam("userId"))
+				r.Delete("/", h.RemoveParticipant)
+			})
 			r.Post("/rotate-invite", h.RotateInviteToken)
 			r.Delete("/invite", h.RevokeInviteToken)
 		})
@@ -124,7 +131,8 @@ func (h *SessionHandler) GetSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	session, err := h.Sessions.GetSession(r.Context(), chi.URLParam(r, "id"))
+	sessionID := chi.URLParam(r, "id")
+	session, err := h.Sessions.GetSession(r.Context(), sessionID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
@@ -133,6 +141,21 @@ func (h *SessionHandler) GetSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "Not found")
 		return
 	}
+
+	// Platform admin bypasses access check.
+	if !claims.IsPlatformAdmin {
+		allowed, _, err := h.Sessions.CanAccessSession(r.Context(), sessionID, claims.UserID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "Database error")
+			return
+		}
+		if !allowed {
+			// Return 404 to not leak existence.
+			writeError(w, http.StatusNotFound, "Not found")
+			return
+		}
+	}
+
 	writeJSON(w, http.StatusOK, session)
 }
 
@@ -247,7 +270,12 @@ func (h *SessionHandler) GetParticipants(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	participants, err := h.Sessions.GetSessionParticipants(r.Context(), chi.URLParam(r, "id"))
+	sessionID := chi.URLParam(r, "id")
+	if _, ok := h.isSessionAuthority(w, r, sessionID, claims); !ok {
+		return
+	}
+
+	participants, err := h.Sessions.GetSessionParticipants(r.Context(), sessionID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
@@ -519,6 +547,127 @@ func (h *SessionHandler) isSessionOwner(w http.ResponseWriter, r *http.Request, 
 		return nil, false
 	}
 	return session, true
+}
+
+// isSessionAuthority checks whether the caller has "authority" over a session:
+// platform admin, session teacher, class instructor/ta, or org admin (if session is class-bound).
+// It fetches the session and returns it; on failure it writes the error response.
+func (h *SessionHandler) isSessionAuthority(w http.ResponseWriter, r *http.Request, sessionID string, claims *auth.Claims) (*store.LiveSession, bool) {
+	session, err := h.Sessions.GetSession(r.Context(), sessionID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return nil, false
+	}
+	if session == nil {
+		writeError(w, http.StatusNotFound, "Not found")
+		return nil, false
+	}
+
+	if claims.IsPlatformAdmin || session.TeacherID == claims.UserID {
+		return session, true
+	}
+
+	// If the session belongs to a class, check class instructor/ta and org admin.
+	if session.ClassID != nil && h.Classes != nil {
+		// Check class instructor/ta
+		members, err := h.Classes.ListClassMembers(r.Context(), *session.ClassID)
+		if err == nil {
+			for _, m := range members {
+				if m.UserID == claims.UserID && (m.Role == "instructor" || m.Role == "ta") {
+					return session, true
+				}
+			}
+		}
+
+		// Check org admin: get the class to find the org, then check org membership.
+		if h.Orgs != nil {
+			class, err := h.Classes.GetClass(r.Context(), *session.ClassID)
+			if err == nil && class != nil {
+				roles, err := h.Orgs.GetUserRolesInOrg(r.Context(), class.OrgID, claims.UserID)
+				if err == nil {
+					for _, role := range roles {
+						if role.Role == "org_admin" {
+							return session, true
+						}
+					}
+				}
+			}
+		}
+	}
+
+	writeError(w, http.StatusForbidden, "Not authorized")
+	return nil, false
+}
+
+// AddParticipant handles POST /api/sessions/{id}/participants — add a participant directly.
+func (h *SessionHandler) AddParticipant(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	sessionID := chi.URLParam(r, "id")
+	if _, ok := h.isSessionAuthority(w, r, sessionID, claims); !ok {
+		return
+	}
+
+	var body struct {
+		UserID string `json:"userId"`
+		Email  string `json:"email"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	if body.UserID == "" && body.Email == "" {
+		writeError(w, http.StatusBadRequest, "userId or email is required")
+		return
+	}
+
+	var participant *store.SessionParticipant
+	var err error
+	if body.UserID != "" {
+		participant, err = h.Sessions.AddParticipant(r.Context(), sessionID, body.UserID, claims.UserID)
+	} else {
+		participant, err = h.Sessions.AddParticipantByEmail(r.Context(), sessionID, body.Email, claims.UserID)
+	}
+	if err != nil {
+		if errors.Is(err, store.ErrUserNotFound) {
+			writeError(w, http.StatusNotFound, "User not found")
+			return
+		}
+		slog.Error("AddParticipant failed", "error", err, "sessionId", sessionID)
+		writeError(w, http.StatusInternalServerError, "Failed to add participant")
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, participant)
+}
+
+// RemoveParticipant handles DELETE /api/sessions/{id}/participants/{userId} — revoke a participant.
+func (h *SessionHandler) RemoveParticipant(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	sessionID := chi.URLParam(r, "id")
+	if _, ok := h.isSessionAuthority(w, r, sessionID, claims); !ok {
+		return
+	}
+
+	targetUserID := chi.URLParam(r, "userId")
+	deleted, err := h.Sessions.RemoveParticipant(r.Context(), sessionID, targetUserID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if !deleted {
+		writeError(w, http.StatusNotFound, "Participant not found")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // PatchSession handles PATCH /api/sessions/{id} — update mutable fields (title, settings, invite_expires_at).
