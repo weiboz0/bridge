@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -72,9 +73,19 @@ type SessionTopicWithDetails struct {
 }
 
 type CreateSessionInput struct {
-	ClassID string `json:"classId"`
-	TeacherID   string `json:"teacherId"`
-	Settings    string `json:"settings"`
+	ClassID   *string `json:"classId"`
+	TeacherID string  `json:"teacherId"`
+	Title     string  `json:"title"`
+	Settings  string  `json:"settings"`
+}
+
+type ListSessionsFilter struct {
+	TeacherID       string
+	ClassID         *string
+	Status          string
+	Limit           int
+	CursorStartedAt *time.Time
+	CursorID        *string
 }
 
 type SessionStore struct {
@@ -115,19 +126,25 @@ func scanParticipant(row interface{ Scan(...any) error }) (*SessionParticipant, 
 }
 
 func (s *SessionStore) CreateSession(ctx context.Context, input CreateSessionInput) (*LiveSession, error) {
+	if strings.TrimSpace(input.Title) == "" {
+		return nil, errors.New("title is required")
+	}
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback()
 
-	// End any live session for this classroom
 	now := time.Now()
-	_, err = tx.ExecContext(ctx,
-		`UPDATE sessions SET status = 'ended', ended_at = $1 WHERE class_id = $2 AND status = 'live'`,
-		now, input.ClassID)
-	if err != nil {
-		return nil, err
+	if input.ClassID != nil {
+		// End any live session for this classroom.
+		_, err = tx.ExecContext(ctx,
+			`UPDATE sessions SET status = 'ended', ended_at = $1 WHERE class_id = $2 AND status = 'live'`,
+			now, input.ClassID)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	id := uuid.New().String()
@@ -139,9 +156,9 @@ func (s *SessionStore) CreateSession(ctx context.Context, input CreateSessionInp
 	var session LiveSession
 	err = tx.QueryRowContext(ctx,
 		`INSERT INTO sessions (id, class_id, teacher_id, title, status, settings, started_at)
-		 VALUES ($1, $2, $3, COALESCE((SELECT title FROM classes WHERE id = $2), 'Untitled session'), 'live', $4, $5)
+		 VALUES ($1, $2, $3, $4, 'live', $5, $6)
 		 RETURNING `+sessionColumns,
-		id, input.ClassID, input.TeacherID, settings, now,
+		id, input.ClassID, input.TeacherID, input.Title, settings, now,
 	).Scan(&session.ID, &session.ClassID, &session.TeacherID, &session.Title, &session.Status, &session.Settings,
 		&session.InviteToken, &session.InviteExpiresAt, &session.StartedAt, &session.EndedAt)
 	if err != nil {
@@ -164,28 +181,98 @@ func (s *SessionStore) GetActiveSession(ctx context.Context, classID string) (*L
 		`SELECT `+sessionColumns+` FROM sessions WHERE class_id = $1 AND status = 'live'`, classID))
 }
 
-// ListSessionsByClass returns all sessions for a class, most recent first.
-func (s *SessionStore) ListSessionsByClass(ctx context.Context, classID string) ([]LiveSession, error) {
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT `+sessionColumns+` FROM sessions WHERE class_id = $1 ORDER BY started_at DESC`, classID)
+// ListSessions returns sessions matching the supplied filters, paginated by
+// (started_at DESC, id DESC). An empty TeacherID/Status means "any".
+func (s *SessionStore) ListSessions(ctx context.Context, f ListSessionsFilter) ([]LiveSession, bool, error) {
+	where := []string{}
+	args := []any{}
+	idx := 1
+
+	if f.TeacherID != "" {
+		where = append(where, fmt.Sprintf("teacher_id = $%d", idx))
+		args = append(args, f.TeacherID)
+		idx++
+	}
+	if f.ClassID != nil {
+		where = append(where, fmt.Sprintf("class_id = $%d", idx))
+		args = append(args, *f.ClassID)
+		idx++
+	}
+	if f.Status != "" {
+		where = append(where, fmt.Sprintf("status = $%d", idx))
+		args = append(args, f.Status)
+		idx++
+	}
+	if f.CursorStartedAt != nil && f.CursorID != nil {
+		where = append(where, fmt.Sprintf("(started_at, id) < ($%d, $%d)", idx, idx+1))
+		args = append(args, *f.CursorStartedAt, *f.CursorID)
+		idx += 2
+	}
+
+	limit := f.Limit
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
+	}
+
+	q := `SELECT ` + sessionColumns + ` FROM sessions`
+	if len(where) > 0 {
+		q += ` WHERE ` + strings.Join(where, ` AND `)
+	}
+	q += fmt.Sprintf(` ORDER BY started_at DESC, id DESC LIMIT %d`, limit+1)
+
+	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer rows.Close()
 
-	var sessions []LiveSession
+	out := []LiveSession{}
 	for rows.Next() {
-		var ls LiveSession
-		if err := rows.Scan(&ls.ID, &ls.ClassID, &ls.TeacherID, &ls.Title, &ls.Status, &ls.Settings,
-			&ls.InviteToken, &ls.InviteExpiresAt, &ls.StartedAt, &ls.EndedAt); err != nil {
+		session, err := scanSession(rows)
+		if err != nil {
+			return nil, false, err
+		}
+		out = append(out, *session)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+
+	hasMore := len(out) > limit
+	if hasMore {
+		out = out[:limit]
+	}
+	return out, hasMore, nil
+}
+
+// ListSessionsByClass returns all sessions for a class, most recent first.
+func (s *SessionStore) ListSessionsByClass(ctx context.Context, classID string) ([]LiveSession, error) {
+	filter := ListSessionsFilter{
+		ClassID: &classID,
+		Limit:   100,
+	}
+
+	all := []LiveSession{}
+	for {
+		page, hasMore, err := s.ListSessions(ctx, filter)
+		if err != nil {
 			return nil, err
 		}
-		sessions = append(sessions, ls)
+		all = append(all, page...)
+		if !hasMore || len(page) == 0 {
+			if all == nil {
+				all = []LiveSession{}
+			}
+			return all, nil
+		}
+
+		last := page[len(page)-1]
+		filter.CursorStartedAt = &last.StartedAt
+		filter.CursorID = &last.ID
 	}
-	if sessions == nil {
-		sessions = []LiveSession{}
-	}
-	return sessions, rows.Err()
 }
 
 // SessionWithParticipantCount is a session with the number of participants.

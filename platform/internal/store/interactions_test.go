@@ -18,7 +18,7 @@ func TestInteractionStore_CreateAndGet(t *testing.T) {
 	classID, teacherID := setupSessionTest(t, db, t.Name())
 	student := createTestUser(t, db, users, t.Name()+"-student")
 
-	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: classID, TeacherID: teacherID})
+	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: strPtr(classID), TeacherID: teacherID, Title: "Session"})
 	t.Cleanup(func() {
 		db.ExecContext(ctx, "DELETE FROM ai_interactions WHERE session_id = $1", session.ID)
 	})
@@ -45,7 +45,7 @@ func TestInteractionStore_GetActiveInteraction(t *testing.T) {
 	classID, teacherID := setupSessionTest(t, db, t.Name())
 	student := createTestUser(t, db, users, t.Name()+"-student")
 
-	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: classID, TeacherID: teacherID})
+	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: strPtr(classID), TeacherID: teacherID, Title: "Session"})
 	t.Cleanup(func() {
 		db.ExecContext(ctx, "DELETE FROM ai_interactions WHERE session_id = $1", session.ID)
 	})
@@ -74,7 +74,7 @@ func TestInteractionStore_AppendMessage(t *testing.T) {
 	classID, teacherID := setupSessionTest(t, db, t.Name())
 	student := createTestUser(t, db, users, t.Name()+"-student")
 
-	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: classID, TeacherID: teacherID})
+	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: strPtr(classID), TeacherID: teacherID, Title: "Session"})
 	interaction, _ := interactions.CreateInteraction(ctx, CreateInteractionInput{
 		StudentID: student.ID, SessionID: session.ID, EnabledByTeacherID: teacherID,
 	})
@@ -100,7 +100,7 @@ func TestInteractionStore_ListBySession(t *testing.T) {
 	classID, teacherID := setupSessionTest(t, db, t.Name())
 	student := createTestUser(t, db, users, t.Name()+"-student")
 
-	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: classID, TeacherID: teacherID})
+	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: strPtr(classID), TeacherID: teacherID, Title: "Session"})
 	interactions.CreateInteraction(ctx, CreateInteractionInput{
 		StudentID: student.ID, SessionID: session.ID, EnabledByTeacherID: teacherID,
 	})
@@ -123,7 +123,7 @@ func TestInteractionStore_DeleteInteraction(t *testing.T) {
 	classID, teacherID := setupSessionTest(t, db, t.Name())
 	student := createTestUser(t, db, users, t.Name()+"-student")
 
-	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: classID, TeacherID: teacherID})
+	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: strPtr(classID), TeacherID: teacherID, Title: "Session"})
 	interactions.CreateInteraction(ctx, CreateInteractionInput{
 		StudentID: student.ID, SessionID: session.ID, EnabledByTeacherID: teacherID,
 	})

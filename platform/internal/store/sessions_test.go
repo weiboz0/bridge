@@ -49,7 +49,9 @@ func TestSessionStore_CreateAndGet(t *testing.T) {
 	classID, teacherID := setupSessionTest(t, db, t.Name())
 
 	session, err := sessions.CreateSession(context.Background(), CreateSessionInput{
-		ClassID: classID, TeacherID: teacherID,
+		ClassID:   strPtr(classID),
+		TeacherID: teacherID,
+		Title:     "Class session",
 	})
 	require.NoError(t, err)
 	require.NotNil(t, session)
@@ -63,16 +65,177 @@ func TestSessionStore_CreateAndGet(t *testing.T) {
 	assert.Equal(t, session.ID, fetched.ID)
 }
 
+func TestSessionStore_CreateOrphanSession(t *testing.T) {
+	db := testDB(t)
+	sessions := NewSessionStore(db)
+	users := NewUserStore(db)
+	ctx := context.Background()
+
+	teacher := createTestUser(t, db, users, t.Name()+"-teacher")
+
+	session, err := sessions.CreateSession(ctx, CreateSessionInput{
+		TeacherID: teacher.ID,
+		Title:     "Office hours",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	t.Cleanup(func() {
+		db.ExecContext(ctx, "DELETE FROM sessions WHERE id = $1", session.ID)
+	})
+
+	assert.Nil(t, session.ClassID)
+	assert.Equal(t, "Office hours", session.Title)
+
+	fetched, err := sessions.GetSession(ctx, session.ID)
+	require.NoError(t, err)
+	require.NotNil(t, fetched)
+	assert.Nil(t, fetched.ClassID)
+	assert.Equal(t, session.ID, fetched.ID)
+	assert.Equal(t, "Office hours", fetched.Title)
+}
+
+func TestSessionStore_ListSessions_Filters(t *testing.T) {
+	db := testDB(t)
+	sessions := NewSessionStore(db)
+	ctx := context.Background()
+
+	classID, teacherID := setupSessionTest(t, db, t.Name()+"-class")
+	otherClassID, otherTeacherID := setupSessionTest(t, db, t.Name()+"-other-class")
+
+	orphanOne, err := sessions.CreateSession(ctx, CreateSessionInput{
+		TeacherID: teacherID,
+		Title:     "Orphan one",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		db.ExecContext(ctx, "DELETE FROM sessions WHERE id = $1", orphanOne.ID)
+	})
+
+	classSession, err := sessions.CreateSession(ctx, CreateSessionInput{
+		ClassID:   strPtr(classID),
+		TeacherID: teacherID,
+		Title:     "Class session",
+	})
+	require.NoError(t, err)
+
+	orphanTwo, err := sessions.CreateSession(ctx, CreateSessionInput{
+		TeacherID: teacherID,
+		Title:     "Orphan two",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		db.ExecContext(ctx, "DELETE FROM sessions WHERE id = $1", orphanTwo.ID)
+	})
+
+	otherTeacherSession, err := sessions.CreateSession(ctx, CreateSessionInput{
+		ClassID:   strPtr(otherClassID),
+		TeacherID: otherTeacherID,
+		Title:     "Other teacher",
+	})
+	require.NoError(t, err)
+
+	_, err = sessions.EndSession(ctx, classSession.ID)
+	require.NoError(t, err)
+
+	base := time.Date(2026, 4, 23, 12, 0, 0, 0, time.UTC)
+	_, err = db.ExecContext(ctx, "UPDATE sessions SET started_at = $1 WHERE id = $2", base.Add(1*time.Minute), orphanOne.ID)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, "UPDATE sessions SET started_at = $1 WHERE id = $2", base.Add(2*time.Minute), classSession.ID)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, "UPDATE sessions SET started_at = $1 WHERE id = $2", base.Add(3*time.Minute), orphanTwo.ID)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, "UPDATE sessions SET started_at = $1 WHERE id = $2", base.Add(4*time.Minute), otherTeacherSession.ID)
+	require.NoError(t, err)
+
+	teacherSessions, hasMore, err := sessions.ListSessions(ctx, ListSessionsFilter{
+		TeacherID: teacherID,
+	})
+	require.NoError(t, err)
+	assert.False(t, hasMore)
+	require.Len(t, teacherSessions, 3)
+	assert.Equal(t, []string{orphanTwo.ID, classSession.ID, orphanOne.ID}, []string{
+		teacherSessions[0].ID,
+		teacherSessions[1].ID,
+		teacherSessions[2].ID,
+	})
+
+	classSessions, hasMore, err := sessions.ListSessions(ctx, ListSessionsFilter{
+		ClassID: strPtr(classID),
+	})
+	require.NoError(t, err)
+	assert.False(t, hasMore)
+	require.Len(t, classSessions, 1)
+	assert.Equal(t, classSession.ID, classSessions[0].ID)
+
+	endedSessions, hasMore, err := sessions.ListSessions(ctx, ListSessionsFilter{
+		Status: "ended",
+	})
+	require.NoError(t, err)
+	assert.False(t, hasMore)
+	require.Len(t, endedSessions, 1)
+	assert.Equal(t, classSession.ID, endedSessions[0].ID)
+
+	firstPage, hasMore, err := sessions.ListSessions(ctx, ListSessionsFilter{
+		TeacherID: teacherID,
+		Limit:     1,
+	})
+	require.NoError(t, err)
+	require.True(t, hasMore)
+	require.Len(t, firstPage, 1)
+	assert.Equal(t, orphanTwo.ID, firstPage[0].ID)
+
+	secondPage, hasMore, err := sessions.ListSessions(ctx, ListSessionsFilter{
+		TeacherID:       teacherID,
+		Limit:           1,
+		CursorStartedAt: &firstPage[0].StartedAt,
+		CursorID:        &firstPage[0].ID,
+	})
+	require.NoError(t, err)
+	require.True(t, hasMore)
+	require.Len(t, secondPage, 1)
+	assert.Equal(t, classSession.ID, secondPage[0].ID)
+
+}
+
+func TestSessionStore_ListSessionsByClass_ExcludesOrphans(t *testing.T) {
+	db := testDB(t)
+	sessions := NewSessionStore(db)
+	ctx := context.Background()
+
+	classID, teacherID := setupSessionTest(t, db, t.Name())
+
+	classSession, err := sessions.CreateSession(ctx, CreateSessionInput{
+		ClassID:   strPtr(classID),
+		TeacherID: teacherID,
+		Title:     "Class session",
+	})
+	require.NoError(t, err)
+
+	orphanSession, err := sessions.CreateSession(ctx, CreateSessionInput{
+		TeacherID: teacherID,
+		Title:     "Orphan session",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		db.ExecContext(ctx, "DELETE FROM sessions WHERE id = $1", orphanSession.ID)
+	})
+
+	list, err := sessions.ListSessionsByClass(ctx, classID)
+	require.NoError(t, err)
+	require.Len(t, list, 1)
+	assert.Equal(t, classSession.ID, list[0].ID)
+}
+
 func TestSessionStore_CreateAutoEnds(t *testing.T) {
 	db := testDB(t)
 	sessions := NewSessionStore(db)
 	classID, teacherID := setupSessionTest(t, db, t.Name())
 	ctx := context.Background()
 
-	s1, err := sessions.CreateSession(ctx, CreateSessionInput{ClassID: classID, TeacherID: teacherID})
+	s1, err := sessions.CreateSession(ctx, CreateSessionInput{ClassID: strPtr(classID), TeacherID: teacherID, Title: "Session"})
 	require.NoError(t, err)
 
-	s2, err := sessions.CreateSession(ctx, CreateSessionInput{ClassID: classID, TeacherID: teacherID})
+	s2, err := sessions.CreateSession(ctx, CreateSessionInput{ClassID: strPtr(classID), TeacherID: teacherID, Title: "Session"})
 	require.NoError(t, err)
 	assert.NotEqual(t, s1.ID, s2.ID)
 
@@ -87,7 +250,7 @@ func TestSessionStore_EndSession(t *testing.T) {
 	sessions := NewSessionStore(db)
 	classID, teacherID := setupSessionTest(t, db, t.Name())
 
-	session, _ := sessions.CreateSession(context.Background(), CreateSessionInput{ClassID: classID, TeacherID: teacherID})
+	session, _ := sessions.CreateSession(context.Background(), CreateSessionInput{ClassID: strPtr(classID), TeacherID: teacherID, Title: "Session"})
 
 	ended, err := sessions.EndSession(context.Background(), session.ID)
 	require.NoError(t, err)
@@ -103,7 +266,7 @@ func TestSessionStore_JoinAndLeave(t *testing.T) {
 	student := createTestUser(t, db, users, t.Name()+"-student")
 	ctx := context.Background()
 
-	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: classID, TeacherID: teacherID})
+	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: strPtr(classID), TeacherID: teacherID, Title: "Session"})
 
 	p, err := sessions.JoinSession(ctx, session.ID, student.ID)
 	require.NoError(t, err)
@@ -132,7 +295,7 @@ func TestSessionStore_UpdateParticipantStatus(t *testing.T) {
 	student := createTestUser(t, db, users, t.Name()+"-student")
 	ctx := context.Background()
 
-	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: classID, TeacherID: teacherID})
+	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: strPtr(classID), TeacherID: teacherID, Title: "Session"})
 	sessions.JoinSession(ctx, session.ID, student.ID)
 
 	updated, err := sessions.UpdateParticipantStatus(ctx, session.ID, student.ID, "needs_help")
@@ -149,7 +312,7 @@ func TestSessionStore_UpdateParticipantStatusRejectsUnknownStatus(t *testing.T) 
 	student := createTestUser(t, db, users, t.Name()+"-student")
 	ctx := context.Background()
 
-	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: classID, TeacherID: teacherID})
+	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: strPtr(classID), TeacherID: teacherID, Title: "Session"})
 	sessions.JoinSession(ctx, session.ID, student.ID)
 
 	updated, err := sessions.UpdateParticipantStatus(ctx, session.ID, student.ID, "idle")
@@ -168,7 +331,7 @@ func TestSessionStore_GetActiveSession(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Nil(t, active)
 
-	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: classID, TeacherID: teacherID})
+	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: strPtr(classID), TeacherID: teacherID, Title: "Session"})
 
 	active, err = sessions.GetActiveSession(ctx, classID)
 	require.NoError(t, err)
@@ -205,7 +368,7 @@ func TestSessionStore_SessionTopics(t *testing.T) {
 		db.ExecContext(ctx, "DELETE FROM courses WHERE id = $1", course.ID)
 	})
 
-	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: class.ID, TeacherID: user.ID})
+	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: strPtr(class.ID), TeacherID: user.ID, Title: "Session"})
 
 	link, err := sessions.LinkSessionTopic(ctx, session.ID, topic.ID)
 	require.NoError(t, err)
@@ -246,7 +409,7 @@ func TestSessionStore_GenerateAndRotateToken(t *testing.T) {
 	classID, teacherID := setupSessionTest(t, db, t.Name())
 	ctx := context.Background()
 
-	session, err := sessions.CreateSession(ctx, CreateSessionInput{ClassID: classID, TeacherID: teacherID})
+	session, err := sessions.CreateSession(ctx, CreateSessionInput{ClassID: strPtr(classID), TeacherID: teacherID, Title: "Session"})
 	require.NoError(t, err)
 	assert.Nil(t, session.InviteToken, "new session should have nil invite token")
 
@@ -277,7 +440,7 @@ func TestSessionStore_GetSessionByToken(t *testing.T) {
 	classID, teacherID := setupSessionTest(t, db, t.Name())
 	ctx := context.Background()
 
-	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: classID, TeacherID: teacherID})
+	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: strPtr(classID), TeacherID: teacherID, Title: "Session"})
 	rotated, err := sessions.RotateInviteToken(ctx, session.ID)
 	require.NoError(t, err)
 
@@ -299,7 +462,7 @@ func TestSessionStore_RevokeToken(t *testing.T) {
 	classID, teacherID := setupSessionTest(t, db, t.Name())
 	ctx := context.Background()
 
-	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: classID, TeacherID: teacherID})
+	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: strPtr(classID), TeacherID: teacherID, Title: "Session"})
 	rotated, _ := sessions.RotateInviteToken(ctx, session.ID)
 	token := *rotated.InviteToken
 
@@ -322,7 +485,7 @@ func TestSessionStore_SetInviteExpiry(t *testing.T) {
 	classID, teacherID := setupSessionTest(t, db, t.Name())
 	ctx := context.Background()
 
-	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: classID, TeacherID: teacherID})
+	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: strPtr(classID), TeacherID: teacherID, Title: "Session"})
 
 	// Set expiry to the future
 	future := time.Now().Add(24 * time.Hour)
@@ -347,7 +510,7 @@ func TestSessionStore_JoinSessionByToken_HappyPath(t *testing.T) {
 	student := createTestUser(t, db, users, t.Name()+"-student")
 	ctx := context.Background()
 
-	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: classID, TeacherID: teacherID})
+	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: strPtr(classID), TeacherID: teacherID, Title: "Session"})
 	rotated, _ := sessions.RotateInviteToken(ctx, session.ID)
 
 	// Clean up participant on test end
@@ -371,7 +534,7 @@ func TestSessionStore_JoinSessionByToken_WrongToken(t *testing.T) {
 	student := createTestUser(t, db, users, t.Name()+"-student")
 	ctx := context.Background()
 
-	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: classID, TeacherID: teacherID})
+	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: strPtr(classID), TeacherID: teacherID, Title: "Session"})
 	sessions.RotateInviteToken(ctx, session.ID)
 
 	p, err := sessions.JoinSessionByToken(ctx, session.ID, student.ID, "wrong_token_value_12345")
@@ -387,7 +550,7 @@ func TestSessionStore_JoinSessionByToken_ExpiredToken(t *testing.T) {
 	student := createTestUser(t, db, users, t.Name()+"-student")
 	ctx := context.Background()
 
-	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: classID, TeacherID: teacherID})
+	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: strPtr(classID), TeacherID: teacherID, Title: "Session"})
 	rotated, _ := sessions.RotateInviteToken(ctx, session.ID)
 
 	// Set expiry to the past
@@ -407,7 +570,7 @@ func TestSessionStore_JoinSessionByToken_EndedSession(t *testing.T) {
 	student := createTestUser(t, db, users, t.Name()+"-student")
 	ctx := context.Background()
 
-	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: classID, TeacherID: teacherID})
+	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: strPtr(classID), TeacherID: teacherID, Title: "Session"})
 	rotated, _ := sessions.RotateInviteToken(ctx, session.ID)
 	token := *rotated.InviteToken
 
@@ -427,7 +590,7 @@ func TestSessionStore_JoinSessionByToken_AlreadyParticipant(t *testing.T) {
 	student := createTestUser(t, db, users, t.Name()+"-student")
 	ctx := context.Background()
 
-	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: classID, TeacherID: teacherID})
+	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: strPtr(classID), TeacherID: teacherID, Title: "Session"})
 	rotated, _ := sessions.RotateInviteToken(ctx, session.ID)
 	token := *rotated.InviteToken
 
@@ -454,7 +617,7 @@ func TestSessionStore_CanAccessSession_Teacher(t *testing.T) {
 	classID, teacherID := setupSessionTest(t, db, t.Name())
 	ctx := context.Background()
 
-	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: classID, TeacherID: teacherID})
+	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: strPtr(classID), TeacherID: teacherID, Title: "Session"})
 
 	allowed, reason, err := sessions.CanAccessSession(ctx, session.ID, teacherID)
 	require.NoError(t, err)
@@ -481,7 +644,7 @@ func TestSessionStore_CanAccessSession_ClassMember(t *testing.T) {
 		db.ExecContext(ctx, "DELETE FROM class_memberships WHERE class_id = $1 AND user_id = $2", classID, student.ID)
 	})
 
-	session, err := sessions.CreateSession(ctx, CreateSessionInput{ClassID: classID, TeacherID: teacherID})
+	session, err := sessions.CreateSession(ctx, CreateSessionInput{ClassID: strPtr(classID), TeacherID: teacherID, Title: "Session"})
 	require.NoError(t, err)
 
 	allowed, reason, err := sessions.CanAccessSession(ctx, session.ID, student.ID)
@@ -498,7 +661,7 @@ func TestSessionStore_CanAccessSession_TokenJoinedParticipant(t *testing.T) {
 	outsider := createTestUser(t, db, users, t.Name()+"-outsider")
 	ctx := context.Background()
 
-	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: classID, TeacherID: teacherID})
+	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: strPtr(classID), TeacherID: teacherID, Title: "Session"})
 	rotated, _ := sessions.RotateInviteToken(ctx, session.ID)
 
 	t.Cleanup(func() {
@@ -522,7 +685,7 @@ func TestSessionStore_CanAccessSession_EndedSession(t *testing.T) {
 	classID, teacherID := setupSessionTest(t, db, t.Name())
 	ctx := context.Background()
 
-	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: classID, TeacherID: teacherID})
+	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: strPtr(classID), TeacherID: teacherID, Title: "Session"})
 	sessions.EndSession(ctx, session.ID)
 
 	allowed, reason, err := sessions.CanAccessSession(ctx, session.ID, teacherID)
@@ -539,7 +702,7 @@ func TestSessionStore_CanAccessSession_NoAccess(t *testing.T) {
 	outsider := createTestUser(t, db, users, t.Name()+"-outsider")
 	ctx := context.Background()
 
-	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: classID, TeacherID: teacherID})
+	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: strPtr(classID), TeacherID: teacherID, Title: "Session"})
 
 	allowed, reason, err := sessions.CanAccessSession(ctx, session.ID, outsider.ID)
 	require.NoError(t, err)
@@ -563,7 +726,7 @@ func TestSessionStore_AddParticipant_NewUser(t *testing.T) {
 	student := createTestUser(t, db, users, t.Name()+"-student")
 	ctx := context.Background()
 
-	session, err := sessions.CreateSession(ctx, CreateSessionInput{ClassID: classID, TeacherID: teacherID})
+	session, err := sessions.CreateSession(ctx, CreateSessionInput{ClassID: strPtr(classID), TeacherID: teacherID, Title: "Session"})
 	require.NoError(t, err)
 
 	t.Cleanup(func() {
@@ -590,7 +753,7 @@ func TestSessionStore_AddParticipant_AlreadyPresent(t *testing.T) {
 	student := createTestUser(t, db, users, t.Name()+"-student")
 	ctx := context.Background()
 
-	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: classID, TeacherID: teacherID})
+	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: strPtr(classID), TeacherID: teacherID, Title: "Session"})
 	t.Cleanup(func() {
 		db.ExecContext(ctx, "DELETE FROM session_participants WHERE session_id = $1 AND user_id = $2", session.ID, student.ID)
 	})
@@ -617,7 +780,7 @@ func TestSessionStore_AddParticipant_ReInviteAfterLeft(t *testing.T) {
 	student := createTestUser(t, db, users, t.Name()+"-student")
 	ctx := context.Background()
 
-	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: classID, TeacherID: teacherID})
+	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: strPtr(classID), TeacherID: teacherID, Title: "Session"})
 	t.Cleanup(func() {
 		db.ExecContext(ctx, "DELETE FROM session_participants WHERE session_id = $1 AND user_id = $2", session.ID, student.ID)
 	})
@@ -644,7 +807,7 @@ func TestSessionStore_AddParticipantByEmail_HappyPath(t *testing.T) {
 	student := createTestUser(t, db, users, t.Name()+"-student")
 	ctx := context.Background()
 
-	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: classID, TeacherID: teacherID})
+	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: strPtr(classID), TeacherID: teacherID, Title: "Session"})
 	t.Cleanup(func() {
 		db.ExecContext(ctx, "DELETE FROM session_participants WHERE session_id = $1 AND user_id = $2", session.ID, student.ID)
 	})
@@ -663,7 +826,7 @@ func TestSessionStore_AddParticipantByEmail_NotFound(t *testing.T) {
 	classID, teacherID := setupSessionTest(t, db, t.Name())
 	ctx := context.Background()
 
-	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: classID, TeacherID: teacherID})
+	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: strPtr(classID), TeacherID: teacherID, Title: "Session"})
 
 	p, err := sessions.AddParticipantByEmail(ctx, session.ID, "nonexistent@example.com", teacherID)
 	assert.Nil(t, p)
@@ -679,7 +842,7 @@ func TestSessionStore_RemoveParticipant(t *testing.T) {
 	student := createTestUser(t, db, users, t.Name()+"-student")
 	ctx := context.Background()
 
-	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: classID, TeacherID: teacherID})
+	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: strPtr(classID), TeacherID: teacherID, Title: "Session"})
 
 	// Add participant
 	sessions.AddParticipant(ctx, session.ID, student.ID, teacherID)
@@ -709,7 +872,7 @@ func TestSessionStore_PromoteToPresent(t *testing.T) {
 	student := createTestUser(t, db, users, t.Name()+"-student")
 	ctx := context.Background()
 
-	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: classID, TeacherID: teacherID})
+	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: strPtr(classID), TeacherID: teacherID, Title: "Session"})
 	t.Cleanup(func() {
 		db.ExecContext(ctx, "DELETE FROM session_participants WHERE session_id = $1 AND user_id = $2", session.ID, student.ID)
 	})
@@ -733,7 +896,7 @@ func TestSessionStore_PromoteToPresent_AlreadyPresent(t *testing.T) {
 	student := createTestUser(t, db, users, t.Name()+"-student")
 	ctx := context.Background()
 
-	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: classID, TeacherID: teacherID})
+	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: strPtr(classID), TeacherID: teacherID, Title: "Session"})
 	t.Cleanup(func() {
 		db.ExecContext(ctx, "DELETE FROM session_participants WHERE session_id = $1 AND user_id = $2", session.ID, student.ID)
 	})
@@ -756,7 +919,7 @@ func TestSessionStore_CanAccessSession_InvitedParticipant(t *testing.T) {
 	student := createTestUser(t, db, users, t.Name()+"-student")
 	ctx := context.Background()
 
-	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: classID, TeacherID: teacherID})
+	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: strPtr(classID), TeacherID: teacherID, Title: "Session"})
 	t.Cleanup(func() {
 		db.ExecContext(ctx, "DELETE FROM session_participants WHERE session_id = $1 AND user_id = $2", session.ID, student.ID)
 	})
@@ -779,7 +942,7 @@ func TestSessionStore_CanAccessSession_RevokedParticipant(t *testing.T) {
 	student := createTestUser(t, db, users, t.Name()+"-student")
 	ctx := context.Background()
 
-	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: classID, TeacherID: teacherID})
+	session, _ := sessions.CreateSession(ctx, CreateSessionInput{ClassID: strPtr(classID), TeacherID: teacherID, Title: "Session"})
 
 	// Add then remove
 	sessions.AddParticipant(ctx, session.ID, student.ID, teacherID)
