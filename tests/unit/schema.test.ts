@@ -61,4 +61,33 @@ describe("Schema exports", () => {
     expect(schema.topicProblems.problemId).toBeDefined();
     expect(schema.problemSolutions.isPublished).toBeDefined();
   });
+
+  it("teaching units schema has expected tables and columns", () => {
+    const columns = Object.keys(schema.teachingUnits);
+    expect(schema.teachingUnits).toBeDefined();
+    expect(columns).toContain("id");
+    expect(columns).toContain("scope");
+    expect(columns).toContain("scopeId");
+    expect(columns).toContain("title");
+    expect(columns).toContain("slug");
+    expect(columns).toContain("summary");
+    expect(columns).toContain("gradeLevel");
+    expect(columns).toContain("subjectTags");
+    expect(columns).toContain("standardsTags");
+    expect(columns).toContain("estimatedMinutes");
+    expect(columns).toContain("status");
+    expect(columns).toContain("createdBy");
+    expect(columns).toContain("createdAt");
+    expect(columns).toContain("updatedAt");
+    expect(schema.unitDocuments).toBeDefined();
+    expect(schema.unitDocuments.unitId).toBeDefined();
+    expect(schema.unitDocuments.blocks).toBeDefined();
+    expect(schema.unitRevisions).toBeDefined();
+    expect(schema.unitRevisions.id).toBeDefined();
+    expect(schema.unitRevisions.unitId).toBeDefined();
+    expect(schema.unitRevisions.blocks).toBeDefined();
+    expect(schema.unitRevisions.reason).toBeDefined();
+    expect(schema.unitRevisions.createdBy).toBeDefined();
+    expect(schema.unitRevisions.createdAt).toBeDefined();
+  });
 });

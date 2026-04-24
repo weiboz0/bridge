@@ -591,6 +591,80 @@ export const problemSolutions = pgTable(
   })
 );
 
+export const teachingUnits = pgTable(
+  "teaching_units",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    scope: varchar("scope", { length: 16 })
+      .$type<"platform" | "org" | "personal">()
+      .notNull(),
+    scopeId: uuid("scope_id"),
+    title: varchar("title", { length: 255 }).notNull(),
+    slug: varchar("slug", { length: 255 }),
+    summary: text("summary").notNull().default(""),
+    gradeLevel: varchar("grade_level", { length: 8 }).$type<
+      "K-5" | "6-8" | "9-12" | null
+    >(),
+    subjectTags: text("subject_tags").array().notNull().default([]),
+    standardsTags: text("standards_tags").array().notNull().default([]),
+    estimatedMinutes: integer("estimated_minutes"),
+    status: varchar("status", { length: 24 })
+      .$type<"draft" | "reviewed" | "classroom_ready" | "coach_ready" | "archived">()
+      .notNull()
+      .default("draft"),
+    createdBy: uuid("created_by").notNull().references(() => users.id),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => ({
+    scopeStatusIdx: index("teaching_units_scope_scope_id_status_idx").on(
+      t.scope,
+      t.scopeId,
+      t.status
+    ),
+    createdByIdx: index("teaching_units_created_by_idx").on(t.createdBy),
+  })
+);
+
+export const unitDocuments = pgTable("unit_documents", {
+  unitId: uuid("unit_id")
+    .primaryKey()
+    .references(() => teachingUnits.id, { onDelete: "cascade" }),
+  blocks: jsonb("blocks")
+    .$type<Record<string, unknown>>()
+    .notNull()
+    .default({ type: "doc", content: [] }),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
+export const unitRevisions = pgTable(
+  "unit_revisions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    unitId: uuid("unit_id")
+      .notNull()
+      .references(() => teachingUnits.id, { onDelete: "cascade" }),
+    blocks: jsonb("blocks").$type<Record<string, unknown>>().notNull(),
+    reason: varchar("reason", { length: 255 }),
+    createdBy: uuid("created_by").notNull().references(() => users.id),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => ({
+    unitCreatedIdx: index("unit_revisions_unit_created_idx").on(
+      t.unitId,
+      t.createdAt
+    ),
+  })
+);
+
 // --- Parent Reports ---
 
 export const parentReports = pgTable(

@@ -44,7 +44,7 @@ Keep plan 031 small. Anything not listed in "In scope" is a new plan.
 
 | File | Responsibility |
 |---|---|
-| `drizzle/0015_teaching_units.sql` | Create `teaching_units`, `unit_documents`, `unit_revisions`; add CHECK constraints; indexes. |
+| `drizzle/0016_teaching_units.sql` | Create `teaching_units`, `unit_documents`, `unit_revisions`; add CHECK constraints; indexes. |
 | `src/lib/db/schema.ts` | Drizzle table exports: `teachingUnits`, `unitDocuments`, `unitRevisions`. |
 | `tests/unit/schema.test.ts` | Assert new table shape. |
 | `platform/internal/store/teaching_units.go` | **New.** `TeachingUnitStore` with CRUD on `teaching_units`, upsert on `unit_documents`, no writes to `unit_revisions` yet. |
@@ -92,11 +92,11 @@ Document this narrowing in `docs/api.md` for plan 031 so front-end and backend c
 ### Task 1: Schema migration + Drizzle types
 
 **Files:**
-- Create: `drizzle/0015_teaching_units.sql`
+- Create: `drizzle/0016_teaching_units.sql`
 - Modify: `src/lib/db/schema.ts`
 - Modify: `tests/unit/schema.test.ts`
 
-- [ ] **Step 1: Write the migration (`drizzle/0015_teaching_units.sql`)**
+- [ ] **Step 1: Write the migration (`drizzle/0016_teaching_units.sql`)**
 
 ```sql
 -- Plan 031 / spec 012: teaching units core schema.
@@ -166,8 +166,8 @@ COMMIT;
 - [ ] **Step 2: Apply to dev + test DBs**
 
 ```bash
-psql postgresql://work@127.0.0.1:5432/bridge      -f drizzle/0015_teaching_units.sql
-psql postgresql://work@127.0.0.1:5432/bridge_test -f drizzle/0015_teaching_units.sql
+psql postgresql://work@127.0.0.1:5432/bridge      -f drizzle/0016_teaching_units.sql
+psql postgresql://work@127.0.0.1:5432/bridge_test -f drizzle/0016_teaching_units.sql
 ```
 
 Run each twice. Second run should emit only "already exists, skipping" NOTICEs.
@@ -261,7 +261,7 @@ DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test node_modules/.bin/vite
 - [ ] **Step 7: Commit**
 
 ```bash
-git add drizzle/0015_teaching_units.sql src/lib/db/schema.ts tests/unit/schema.test.ts
+git add drizzle/0016_teaching_units.sql src/lib/db/schema.ts tests/unit/schema.test.ts
 git commit -m "feat(031): schema 0015 — teaching_units, unit_documents, unit_revisions"
 ```
 
