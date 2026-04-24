@@ -45,17 +45,20 @@ var validUnitStatuses = map[string]bool{
 // unit document. It is kept as a package-level variable so tests can inspect
 // it directly.
 var knownBlockTypes = map[string]bool{
-	"prose":       true,
-	"problem-ref": true,
-	"paragraph":   true,
-	"heading":     true,
-	"bulletList":  true,
-	"orderedList": true,
-	"listItem":    true,
-	"codeBlock":   true,
-	"blockquote":  true,
+	"prose":          true,
+	"problem-ref":    true,
+	"paragraph":      true,
+	"heading":        true,
+	"bulletList":     true,
+	"orderedList":    true,
+	"listItem":       true,
+	"codeBlock":      true,
+	"blockquote":     true,
 	"horizontalRule": true,
-	"hardBreak":   true,
+	"hardBreak":      true,
+	"teacher-note":   true,
+	"code-snippet":   true,
+	"media-embed":    true,
 }
 
 const maxUnitTitleLen = 255
@@ -176,8 +179,11 @@ func validateBlockDocument(raw json.RawMessage) error {
 	// Standard StarterKit structural blocks (paragraph, heading, etc.)
 	// don't need IDs — they're just rich text.
 	blockTypesRequiringID := map[string]bool{
-		"prose":       true,
-		"problem-ref": true,
+		"prose":        true,
+		"problem-ref":  true,
+		"teacher-note": true,
+		"code-snippet": true,
+		"media-embed":  true,
 	}
 
 	// Walk top-level blocks.

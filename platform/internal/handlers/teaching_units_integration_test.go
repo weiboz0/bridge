@@ -1154,3 +1154,97 @@ func TestTeachingUnitHandler_GetRevision_WrongUnit_404(t *testing.T) {
 		fx.claims(fx.teacher1, false))
 	assert.Equal(t, http.StatusNotFound, w.Code)
 }
+
+// ==================== Block Allowlist Expansion (Task 3) ====================
+
+func TestTeachingUnitHandler_SaveDocument_TeacherNote_200(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Note Unit", fx.teacher1.ID)
+
+	doc := map[string]any{
+		"type": "doc",
+		"content": []any{
+			map[string]any{
+				"type":  "teacher-note",
+				"attrs": map[string]any{"id": "tn-001"},
+				"content": []any{
+					map[string]any{"type": "paragraph", "content": []any{
+						map[string]any{"type": "text", "text": "This is for teachers only"},
+					}},
+				},
+			},
+		},
+	}
+
+	w := doUnitPut(t, fx.h.SaveDocument, "/api/units/"+u.ID+"/document", doc,
+		map[string]string{"id": u.ID}, fx.claims(fx.teacher1, false))
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestTeachingUnitHandler_SaveDocument_CodeSnippet_200(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Snippet Unit", fx.teacher1.ID)
+
+	doc := map[string]any{
+		"type": "doc",
+		"content": []any{
+			map[string]any{
+				"type": "code-snippet",
+				"attrs": map[string]any{
+					"id":       "cs-001",
+					"language": "python",
+					"code":     "print('hello')",
+				},
+			},
+		},
+	}
+
+	w := doUnitPut(t, fx.h.SaveDocument, "/api/units/"+u.ID+"/document", doc,
+		map[string]string{"id": u.ID}, fx.claims(fx.teacher1, false))
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestTeachingUnitHandler_SaveDocument_MediaEmbed_200(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Media Unit", fx.teacher1.ID)
+
+	doc := map[string]any{
+		"type": "doc",
+		"content": []any{
+			map[string]any{
+				"type": "media-embed",
+				"attrs": map[string]any{
+					"id":   "me-001",
+					"url":  "https://example.com/image.png",
+					"alt":  "Example image",
+					"type": "image",
+				},
+			},
+		},
+	}
+
+	w := doUnitPut(t, fx.h.SaveDocument, "/api/units/"+u.ID+"/document", doc,
+		map[string]string{"id": u.ID}, fx.claims(fx.teacher1, false))
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestTeachingUnitHandler_SaveDocument_NewBlockMissingID_400(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "No ID Unit", fx.teacher1.ID)
+
+	// teacher-note without attrs.id → 400.
+	doc := map[string]any{
+		"type": "doc",
+		"content": []any{
+			map[string]any{
+				"type":  "teacher-note",
+				"attrs": map[string]any{},
+			},
+		},
+	}
+
+	w := doUnitPut(t, fx.h.SaveDocument, "/api/units/"+u.ID+"/document", doc,
+		map[string]string{"id": u.ID}, fx.claims(fx.teacher1, false))
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "teacher-note")
+}
