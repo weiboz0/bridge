@@ -78,7 +78,20 @@
 
 ## Code Review
 
-Reviewers append findings here following `docs/code-review.md`. Author responds inline with `→ Response:` and updates status to `[FIXED]` or `[WONTFIX]`.
+### Review 1
+
+- **Date**: 2026-04-23
+- **Reviewer**: Claude
+- **Commits**: `702b596..b26e721`
+- **Verdict**: Approved
+
+Reviewed migration 0015, store caller flip, and handler test additions. No issues found.
+
+- Migration 0015 dynamically resolves FK name via pg_constraint, drops indexes via loop, column via IF EXISTS. Idempotent and transactional.
+- `scheduleReadColumns` uses correlated subquery to derive linked_session_id from the new canonical direction. Acceptable for K-12 scale.
+- `StartScheduledSession` writes `sessions.scheduled_session_id` in INSERT, no longer writes old backref. Dual-write cleanly removed.
+- `CompleteScheduledSession` joins via `WHERE id = (SELECT scheduled_session_id FROM sessions WHERE id = $2)`. Correct.
+- `grep -rn live_session_id platform/ src/ tests/` clean. All Go tests green.
 
 ## Post-Execution Report
 
