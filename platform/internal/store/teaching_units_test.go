@@ -773,3 +773,261 @@ func TestTeachingUnitStore_DeleteUnit_Cascades(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, docGone, "unit_documents row must be cascaded on unit delete")
 }
+
+// ── SetUnitStatus ────────────────────────────────────────────────────────────
+
+func TestTeachingUnitStore_SetUnitStatus_DraftToReviewed(t *testing.T) {
+	units, _, _, userID := setupUnitEnv(t, t.Name())
+	ctx := context.Background()
+
+	u := mustCreateUnit(t, units, CreateTeachingUnitInput{
+		Scope: "personal", ScopeID: &userID, Title: "Draft→Reviewed", CreatedBy: userID,
+	})
+	assert.Equal(t, "draft", u.Status)
+
+	updated, err := units.SetUnitStatus(ctx, u.ID, "reviewed", userID)
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	assert.Equal(t, "reviewed", updated.Status)
+
+	// No revision should be created for reviewed.
+	revs, err := units.ListRevisions(ctx, u.ID)
+	require.NoError(t, err)
+	assert.Empty(t, revs, "no revision on draft→reviewed")
+}
+
+func TestTeachingUnitStore_SetUnitStatus_ReviewedToClassroomReady_CreatesRevision(t *testing.T) {
+	units, _, _, userID := setupUnitEnv(t, t.Name())
+	ctx := context.Background()
+
+	u := mustCreateUnit(t, units, CreateTeachingUnitInput{
+		Scope: "personal", ScopeID: &userID, Title: "Reviewed→CR", CreatedBy: userID,
+	})
+
+	// Save some blocks so the snapshot is non-trivial.
+	blocks := json.RawMessage(`{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"hello"}]}]}`)
+	_, err := units.SaveDocument(ctx, u.ID, blocks)
+	require.NoError(t, err)
+
+	// draft→reviewed
+	_, err = units.SetUnitStatus(ctx, u.ID, "reviewed", userID)
+	require.NoError(t, err)
+
+	// reviewed→classroom_ready
+	updated, err := units.SetUnitStatus(ctx, u.ID, "classroom_ready", userID)
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	assert.Equal(t, "classroom_ready", updated.Status)
+
+	// Verify revision was created.
+	revs, err := units.ListRevisions(ctx, u.ID)
+	require.NoError(t, err)
+	require.Len(t, revs, 1)
+	assert.Equal(t, u.ID, revs[0].UnitID)
+	require.NotNil(t, revs[0].Reason)
+	assert.Equal(t, "classroom_ready", *revs[0].Reason)
+	assert.Equal(t, userID, revs[0].CreatedBy)
+
+	// Blocks in the revision should match what we saved.
+	var revBlocks map[string]interface{}
+	require.NoError(t, json.Unmarshal(revs[0].Blocks, &revBlocks))
+	assert.Equal(t, "doc", revBlocks["type"])
+}
+
+func TestTeachingUnitStore_SetUnitStatus_ReviewedToCoachReady_CreatesRevision(t *testing.T) {
+	units, _, _, userID := setupUnitEnv(t, t.Name())
+	ctx := context.Background()
+
+	u := mustCreateUnit(t, units, CreateTeachingUnitInput{
+		Scope: "personal", ScopeID: &userID, Title: "Reviewed→Coach", CreatedBy: userID,
+	})
+
+	_, err := units.SetUnitStatus(ctx, u.ID, "reviewed", userID)
+	require.NoError(t, err)
+
+	updated, err := units.SetUnitStatus(ctx, u.ID, "coach_ready", userID)
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	assert.Equal(t, "coach_ready", updated.Status)
+
+	revs, err := units.ListRevisions(ctx, u.ID)
+	require.NoError(t, err)
+	require.Len(t, revs, 1)
+	require.NotNil(t, revs[0].Reason)
+	assert.Equal(t, "coach_ready", *revs[0].Reason)
+}
+
+func TestTeachingUnitStore_SetUnitStatus_InvalidTransitions(t *testing.T) {
+	units, _, _, userID := setupUnitEnv(t, t.Name())
+	ctx := context.Background()
+
+	tests := []struct {
+		name          string
+		initialStatus string
+		targetStatus  string
+	}{
+		{"draft→classroom_ready (skips reviewed)", "draft", "classroom_ready"},
+		{"draft→coach_ready (skips reviewed)", "draft", "coach_ready"},
+		{"draft→archived", "draft", "archived"},
+		{"classroom_ready→reviewed (backwards)", "classroom_ready", "reviewed"},
+		{"classroom_ready→coach_ready (lateral)", "classroom_ready", "coach_ready"},
+		{"coach_ready→classroom_ready (lateral)", "coach_ready", "classroom_ready"},
+		{"reviewed→draft (backwards)", "reviewed", "draft"},
+		{"classroom_ready→draft (backwards)", "classroom_ready", "draft"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			u := mustCreateUnit(t, units, CreateTeachingUnitInput{
+				Scope: "personal", ScopeID: &userID, Title: "Invalid-" + tt.name,
+				Status: tt.initialStatus, CreatedBy: userID,
+			})
+
+			_, err := units.SetUnitStatus(ctx, u.ID, tt.targetStatus, userID)
+			assert.ErrorIs(t, err, ErrInvalidTransition, "transition %s should be invalid", tt.name)
+		})
+	}
+}
+
+func TestTeachingUnitStore_SetUnitStatus_ArchiveFromReviewed(t *testing.T) {
+	units, _, _, userID := setupUnitEnv(t, t.Name())
+	ctx := context.Background()
+
+	u := mustCreateUnit(t, units, CreateTeachingUnitInput{
+		Scope: "personal", ScopeID: &userID, Title: "Archive-Reviewed", CreatedBy: userID,
+	})
+	_, err := units.SetUnitStatus(ctx, u.ID, "reviewed", userID)
+	require.NoError(t, err)
+
+	archived, err := units.SetUnitStatus(ctx, u.ID, "archived", userID)
+	require.NoError(t, err)
+	require.NotNil(t, archived)
+	assert.Equal(t, "archived", archived.Status)
+}
+
+func TestTeachingUnitStore_SetUnitStatus_ArchiveFromClassroomReady(t *testing.T) {
+	units, _, _, userID := setupUnitEnv(t, t.Name())
+	ctx := context.Background()
+
+	u := mustCreateUnit(t, units, CreateTeachingUnitInput{
+		Scope: "personal", ScopeID: &userID, Title: "Archive-CR",
+		Status: "classroom_ready", CreatedBy: userID,
+	})
+
+	archived, err := units.SetUnitStatus(ctx, u.ID, "archived", userID)
+	require.NoError(t, err)
+	require.NotNil(t, archived)
+	assert.Equal(t, "archived", archived.Status)
+}
+
+func TestTeachingUnitStore_SetUnitStatus_UnarchiveToClassroomReady_CreatesRevision(t *testing.T) {
+	units, _, _, userID := setupUnitEnv(t, t.Name())
+	ctx := context.Background()
+
+	u := mustCreateUnit(t, units, CreateTeachingUnitInput{
+		Scope: "personal", ScopeID: &userID, Title: "Unarchive",
+		Status: "archived", CreatedBy: userID,
+	})
+
+	// Save blocks before unarchive so the snapshot captures them.
+	blocks := json.RawMessage(`{"type":"doc","content":[{"type":"paragraph"}]}`)
+	_, err := units.SaveDocument(ctx, u.ID, blocks)
+	require.NoError(t, err)
+
+	updated, err := units.SetUnitStatus(ctx, u.ID, "classroom_ready", userID)
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	assert.Equal(t, "classroom_ready", updated.Status)
+
+	// Revision should exist.
+	revs, err := units.ListRevisions(ctx, u.ID)
+	require.NoError(t, err)
+	require.Len(t, revs, 1)
+	require.NotNil(t, revs[0].Reason)
+	assert.Equal(t, "classroom_ready", *revs[0].Reason)
+}
+
+func TestTeachingUnitStore_SetUnitStatus_NonExistentUnit(t *testing.T) {
+	units, _, _, userID := setupUnitEnv(t, t.Name())
+	ctx := context.Background()
+
+	_, err := units.SetUnitStatus(ctx, "00000000-0000-0000-0000-000000000000", "reviewed", userID)
+	assert.ErrorIs(t, err, ErrInvalidTransition)
+}
+
+// ── ListRevisions / GetRevision ─────────────────────────────────────────────
+
+func TestTeachingUnitStore_ListRevisions_Ordered(t *testing.T) {
+	units, _, _, userID := setupUnitEnv(t, t.Name())
+	ctx := context.Background()
+
+	u := mustCreateUnit(t, units, CreateTeachingUnitInput{
+		Scope: "personal", ScopeID: &userID, Title: "Rev-Order", CreatedBy: userID,
+	})
+
+	// draft→reviewed→classroom_ready (revision 1)
+	_, err := units.SetUnitStatus(ctx, u.ID, "reviewed", userID)
+	require.NoError(t, err)
+	_, err = units.SetUnitStatus(ctx, u.ID, "classroom_ready", userID)
+	require.NoError(t, err)
+
+	// classroom_ready→archived→classroom_ready (revision 2)
+	_, err = units.SetUnitStatus(ctx, u.ID, "archived", userID)
+	require.NoError(t, err)
+	_, err = units.SetUnitStatus(ctx, u.ID, "classroom_ready", userID)
+	require.NoError(t, err)
+
+	revs, err := units.ListRevisions(ctx, u.ID)
+	require.NoError(t, err)
+	require.Len(t, revs, 2)
+
+	// Ordered by created_at DESC — newest first.
+	assert.True(t, !revs[0].CreatedAt.Before(revs[1].CreatedAt),
+		"revisions should be ordered DESC by created_at")
+}
+
+func TestTeachingUnitStore_ListRevisions_EmptyForUnpublished(t *testing.T) {
+	units, _, _, userID := setupUnitEnv(t, t.Name())
+	ctx := context.Background()
+
+	u := mustCreateUnit(t, units, CreateTeachingUnitInput{
+		Scope: "personal", ScopeID: &userID, Title: "Never Published", CreatedBy: userID,
+	})
+
+	revs, err := units.ListRevisions(ctx, u.ID)
+	require.NoError(t, err)
+	assert.Empty(t, revs)
+}
+
+func TestTeachingUnitStore_GetRevision(t *testing.T) {
+	units, _, _, userID := setupUnitEnv(t, t.Name())
+	ctx := context.Background()
+
+	u := mustCreateUnit(t, units, CreateTeachingUnitInput{
+		Scope: "personal", ScopeID: &userID, Title: "Get-Rev", CreatedBy: userID,
+	})
+
+	_, err := units.SetUnitStatus(ctx, u.ID, "reviewed", userID)
+	require.NoError(t, err)
+	_, err = units.SetUnitStatus(ctx, u.ID, "classroom_ready", userID)
+	require.NoError(t, err)
+
+	revs, err := units.ListRevisions(ctx, u.ID)
+	require.NoError(t, err)
+	require.Len(t, revs, 1)
+
+	got, err := units.GetRevision(ctx, revs[0].ID)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, revs[0].ID, got.ID)
+	assert.Equal(t, u.ID, got.UnitID)
+}
+
+func TestTeachingUnitStore_GetRevision_NotFound(t *testing.T) {
+	units, _, _, _ := setupUnitEnv(t, t.Name())
+	ctx := context.Background()
+
+	got, err := units.GetRevision(ctx, "00000000-0000-0000-0000-000000000000")
+	require.NoError(t, err)
+	assert.Nil(t, got)
+}
