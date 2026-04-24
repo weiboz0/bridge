@@ -229,6 +229,12 @@ func main() {
 
 		adminH := &handlers.AdminHandler{Orgs: stores.Orgs, Users: stores.Users, Stats: stores.Stats, DB: database}
 		adminH.Routes(r)
+
+		unitH := &handlers.TeachingUnitHandler{
+			Units: stores.TeachingUnits,
+			Orgs:  stores.Orgs,
+		}
+		unitH.Routes(r)
 	})
 
 	// Start server

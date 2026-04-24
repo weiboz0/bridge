@@ -2,11 +2,13 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"regexp"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/lib/pq"
 )
 
 var uuidRegex = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
@@ -49,6 +51,26 @@ func requireUUID(w http.ResponseWriter, r *http.Request, param string) (string, 
 		return "", false
 	}
 	return val, true
+}
+
+// isConstraintError returns true if err is a PostgreSQL constraint violation
+// (unique, check, foreign-key). Callers should map these to 409 Conflict.
+func isConstraintError(err error) bool {
+	var pqErr *pq.Error
+	if errors.As(err, &pqErr) {
+		// 23xxx family: integrity constraint violations.
+		switch pqErr.Code {
+		case "23000", // integrity_constraint_violation
+			"23001", // restrict_violation
+			"23502", // not_null_violation
+			"23503", // foreign_key_violation
+			"23505", // unique_violation
+			"23514", // check_violation
+			"23P01": // exclusion_violation
+			return true
+		}
+	}
+	return false
 }
 
 // ValidateUUIDParam returns a middleware that validates a named URL param is a valid UUID.

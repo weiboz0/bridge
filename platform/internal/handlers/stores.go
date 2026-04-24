@@ -26,6 +26,7 @@ type Stores struct {
 	Attempts      *store.AttemptStore
 	Solutions     *store.ProblemSolutionStore
 	TopicProblems *store.TopicProblemStore
+	TeachingUnits *store.TeachingUnitStore
 }
 
 // NewStores creates all stores from a database connection.
@@ -49,5 +50,6 @@ func NewStores(db *sql.DB) *Stores {
 		Attempts:      store.NewAttemptStore(db),
 		Solutions:     store.NewProblemSolutionStore(db),
 		TopicProblems: store.NewTopicProblemStore(db),
+		TeachingUnits: store.NewTeachingUnitStore(db),
 	}
 }

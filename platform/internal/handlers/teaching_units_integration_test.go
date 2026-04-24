@@ -1,0 +1,806 @@
+package handlers
+
+import (
+	"bytes"
+	"context"
+	"database/sql"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/weiboz0/bridge/platform/internal/auth"
+	"github.com/weiboz0/bridge/platform/internal/store"
+)
+
+// unitFixture is the world a TeachingUnit integration test runs against:
+// two orgs, a handful of users wired into them in various roles, and a
+// fully-built TeachingUnitHandler.
+type unitFixture struct {
+	sqlDB    *sql.DB
+	h        *TeachingUnitHandler
+	org1     *store.Org
+	org2     *store.Org
+	admin    *store.RegisteredUser // platform admin
+	teacher1 *store.RegisteredUser // org1 teacher
+	student1 *store.RegisteredUser // org1 student
+	teacher2 *store.RegisteredUser // org2 teacher
+	outsider *store.RegisteredUser // no orgs
+}
+
+// newUnitFixture builds a clean-slate handler + users + orgs.
+func newUnitFixture(t *testing.T, suffix string) *unitFixture {
+	t.Helper()
+	db := integrationDB(t) // reuses helper from problems_integration_test.go
+	ctx := context.Background()
+
+	orgs := store.NewOrgStore(db)
+	users := store.NewUserStore(db)
+
+	h := &TeachingUnitHandler{
+		Units: store.NewTeachingUnitStore(db),
+		Orgs:  orgs,
+	}
+
+	mkOrg := func(label string) *store.Org {
+		org, err := orgs.CreateOrg(ctx, store.CreateOrgInput{
+			Name:         "UnitOrg " + label,
+			Slug:         "unit-org-" + label,
+			Type:         "school",
+			ContactEmail: "unit-" + label + "@example.com",
+			ContactName:  "Admin " + label,
+		})
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			db.ExecContext(ctx, "DELETE FROM org_memberships WHERE org_id = $1", org.ID)
+			db.ExecContext(ctx, "DELETE FROM organizations WHERE id = $1", org.ID)
+		})
+		return org
+	}
+	mkUser := func(label string) *store.RegisteredUser {
+		u, err := users.RegisterUser(ctx, store.RegisterInput{
+			Name:     "UnitUser " + label,
+			Email:    "unit-" + label + "@example.com",
+			Password: "testpassword123",
+		})
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			db.ExecContext(ctx, "DELETE FROM unit_documents WHERE unit_id IN (SELECT id FROM teaching_units WHERE created_by = $1)", u.ID)
+			db.ExecContext(ctx, "DELETE FROM teaching_units WHERE created_by = $1 OR scope_id = $1", u.ID)
+			db.ExecContext(ctx, "DELETE FROM org_memberships WHERE user_id = $1", u.ID)
+			db.ExecContext(ctx, "DELETE FROM auth_providers WHERE user_id = $1", u.ID)
+			db.ExecContext(ctx, "DELETE FROM users WHERE id = $1", u.ID)
+		})
+		return u
+	}
+
+	fx := &unitFixture{sqlDB: db, h: h}
+	fx.org1 = mkOrg(suffix + "-1")
+	fx.org2 = mkOrg(suffix + "-2")
+	fx.admin = mkUser(suffix + "-admin")
+	fx.teacher1 = mkUser(suffix + "-teacher1")
+	fx.student1 = mkUser(suffix + "-student1")
+	fx.teacher2 = mkUser(suffix + "-teacher2")
+	fx.outsider = mkUser(suffix + "-outsider")
+
+	addMember := func(org *store.Org, userID, role string) {
+		_, err := orgs.AddOrgMember(ctx, store.AddMemberInput{
+			OrgID: org.ID, UserID: userID, Role: role, Status: "active",
+		})
+		require.NoError(t, err)
+	}
+	addMember(fx.org1, fx.teacher1.ID, "teacher")
+	addMember(fx.org1, fx.student1.ID, "student")
+	addMember(fx.org2, fx.teacher2.ID, "teacher")
+
+	return fx
+}
+
+func (fx *unitFixture) claims(u *store.RegisteredUser, isPlatformAdmin bool) *auth.Claims {
+	return &auth.Claims{UserID: u.ID, Email: u.Email, Name: u.Name, IsPlatformAdmin: isPlatformAdmin}
+}
+
+// mkUnit creates a teaching unit directly via the store (bypassing the handler)
+// and registers a cleanup. Status defaults to "draft".
+func (fx *unitFixture) mkUnit(t *testing.T, scope string, scopeID *string, status, title string, createdBy string) *store.TeachingUnit {
+	t.Helper()
+	ctx := context.Background()
+	u, err := fx.h.Units.CreateUnit(ctx, store.CreateTeachingUnitInput{
+		Scope:     scope,
+		ScopeID:   scopeID,
+		Title:     title,
+		Status:    status,
+		CreatedBy: createdBy,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, u)
+	t.Cleanup(func() {
+		fx.sqlDB.ExecContext(ctx, "DELETE FROM unit_documents WHERE unit_id = $1", u.ID)
+		fx.sqlDB.ExecContext(ctx, "DELETE FROM teaching_units WHERE id = $1", u.ID)
+	})
+	return u
+}
+
+// -------------------- HTTP helpers --------------------
+
+func doUnitGet(t *testing.T, h http.HandlerFunc, path string, params map[string]string, claims *auth.Claims) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	if claims != nil {
+		req = withClaims(req, claims)
+	}
+	if params != nil {
+		req = withChiParams(req, params)
+	}
+	w := httptest.NewRecorder()
+	h(w, req)
+	return w
+}
+
+func doUnitPost(t *testing.T, h http.HandlerFunc, path string, body any, claims *auth.Claims) *httptest.ResponseRecorder {
+	t.Helper()
+	b, err := json.Marshal(body)
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(b))
+	if claims != nil {
+		req = withClaims(req, claims)
+	}
+	w := httptest.NewRecorder()
+	h(w, req)
+	return w
+}
+
+func doUnitPatch(t *testing.T, h http.HandlerFunc, path string, body any, params map[string]string, claims *auth.Claims) *httptest.ResponseRecorder {
+	t.Helper()
+	b, err := json.Marshal(body)
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodPatch, path, bytes.NewReader(b))
+	if claims != nil {
+		req = withClaims(req, claims)
+	}
+	if params != nil {
+		req = withChiParams(req, params)
+	}
+	w := httptest.NewRecorder()
+	h(w, req)
+	return w
+}
+
+func doUnitDelete(t *testing.T, h http.HandlerFunc, path string, params map[string]string, claims *auth.Claims) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodDelete, path, nil)
+	if claims != nil {
+		req = withClaims(req, claims)
+	}
+	if params != nil {
+		req = withChiParams(req, params)
+	}
+	w := httptest.NewRecorder()
+	h(w, req)
+	return w
+}
+
+func doUnitPut(t *testing.T, h http.HandlerFunc, path string, body any, params map[string]string, claims *auth.Claims) *httptest.ResponseRecorder {
+	t.Helper()
+	b, err := json.Marshal(body)
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodPut, path, bytes.NewReader(b))
+	if claims != nil {
+		req = withClaims(req, claims)
+	}
+	if params != nil {
+		req = withChiParams(req, params)
+	}
+	w := httptest.NewRecorder()
+	h(w, req)
+	return w
+}
+
+// ==================== CreateUnit ====================
+
+func TestTeachingUnitHandler_Create_PlatformAdmin_201(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	body := map[string]any{"scope": "platform", "title": "Global Unit"}
+	w := doUnitPost(t, fx.h.CreateUnit, "/api/units", body, fx.claims(fx.admin, true))
+	assert.Equal(t, http.StatusCreated, w.Code)
+	var resp store.TeachingUnit
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "Global Unit", resp.Title)
+	assert.Equal(t, "draft", resp.Status)
+	if resp.ID != "" {
+		ctx := context.Background()
+		fx.sqlDB.ExecContext(ctx, "DELETE FROM unit_documents WHERE unit_id = $1", resp.ID)
+		fx.sqlDB.ExecContext(ctx, "DELETE FROM teaching_units WHERE id = $1", resp.ID)
+	}
+}
+
+func TestTeachingUnitHandler_Create_OrgTeacher_201(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	body := map[string]any{"scope": "org", "scopeId": fx.org1.ID, "title": "Org Unit"}
+	w := doUnitPost(t, fx.h.CreateUnit, "/api/units", body, fx.claims(fx.teacher1, false))
+	assert.Equal(t, http.StatusCreated, w.Code)
+	var resp store.TeachingUnit
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "Org Unit", resp.Title)
+	if resp.ID != "" {
+		ctx := context.Background()
+		fx.sqlDB.ExecContext(ctx, "DELETE FROM unit_documents WHERE unit_id = $1", resp.ID)
+		fx.sqlDB.ExecContext(ctx, "DELETE FROM teaching_units WHERE id = $1", resp.ID)
+	}
+}
+
+func TestTeachingUnitHandler_Create_OrgStudent_403(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	body := map[string]any{"scope": "org", "scopeId": fx.org1.ID, "title": "Org Unit"}
+	w := doUnitPost(t, fx.h.CreateUnit, "/api/units", body, fx.claims(fx.student1, false))
+	assert.Equal(t, http.StatusForbidden, w.Code)
+}
+
+func TestTeachingUnitHandler_Create_OrgTeacher_OtherOrg_403(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	// teacher1 is in org1, tries to create in org2.
+	body := map[string]any{"scope": "org", "scopeId": fx.org2.ID, "title": "Org2 Unit"}
+	w := doUnitPost(t, fx.h.CreateUnit, "/api/units", body, fx.claims(fx.teacher1, false))
+	assert.Equal(t, http.StatusForbidden, w.Code)
+}
+
+func TestTeachingUnitHandler_Create_Personal_Self_201(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	body := map[string]any{"scope": "personal", "scopeId": fx.outsider.ID, "title": "My Unit"}
+	w := doUnitPost(t, fx.h.CreateUnit, "/api/units", body, fx.claims(fx.outsider, false))
+	assert.Equal(t, http.StatusCreated, w.Code)
+	var resp store.TeachingUnit
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	if resp.ID != "" {
+		ctx := context.Background()
+		fx.sqlDB.ExecContext(ctx, "DELETE FROM unit_documents WHERE unit_id = $1", resp.ID)
+		fx.sqlDB.ExecContext(ctx, "DELETE FROM teaching_units WHERE id = $1", resp.ID)
+	}
+}
+
+func TestTeachingUnitHandler_Create_Personal_OtherUser_403(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	body := map[string]any{"scope": "personal", "scopeId": fx.teacher1.ID, "title": "Not Mine"}
+	w := doUnitPost(t, fx.h.CreateUnit, "/api/units", body, fx.claims(fx.outsider, false))
+	assert.Equal(t, http.StatusForbidden, w.Code)
+}
+
+func TestTeachingUnitHandler_Create_Platform_NonAdmin_403(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	body := map[string]any{"scope": "platform", "title": "Global Unit"}
+	w := doUnitPost(t, fx.h.CreateUnit, "/api/units", body, fx.claims(fx.teacher1, false))
+	assert.Equal(t, http.StatusForbidden, w.Code)
+}
+
+func TestTeachingUnitHandler_Create_Platform_WithScopeID_400(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	body := map[string]any{"scope": "platform", "scopeId": fx.org1.ID, "title": "Bad"}
+	w := doUnitPost(t, fx.h.CreateUnit, "/api/units", body, fx.claims(fx.admin, true))
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestTeachingUnitHandler_Create_EmptyTitle_400(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	body := map[string]any{"scope": "personal", "scopeId": fx.outsider.ID, "title": ""}
+	w := doUnitPost(t, fx.h.CreateUnit, "/api/units", body, fx.claims(fx.outsider, false))
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestTeachingUnitHandler_Create_InvalidScope_400(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	body := map[string]any{"scope": "galaxy", "title": "Bad Scope"}
+	w := doUnitPost(t, fx.h.CreateUnit, "/api/units", body, fx.claims(fx.admin, true))
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestTeachingUnitHandler_Create_NoAuth_401(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	body := map[string]any{"scope": "personal", "scopeId": fx.outsider.ID, "title": "No auth"}
+	w := doUnitPost(t, fx.h.CreateUnit, "/api/units", body, nil)
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
+// ==================== GetUnit ====================
+
+func TestTeachingUnitHandler_Get_OrgTeacher_200(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Org Draft", fx.teacher1.ID)
+	w := doUnitGet(t, fx.h.GetUnit, "/api/units/"+u.ID, map[string]string{"id": u.ID}, fx.claims(fx.teacher1, false))
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestTeachingUnitHandler_Get_OrgStudent_404(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "classroom_ready", "Ready Unit", fx.teacher1.ID)
+	// Plan-031 narrowing: org students are denied regardless of status.
+	w := doUnitGet(t, fx.h.GetUnit, "/api/units/"+u.ID, map[string]string{"id": u.ID}, fx.claims(fx.student1, false))
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func TestTeachingUnitHandler_Get_OrgDraft_OtherOrgTeacher_404(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Org1 Draft", fx.teacher1.ID)
+	// teacher2 is in org2, not org1.
+	w := doUnitGet(t, fx.h.GetUnit, "/api/units/"+u.ID, map[string]string{"id": u.ID}, fx.claims(fx.teacher2, false))
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func TestTeachingUnitHandler_Get_PlatformAdmin_200(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Admin View", fx.teacher1.ID)
+	w := doUnitGet(t, fx.h.GetUnit, "/api/units/"+u.ID, map[string]string{"id": u.ID}, fx.claims(fx.admin, true))
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestTeachingUnitHandler_Get_Personal_Owner_200(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	uid := fx.outsider.ID
+	u := fx.mkUnit(t, "personal", &uid, "draft", "My Unit", fx.outsider.ID)
+	w := doUnitGet(t, fx.h.GetUnit, "/api/units/"+u.ID, map[string]string{"id": u.ID}, fx.claims(fx.outsider, false))
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestTeachingUnitHandler_Get_Personal_NonOwner_404(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	uid := fx.outsider.ID
+	u := fx.mkUnit(t, "personal", &uid, "draft", "My Unit", fx.outsider.ID)
+	w := doUnitGet(t, fx.h.GetUnit, "/api/units/"+u.ID, map[string]string{"id": u.ID}, fx.claims(fx.teacher1, false))
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func TestTeachingUnitHandler_Get_Platform_ClassroomReady_AnyAuth_200(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	u := fx.mkUnit(t, "platform", nil, "classroom_ready", "Global Ready", fx.admin.ID)
+	for _, c := range []*auth.Claims{
+		fx.claims(fx.teacher1, false),
+		fx.claims(fx.student1, false),
+		fx.claims(fx.outsider, false),
+	} {
+		w := doUnitGet(t, fx.h.GetUnit, "/api/units/"+u.ID, map[string]string{"id": u.ID}, c)
+		assert.Equal(t, http.StatusOK, w.Code, "user %s should see platform classroom_ready unit", c.Email)
+	}
+}
+
+func TestTeachingUnitHandler_Get_Platform_Draft_NonAdmin_404(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	u := fx.mkUnit(t, "platform", nil, "draft", "Platform Draft", fx.admin.ID)
+	w := doUnitGet(t, fx.h.GetUnit, "/api/units/"+u.ID, map[string]string{"id": u.ID}, fx.claims(fx.teacher1, false))
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func TestTeachingUnitHandler_Get_NotFound_404(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	fakeID := "00000000-0000-0000-0000-000000000001"
+	w := doUnitGet(t, fx.h.GetUnit, "/api/units/"+fakeID, map[string]string{"id": fakeID}, fx.claims(fx.admin, true))
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+// ==================== UpdateUnit ====================
+
+func TestTeachingUnitHandler_Update_OrgTeacher_200(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Original", fx.teacher1.ID)
+	w := doUnitPatch(t, fx.h.UpdateUnit, "/api/units/"+u.ID,
+		map[string]any{"title": "Updated"},
+		map[string]string{"id": u.ID},
+		fx.claims(fx.teacher1, false),
+	)
+	assert.Equal(t, http.StatusOK, w.Code)
+	var resp store.TeachingUnit
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "Updated", resp.Title)
+}
+
+func TestTeachingUnitHandler_Update_OrgStudent_404(t *testing.T) {
+	// Students can't view org units in plan 031, so they get 404.
+	fx := newUnitFixture(t, t.Name())
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Org Unit", fx.teacher1.ID)
+	w := doUnitPatch(t, fx.h.UpdateUnit, "/api/units/"+u.ID,
+		map[string]any{"title": "Hack"},
+		map[string]string{"id": u.ID},
+		fx.claims(fx.student1, false),
+	)
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func TestTeachingUnitHandler_Update_Outsider_404(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Org Unit", fx.teacher1.ID)
+	w := doUnitPatch(t, fx.h.UpdateUnit, "/api/units/"+u.ID,
+		map[string]any{"title": "Hack"},
+		map[string]string{"id": u.ID},
+		fx.claims(fx.outsider, false),
+	)
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func TestTeachingUnitHandler_Update_OrgTeacher_OtherOrg_404(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Org1 Unit", fx.teacher1.ID)
+	// teacher2 is in org2 only — can't view org1 units.
+	w := doUnitPatch(t, fx.h.UpdateUnit, "/api/units/"+u.ID,
+		map[string]any{"title": "Hack"},
+		map[string]string{"id": u.ID},
+		fx.claims(fx.teacher2, false),
+	)
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func TestTeachingUnitHandler_Update_EmptyTitle_400(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Original", fx.teacher1.ID)
+	w := doUnitPatch(t, fx.h.UpdateUnit, "/api/units/"+u.ID,
+		map[string]any{"title": ""},
+		map[string]string{"id": u.ID},
+		fx.claims(fx.teacher1, false),
+	)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestTeachingUnitHandler_Update_InvalidStatus_400(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Original", fx.teacher1.ID)
+	w := doUnitPatch(t, fx.h.UpdateUnit, "/api/units/"+u.ID,
+		map[string]any{"status": "galaxy"},
+		map[string]string{"id": u.ID},
+		fx.claims(fx.teacher1, false),
+	)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestTeachingUnitHandler_Update_NoAuth_401(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Org Unit", fx.teacher1.ID)
+	w := doUnitPatch(t, fx.h.UpdateUnit, "/api/units/"+u.ID,
+		map[string]any{"title": "Hack"},
+		map[string]string{"id": u.ID},
+		nil,
+	)
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
+// ==================== DeleteUnit ====================
+
+func TestTeachingUnitHandler_Delete_OrgTeacher_204(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	// Create directly via store — we don't want the cleanup from mkUnit since deletion is the test.
+	ctx := context.Background()
+	u, err := fx.h.Units.CreateUnit(ctx, store.CreateTeachingUnitInput{
+		Scope: "org", ScopeID: &fx.org1.ID,
+		Title: "To Delete", Status: "draft", CreatedBy: fx.teacher1.ID,
+	})
+	require.NoError(t, err)
+
+	w := doUnitDelete(t, fx.h.DeleteUnit, "/api/units/"+u.ID, map[string]string{"id": u.ID}, fx.claims(fx.teacher1, false))
+	assert.Equal(t, http.StatusNoContent, w.Code)
+
+	// Verify the unit is gone.
+	got, err := fx.h.Units.GetUnit(ctx, u.ID)
+	require.NoError(t, err)
+	assert.Nil(t, got)
+}
+
+func TestTeachingUnitHandler_Delete_Cascade_DocumentGone(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	ctx := context.Background()
+	u, err := fx.h.Units.CreateUnit(ctx, store.CreateTeachingUnitInput{
+		Scope: "org", ScopeID: &fx.org1.ID,
+		Title: "Has Document", Status: "draft", CreatedBy: fx.teacher1.ID,
+	})
+	require.NoError(t, err)
+
+	// Confirm unit_documents row exists after creation.
+	doc, err := fx.h.Units.GetDocument(ctx, u.ID)
+	require.NoError(t, err)
+	require.NotNil(t, doc, "CreateUnit should seed a unit_documents row")
+
+	// Delete via handler.
+	w := doUnitDelete(t, fx.h.DeleteUnit, "/api/units/"+u.ID, map[string]string{"id": u.ID}, fx.claims(fx.teacher1, false))
+	require.Equal(t, http.StatusNoContent, w.Code)
+
+	// The document row should be cascade-deleted.
+	doc2, err := fx.h.Units.GetDocument(ctx, u.ID)
+	require.NoError(t, err)
+	assert.Nil(t, doc2, "unit_documents row should be deleted by cascade")
+}
+
+func TestTeachingUnitHandler_Delete_OtherOrgTeacher_404(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Org1 Unit", fx.teacher1.ID)
+	w := doUnitDelete(t, fx.h.DeleteUnit, "/api/units/"+u.ID, map[string]string{"id": u.ID}, fx.claims(fx.teacher2, false))
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func TestTeachingUnitHandler_Delete_OrgStudent_404(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Org Unit", fx.teacher1.ID)
+	w := doUnitDelete(t, fx.h.DeleteUnit, "/api/units/"+u.ID, map[string]string{"id": u.ID}, fx.claims(fx.student1, false))
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+// ==================== GetDocument ====================
+
+func TestTeachingUnitHandler_GetDocument_NewUnit_HasEmptyDoc(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Doc Unit", fx.teacher1.ID)
+	w := doUnitGet(t, fx.h.GetDocument, "/api/units/"+u.ID+"/document", map[string]string{"id": u.ID}, fx.claims(fx.teacher1, false))
+	assert.Equal(t, http.StatusOK, w.Code)
+	var resp store.UnitDocument
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, u.ID, resp.UnitID)
+	assert.NotNil(t, resp.Blocks)
+}
+
+func TestTeachingUnitHandler_GetDocument_NoAccess_404(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Doc Unit", fx.teacher1.ID)
+	w := doUnitGet(t, fx.h.GetDocument, "/api/units/"+u.ID+"/document", map[string]string{"id": u.ID}, fx.claims(fx.outsider, false))
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+// ==================== SaveDocument ====================
+
+func TestTeachingUnitHandler_SaveDocument_ValidDoc_200(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Doc Unit", fx.teacher1.ID)
+
+	validDoc := map[string]any{
+		"type": "doc",
+		"content": []any{
+			map[string]any{
+				"type":  "prose",
+				"attrs": map[string]any{"id": "blk-001"},
+			},
+		},
+	}
+
+	w := doUnitPut(t, fx.h.SaveDocument, "/api/units/"+u.ID+"/document", validDoc, map[string]string{"id": u.ID}, fx.claims(fx.teacher1, false))
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var resp store.UnitDocument
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, u.ID, resp.UnitID)
+}
+
+func TestTeachingUnitHandler_SaveDocument_Roundtrip(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Roundtrip Unit", fx.teacher1.ID)
+
+	doc := map[string]any{
+		"type": "doc",
+		"content": []any{
+			map[string]any{
+				"type":  "prose",
+				"attrs": map[string]any{"id": "blk-abc"},
+				"content": []any{
+					map[string]any{"type": "text", "text": "Hello World"},
+				},
+			},
+		},
+	}
+
+	// Save.
+	w := doUnitPut(t, fx.h.SaveDocument, "/api/units/"+u.ID+"/document", doc, map[string]string{"id": u.ID}, fx.claims(fx.teacher1, false))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	// Read back via GET.
+	w2 := doUnitGet(t, fx.h.GetDocument, "/api/units/"+u.ID+"/document", map[string]string{"id": u.ID}, fx.claims(fx.teacher1, false))
+	require.Equal(t, http.StatusOK, w2.Code)
+
+	var resp store.UnitDocument
+	require.NoError(t, json.Unmarshal(w2.Body.Bytes(), &resp))
+
+	var roundtripped map[string]any
+	require.NoError(t, json.Unmarshal(resp.Blocks, &roundtripped))
+	assert.Equal(t, "doc", roundtripped["type"])
+	content, ok := roundtripped["content"].([]any)
+	require.True(t, ok)
+	require.Len(t, content, 1)
+}
+
+func TestTeachingUnitHandler_SaveDocument_OrgStudent_404(t *testing.T) {
+	// Plan-031: org students can't view org units, so they get 404 on document save.
+	fx := newUnitFixture(t, t.Name())
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Doc Unit", fx.teacher1.ID)
+	doc := map[string]any{"type": "doc", "content": []any{}}
+	w := doUnitPut(t, fx.h.SaveDocument, "/api/units/"+u.ID+"/document", doc, map[string]string{"id": u.ID}, fx.claims(fx.student1, false))
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func TestTeachingUnitHandler_SaveDocument_OtherOrgTeacher_NotEditor_404(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	// teacher2 is in org2, cannot view org1 units → 404.
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Doc Unit", fx.teacher1.ID)
+	doc := map[string]any{"type": "doc", "content": []any{}}
+	w := doUnitPut(t, fx.h.SaveDocument, "/api/units/"+u.ID+"/document", doc, map[string]string{"id": u.ID}, fx.claims(fx.teacher2, false))
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+// ---------- Document validation tests ----------
+
+func TestTeachingUnitHandler_SaveDocument_InvalidEnvelope_400(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Doc Unit", fx.teacher1.ID)
+	badDoc := map[string]any{
+		"type":    "not-doc",
+		"content": []any{},
+	}
+	w := doUnitPut(t, fx.h.SaveDocument, "/api/units/"+u.ID+"/document", badDoc, map[string]string{"id": u.ID}, fx.claims(fx.teacher1, false))
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestTeachingUnitHandler_SaveDocument_BlockMissingAttrsID_400(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Doc Unit", fx.teacher1.ID)
+	// Block at index 0 has no attrs.id.
+	badDoc := map[string]any{
+		"type": "doc",
+		"content": []any{
+			map[string]any{
+				"type":  "prose",
+				"attrs": map[string]any{},
+			},
+		},
+	}
+	w := doUnitPut(t, fx.h.SaveDocument, "/api/units/"+u.ID+"/document", badDoc, map[string]string{"id": u.ID}, fx.claims(fx.teacher1, false))
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "index 0")
+}
+
+func TestTeachingUnitHandler_SaveDocument_BlockMissingAttrsID_AtIndex3_400(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Doc Unit", fx.teacher1.ID)
+	// Blocks 0–2 valid; block 3 missing attrs.id.
+	doc := map[string]any{
+		"type": "doc",
+		"content": []any{
+			map[string]any{"type": "prose", "attrs": map[string]any{"id": "b1"}},
+			map[string]any{"type": "prose", "attrs": map[string]any{"id": "b2"}},
+			map[string]any{"type": "prose", "attrs": map[string]any{"id": "b3"}},
+			map[string]any{"type": "prose", "attrs": map[string]any{}},
+		},
+	}
+	w := doUnitPut(t, fx.h.SaveDocument, "/api/units/"+u.ID+"/document", doc, map[string]string{"id": u.ID}, fx.claims(fx.teacher1, false))
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "index 3")
+}
+
+func TestTeachingUnitHandler_SaveDocument_UnknownBlockType_400(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Doc Unit", fx.teacher1.ID)
+	// "video-embed" is not in the plan-031 allowlist.
+	badDoc := map[string]any{
+		"type": "doc",
+		"content": []any{
+			map[string]any{
+				"type":  "video-embed",
+				"attrs": map[string]any{"id": "blk-xyz"},
+			},
+		},
+	}
+	w := doUnitPut(t, fx.h.SaveDocument, "/api/units/"+u.ID+"/document", badDoc, map[string]string{"id": u.ID}, fx.claims(fx.teacher1, false))
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "video-embed")
+}
+
+func TestTeachingUnitHandler_SaveDocument_ProblemRef_Valid(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Doc Unit", fx.teacher1.ID)
+	// problem-ref is in the plan-031 allowlist.
+	doc := map[string]any{
+		"type": "doc",
+		"content": []any{
+			map[string]any{
+				"type":  "problem-ref",
+				"attrs": map[string]any{"id": "blk-pr1", "problemId": "00000000-0000-0000-0000-000000000999"},
+			},
+		},
+	}
+	w := doUnitPut(t, fx.h.SaveDocument, "/api/units/"+u.ID+"/document", doc, map[string]string{"id": u.ID}, fx.claims(fx.teacher1, false))
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestTeachingUnitHandler_SaveDocument_EmptyContent_Valid(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Doc Unit", fx.teacher1.ID)
+	// An empty content array is valid — no blocks to validate.
+	doc := map[string]any{
+		"type":    "doc",
+		"content": []any{},
+	}
+	w := doUnitPut(t, fx.h.SaveDocument, "/api/units/"+u.ID+"/document", doc, map[string]string{"id": u.ID}, fx.claims(fx.teacher1, false))
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestTeachingUnitHandler_SaveDocument_UpdatedAtBumps(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	ctx := context.Background()
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Bump Unit", fx.teacher1.ID)
+
+	before, err := fx.h.Units.GetDocument(ctx, u.ID)
+	require.NoError(t, err)
+	require.NotNil(t, before)
+
+	doc := map[string]any{
+		"type": "doc",
+		"content": []any{
+			map[string]any{"type": "prose", "attrs": map[string]any{"id": "b1"}},
+		},
+	}
+	w := doUnitPut(t, fx.h.SaveDocument, "/api/units/"+u.ID+"/document", doc, map[string]string{"id": u.ID}, fx.claims(fx.teacher1, false))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	after, err := fx.h.Units.GetDocument(ctx, u.ID)
+	require.NoError(t, err)
+	require.NotNil(t, after)
+	assert.True(t, !after.UpdatedAt.Before(before.UpdatedAt), "updated_at should be >= before")
+}
+
+// ==================== ListUnits ====================
+
+func TestTeachingUnitHandler_List_OrgScope_TeacherSeesAll(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	_ = fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Draft", fx.teacher1.ID)
+	_ = fx.mkUnit(t, "org", &fx.org1.ID, "classroom_ready", "Ready", fx.teacher1.ID)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/units?scope=org&scopeId="+fx.org1.ID, nil)
+	req = withClaims(req, fx.claims(fx.teacher1, false))
+	w := httptest.NewRecorder()
+	fx.h.ListUnits(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var resp map[string][]store.TeachingUnit
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.GreaterOrEqual(t, len(resp["items"]), 2, "teacher should see at least the 2 units created in this test")
+}
+
+func TestTeachingUnitHandler_List_OrgScope_StudentSeesNone(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	_ = fx.mkUnit(t, "org", &fx.org1.ID, "classroom_ready", "Ready", fx.teacher1.ID)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/units?scope=org&scopeId="+fx.org1.ID, nil)
+	req = withClaims(req, fx.claims(fx.student1, false))
+	w := httptest.NewRecorder()
+	fx.h.ListUnits(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var resp map[string][]store.TeachingUnit
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	// Plan-031: students denied entirely.
+	assert.Empty(t, resp["items"])
+}
+
+func TestTeachingUnitHandler_List_PlatformAdmin_SeesAll(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	_ = fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Draft", fx.teacher1.ID)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/units?scope=org&scopeId="+fx.org1.ID, nil)
+	req = withClaims(req, fx.claims(fx.admin, true))
+	w := httptest.NewRecorder()
+	fx.h.ListUnits(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var resp map[string][]store.TeachingUnit
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.GreaterOrEqual(t, len(resp["items"]), 1, "admin should see the draft unit")
+}
+
+func TestTeachingUnitHandler_List_NoAuth_401(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	req := httptest.NewRequest(http.MethodGet, "/api/units?scope=org&scopeId="+fx.org1.ID, nil)
+	w := httptest.NewRecorder()
+	fx.h.ListUnits(w, req)
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
+func TestTeachingUnitHandler_List_InvalidScope_400(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	req := httptest.NewRequest(http.MethodGet, "/api/units?scope=galaxy", nil)
+	req = withClaims(req, fx.claims(fx.admin, true))
+	w := httptest.NewRecorder()
+	fx.h.ListUnits(w, req)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
