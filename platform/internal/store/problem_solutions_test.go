@@ -253,6 +253,189 @@ func TestSolutions_Delete_NotFound_ReturnsNil(t *testing.T) {
 	assert.Nil(t, got)
 }
 
+// --- UpdateSolution: maximize branch coverage ---
+
+func TestSolutions_UpdateTitleOnly(t *testing.T) {
+	db, ps, s, orgID, userID := setupSolutionEnv(t, t.Name())
+
+	p := mustCreateProblem(t, db, ps, "org", &orgID, "published", "TitleOnly "+t.Name(), userID, nil)
+	origTitle := "Original Title"
+	sol := mustCreateSolution(t, s, CreateSolutionInput{
+		ProblemID: p.ID, Language: "python", Code: "original code",
+		Title: &origTitle, CreatedBy: userID,
+	})
+
+	newTitle := "Updated Title"
+	updated, err := s.UpdateSolution(context.Background(), sol.ID, UpdateSolutionInput{Title: &newTitle})
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	require.NotNil(t, updated.Title)
+	assert.Equal(t, "Updated Title", *updated.Title)
+	assert.Equal(t, "original code", updated.Code, "code should remain unchanged")
+}
+
+func TestSolutions_UpdateCodeOnly(t *testing.T) {
+	db, ps, s, orgID, userID := setupSolutionEnv(t, t.Name())
+
+	p := mustCreateProblem(t, db, ps, "org", &orgID, "published", "CodeOnly "+t.Name(), userID, nil)
+	title := "Keep Me"
+	sol := mustCreateSolution(t, s, CreateSolutionInput{
+		ProblemID: p.ID, Language: "go", Code: "old code",
+		Title: &title, CreatedBy: userID,
+	})
+
+	newCode := "brand new code"
+	updated, err := s.UpdateSolution(context.Background(), sol.ID, UpdateSolutionInput{Code: &newCode})
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	assert.Equal(t, "brand new code", updated.Code)
+	require.NotNil(t, updated.Title)
+	assert.Equal(t, "Keep Me", *updated.Title, "title should be unchanged")
+}
+
+func TestSolutions_UpdateNotesSetAndClear(t *testing.T) {
+	db, ps, s, orgID, userID := setupSolutionEnv(t, t.Name())
+
+	p := mustCreateProblem(t, db, ps, "org", &orgID, "published", "Notes "+t.Name(), userID, nil)
+	sol := mustCreateSolution(t, s, CreateSolutionInput{
+		ProblemID: p.ID, Language: "python", Code: "pass", CreatedBy: userID,
+	})
+	assert.Nil(t, sol.Notes, "notes should start nil")
+
+	// Set notes.
+	notes := "Some explanation"
+	updated, err := s.UpdateSolution(context.Background(), sol.ID, UpdateSolutionInput{Notes: &notes})
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	require.NotNil(t, updated.Notes)
+	assert.Equal(t, "Some explanation", *updated.Notes)
+
+	// Clear notes with empty string -> NULL.
+	empty := ""
+	cleared, err := s.UpdateSolution(context.Background(), sol.ID, UpdateSolutionInput{Notes: &empty})
+	require.NoError(t, err)
+	require.NotNil(t, cleared)
+	assert.Nil(t, cleared.Notes, "empty string notes should clear to NULL")
+}
+
+func TestSolutions_UpdateTitleSetAndClear(t *testing.T) {
+	db, ps, s, orgID, userID := setupSolutionEnv(t, t.Name())
+
+	p := mustCreateProblem(t, db, ps, "org", &orgID, "published", "TitleClear "+t.Name(), userID, nil)
+	title := "Has Title"
+	sol := mustCreateSolution(t, s, CreateSolutionInput{
+		ProblemID: p.ID, Language: "python", Code: "pass",
+		Title: &title, CreatedBy: userID,
+	})
+	require.NotNil(t, sol.Title)
+
+	// Clear title with empty string -> NULL.
+	empty := ""
+	cleared, err := s.UpdateSolution(context.Background(), sol.ID, UpdateSolutionInput{Title: &empty})
+	require.NoError(t, err)
+	require.NotNil(t, cleared)
+	assert.Nil(t, cleared.Title, "empty string title should clear to NULL")
+
+	// Set title back.
+	newTitle := "Restored"
+	restored, err := s.UpdateSolution(context.Background(), sol.ID, UpdateSolutionInput{Title: &newTitle})
+	require.NoError(t, err)
+	require.NotNil(t, restored)
+	require.NotNil(t, restored.Title)
+	assert.Equal(t, "Restored", *restored.Title)
+}
+
+func TestSolutions_UpdateApproachTagsNilVsEmpty(t *testing.T) {
+	db, ps, s, orgID, userID := setupSolutionEnv(t, t.Name())
+
+	p := mustCreateProblem(t, db, ps, "org", &orgID, "published", "TagNilEmpty "+t.Name(), userID, nil)
+	sol := mustCreateSolution(t, s, CreateSolutionInput{
+		ProblemID:    p.ID,
+		Language:     "python",
+		Code:         "pass",
+		CreatedBy:    userID,
+		ApproachTags: []string{"greedy", "sorting"},
+	})
+	assert.Equal(t, []string{"greedy", "sorting"}, sol.ApproachTags)
+
+	// nil ApproachTags = unchanged.
+	updated, err := s.UpdateSolution(context.Background(), sol.ID, UpdateSolutionInput{ApproachTags: nil})
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	assert.Equal(t, []string{"greedy", "sorting"}, updated.ApproachTags, "nil should leave tags unchanged")
+
+	// empty slice = clear.
+	cleared, err := s.UpdateSolution(context.Background(), sol.ID, UpdateSolutionInput{ApproachTags: []string{}})
+	require.NoError(t, err)
+	require.NotNil(t, cleared)
+	assert.Equal(t, []string{}, cleared.ApproachTags, "empty slice should clear tags")
+}
+
+func TestSolutions_UpdateMultipleFields(t *testing.T) {
+	db, ps, s, orgID, userID := setupSolutionEnv(t, t.Name())
+
+	p := mustCreateProblem(t, db, ps, "org", &orgID, "published", "Multi "+t.Name(), userID, nil)
+	origTitle := "Old"
+	origNotes := "Old notes"
+	sol := mustCreateSolution(t, s, CreateSolutionInput{
+		ProblemID:    p.ID,
+		Language:     "python",
+		Code:         "old code",
+		Title:        &origTitle,
+		Notes:        &origNotes,
+		ApproachTags: []string{"brute-force"},
+		CreatedBy:    userID,
+	})
+
+	newTitle := "New Title"
+	newCode := "new code"
+	newNotes := "New notes"
+	updated, err := s.UpdateSolution(context.Background(), sol.ID, UpdateSolutionInput{
+		Title:        &newTitle,
+		Code:         &newCode,
+		Notes:        &newNotes,
+		ApproachTags: []string{"dp", "memoization"},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	require.NotNil(t, updated.Title)
+	assert.Equal(t, "New Title", *updated.Title)
+	assert.Equal(t, "new code", updated.Code)
+	require.NotNil(t, updated.Notes)
+	assert.Equal(t, "New notes", *updated.Notes)
+	assert.Equal(t, []string{"dp", "memoization"}, updated.ApproachTags)
+}
+
+func TestSolutions_UpdateNonExistent_ReturnsNil(t *testing.T) {
+	_, _, s, _, _ := setupSolutionEnv(t, t.Name())
+
+	newCode := "ghost"
+	got, err := s.UpdateSolution(context.Background(), "00000000-0000-0000-0000-000000000000", UpdateSolutionInput{
+		Code: &newCode,
+	})
+	require.NoError(t, err)
+	assert.Nil(t, got, "updating a non-existent solution should return nil")
+}
+
+func TestSolutions_UpdateNoFields_ReturnsExistingUnchanged(t *testing.T) {
+	db, ps, s, orgID, userID := setupSolutionEnv(t, t.Name())
+
+	p := mustCreateProblem(t, db, ps, "org", &orgID, "published", "Noop2 "+t.Name(), userID, nil)
+	title := "Stable"
+	sol := mustCreateSolution(t, s, CreateSolutionInput{
+		ProblemID: p.ID, Language: "python", Code: "stable code",
+		Title: &title, CreatedBy: userID,
+	})
+
+	same, err := s.UpdateSolution(context.Background(), sol.ID, UpdateSolutionInput{})
+	require.NoError(t, err)
+	require.NotNil(t, same)
+	assert.Equal(t, sol.ID, same.ID)
+	assert.Equal(t, "stable code", same.Code)
+	require.NotNil(t, same.Title)
+	assert.Equal(t, "Stable", *same.Title)
+}
+
 // --- Cascade ---
 
 func TestSolutions_CascadeDeleteWithProblem(t *testing.T) {

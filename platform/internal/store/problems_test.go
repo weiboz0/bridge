@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"testing"
 
 	"github.com/lib/pq"
@@ -899,4 +900,577 @@ func TestProblemStore_ForkProblem_SourceNotFound(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Nil(t, got)
+}
+
+// --- UpdateProblem: maximize branch coverage ---
+
+func TestProblemStore_UpdateProblem_TitleOnly(t *testing.T) {
+	_, problems, _, user := setupProblemEnv(t, t.Name())
+	ctx := context.Background()
+	scopeID := user.ID
+
+	p, err := problems.CreateProblem(ctx, CreateProblemInput{
+		Scope: "personal", ScopeID: &scopeID, Title: "Original Title",
+		Description: "original desc", Difficulty: "medium",
+		CreatedBy: user.ID, Tags: []string{"arrays"},
+		StarterCode: map[string]string{"python": "pass"},
+	})
+	require.NoError(t, err)
+
+	newTitle := "Updated Title"
+	updated, err := problems.UpdateProblem(ctx, p.ID, UpdateProblemInput{Title: &newTitle})
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	assert.Equal(t, "Updated Title", updated.Title)
+	// All other fields unchanged.
+	assert.Equal(t, "original desc", updated.Description)
+	assert.Equal(t, "medium", updated.Difficulty)
+	assert.Equal(t, []string{"arrays"}, updated.Tags)
+	assert.Equal(t, map[string]string{"python": "pass"}, updated.StarterCode)
+}
+
+func TestProblemStore_UpdateProblem_SlugSetAndClear(t *testing.T) {
+	_, problems, _, user := setupProblemEnv(t, t.Name())
+	ctx := context.Background()
+	scopeID := user.ID
+
+	p, err := problems.CreateProblem(ctx, CreateProblemInput{
+		Scope: "personal", ScopeID: &scopeID, Title: "Slug Test",
+		Description: "d", CreatedBy: user.ID,
+	})
+	require.NoError(t, err)
+	assert.Nil(t, p.Slug, "slug should start nil")
+
+	// Set slug.
+	slug := "two-sum"
+	updated, err := problems.UpdateProblem(ctx, p.ID, UpdateProblemInput{Slug: &slug})
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	require.NotNil(t, updated.Slug)
+	assert.Equal(t, "two-sum", *updated.Slug)
+
+	// Clear slug with empty string -> NULL.
+	empty := ""
+	cleared, err := problems.UpdateProblem(ctx, p.ID, UpdateProblemInput{Slug: &empty})
+	require.NoError(t, err)
+	require.NotNil(t, cleared)
+	assert.Nil(t, cleared.Slug, "empty string slug should clear to NULL")
+}
+
+func TestProblemStore_UpdateProblem_Difficulty(t *testing.T) {
+	_, problems, _, user := setupProblemEnv(t, t.Name())
+	ctx := context.Background()
+	scopeID := user.ID
+
+	p, err := problems.CreateProblem(ctx, CreateProblemInput{
+		Scope: "personal", ScopeID: &scopeID, Title: "Diff Test",
+		Description: "d", CreatedBy: user.ID, Difficulty: "easy",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "easy", p.Difficulty)
+
+	hard := "hard"
+	updated, err := problems.UpdateProblem(ctx, p.ID, UpdateProblemInput{Difficulty: &hard})
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	assert.Equal(t, "hard", updated.Difficulty)
+}
+
+func TestProblemStore_UpdateProblem_GradeLevelSetAndClear(t *testing.T) {
+	_, problems, _, user := setupProblemEnv(t, t.Name())
+	ctx := context.Background()
+	scopeID := user.ID
+
+	p, err := problems.CreateProblem(ctx, CreateProblemInput{
+		Scope: "personal", ScopeID: &scopeID, Title: "GL Test",
+		Description: "d", CreatedBy: user.ID,
+	})
+	require.NoError(t, err)
+	assert.Nil(t, p.GradeLevel)
+
+	// Set grade level.
+	gl := "9-12"
+	updated, err := problems.UpdateProblem(ctx, p.ID, UpdateProblemInput{GradeLevel: &gl})
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	require.NotNil(t, updated.GradeLevel)
+	assert.Equal(t, "9-12", *updated.GradeLevel)
+
+	// Clear to nil via empty string.
+	empty := ""
+	cleared, err := problems.UpdateProblem(ctx, p.ID, UpdateProblemInput{GradeLevel: &empty})
+	require.NoError(t, err)
+	require.NotNil(t, cleared)
+	assert.Nil(t, cleared.GradeLevel)
+}
+
+func TestProblemStore_UpdateProblem_TagsNilVsEmpty(t *testing.T) {
+	_, problems, _, user := setupProblemEnv(t, t.Name())
+	ctx := context.Background()
+	scopeID := user.ID
+
+	p, err := problems.CreateProblem(ctx, CreateProblemInput{
+		Scope: "personal", ScopeID: &scopeID, Title: "Tags nil vs empty",
+		Description: "d", CreatedBy: user.ID, Tags: []string{"sorting", "dp"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"sorting", "dp"}, p.Tags)
+
+	// nil Tags = unchanged.
+	updated, err := problems.UpdateProblem(ctx, p.ID, UpdateProblemInput{Tags: nil})
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	assert.Equal(t, []string{"sorting", "dp"}, updated.Tags, "nil tags should leave unchanged")
+
+	// empty slice = clear to '{}'.
+	updated2, err := problems.UpdateProblem(ctx, p.ID, UpdateProblemInput{Tags: []string{}})
+	require.NoError(t, err)
+	require.NotNil(t, updated2)
+	assert.Equal(t, []string{}, updated2.Tags, "empty tags should clear")
+}
+
+func TestProblemStore_UpdateProblem_TimeLimitAndMemoryLimit(t *testing.T) {
+	_, problems, _, user := setupProblemEnv(t, t.Name())
+	ctx := context.Background()
+	scopeID := user.ID
+
+	p, err := problems.CreateProblem(ctx, CreateProblemInput{
+		Scope: "personal", ScopeID: &scopeID, Title: "Limits",
+		Description: "d", CreatedBy: user.ID,
+	})
+	require.NoError(t, err)
+	assert.Nil(t, p.TimeLimitMs)
+	assert.Nil(t, p.MemoryLimitMb)
+
+	// Set both limits.
+	tl := 2000
+	ml := 256
+	updated, err := problems.UpdateProblem(ctx, p.ID, UpdateProblemInput{
+		TimeLimitMs: &tl, MemoryLimitMb: &ml,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	require.NotNil(t, updated.TimeLimitMs)
+	assert.Equal(t, 2000, *updated.TimeLimitMs)
+	require.NotNil(t, updated.MemoryLimitMb)
+	assert.Equal(t, 256, *updated.MemoryLimitMb)
+
+	// Verify via GetProblem round-trip.
+	got, err := problems.GetProblem(ctx, p.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got.TimeLimitMs)
+	assert.Equal(t, 2000, *got.TimeLimitMs)
+	require.NotNil(t, got.MemoryLimitMb)
+	assert.Equal(t, 256, *got.MemoryLimitMb)
+}
+
+func TestProblemStore_UpdateProblem_MultipleFieldsAtOnce(t *testing.T) {
+	_, problems, _, user := setupProblemEnv(t, t.Name())
+	ctx := context.Background()
+	scopeID := user.ID
+
+	gl := "K-5"
+	p, err := problems.CreateProblem(ctx, CreateProblemInput{
+		Scope: "personal", ScopeID: &scopeID, Title: "Multi",
+		Description: "old", Difficulty: "easy", GradeLevel: &gl,
+		CreatedBy: user.ID, Tags: []string{"old-tag"},
+		StarterCode: map[string]string{"python": "old"},
+	})
+	require.NoError(t, err)
+
+	newTitle := "Multi Updated"
+	newDesc := "new desc"
+	newSlug := "multi-updated"
+	newDiff := "hard"
+	newGL := "6-8"
+	tl := 5000
+	ml := 512
+	updated, err := problems.UpdateProblem(ctx, p.ID, UpdateProblemInput{
+		Title:         &newTitle,
+		Description:   &newDesc,
+		Slug:          &newSlug,
+		Difficulty:    &newDiff,
+		GradeLevel:    &newGL,
+		Tags:          []string{"new-tag-1", "new-tag-2"},
+		StarterCode:   map[string]string{"go": "package main"},
+		TimeLimitMs:   &tl,
+		MemoryLimitMb: &ml,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	assert.Equal(t, "Multi Updated", updated.Title)
+	assert.Equal(t, "new desc", updated.Description)
+	require.NotNil(t, updated.Slug)
+	assert.Equal(t, "multi-updated", *updated.Slug)
+	assert.Equal(t, "hard", updated.Difficulty)
+	require.NotNil(t, updated.GradeLevel)
+	assert.Equal(t, "6-8", *updated.GradeLevel)
+	assert.Equal(t, []string{"new-tag-1", "new-tag-2"}, updated.Tags)
+	assert.Equal(t, map[string]string{"go": "package main"}, updated.StarterCode)
+	require.NotNil(t, updated.TimeLimitMs)
+	assert.Equal(t, 5000, *updated.TimeLimitMs)
+	require.NotNil(t, updated.MemoryLimitMb)
+	assert.Equal(t, 512, *updated.MemoryLimitMb)
+}
+
+func TestProblemStore_UpdateProblem_NonExistentProblem(t *testing.T) {
+	_, problems, _, _ := setupProblemEnv(t, t.Name())
+	ctx := context.Background()
+
+	newTitle := "Ghost"
+	got, err := problems.UpdateProblem(ctx, "00000000-0000-0000-0000-000000000000", UpdateProblemInput{
+		Title: &newTitle,
+	})
+	require.NoError(t, err)
+	assert.Nil(t, got, "updating a non-existent problem should return nil")
+}
+
+func TestProblemStore_UpdateProblem_NoFieldsReturnsCurrent(t *testing.T) {
+	_, problems, _, user := setupProblemEnv(t, t.Name())
+	ctx := context.Background()
+	scopeID := user.ID
+
+	p, err := problems.CreateProblem(ctx, CreateProblemInput{
+		Scope: "personal", ScopeID: &scopeID, Title: "No Change",
+		Description: "d", CreatedBy: user.ID,
+	})
+	require.NoError(t, err)
+
+	same, err := problems.UpdateProblem(ctx, p.ID, UpdateProblemInput{})
+	require.NoError(t, err)
+	require.NotNil(t, same)
+	assert.Equal(t, p.ID, same.ID)
+	assert.Equal(t, "No Change", same.Title)
+	assert.Equal(t, p.UpdatedAt, same.UpdatedAt, "updated_at should not change when no fields are set")
+}
+
+func TestProblemStore_UpdateProblem_Description(t *testing.T) {
+	_, problems, _, user := setupProblemEnv(t, t.Name())
+	ctx := context.Background()
+	scopeID := user.ID
+
+	p, err := problems.CreateProblem(ctx, CreateProblemInput{
+		Scope: "personal", ScopeID: &scopeID, Title: "Desc Test",
+		Description: "original", CreatedBy: user.ID,
+	})
+	require.NoError(t, err)
+
+	newDesc := "updated description"
+	updated, err := problems.UpdateProblem(ctx, p.ID, UpdateProblemInput{Description: &newDesc})
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	assert.Equal(t, "updated description", updated.Description)
+	assert.Equal(t, "Desc Test", updated.Title, "title unchanged")
+}
+
+// --- ForkProblem: maximize branch coverage ---
+
+func TestProblemStore_ForkProblem_CustomTitle(t *testing.T) {
+	_, problems, _, user := setupProblemEnv(t, t.Name())
+	ctx := context.Background()
+	scopeID := user.ID
+
+	source, err := problems.CreateProblem(ctx, CreateProblemInput{
+		Scope: "personal", ScopeID: &scopeID, Title: "Source",
+		Description: "d", CreatedBy: user.ID,
+	})
+	require.NoError(t, err)
+
+	customTitle := "My Custom Fork"
+	forked, err := problems.ForkProblem(ctx, source.ID, ForkTarget{
+		Scope: "personal", ScopeID: &scopeID, Title: &customTitle, CallerID: user.ID,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, forked)
+	assert.Equal(t, "My Custom Fork", forked.Title, "custom title should be used")
+}
+
+func TestProblemStore_ForkProblem_EmptyTitleFallsBackToDefault(t *testing.T) {
+	_, problems, _, user := setupProblemEnv(t, t.Name())
+	ctx := context.Background()
+	scopeID := user.ID
+
+	source, err := problems.CreateProblem(ctx, CreateProblemInput{
+		Scope: "personal", ScopeID: &scopeID, Title: "Source Title",
+		Description: "d", CreatedBy: user.ID,
+	})
+	require.NoError(t, err)
+
+	// Empty string title should fall back to "<original> (fork)".
+	emptyTitle := ""
+	forked, err := problems.ForkProblem(ctx, source.ID, ForkTarget{
+		Scope: "personal", ScopeID: &scopeID, Title: &emptyTitle, CallerID: user.ID,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, forked)
+	assert.Equal(t, "Source Title (fork)", forked.Title, "empty title should use default")
+}
+
+func TestProblemStore_ForkProblem_StatusAlwaysDraft(t *testing.T) {
+	db, problems, topic, user := setupProblemEnv(t, t.Name())
+	ctx := context.Background()
+
+	var orgID string
+	require.NoError(t, db.QueryRowContext(ctx,
+		`SELECT c.org_id FROM topics t JOIN courses c ON c.id = t.course_id WHERE t.id = $1`,
+		topic.ID).Scan(&orgID))
+
+	// Create a published source.
+	source, err := problems.CreateProblem(ctx, CreateProblemInput{
+		Scope: "org", ScopeID: &orgID, Title: "Published Source",
+		Description: "d", CreatedBy: user.ID, Status: "published",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { db.ExecContext(ctx, "DELETE FROM problems WHERE id = $1", source.ID) })
+
+	scopeID := user.ID
+	forked, err := problems.ForkProblem(ctx, source.ID, ForkTarget{
+		Scope: "personal", ScopeID: &scopeID, CallerID: user.ID,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, forked)
+	assert.Equal(t, "draft", forked.Status, "forked problem must always be draft regardless of source status")
+}
+
+func TestProblemStore_ForkProblem_CopiesOnlyCanonicalTestCases(t *testing.T) {
+	db, problems, _, user := setupProblemEnv(t, t.Name())
+	tcStore := NewTestCaseStore(db)
+	ctx := context.Background()
+	scopeID := user.ID
+
+	source, err := problems.CreateProblem(ctx, CreateProblemInput{
+		Scope: "personal", ScopeID: &scopeID, Title: "TC Copy Test",
+		Description: "d", CreatedBy: user.ID,
+	})
+	require.NoError(t, err)
+
+	// 3 canonical test cases.
+	for i := 0; i < 3; i++ {
+		_, err := tcStore.CreateTestCase(ctx, CreateTestCaseInput{
+			ProblemID: source.ID, Name: fmt.Sprintf("canonical-%d", i),
+			Stdin: "in", IsExample: i == 0, Order: i,
+		})
+		require.NoError(t, err)
+	}
+
+	// 2 private test cases (owner_id set).
+	ownerID := user.ID
+	for i := 0; i < 2; i++ {
+		_, err := tcStore.CreateTestCase(ctx, CreateTestCaseInput{
+			ProblemID: source.ID, OwnerID: &ownerID, Name: fmt.Sprintf("private-%d", i),
+			Stdin: "p", Order: i + 10,
+		})
+		require.NoError(t, err)
+	}
+
+	forked, err := problems.ForkProblem(ctx, source.ID, ForkTarget{
+		Scope: "personal", ScopeID: &scopeID, CallerID: user.ID,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, forked)
+
+	// Count canonical test cases on fork.
+	var canonCount int
+	require.NoError(t, db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM test_cases WHERE problem_id = $1 AND owner_id IS NULL`,
+		forked.ID).Scan(&canonCount))
+	assert.Equal(t, 3, canonCount, "all canonical test cases should be copied")
+
+	// Count private test cases on fork.
+	var privCount int
+	require.NoError(t, db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM test_cases WHERE problem_id = $1 AND owner_id IS NOT NULL`,
+		forked.ID).Scan(&privCount))
+	assert.Equal(t, 0, privCount, "private test cases must NOT be copied")
+}
+
+func TestProblemStore_ForkProblem_DifferentScope(t *testing.T) {
+	db, problems, topic, user := setupProblemEnv(t, t.Name())
+	ctx := context.Background()
+
+	var orgID string
+	require.NoError(t, db.QueryRowContext(ctx,
+		`SELECT c.org_id FROM topics t JOIN courses c ON c.id = t.course_id WHERE t.id = $1`,
+		topic.ID).Scan(&orgID))
+
+	// Source is platform-scoped.
+	source, err := problems.CreateProblem(ctx, CreateProblemInput{
+		Scope: "platform", Title: "Platform Source",
+		Description: "d", CreatedBy: user.ID, Status: "published",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { db.ExecContext(ctx, "DELETE FROM problems WHERE id = $1", source.ID) })
+
+	// Fork into org scope.
+	forked, err := problems.ForkProblem(ctx, source.ID, ForkTarget{
+		Scope: "org", ScopeID: &orgID, CallerID: user.ID,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, forked)
+	assert.Equal(t, "org", forked.Scope)
+	require.NotNil(t, forked.ScopeID)
+	assert.Equal(t, orgID, *forked.ScopeID)
+	require.NotNil(t, forked.ForkedFrom)
+	assert.Equal(t, source.ID, *forked.ForkedFrom)
+}
+
+func TestProblemStore_ForkProblem_SourceUnchanged(t *testing.T) {
+	_, problems, _, user := setupProblemEnv(t, t.Name())
+	ctx := context.Background()
+	scopeID := user.ID
+
+	gl := "K-5"
+	tl := 1000
+	ml := 128
+	source, err := problems.CreateProblem(ctx, CreateProblemInput{
+		Scope: "personal", ScopeID: &scopeID, Title: "Immutable Source",
+		Description: "src desc", Difficulty: "hard", GradeLevel: &gl,
+		Tags: []string{"immutable"}, CreatedBy: user.ID,
+		StarterCode:   map[string]string{"python": "pass"},
+		TimeLimitMs:   &tl,
+		MemoryLimitMb: &ml,
+	})
+	require.NoError(t, err)
+
+	_, err = problems.ForkProblem(ctx, source.ID, ForkTarget{
+		Scope: "personal", ScopeID: &scopeID, CallerID: user.ID,
+	})
+	require.NoError(t, err)
+
+	after, err := problems.GetProblem(ctx, source.ID)
+	require.NoError(t, err)
+	require.NotNil(t, after)
+	assert.Equal(t, source.Title, after.Title)
+	assert.Equal(t, source.Description, after.Description)
+	assert.Equal(t, source.Difficulty, after.Difficulty)
+	assert.Equal(t, source.Tags, after.Tags)
+	assert.Equal(t, source.StarterCode, after.StarterCode)
+	assert.Equal(t, source.Status, after.Status)
+	assert.Equal(t, source.CreatedBy, after.CreatedBy)
+	assert.Nil(t, after.ForkedFrom, "source should not have forkedFrom set")
+}
+
+func TestProblemStore_ForkProblem_CopiesNullableFields(t *testing.T) {
+	_, problems, _, user := setupProblemEnv(t, t.Name())
+	ctx := context.Background()
+	scopeID := user.ID
+
+	slug := "src-slug"
+	gl := "6-8"
+	tl := 3000
+	ml := 512
+	source, err := problems.CreateProblem(ctx, CreateProblemInput{
+		Scope: "personal", ScopeID: &scopeID, Title: "Nullable Fields",
+		Slug: &slug, Description: "d", Difficulty: "medium", GradeLevel: &gl,
+		CreatedBy: user.ID, TimeLimitMs: &tl, MemoryLimitMb: &ml,
+		Tags:        []string{"tag-a", "tag-b"},
+		StarterCode: map[string]string{"python": "x", "go": "y"},
+	})
+	require.NoError(t, err)
+
+	forked, err := problems.ForkProblem(ctx, source.ID, ForkTarget{
+		Scope: "personal", ScopeID: &scopeID, CallerID: user.ID,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, forked)
+
+	// Fork copies difficulty, gradeLevel, tags, starterCode, timeLimitMs, memoryLimitMb.
+	assert.Equal(t, "medium", forked.Difficulty)
+	require.NotNil(t, forked.GradeLevel)
+	assert.Equal(t, "6-8", *forked.GradeLevel)
+	assert.Equal(t, []string{"tag-a", "tag-b"}, forked.Tags)
+	assert.Equal(t, map[string]string{"python": "x", "go": "y"}, forked.StarterCode)
+	require.NotNil(t, forked.TimeLimitMs)
+	assert.Equal(t, 3000, *forked.TimeLimitMs)
+	require.NotNil(t, forked.MemoryLimitMb)
+	assert.Equal(t, 512, *forked.MemoryLimitMb)
+	// Fork does NOT copy slug.
+	assert.Nil(t, forked.Slug, "slug should not be copied to fork")
+}
+
+// --- scanProblemRow: exercise nullable field combinations ---
+
+func TestProblemStore_ScanProblemRow_AllNullableFieldsNull(t *testing.T) {
+	_, problems, _, user := setupProblemEnv(t, t.Name())
+	ctx := context.Background()
+
+	// Platform scope => scopeID is NULL; omit slug, gradeLevel, timeLimitMs, memoryLimitMb, forkedFrom.
+	p, err := problems.CreateProblem(ctx, CreateProblemInput{
+		Scope: "platform", Title: "All Null",
+		Description: "d", CreatedBy: user.ID, Status: "published",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { problems.DeleteProblem(ctx, p.ID) })
+
+	got, err := problems.GetProblem(ctx, p.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Nil(t, got.ScopeID)
+	assert.Nil(t, got.Slug)
+	assert.Nil(t, got.GradeLevel)
+	assert.Nil(t, got.ForkedFrom)
+	assert.Nil(t, got.TimeLimitMs)
+	assert.Nil(t, got.MemoryLimitMb)
+	assert.Equal(t, map[string]string{}, got.StarterCode)
+	assert.Equal(t, []string{}, got.Tags)
+}
+
+func TestProblemStore_ScanProblemRow_AllNullableFieldsSet(t *testing.T) {
+	_, problems, _, user := setupProblemEnv(t, t.Name())
+	ctx := context.Background()
+	scopeID := user.ID
+
+	slug := "all-set"
+	gl := "9-12"
+	tl := 5000
+	ml := 1024
+	p, err := problems.CreateProblem(ctx, CreateProblemInput{
+		Scope: "personal", ScopeID: &scopeID, Title: "All Set",
+		Slug: &slug, Description: "d", GradeLevel: &gl,
+		TimeLimitMs: &tl, MemoryLimitMb: &ml, CreatedBy: user.ID,
+		StarterCode: map[string]string{"python": "print"},
+		Tags:        []string{"t1", "t2"},
+	})
+	require.NoError(t, err)
+
+	got, err := problems.GetProblem(ctx, p.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.NotNil(t, got.ScopeID)
+	assert.Equal(t, scopeID, *got.ScopeID)
+	require.NotNil(t, got.Slug)
+	assert.Equal(t, "all-set", *got.Slug)
+	require.NotNil(t, got.GradeLevel)
+	assert.Equal(t, "9-12", *got.GradeLevel)
+	assert.Nil(t, got.ForkedFrom, "no forked_from on non-fork")
+	require.NotNil(t, got.TimeLimitMs)
+	assert.Equal(t, 5000, *got.TimeLimitMs)
+	require.NotNil(t, got.MemoryLimitMb)
+	assert.Equal(t, 1024, *got.MemoryLimitMb)
+	assert.Equal(t, map[string]string{"python": "print"}, got.StarterCode)
+	assert.Equal(t, []string{"t1", "t2"}, got.Tags)
+}
+
+func TestProblemStore_ScanProblemRow_ForkedFromSet(t *testing.T) {
+	_, problems, _, user := setupProblemEnv(t, t.Name())
+	ctx := context.Background()
+	scopeID := user.ID
+
+	source, err := problems.CreateProblem(ctx, CreateProblemInput{
+		Scope: "personal", ScopeID: &scopeID, Title: "Source for ForkedFrom",
+		Description: "d", CreatedBy: user.ID,
+	})
+	require.NoError(t, err)
+
+	forked, err := problems.ForkProblem(ctx, source.ID, ForkTarget{
+		Scope: "personal", ScopeID: &scopeID, CallerID: user.ID,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, forked)
+
+	got, err := problems.GetProblem(ctx, forked.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.NotNil(t, got.ForkedFrom)
+	assert.Equal(t, source.ID, *got.ForkedFrom)
 }
