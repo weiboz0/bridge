@@ -293,6 +293,394 @@ func TestTeachingUnitStore_UpdateUnit_SubjectTags(t *testing.T) {
 	assert.Equal(t, []string{}, cleared.SubjectTags, "empty SubjectTags must clear the array")
 }
 
+// ── UpdateUnit extended coverage ─────────────────────────────────────────────
+
+func TestTeachingUnitStore_UpdateUnit_SlugSetAndClear(t *testing.T) {
+	units, _, _, userID := setupUnitEnv(t, t.Name())
+	ctx := context.Background()
+
+	u := mustCreateUnit(t, units, CreateTeachingUnitInput{
+		Scope:     "personal",
+		ScopeID:   &userID,
+		Title:     "Slug Unit",
+		CreatedBy: userID,
+	})
+	assert.Nil(t, u.Slug, "new unit should have nil slug")
+
+	// Set slug
+	slug := "my-slug"
+	updated, err := units.UpdateUnit(ctx, u.ID, UpdateTeachingUnitInput{Slug: &slug})
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	require.NotNil(t, updated.Slug)
+	assert.Equal(t, "my-slug", *updated.Slug)
+
+	// Clear slug (empty string → NULL)
+	emptySlug := ""
+	cleared, err := units.UpdateUnit(ctx, u.ID, UpdateTeachingUnitInput{Slug: &emptySlug})
+	require.NoError(t, err)
+	require.NotNil(t, cleared)
+	assert.Nil(t, cleared.Slug, "slug should be cleared to nil when set to empty string")
+}
+
+func TestTeachingUnitStore_UpdateUnit_GradeLevelSetAndClear(t *testing.T) {
+	units, _, _, userID := setupUnitEnv(t, t.Name())
+	ctx := context.Background()
+
+	u := mustCreateUnit(t, units, CreateTeachingUnitInput{
+		Scope:     "personal",
+		ScopeID:   &userID,
+		Title:     "Grade Unit",
+		CreatedBy: userID,
+	})
+	assert.Nil(t, u.GradeLevel, "new unit should have nil grade level")
+
+	// Set grade level
+	grade := "K-5"
+	updated, err := units.UpdateUnit(ctx, u.ID, UpdateTeachingUnitInput{GradeLevel: &grade})
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	require.NotNil(t, updated.GradeLevel)
+	assert.Equal(t, "K-5", *updated.GradeLevel)
+
+	// Clear grade level (empty string → NULL)
+	emptyGrade := ""
+	cleared, err := units.UpdateUnit(ctx, u.ID, UpdateTeachingUnitInput{GradeLevel: &emptyGrade})
+	require.NoError(t, err)
+	require.NotNil(t, cleared)
+	assert.Nil(t, cleared.GradeLevel, "grade level should be cleared to nil when set to empty string")
+}
+
+func TestTeachingUnitStore_UpdateUnit_StandardsTags(t *testing.T) {
+	units, _, _, userID := setupUnitEnv(t, t.Name())
+	ctx := context.Background()
+
+	u := mustCreateUnit(t, units, CreateTeachingUnitInput{
+		Scope:         "personal",
+		ScopeID:       &userID,
+		Title:         "Standards Unit",
+		StandardsTags: []string{"CCSS.1", "CCSS.2"},
+		CreatedBy:     userID,
+	})
+	assert.Equal(t, []string{"CCSS.1", "CCSS.2"}, u.StandardsTags)
+
+	// nil StandardsTags → leave unchanged
+	unchanged, err := units.UpdateUnit(ctx, u.ID, UpdateTeachingUnitInput{
+		StandardsTags: nil,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, unchanged)
+	assert.Equal(t, []string{"CCSS.1", "CCSS.2"}, unchanged.StandardsTags, "nil StandardsTags must leave tags unchanged")
+
+	// Empty slice → clear
+	cleared, err := units.UpdateUnit(ctx, u.ID, UpdateTeachingUnitInput{
+		StandardsTags: []string{},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, cleared)
+	assert.Equal(t, []string{}, cleared.StandardsTags, "empty StandardsTags must clear the array")
+
+	// Set new tags
+	set, err := units.UpdateUnit(ctx, u.ID, UpdateTeachingUnitInput{
+		StandardsTags: []string{"NGSS.1"},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, set)
+	assert.Equal(t, []string{"NGSS.1"}, set.StandardsTags)
+}
+
+func TestTeachingUnitStore_UpdateUnit_EstimatedMinutes(t *testing.T) {
+	units, _, _, userID := setupUnitEnv(t, t.Name())
+	ctx := context.Background()
+
+	u := mustCreateUnit(t, units, CreateTeachingUnitInput{
+		Scope:     "personal",
+		ScopeID:   &userID,
+		Title:     "Minutes Unit",
+		CreatedBy: userID,
+	})
+	assert.Nil(t, u.EstimatedMinutes, "new unit should have nil estimated minutes")
+
+	// Set estimated minutes
+	mins := 45
+	updated, err := units.UpdateUnit(ctx, u.ID, UpdateTeachingUnitInput{EstimatedMinutes: &mins})
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	require.NotNil(t, updated.EstimatedMinutes)
+	assert.Equal(t, 45, *updated.EstimatedMinutes)
+
+	// Clear estimated minutes (0 maps to SQL zero, which IS stored — but we can verify it round-trips)
+	zero := 0
+	zeroed, err := units.UpdateUnit(ctx, u.ID, UpdateTeachingUnitInput{EstimatedMinutes: &zero})
+	require.NoError(t, err)
+	require.NotNil(t, zeroed)
+	require.NotNil(t, zeroed.EstimatedMinutes)
+	assert.Equal(t, 0, *zeroed.EstimatedMinutes)
+}
+
+func TestTeachingUnitStore_UpdateUnit_Status(t *testing.T) {
+	units, _, _, userID := setupUnitEnv(t, t.Name())
+	ctx := context.Background()
+
+	u := mustCreateUnit(t, units, CreateTeachingUnitInput{
+		Scope:     "personal",
+		ScopeID:   &userID,
+		Title:     "Status Unit",
+		CreatedBy: userID,
+	})
+	assert.Equal(t, "draft", u.Status)
+
+	status := "reviewed"
+	updated, err := units.UpdateUnit(ctx, u.ID, UpdateTeachingUnitInput{Status: &status})
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	assert.Equal(t, "reviewed", updated.Status)
+}
+
+func TestTeachingUnitStore_UpdateUnit_MultipleFields(t *testing.T) {
+	units, _, _, userID := setupUnitEnv(t, t.Name())
+	ctx := context.Background()
+
+	u := mustCreateUnit(t, units, CreateTeachingUnitInput{
+		Scope:     "personal",
+		ScopeID:   &userID,
+		Title:     "Multi Unit",
+		Summary:   "Old summary",
+		CreatedBy: userID,
+	})
+
+	newTitle := "New Title"
+	newSummary := "New summary"
+	newSlug := "new-slug"
+	grade := "6-8"
+	mins := 60
+	status := "classroom_ready"
+	updated, err := units.UpdateUnit(ctx, u.ID, UpdateTeachingUnitInput{
+		Title:            &newTitle,
+		Summary:          &newSummary,
+		Slug:             &newSlug,
+		GradeLevel:       &grade,
+		SubjectTags:      []string{"science", "bio"},
+		StandardsTags:    []string{"NGSS.1"},
+		EstimatedMinutes: &mins,
+		Status:           &status,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	assert.Equal(t, "New Title", updated.Title)
+	assert.Equal(t, "New summary", updated.Summary)
+	require.NotNil(t, updated.Slug)
+	assert.Equal(t, "new-slug", *updated.Slug)
+	require.NotNil(t, updated.GradeLevel)
+	assert.Equal(t, "6-8", *updated.GradeLevel)
+	assert.Equal(t, []string{"science", "bio"}, updated.SubjectTags)
+	assert.Equal(t, []string{"NGSS.1"}, updated.StandardsTags)
+	require.NotNil(t, updated.EstimatedMinutes)
+	assert.Equal(t, 60, *updated.EstimatedMinutes)
+	assert.Equal(t, "classroom_ready", updated.Status)
+}
+
+func TestTeachingUnitStore_UpdateUnit_NonExistent(t *testing.T) {
+	units, _, _, _ := setupUnitEnv(t, t.Name())
+	ctx := context.Background()
+
+	newTitle := "Ghost"
+	result, err := units.UpdateUnit(ctx, "00000000-0000-0000-0000-000000000000", UpdateTeachingUnitInput{
+		Title: &newTitle,
+	})
+	assert.NoError(t, err)
+	assert.Nil(t, result, "updating non-existent unit should return nil")
+}
+
+func TestTeachingUnitStore_UpdateUnit_NoFields(t *testing.T) {
+	units, _, _, userID := setupUnitEnv(t, t.Name())
+	ctx := context.Background()
+
+	u := mustCreateUnit(t, units, CreateTeachingUnitInput{
+		Scope:     "personal",
+		ScopeID:   &userID,
+		Title:     "Unchanged Unit",
+		CreatedBy: userID,
+	})
+
+	// No fields provided — should return existing unchanged
+	result, err := units.UpdateUnit(ctx, u.ID, UpdateTeachingUnitInput{})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, "Unchanged Unit", result.Title)
+	assert.Equal(t, u.ID, result.ID)
+}
+
+// ── ListUnitsForScope ────────────────────────────────────────────────────────
+
+func TestTeachingUnitStore_ListUnitsForScope_OrgUnits(t *testing.T) {
+	units, _, orgID, userID := setupUnitEnv(t, t.Name())
+	ctx := context.Background()
+
+	// Create a second org environment for isolation testing
+	db := testDB(t)
+	orgs := NewOrgStore(db)
+	otherOrg := createTestOrg(t, db, orgs, t.Name()+"-other")
+
+	// Create units in our org
+	u1 := mustCreateUnit(t, units, CreateTeachingUnitInput{
+		Scope: "org", ScopeID: &orgID, Title: "Org Unit 1", CreatedBy: userID,
+	})
+	u2 := mustCreateUnit(t, units, CreateTeachingUnitInput{
+		Scope: "org", ScopeID: &orgID, Title: "Org Unit 2", CreatedBy: userID,
+	})
+
+	// Create unit in other org (should be excluded)
+	otherUnits := NewTeachingUnitStore(db)
+	otherUnit := mustCreateUnit(t, otherUnits, CreateTeachingUnitInput{
+		Scope: "org", ScopeID: &otherOrg.ID, Title: "Other Org Unit", CreatedBy: userID,
+	})
+	t.Cleanup(func() {
+		db.ExecContext(ctx, `DELETE FROM teaching_units WHERE id = $1`, otherUnit.ID)
+	})
+
+	list, err := units.ListUnitsForScope(ctx, "org", orgID)
+	require.NoError(t, err)
+	require.Len(t, list, 2)
+
+	// Should be ordered by updated_at DESC
+	ids := []string{list[0].ID, list[1].ID}
+	assert.Contains(t, ids, u1.ID)
+	assert.Contains(t, ids, u2.ID)
+
+	// Ensure other org's unit is not included
+	for _, u := range list {
+		assert.NotEqual(t, otherUnit.ID, u.ID, "other org's unit must not appear")
+	}
+}
+
+func TestTeachingUnitStore_ListUnitsForScope_PlatformUnits(t *testing.T) {
+	units, _, _, userID := setupUnitEnv(t, t.Name())
+	ctx := context.Background()
+
+	u := mustCreateUnit(t, units, CreateTeachingUnitInput{
+		Scope: "platform", ScopeID: nil, Title: "Platform List Unit", CreatedBy: userID,
+	})
+
+	list, err := units.ListUnitsForScope(ctx, "platform", "")
+	require.NoError(t, err)
+	require.NotEmpty(t, list)
+
+	found := false
+	for _, item := range list {
+		if item.ID == u.ID {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "platform unit should appear in platform scope listing")
+}
+
+func TestTeachingUnitStore_ListUnitsForScope_PersonalUnits(t *testing.T) {
+	units, _, _, userID := setupUnitEnv(t, t.Name())
+	ctx := context.Background()
+
+	// Create a personal unit for this user
+	u := mustCreateUnit(t, units, CreateTeachingUnitInput{
+		Scope: "personal", ScopeID: &userID, Title: "Personal Unit", CreatedBy: userID,
+	})
+
+	list, err := units.ListUnitsForScope(ctx, "personal", userID)
+	require.NoError(t, err)
+	require.NotEmpty(t, list)
+
+	found := false
+	for _, item := range list {
+		if item.ID == u.ID {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "personal unit should appear in user scope listing")
+}
+
+func TestTeachingUnitStore_ListUnitsForScope_EmptyScope(t *testing.T) {
+	units, _, _, _ := setupUnitEnv(t, t.Name())
+	ctx := context.Background()
+
+	// Use a non-existent scope_id for an org scope — should be empty
+	list, err := units.ListUnitsForScope(ctx, "org", "00000000-0000-0000-0000-000000000000")
+	require.NoError(t, err)
+	require.NotNil(t, list)
+	assert.Len(t, list, 0)
+}
+
+func TestTeachingUnitStore_ListUnitsForScope_OrderByUpdatedAtDesc(t *testing.T) {
+	units, _, _, userID := setupUnitEnv(t, t.Name())
+	ctx := context.Background()
+	db := testDB(t)
+
+	u1 := mustCreateUnit(t, units, CreateTeachingUnitInput{
+		Scope: "personal", ScopeID: &userID, Title: "First", CreatedBy: userID,
+	})
+	u2 := mustCreateUnit(t, units, CreateTeachingUnitInput{
+		Scope: "personal", ScopeID: &userID, Title: "Second", CreatedBy: userID,
+	})
+
+	// Force u1 to have a newer updated_at than u2
+	future := time.Now().Add(1 * time.Hour)
+	_, err := db.ExecContext(ctx, "UPDATE teaching_units SET updated_at = $1 WHERE id = $2", future, u1.ID)
+	require.NoError(t, err)
+
+	list, err := units.ListUnitsForScope(ctx, "personal", userID)
+	require.NoError(t, err)
+	require.Len(t, list, 2)
+	assert.Equal(t, u1.ID, list[0].ID, "unit with newer updated_at should come first")
+	assert.Equal(t, u2.ID, list[1].ID)
+}
+
+// ── scanTeachingUnit nullable fields coverage ────────────────────────────────
+
+func TestTeachingUnitStore_NullableFields_RoundTrip(t *testing.T) {
+	units, _, _, userID := setupUnitEnv(t, t.Name())
+	ctx := context.Background()
+
+	// Create with all nullable fields as nil
+	u := mustCreateUnit(t, units, CreateTeachingUnitInput{
+		Scope:     "personal",
+		ScopeID:   &userID,
+		Title:     "Nullable Unit",
+		CreatedBy: userID,
+	})
+
+	assert.Nil(t, u.Slug)
+	assert.Nil(t, u.GradeLevel)
+	assert.Nil(t, u.EstimatedMinutes)
+	assert.Equal(t, []string{}, u.SubjectTags)
+	assert.Equal(t, []string{}, u.StandardsTags)
+
+	// Fetch and verify round-trip of nil fields
+	fetched, err := units.GetUnit(ctx, u.ID)
+	require.NoError(t, err)
+	require.NotNil(t, fetched)
+	assert.Nil(t, fetched.Slug)
+	assert.Nil(t, fetched.GradeLevel)
+	assert.Nil(t, fetched.EstimatedMinutes)
+
+	// Now set all nullable fields to non-nil and verify
+	slug := "test-slug"
+	grade := "9-12"
+	mins := 90
+	updated, err := units.UpdateUnit(ctx, u.ID, UpdateTeachingUnitInput{
+		Slug:             &slug,
+		GradeLevel:       &grade,
+		EstimatedMinutes: &mins,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	require.NotNil(t, updated.Slug)
+	assert.Equal(t, "test-slug", *updated.Slug)
+	require.NotNil(t, updated.GradeLevel)
+	assert.Equal(t, "9-12", *updated.GradeLevel)
+	require.NotNil(t, updated.EstimatedMinutes)
+	assert.Equal(t, 90, *updated.EstimatedMinutes)
+}
+
 // ── DeleteUnit ────────────────────────────────────────────────────────────────
 
 func TestTeachingUnitStore_DeleteUnit_Cascades(t *testing.T) {

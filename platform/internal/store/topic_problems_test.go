@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -182,6 +183,61 @@ func TestTopicProblems_CascadeOnTopicDelete(t *testing.T) {
 	ok, err := tps.IsAttached(ctx, topicID, p.ID)
 	require.NoError(t, err)
 	assert.False(t, ok, "attachment must be gone after topic delete")
+}
+
+// TestTopicProblems_DetachNonExistentRow verifies that Detach returns false
+// when no such row exists (no error, just no rows affected).
+func TestTopicProblems_DetachNonExistentRow(t *testing.T) {
+	_, _, tps, _, _, _ := setupTopicProblemEnv(t, t.Name())
+	ctx := context.Background()
+
+	removed, err := tps.Detach(ctx,
+		"00000000-0000-0000-0000-000000000000",
+		"00000000-0000-0000-0000-000000000001")
+	require.NoError(t, err)
+	assert.False(t, removed, "detaching a non-existent row should return false")
+}
+
+// TestTopicProblems_AttachDuplicate_IsUniqueViolation exercises the
+// isUniqueViolation helper function through the Attach duplicate path. The
+// first Attach succeeds; the second hits the PRIMARY KEY constraint and returns
+// ErrAlreadyAttached (which internally calls isUniqueViolation).
+func TestTopicProblems_AttachDuplicate_IsUniqueViolation(t *testing.T) {
+	db, ps, tps, topicID, orgID, userID := setupTopicProblemEnv(t, t.Name())
+	ctx := context.Background()
+
+	p := mustCreateProblem(t, db, ps, "org", &orgID, "published", "UniqueViolation "+t.Name(), userID, nil)
+
+	// First attach.
+	a, err := tps.Attach(ctx, topicID, p.ID, 0, userID)
+	require.NoError(t, err)
+	require.NotNil(t, a)
+	t.Cleanup(func() { tps.Detach(ctx, topicID, p.ID) })
+
+	// Second attach -> ErrAlreadyAttached (covers isUniqueViolation returning true).
+	_, err = tps.Attach(ctx, topicID, p.ID, 1, userID)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrAlreadyAttached)
+}
+
+// TestTopicProblems_IsUniqueViolation_NilError exercises the nil-error guard in
+// isUniqueViolation directly (the function is unexported but accessible in the
+// same package).
+func TestTopicProblems_IsUniqueViolation_NilError(t *testing.T) {
+	assert.False(t, isUniqueViolation(nil), "nil error should not be a unique violation")
+}
+
+// TestTopicProblems_IsUniqueViolation_NonUniqueError ensures a non-unique-
+// constraint error returns false.
+func TestTopicProblems_IsUniqueViolation_NonUniqueError(t *testing.T) {
+	assert.False(t, isUniqueViolation(fmt.Errorf("some other error")), "arbitrary error should not be a unique violation")
+}
+
+// TestTopicProblems_IsUniqueViolation_ContainsCode verifies the string-match
+// approach for detecting unique violations.
+func TestTopicProblems_IsUniqueViolation_ContainsCode(t *testing.T) {
+	assert.True(t, isUniqueViolation(fmt.Errorf("ERROR: duplicate key value violates unique constraint (SQLSTATE 23505)")),
+		"error containing 23505 should be detected as unique violation")
 }
 
 // TestTopicProblems_CascadeOnProblemDelete verifies that deleting a problem

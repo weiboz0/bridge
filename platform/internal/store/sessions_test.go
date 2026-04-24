@@ -954,3 +954,267 @@ func TestSessionStore_CanAccessSession_RevokedParticipant(t *testing.T) {
 	assert.False(t, allowed)
 	assert.Equal(t, "no_access", reason)
 }
+
+// --- ListSessionsWithCounts Tests ---
+
+func TestSessionStore_ListSessionsWithCounts_EmptyClass(t *testing.T) {
+	db := testDB(t)
+	sessions := NewSessionStore(db)
+	classID, _ := setupSessionTest(t, db, t.Name())
+	ctx := context.Background()
+
+	list, err := sessions.ListSessionsWithCounts(ctx, classID)
+	require.NoError(t, err)
+	require.NotNil(t, list)
+	assert.Len(t, list, 0)
+}
+
+func TestSessionStore_ListSessionsWithCounts_ZeroParticipants(t *testing.T) {
+	db := testDB(t)
+	sessions := NewSessionStore(db)
+	classID, teacherID := setupSessionTest(t, db, t.Name())
+	ctx := context.Background()
+
+	_, err := sessions.CreateSession(ctx, CreateSessionInput{
+		ClassID: strPtr(classID), TeacherID: teacherID, Title: "No participants",
+	})
+	require.NoError(t, err)
+
+	list, err := sessions.ListSessionsWithCounts(ctx, classID)
+	require.NoError(t, err)
+	require.Len(t, list, 1)
+	assert.Equal(t, 0, list[0].ParticipantCount)
+	assert.Equal(t, "No participants", list[0].Title)
+}
+
+func TestSessionStore_ListSessionsWithCounts_MultipleParticipants(t *testing.T) {
+	db := testDB(t)
+	sessions := NewSessionStore(db)
+	users := NewUserStore(db)
+	classID, teacherID := setupSessionTest(t, db, t.Name())
+	ctx := context.Background()
+
+	session, err := sessions.CreateSession(ctx, CreateSessionInput{
+		ClassID: strPtr(classID), TeacherID: teacherID, Title: "With participants",
+	})
+	require.NoError(t, err)
+
+	// Add 3 participants: student1 joins, student2 joins, student3 joins then leaves
+	student1 := createTestUser(t, db, users, t.Name()+"-s1")
+	student2 := createTestUser(t, db, users, t.Name()+"-s2")
+	student3 := createTestUser(t, db, users, t.Name()+"-s3")
+
+	t.Cleanup(func() {
+		db.ExecContext(ctx, "DELETE FROM session_participants WHERE session_id = $1", session.ID)
+	})
+
+	_, err = sessions.JoinSession(ctx, session.ID, student1.ID)
+	require.NoError(t, err)
+	_, err = sessions.JoinSession(ctx, session.ID, student2.ID)
+	require.NoError(t, err)
+	_, err = sessions.JoinSession(ctx, session.ID, student3.ID)
+	require.NoError(t, err)
+
+	// Student3 leaves — but COUNT(*) still includes them
+	_, err = sessions.LeaveSession(ctx, session.ID, student3.ID)
+	require.NoError(t, err)
+
+	list, err := sessions.ListSessionsWithCounts(ctx, classID)
+	require.NoError(t, err)
+	require.Len(t, list, 1)
+	assert.Equal(t, 3, list[0].ParticipantCount, "count should include all participant rows, even left ones")
+}
+
+func TestSessionStore_ListSessionsWithCounts_MultipleSessions_SortedDesc(t *testing.T) {
+	db := testDB(t)
+	sessions := NewSessionStore(db)
+	users := NewUserStore(db)
+	classID, teacherID := setupSessionTest(t, db, t.Name())
+	ctx := context.Background()
+
+	// Create first session (will be auto-ended by the second)
+	s1, err := sessions.CreateSession(ctx, CreateSessionInput{
+		ClassID: strPtr(classID), TeacherID: teacherID, Title: "First",
+	})
+	require.NoError(t, err)
+
+	// Force older started_at
+	base := time.Date(2026, 4, 20, 12, 0, 0, 0, time.UTC)
+	_, err = db.ExecContext(ctx, "UPDATE sessions SET started_at = $1 WHERE id = $2", base, s1.ID)
+	require.NoError(t, err)
+
+	// Create second session (auto-ends the first)
+	s2, err := sessions.CreateSession(ctx, CreateSessionInput{
+		ClassID: strPtr(classID), TeacherID: teacherID, Title: "Second",
+	})
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, "UPDATE sessions SET started_at = $1 WHERE id = $2", base.Add(1*time.Hour), s2.ID)
+	require.NoError(t, err)
+
+	// Add a participant to s1 only
+	student := createTestUser(t, db, users, t.Name()+"-s")
+	t.Cleanup(func() {
+		db.ExecContext(ctx, "DELETE FROM session_participants WHERE session_id IN ($1, $2)", s1.ID, s2.ID)
+	})
+	_, err = sessions.JoinSession(ctx, s1.ID, student.ID)
+	require.NoError(t, err)
+
+	list, err := sessions.ListSessionsWithCounts(ctx, classID)
+	require.NoError(t, err)
+	require.Len(t, list, 2)
+	// DESC order: s2 first, s1 second
+	assert.Equal(t, s2.ID, list[0].ID)
+	assert.Equal(t, s1.ID, list[1].ID)
+	assert.Equal(t, 0, list[0].ParticipantCount)
+	assert.Equal(t, 1, list[1].ParticipantCount)
+}
+
+// --- UpdateSession Tests ---
+
+func TestSessionStore_UpdateSession_TitleOnly(t *testing.T) {
+	db := testDB(t)
+	sessions := NewSessionStore(db)
+	classID, teacherID := setupSessionTest(t, db, t.Name())
+	ctx := context.Background()
+
+	session, err := sessions.CreateSession(ctx, CreateSessionInput{
+		ClassID: strPtr(classID), TeacherID: teacherID, Title: "Original", Settings: `{"foo":"bar"}`,
+	})
+	require.NoError(t, err)
+
+	newTitle := "Updated Title"
+	updated, err := sessions.UpdateSession(ctx, session.ID, UpdateSessionInput{
+		Title: &newTitle,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	assert.Equal(t, "Updated Title", updated.Title)
+	assert.Contains(t, updated.Settings, "foo", "settings must remain unchanged")
+}
+
+func TestSessionStore_UpdateSession_SettingsOnly(t *testing.T) {
+	db := testDB(t)
+	sessions := NewSessionStore(db)
+	classID, teacherID := setupSessionTest(t, db, t.Name())
+	ctx := context.Background()
+
+	session, err := sessions.CreateSession(ctx, CreateSessionInput{
+		ClassID: strPtr(classID), TeacherID: teacherID, Title: "Keep Title",
+	})
+	require.NoError(t, err)
+
+	newSettings := `{"mode":"guided"}`
+	updated, err := sessions.UpdateSession(ctx, session.ID, UpdateSessionInput{
+		Settings: &newSettings,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	assert.Equal(t, "Keep Title", updated.Title, "title must remain unchanged")
+	assert.Contains(t, updated.Settings, "guided", "settings must contain the new value")
+}
+
+func TestSessionStore_UpdateSession_InviteExpiresAt_SetAndClear(t *testing.T) {
+	db := testDB(t)
+	sessions := NewSessionStore(db)
+	classID, teacherID := setupSessionTest(t, db, t.Name())
+	ctx := context.Background()
+
+	session, err := sessions.CreateSession(ctx, CreateSessionInput{
+		ClassID: strPtr(classID), TeacherID: teacherID, Title: "Expiry test",
+	})
+	require.NoError(t, err)
+
+	// Set invite_expires_at
+	future := time.Now().Add(24 * time.Hour)
+	updated, err := sessions.UpdateSession(ctx, session.ID, UpdateSessionInput{
+		InviteExpiresAt: &future,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	require.NotNil(t, updated.InviteExpiresAt)
+	assert.WithinDuration(t, future, *updated.InviteExpiresAt, time.Second)
+
+	// Clear invite_expires_at using ClearInviteExpiry
+	cleared, err := sessions.UpdateSession(ctx, session.ID, UpdateSessionInput{
+		ClearInviteExpiry: true,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, cleared)
+	assert.Nil(t, cleared.InviteExpiresAt, "invite_expires_at should be cleared to NULL")
+}
+
+func TestSessionStore_UpdateSession_NonExistent(t *testing.T) {
+	db := testDB(t)
+	sessions := NewSessionStore(db)
+	ctx := context.Background()
+
+	newTitle := "Ghost"
+	result, err := sessions.UpdateSession(ctx, "00000000-0000-0000-0000-000000000000", UpdateSessionInput{
+		Title: &newTitle,
+	})
+	assert.NoError(t, err)
+	assert.Nil(t, result, "updating non-existent session should return nil")
+}
+
+func TestSessionStore_UpdateSession_NoFields(t *testing.T) {
+	db := testDB(t)
+	sessions := NewSessionStore(db)
+	classID, teacherID := setupSessionTest(t, db, t.Name())
+	ctx := context.Background()
+
+	session, err := sessions.CreateSession(ctx, CreateSessionInput{
+		ClassID: strPtr(classID), TeacherID: teacherID, Title: "Untouched",
+	})
+	require.NoError(t, err)
+
+	// No fields set at all — COALESCE($1, title) with nil $1 preserves title
+	result, err := sessions.UpdateSession(ctx, session.ID, UpdateSessionInput{})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, "Untouched", result.Title, "title must not change when no fields provided")
+}
+
+// --- ListSessionsByClass empty class test ---
+
+func TestSessionStore_ListSessionsByClass_EmptyClass(t *testing.T) {
+	db := testDB(t)
+	sessions := NewSessionStore(db)
+	classID, _ := setupSessionTest(t, db, t.Name())
+	ctx := context.Background()
+
+	list, err := sessions.ListSessionsByClass(ctx, classID)
+	require.NoError(t, err)
+	require.NotNil(t, list)
+	assert.Len(t, list, 0)
+}
+
+// --- RemoveParticipant non-existent test ---
+
+func TestSessionStore_RemoveParticipant_NonExistent(t *testing.T) {
+	db := testDB(t)
+	sessions := NewSessionStore(db)
+	classID, teacherID := setupSessionTest(t, db, t.Name())
+	ctx := context.Background()
+
+	session, err := sessions.CreateSession(ctx, CreateSessionInput{
+		ClassID: strPtr(classID), TeacherID: teacherID, Title: "Session",
+	})
+	require.NoError(t, err)
+
+	// Remove a participant that was never added
+	removed, err := sessions.RemoveParticipant(ctx, session.ID, "00000000-0000-0000-0000-000000000000")
+	require.NoError(t, err)
+	assert.False(t, removed, "should return false when no row to delete")
+}
+
+// --- RotateInviteToken non-existent test ---
+
+func TestSessionStore_RotateInviteToken_NonExistent(t *testing.T) {
+	db := testDB(t)
+	sessions := NewSessionStore(db)
+	ctx := context.Background()
+
+	result, err := sessions.RotateInviteToken(ctx, "00000000-0000-0000-0000-000000000000")
+	assert.NoError(t, err)
+	assert.Nil(t, result, "rotating token on non-existent session should return nil")
+}
