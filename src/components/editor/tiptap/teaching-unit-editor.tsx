@@ -16,7 +16,15 @@ function assignMissingTopLevelNodeIds(editor: Editor) {
   let transaction = editor.state.tr
   let needsUpdate = false
 
-  editor.state.doc.forEach((node: { attrs?: Record<string, unknown> }, offset: number) => {
+  editor.state.doc.forEach((node: { type: { spec: { attrs?: Record<string, unknown> } }; attrs?: Record<string, unknown> }, offset: number) => {
+    // Only process node types that declare an `id` attribute in their schema.
+    // Calling setNodeMarkup on nodes without a declared `id` (e.g. paragraph,
+    // heading) would pass unknown attrs into ProseMirror's schema validation
+    // and cause a "NodeType.create can't construct text nodes" error.
+    if (!node.type.spec.attrs || !("id" in node.type.spec.attrs)) {
+      return
+    }
+
     const attrs = node.attrs as Record<string, unknown> | null
     if (typeof attrs?.id === "string" && attrs.id.length > 0) {
       return
@@ -27,7 +35,7 @@ function assignMissingTopLevelNodeIds(editor: Editor) {
       id: nanoid(),
     }
 
-    transaction = transaction.setNodeMarkup(offset + 1, undefined, nextAttrs)
+    transaction = transaction.setNodeMarkup(offset, undefined, nextAttrs)
     needsUpdate = true
   })
 
