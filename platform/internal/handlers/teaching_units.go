@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -77,6 +78,12 @@ func (h *TeachingUnitHandler) Routes(r chi.Router) {
 		r.Delete("/", h.DeleteUnit)
 		r.Get("/document", h.GetDocument)
 		r.Put("/document", h.SaveDocument)
+		r.Post("/transition", h.TransitionUnit)
+		r.Get("/revisions", h.ListRevisions)
+		r.Route("/revisions/{revisionId}", func(r chi.Router) {
+			r.Use(ValidateUUIDParam("revisionId"))
+			r.Get("/", h.GetRevision)
+		})
 	})
 }
 
@@ -532,4 +539,113 @@ func (h *TeachingUnitHandler) SaveDocument(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	writeJSON(w, http.StatusOK, doc)
+}
+
+// TransitionUnit — POST /api/units/{id}/transition
+// Transitions the unit to a new status per the spec-012 state machine.
+// Body: { "status": "<target>" }
+// Maps ErrInvalidTransition → 409 Conflict.
+func (h *TeachingUnitHandler) TransitionUnit(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	unitID := chi.URLParam(r, "id")
+
+	unit, err := h.Units.GetUnit(r.Context(), unitID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if unit == nil || !h.canViewUnit(r.Context(), claims, unit) {
+		writeError(w, http.StatusNotFound, "Not found")
+		return
+	}
+	if !h.canEditUnit(r.Context(), claims, unit.Scope, unit.ScopeID) {
+		writeError(w, http.StatusForbidden, "Not authorized to transition")
+		return
+	}
+
+	var body struct {
+		Status string `json:"status"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	if !validUnitStatuses[body.Status] {
+		writeError(w, http.StatusBadRequest, "invalid target status")
+		return
+	}
+
+	updated, err := h.Units.SetUnitStatus(r.Context(), unitID, body.Status, claims.UserID)
+	switch {
+	case errors.Is(err, store.ErrInvalidTransition):
+		writeError(w, http.StatusConflict, "invalid status transition")
+		return
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	writeJSON(w, http.StatusOK, updated)
+}
+
+// ListRevisions — GET /api/units/{id}/revisions
+func (h *TeachingUnitHandler) ListRevisions(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	unitID := chi.URLParam(r, "id")
+
+	unit, err := h.Units.GetUnit(r.Context(), unitID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if unit == nil || !h.canViewUnit(r.Context(), claims, unit) {
+		writeError(w, http.StatusNotFound, "Not found")
+		return
+	}
+
+	revisions, err := h.Units.ListRevisions(r.Context(), unitID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": revisions})
+}
+
+// GetRevision — GET /api/units/{id}/revisions/{revisionId}
+func (h *TeachingUnitHandler) GetRevision(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	unitID := chi.URLParam(r, "id")
+
+	// Verify access to the parent unit first.
+	unit, err := h.Units.GetUnit(r.Context(), unitID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if unit == nil || !h.canViewUnit(r.Context(), claims, unit) {
+		writeError(w, http.StatusNotFound, "Not found")
+		return
+	}
+
+	revisionID := chi.URLParam(r, "revisionId")
+	rev, err := h.Units.GetRevision(r.Context(), revisionID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if rev == nil || rev.UnitID != unitID {
+		writeError(w, http.StatusNotFound, "Revision not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, rev)
 }
