@@ -68,10 +68,10 @@ function makeSlashCommandExtension() {
         extraAttrs: Record<string, unknown> = {}
       ) =>
         new InputRule({
-          // Match the trigger text optionally preceded by a slash, anchored
-          // to the start of the content (positive lookbehind on newline or
-          // start) so it only fires on its own line.
-          find: new RegExp(`/${trigger}$`),
+          // Match the slash command only at the start of a text block
+          // (after whitespace or at position 0) to avoid false triggers
+          // on inline text like "url/code".
+          find: new RegExp(`(?:^|\\s)/${trigger}$`),
           handler: ({ state, range, chain }) => {
             const type = state.schema.nodes[nodeType]
             if (!type) return null

@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"testing"
 	"time"
@@ -952,7 +953,7 @@ func TestTeachingUnitStore_SetUnitStatus_NonExistentUnit(t *testing.T) {
 	ctx := context.Background()
 
 	_, err := units.SetUnitStatus(ctx, "00000000-0000-0000-0000-000000000000", "reviewed", userID)
-	assert.ErrorIs(t, err, ErrInvalidTransition)
+	assert.ErrorIs(t, err, sql.ErrNoRows)
 }
 
 // ── ListRevisions / GetRevision ─────────────────────────────────────────────

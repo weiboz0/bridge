@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -586,6 +587,9 @@ func (h *TeachingUnitHandler) TransitionUnit(w http.ResponseWriter, r *http.Requ
 
 	updated, err := h.Units.SetUnitStatus(r.Context(), unitID, body.Status, claims.UserID)
 	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		writeError(w, http.StatusNotFound, "Not found")
+		return
 	case errors.Is(err, store.ErrInvalidTransition):
 		writeError(w, http.StatusConflict, "invalid status transition")
 		return

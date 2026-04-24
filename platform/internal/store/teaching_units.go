@@ -418,8 +418,7 @@ var snapshotStatuses = map[string]bool{
 // unit_documents.blocks into a unit_revisions row. Returns the updated unit.
 //
 // Invalid transitions return ErrInvalidTransition (defined in problems.go).
-// A non-existent unit also returns ErrInvalidTransition (callers should
-// disambiguate via GetUnit when a 404 is needed at the handler layer).
+// A non-existent unit returns sql.ErrNoRows (handler maps to 404).
 func (s *TeachingUnitStore) SetUnitStatus(ctx context.Context, unitID, newStatus, callerID string) (*TeachingUnit, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -427,13 +426,12 @@ func (s *TeachingUnitStore) SetUnitStatus(ctx context.Context, unitID, newStatus
 	}
 	defer tx.Rollback()
 
-	// Lock and fetch current status.
 	var currentStatus string
 	err = tx.QueryRowContext(ctx,
 		`SELECT status FROM teaching_units WHERE id = $1 FOR UPDATE`, unitID,
 	).Scan(&currentStatus)
 	if err == sql.ErrNoRows {
-		return nil, ErrInvalidTransition
+		return nil, sql.ErrNoRows
 	}
 	if err != nil {
 		return nil, err
