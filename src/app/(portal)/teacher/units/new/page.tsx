@@ -51,7 +51,11 @@ export default function CreateUnitPage() {
           if (teacherOrgs.length > 0) {
             setOrgId(teacherOrgs[0].orgId)
           }
+        } else {
+          setError("Failed to load organizations")
         }
+      } catch {
+        setError("Failed to load organizations")
       } finally {
         setOrgsLoading(false)
       }

@@ -840,7 +840,29 @@ GH_TOKEN=$(cat .gh-token) gh pr create \
 
 ## Code Review
 
-Reviewers append findings here following `docs/code-review.md` format. Author responds inline with `→ Response:` and status `[FIXED]` / `[WONTFIX]`.
+### Review 1
+
+- **Date**: 2026-04-23
+- **Reviewer**: Codex
+- **Verdict**: Changes requested
+
+**Must Fix**
+
+1. `[FIXED]` Block allowlist rejects StarterKit output. `knownBlockTypes` only allowed `prose` and `problem-ref`, but Tiptap StarterKit emits `paragraph`, `heading`, `bulletList`, etc. Any normal prose save would 400.
+    → Response: Added all StarterKit block types to `knownBlockTypes`. Only custom blocks (`prose`, `problem-ref`) require `attrs.id`; StarterKit structural blocks are exempt from the ID check.
+
+2. `[FIXED]` `attrs.id` validation rejects StarterKit blocks that don't declare an `id` attr. `assignMissingTopLevelNodeIds` only assigns IDs to nodes with an `id` attr in their ProseMirror schema, so `paragraph`/`heading` nodes never get IDs and fail server validation.
+    → Response: Changed `validateBlockDocument` to only require `attrs.id` on custom block types (`prose`, `problem-ref`) that need it for overlay semantics. StarterKit blocks pass through without ID enforcement.
+
+**Should Fix**
+
+3. `[FIXED]` Org fetch failure in create page shows "No organizations found" instead of an error. `loadOrgs` silently swallowed non-OK responses.
+    → Response: Added error handling for non-OK and network failures in the org fetch.
+
+**Nice to Have**
+
+4. `[OPEN]` `ListUnitsForScope` orders by `updated_at DESC` but the composite index is `(scope, scope_id, status)`. Missing index on `updated_at`.
+    → Response: Acceptable for MVP — unit lists are small (per-scope, teacher-owned). Will add the index if query plans show sorting overhead at scale.
 
 ## Post-Execution Report
 

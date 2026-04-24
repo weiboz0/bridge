@@ -46,6 +46,15 @@ var validUnitStatuses = map[string]bool{
 var knownBlockTypes = map[string]bool{
 	"prose":       true,
 	"problem-ref": true,
+	"paragraph":   true,
+	"heading":     true,
+	"bulletList":  true,
+	"orderedList": true,
+	"listItem":    true,
+	"codeBlock":   true,
+	"blockquote":  true,
+	"horizontalRule": true,
+	"hardBreak":   true,
 }
 
 const maxUnitTitleLen = 255
@@ -150,6 +159,14 @@ func validateBlockDocument(raw json.RawMessage) error {
 		return fmt.Errorf("document envelope must have \"type\":\"doc\"")
 	}
 
+	// Block types that carry attrs.id (custom teaching-unit blocks).
+	// Standard StarterKit structural blocks (paragraph, heading, etc.)
+	// don't need IDs — they're just rich text.
+	blockTypesRequiringID := map[string]bool{
+		"prose":       true,
+		"problem-ref": true,
+	}
+
 	// Walk top-level blocks.
 	for i, rawBlock := range envelope.Content {
 		var block struct {
@@ -161,8 +178,8 @@ func validateBlockDocument(raw json.RawMessage) error {
 		if err := json.Unmarshal(rawBlock, &block); err != nil {
 			return fmt.Errorf("block at index %d is not valid JSON", i)
 		}
-		if block.Attrs.ID == "" {
-			return fmt.Errorf("block at index %d is missing attrs.id", i)
+		if blockTypesRequiringID[block.Type] && block.Attrs.ID == "" {
+			return fmt.Errorf("block at index %d (%s) is missing attrs.id", i, block.Type)
 		}
 		if !knownBlockTypes[block.Type] {
 			return fmt.Errorf("block at index %d has unknown type %q (allowed: %s)",
