@@ -40,11 +40,11 @@ export function TeachingUnitEditor({ initialDoc, onSave, onDirty }: TeachingUnit
   const editor = useEditor({
     extensions: teachingUnitExtensions(),
     content: initialDoc ?? { type: "doc", content: [] },
-    onCreate({ editor }: { editor: Editor }) {
-      assignMissingTopLevelNodeIds(editor)
+    onCreate({ editor: e }: any) {
+      assignMissingTopLevelNodeIds(e as Editor)
     },
-    onUpdate({ editor }: { editor: Editor }) {
-      assignMissingTopLevelNodeIds(editor)
+    onUpdate({ editor: e }: any) {
+      assignMissingTopLevelNodeIds(e as Editor)
       onDirty?.(true)
     },
   })

@@ -175,13 +175,7 @@ export const ProblemRefNode = Node.create({
       },
     ]
   },
-  renderHTML({
-    node,
-    HTMLAttributes,
-  }: {
-    node: { attrs: ProblemRefNodeAttrs }
-    HTMLAttributes: Record<string, unknown>
-  }) {
+  renderHTML({ node, HTMLAttributes }: any) {
     return [
       "div",
       mergeAttributes(HTMLAttributes, {

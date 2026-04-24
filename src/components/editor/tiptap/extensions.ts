@@ -1,22 +1,13 @@
+import type { AnyExtension } from "@tiptap/react"
 import StarterKit from "@tiptap/starter-kit"
 
 import { ProblemRefNode } from "./problem-ref-node"
 
-export function teachingUnitExtensions() {
-  const starterKit = StarterKit as {
-    configure: (options: {
-      heading: {
-        levels: number[]
-      }
-    }) => unknown
-  }
-
+export function teachingUnitExtensions(): AnyExtension[] {
   return [
-    starterKit.configure({
-      heading: {
-        levels: [1, 2, 3],
-      },
+    StarterKit.configure({
+      heading: { levels: [1, 2, 3] },
     }),
     ProblemRefNode,
-  ]
+  ] as AnyExtension[]
 }
