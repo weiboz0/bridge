@@ -3,6 +3,7 @@
 import { useCallback } from "react"
 import { nanoid } from "nanoid"
 import { EditorContent, type Editor, type JSONContent, useEditor } from "@tiptap/react"
+import { InputRule } from "@tiptap/core"
 import { Button } from "@/components/ui/button"
 import { teachingUnitExtensions } from "./extensions"
 
@@ -44,9 +45,70 @@ function assignMissingTopLevelNodeIds(editor: Editor) {
   }
 }
 
+/**
+ * Slash command input rules.
+ * When the user types /note, /code, /media, or /problem at the start of a
+ * paragraph (preceded only by optional whitespace), the typed trigger text is
+ * replaced with the corresponding custom block node.
+ *
+ * Tiptap InputRule receives the full match and returns a replacement via the
+ * `handler` callback.  We use a plain text regex pattern so the rule fires
+ * exactly once per trigger word.
+ */
+function makeSlashCommandExtension() {
+  // We cannot add InputRules to an existing node type here, so we return a
+  // lightweight anonymous Tiptap extension that only contributes input rules.
+  const { Extension } = require("@tiptap/core") as typeof import("@tiptap/core")
+  return Extension.create({
+    name: "slash-commands",
+    addInputRules() {
+      const makeRule = (
+        trigger: string,
+        nodeType: string,
+        extraAttrs: Record<string, unknown> = {}
+      ) =>
+        new InputRule({
+          // Match the trigger text optionally preceded by a slash, anchored
+          // to the start of the content (positive lookbehind on newline or
+          // start) so it only fires on its own line.
+          find: new RegExp(`/${trigger}$`),
+          handler: ({ state, range, chain }) => {
+            const type = state.schema.nodes[nodeType]
+            if (!type) return null
+
+            chain()
+              .deleteRange(range)
+              .insertContent({
+                type: nodeType,
+                attrs: { id: nanoid(), ...extraAttrs },
+              })
+              .run()
+
+            return null
+          },
+        })
+
+      return [
+        makeRule("note", "teacher-note"),
+        makeRule("code", "code-snippet", { language: "python", code: "" }),
+        makeRule("media", "media-embed", { url: "", alt: "", mediaType: "image" }),
+        makeRule("problem", "problem-ref", {
+          problemId: "",
+          pinnedRevision: null,
+          visibility: "always",
+          overrideStarter: null,
+        }),
+      ]
+    },
+  })
+}
+
 export function TeachingUnitEditor({ initialDoc, onSave, onDirty }: TeachingUnitEditorProps) {
   const editor = useEditor({
-    extensions: teachingUnitExtensions(),
+    extensions: [
+      ...teachingUnitExtensions(),
+      makeSlashCommandExtension(),
+    ],
     content: initialDoc ?? { type: "doc", content: [] },
     onCreate({ editor: e }: any) {
       assignMissingTopLevelNodeIds(e as Editor)
@@ -83,6 +145,43 @@ export function TeachingUnitEditor({ initialDoc, onSave, onDirty }: TeachingUnit
       .run()
   }, [editor])
 
+  const handleInsertTeacherNote = useCallback(() => {
+    if (!editor) return
+    editor
+      .chain()
+      .focus()
+      .insertContent({
+        type: "teacher-note",
+        attrs: { id: nanoid() },
+        content: [{ type: "paragraph" }],
+      })
+      .run()
+  }, [editor])
+
+  const handleInsertCodeSnippet = useCallback(() => {
+    if (!editor) return
+    editor
+      .chain()
+      .focus()
+      .insertContent({
+        type: "code-snippet",
+        attrs: { id: nanoid(), language: "python", code: "" },
+      })
+      .run()
+  }, [editor])
+
+  const handleInsertMediaEmbed = useCallback(() => {
+    if (!editor) return
+    editor
+      .chain()
+      .focus()
+      .insertContent({
+        type: "media-embed",
+        attrs: { id: nanoid(), url: "", alt: "", mediaType: "image" },
+      })
+      .run()
+  }, [editor])
+
   const handleSave = useCallback(async () => {
     if (!editor) {
       return
@@ -95,12 +194,30 @@ export function TeachingUnitEditor({ initialDoc, onSave, onDirty }: TeachingUnit
 
   return (
     <div className="space-y-3">
+      {/* Toolbar */}
       <div className="flex flex-wrap gap-2">
-        <Button onClick={handleInsertProblem}>Insert Problem</Button>
-        <Button variant="outline" onClick={handleSave}>
+        <Button onClick={handleInsertProblem} variant="outline" size="sm">
+          + Problem
+        </Button>
+        <Button onClick={handleInsertTeacherNote} variant="outline" size="sm">
+          + Teacher Note
+        </Button>
+        <Button onClick={handleInsertCodeSnippet} variant="outline" size="sm">
+          + Code
+        </Button>
+        <Button onClick={handleInsertMediaEmbed} variant="outline" size="sm">
+          + Media
+        </Button>
+        <Button variant="default" size="sm" onClick={handleSave}>
           Save
         </Button>
       </div>
+      <p className="text-xs text-zinc-400">
+        Tip: type <code className="rounded bg-zinc-100 px-1">/note</code>,{" "}
+        <code className="rounded bg-zinc-100 px-1">/code</code>,{" "}
+        <code className="rounded bg-zinc-100 px-1">/media</code>, or{" "}
+        <code className="rounded bg-zinc-100 px-1">/problem</code> to insert a block.
+      </p>
       <div className="rounded-lg border border-zinc-200 bg-zinc-50">
         <EditorContent editor={editor} className="min-h-60 px-3 py-2" />
       </div>
