@@ -186,6 +186,17 @@ func TestScheduleStore_StartScheduledSession(t *testing.T) {
 	assert.Equal(t, "in_progress", updated.Status)
 	assert.Equal(t, session.ID, *updated.LiveSessionID)
 
+	var scheduledSessionID *string
+	err = db.QueryRowContext(ctx, `SELECT scheduled_session_id FROM sessions WHERE id = $1`, session.ID).Scan(&scheduledSessionID)
+	require.NoError(t, err)
+	require.NotNil(t, scheduledSessionID)
+	assert.Equal(t, sched.ID, *scheduledSessionID)
+
+	refetched, err := schedules.GetSchedule(ctx, sched.ID)
+	require.NoError(t, err)
+	require.NotNil(t, refetched.LiveSessionID)
+	assert.Equal(t, session.ID, *refetched.LiveSessionID)
+
 	// Topics should be linked
 	linkedTopics, _ := NewSessionStore(db).GetSessionTopics(ctx, session.ID)
 	assert.Len(t, linkedTopics, 1)

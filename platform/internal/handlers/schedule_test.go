@@ -2,14 +2,19 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/weiboz0/bridge/platform/internal/auth"
+	"github.com/weiboz0/bridge/platform/internal/store"
 )
 
 func TestCreateSchedule_NoClaims(t *testing.T) {
@@ -125,4 +130,89 @@ func TestStartSchedule_NoClaims(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.Start(w, req)
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
+func TestScheduleHandler_List_UsesSessionScheduledBackref(t *testing.T) {
+	db := integrationDB(t)
+	ctx := context.Background()
+	suffix := strings.ToLower(strings.ReplaceAll(t.Name(), "_", "-"))
+
+	orgs := store.NewOrgStore(db)
+	users := store.NewUserStore(db)
+	courses := store.NewCourseStore(db)
+	classes := store.NewClassStore(db)
+	schedules := store.NewScheduleStore(db)
+
+	org, err := orgs.CreateOrg(ctx, store.CreateOrgInput{
+		Name:         "Org " + suffix,
+		Slug:         "org-" + suffix,
+		Type:         "school",
+		ContactEmail: suffix + "@example.com",
+		ContactName:  "Admin",
+	})
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, "UPDATE organizations SET status = 'active' WHERE id = $1", org.ID)
+	require.NoError(t, err)
+
+	teacher, err := users.RegisterUser(ctx, store.RegisterInput{
+		Name:     "Teacher " + suffix,
+		Email:    suffix + "-teacher@example.com",
+		Password: "testpassword123",
+	})
+	require.NoError(t, err)
+
+	course, err := courses.CreateCourse(ctx, store.CreateCourseInput{
+		OrgID:      org.ID,
+		CreatedBy:  teacher.ID,
+		Title:      "Course " + suffix,
+		GradeLevel: "K-5",
+	})
+	require.NoError(t, err)
+
+	class, err := classes.CreateClass(ctx, store.CreateClassInput{
+		CourseID:  course.ID,
+		OrgID:     org.ID,
+		Title:     "Class " + suffix,
+		CreatedBy: teacher.ID,
+	})
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		db.ExecContext(ctx, "DELETE FROM scheduled_sessions WHERE class_id = $1", class.ID)
+		db.ExecContext(ctx, "DELETE FROM sessions WHERE class_id = $1", class.ID)
+		db.ExecContext(ctx, "DELETE FROM class_memberships WHERE class_id = $1", class.ID)
+		db.ExecContext(ctx, "DELETE FROM class_settings WHERE class_id = $1", class.ID)
+		db.ExecContext(ctx, "DELETE FROM classes WHERE id = $1", class.ID)
+		db.ExecContext(ctx, "DELETE FROM courses WHERE id = $1", course.ID)
+		db.ExecContext(ctx, "DELETE FROM org_memberships WHERE org_id = $1", org.ID)
+		db.ExecContext(ctx, "DELETE FROM auth_providers WHERE user_id = $1", teacher.ID)
+		db.ExecContext(ctx, "DELETE FROM users WHERE id = $1", teacher.ID)
+		db.ExecContext(ctx, "DELETE FROM organizations WHERE id = $1", org.ID)
+	})
+
+	sched, err := schedules.CreateSchedule(ctx, store.CreateScheduleInput{
+		ClassID:        class.ID,
+		TeacherID:      teacher.ID,
+		ScheduledStart: time.Now().Add(time.Hour),
+		ScheduledEnd:   time.Now().Add(2 * time.Hour),
+	})
+	require.NoError(t, err)
+
+	session, err := schedules.StartScheduledSession(ctx, sched.ID, teacher.ID)
+	require.NoError(t, err)
+
+	h := &ScheduleHandler{Schedules: schedules}
+	req := httptest.NewRequest(http.MethodGet, "/api/classes/"+class.ID+"/schedule", nil)
+	req = withChiParams(req, map[string]string{"classId": class.ID})
+	req = withClaims(req, &auth.Claims{UserID: teacher.ID})
+	w := httptest.NewRecorder()
+	h.List(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+
+	var payload []store.ScheduledSession
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &payload))
+	require.Len(t, payload, 1)
+	require.NotNil(t, payload[0].LiveSessionID)
+	assert.Equal(t, session.ID, *payload[0].LiveSessionID)
 }

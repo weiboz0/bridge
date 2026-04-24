@@ -11,18 +11,18 @@ import (
 )
 
 type ScheduledSession struct {
-	ID             string     `json:"id"`
-	ClassID        string     `json:"classId"`
-	TeacherID      string     `json:"teacherId"`
-	Title          *string    `json:"title"`
-	ScheduledStart time.Time  `json:"scheduledStart"`
-	ScheduledEnd   time.Time  `json:"scheduledEnd"`
-	Recurrence     *string    `json:"recurrence"`   // JSONB as string
-	TopicIDs       []string   `json:"topicIds"`
-	LiveSessionID  *string    `json:"liveSessionId"`
-	Status         string     `json:"status"`
-	CreatedAt      time.Time  `json:"createdAt"`
-	UpdatedAt      time.Time  `json:"updatedAt"`
+	ID             string    `json:"id"`
+	ClassID        string    `json:"classId"`
+	TeacherID      string    `json:"teacherId"`
+	Title          *string   `json:"title"`
+	ScheduledStart time.Time `json:"scheduledStart"`
+	ScheduledEnd   time.Time `json:"scheduledEnd"`
+	Recurrence     *string   `json:"recurrence"` // JSONB as string
+	TopicIDs       []string  `json:"topicIds"`
+	LiveSessionID  *string   `json:"liveSessionId"`
+	Status         string    `json:"status"`
+	CreatedAt      time.Time `json:"createdAt"`
+	UpdatedAt      time.Time `json:"updatedAt"`
 }
 
 type CreateScheduleInput struct {
@@ -50,7 +50,10 @@ func NewScheduleStore(db *sql.DB) *ScheduleStore {
 	return &ScheduleStore{db: db}
 }
 
-const scheduleColumns = `id, class_id, teacher_id, title, scheduled_start, scheduled_end, recurrence, topic_ids, live_session_id, status, created_at, updated_at`
+const scheduleColumns = `id, class_id, teacher_id, title, scheduled_start, scheduled_end, recurrence, topic_ids, NULL::uuid AS linked_session_id, status, created_at, updated_at`
+const scheduleReadColumns = `scheduled_sessions.id, scheduled_sessions.class_id, scheduled_sessions.teacher_id, scheduled_sessions.title, scheduled_sessions.scheduled_start, scheduled_sessions.scheduled_end, scheduled_sessions.recurrence, scheduled_sessions.topic_ids,
+	(SELECT sessions.id FROM sessions WHERE sessions.scheduled_session_id = scheduled_sessions.id ORDER BY sessions.started_at DESC, sessions.id DESC LIMIT 1) AS linked_session_id,
+	scheduled_sessions.status, scheduled_sessions.created_at, scheduled_sessions.updated_at`
 
 func scanSchedule(row interface{ Scan(...any) error }) (*ScheduledSession, error) {
 	var s ScheduledSession
@@ -105,12 +108,12 @@ func (s *ScheduleStore) CreateSchedule(ctx context.Context, input CreateSchedule
 
 func (s *ScheduleStore) GetSchedule(ctx context.Context, id string) (*ScheduledSession, error) {
 	return scanSchedule(s.db.QueryRowContext(ctx,
-		`SELECT `+scheduleColumns+` FROM scheduled_sessions WHERE id = $1`, id))
+		`SELECT `+scheduleReadColumns+` FROM scheduled_sessions WHERE id = $1`, id))
 }
 
 func (s *ScheduleStore) ListByClass(ctx context.Context, classID string) ([]ScheduledSession, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT `+scheduleColumns+` FROM scheduled_sessions WHERE class_id = $1 ORDER BY scheduled_start ASC`, classID)
+		`SELECT `+scheduleReadColumns+` FROM scheduled_sessions WHERE class_id = $1 ORDER BY scheduled_start ASC`, classID)
 	if err != nil {
 		return nil, err
 	}
@@ -123,7 +126,7 @@ func (s *ScheduleStore) ListUpcoming(ctx context.Context, classID string, limit 
 		limit = 10
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT `+scheduleColumns+` FROM scheduled_sessions
+		`SELECT `+scheduleReadColumns+` FROM scheduled_sessions
 		 WHERE class_id = $1 AND status = 'planned' AND scheduled_start > now()
 		 ORDER BY scheduled_start ASC LIMIT $2`, classID, limit)
 	if err != nil {
@@ -238,7 +241,7 @@ func (s *ScheduleStore) StartScheduledSession(ctx context.Context, scheduleID, t
 	sessionID := uuid.New().String()
 	var session LiveSession
 	err = tx.QueryRowContext(ctx,
-		`INSERT INTO sessions (id, class_id, teacher_id, title, status, settings, started_at)
+		`INSERT INTO sessions (id, class_id, teacher_id, title, status, settings, started_at, scheduled_session_id)
 		 VALUES (
 		   $1,
 		   $2,
@@ -246,10 +249,11 @@ func (s *ScheduleStore) StartScheduledSession(ctx context.Context, scheduleID, t
 		   COALESCE($5, (SELECT title FROM classes WHERE id = $2), 'Untitled session'),
 		   'live',
 		   '{}',
-		   $4
+		   $4,
+		   $6
 		 )
 		 RETURNING `+sessionColumns,
-		sessionID, sched.ClassID, teacherID, now, sched.Title,
+		sessionID, sched.ClassID, teacherID, now, sched.Title, sched.ID,
 	).Scan(&session.ID, &session.ClassID, &session.TeacherID, &session.Title, &session.Status,
 		&session.Settings, &session.InviteToken, &session.InviteExpiresAt,
 		&session.StartedAt, &session.EndedAt)
@@ -269,8 +273,8 @@ func (s *ScheduleStore) StartScheduledSession(ctx context.Context, scheduleID, t
 
 	// Update schedule entry
 	_, err = tx.ExecContext(ctx,
-		`UPDATE scheduled_sessions SET status = 'in_progress', live_session_id = $1, updated_at = $2 WHERE id = $3`,
-		sessionID, now, scheduleID)
+		`UPDATE scheduled_sessions SET status = 'in_progress', updated_at = $1 WHERE id = $2`,
+		now, scheduleID)
 	if err != nil {
 		return nil, err
 	}
@@ -285,7 +289,8 @@ func (s *ScheduleStore) StartScheduledSession(ctx context.Context, scheduleID, t
 func (s *ScheduleStore) CompleteScheduledSession(ctx context.Context, liveSessionID string) error {
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE scheduled_sessions SET status = 'completed', updated_at = $1
-		 WHERE live_session_id = $2 AND status = 'in_progress'`,
+		 WHERE id = (SELECT scheduled_session_id FROM sessions WHERE id = $2)
+		   AND status = 'in_progress'`,
 		time.Now(), liveSessionID)
 	return err
 }

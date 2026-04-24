@@ -103,6 +103,7 @@ Follow `docs/code-review.md` for the review process. Key points:
 - Reviews go in the plan file's `## Code Review` section
 - Reviewers: append findings with `[OPEN]` status and file:line references
 - Authors: respond inline with `→ Response:` and `[FIXED]`/`[WONTFIX]`
+- **Use Codex for code review** when available. Dispatch via `/codex:rescue` with a review prompt targeting the branch diff. Codex provides an independent second opinion with access to the full repo context. The Codex review gate (enabled in this project) also triggers automatically at session stop.
 
 ## Multi-Agent Coordination
 
