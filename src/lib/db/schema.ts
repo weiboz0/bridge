@@ -612,6 +612,7 @@ export const teachingUnits = pgTable(
       .$type<"draft" | "reviewed" | "classroom_ready" | "coach_ready" | "archived">()
       .notNull()
       .default("draft"),
+    topicId: uuid("topic_id").references(() => topics.id, { onDelete: "set null" }),
     createdBy: uuid("created_by").notNull().references(() => users.id),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
