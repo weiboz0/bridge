@@ -681,6 +681,63 @@ func TestTeachingUnitStore_NullableFields_RoundTrip(t *testing.T) {
 	assert.Equal(t, 90, *updated.EstimatedMinutes)
 }
 
+// ── GetUnitByTopicID ─────────────────────────────────────────────────────────
+
+func TestTeachingUnitStore_GetUnitByTopicID(t *testing.T) {
+	units, _, orgID, userID := setupUnitEnv(t, t.Name())
+	ctx := context.Background()
+	db := testDB(t)
+
+	// Use valid UUIDs for the course and topic fixtures.
+	courseID := "00000000-0000-0000-aaaa-000000000001"
+	topicID := "00000000-0000-0000-aaaa-000000000002"
+
+	_, err := db.ExecContext(ctx, `
+		INSERT INTO courses (id, org_id, created_by, title, description, grade_level, language, is_published)
+		VALUES ($1, $2, $3, 'GetByTopicID Course', '', '9-12', 'python', false)
+		ON CONFLICT (id) DO NOTHING`,
+		courseID, orgID, userID)
+	require.NoError(t, err)
+
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO topics (id, course_id, title, description, sort_order, lesson_content)
+		VALUES ($1, $2, 'Test Topic', 'desc', 0, '{}'::jsonb)
+		ON CONFLICT (id) DO NOTHING`,
+		topicID, courseID)
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		db.ExecContext(ctx, `DELETE FROM topics WHERE id = $1`, topicID)
+		db.ExecContext(ctx, `DELETE FROM courses WHERE id = $1`, courseID)
+	})
+
+	// Create a unit that references this topic.
+	u := mustCreateUnit(t, units, CreateTeachingUnitInput{
+		Scope:     "personal",
+		ScopeID:   &userID,
+		Title:     "Topic-linked Unit",
+		CreatedBy: userID,
+	})
+
+	// Set topic_id directly (CreateUnit doesn't expose it yet).
+	_, err = db.ExecContext(ctx,
+		`UPDATE teaching_units SET topic_id = $1 WHERE id = $2`, topicID, u.ID)
+	require.NoError(t, err)
+
+	// Happy path: should find the unit by topic_id.
+	found, err := units.GetUnitByTopicID(ctx, topicID)
+	require.NoError(t, err)
+	require.NotNil(t, found, "GetUnitByTopicID must return unit when topic_id matches")
+	assert.Equal(t, u.ID, found.ID)
+	require.NotNil(t, found.TopicID, "TopicID field must be populated")
+	assert.Equal(t, topicID, *found.TopicID)
+
+	// Non-existent topic_id → nil, nil.
+	missing, err := units.GetUnitByTopicID(ctx, "00000000-0000-0000-0000-000000000000")
+	require.NoError(t, err)
+	assert.Nil(t, missing, "GetUnitByTopicID must return nil for unknown topic_id")
+}
+
 // ── DeleteUnit ────────────────────────────────────────────────────────────────
 
 func TestTeachingUnitStore_DeleteUnit_Cascades(t *testing.T) {

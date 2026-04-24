@@ -30,6 +30,7 @@ type TeachingUnit struct {
 	CreatedBy        string    `json:"createdBy"`
 	CreatedAt        time.Time `json:"createdAt"`
 	UpdatedAt        time.Time `json:"updatedAt"`
+	TopicID          *string   `json:"topicId"`
 }
 
 // UnitDocument is the single document (block-based content) row for a unit.
@@ -80,20 +81,20 @@ func NewTeachingUnitStore(db *sql.DB) *TeachingUnitStore { return &TeachingUnitS
 
 const teachingUnitColumns = `id, scope, scope_id, title, slug, summary,
   grade_level, subject_tags, standards_tags, estimated_minutes, status,
-  created_by, created_at, updated_at`
+  created_by, created_at, updated_at, topic_id`
 
 // scanTeachingUnit reads a teaching_units row. Returns (nil, nil) on
 // sql.ErrNoRows so callers can use a uniform "not found" check.
 func scanTeachingUnit(row interface{ Scan(...any) error }) (*TeachingUnit, error) {
 	var u TeachingUnit
-	var scopeID, slug, gradeLevel sql.NullString
+	var scopeID, slug, gradeLevel, topicID sql.NullString
 	var estimatedMinutes sql.NullInt32
 	var subjectTags, standardsTags pq.StringArray
 
 	err := row.Scan(
 		&u.ID, &u.Scope, &scopeID, &u.Title, &slug, &u.Summary,
 		&gradeLevel, &subjectTags, &standardsTags, &estimatedMinutes, &u.Status,
-		&u.CreatedBy, &u.CreatedAt, &u.UpdatedAt,
+		&u.CreatedBy, &u.CreatedAt, &u.UpdatedAt, &topicID,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -117,6 +118,10 @@ func scanTeachingUnit(row interface{ Scan(...any) error }) (*TeachingUnit, error
 	if estimatedMinutes.Valid {
 		v := int(estimatedMinutes.Int32)
 		u.EstimatedMinutes = &v
+	}
+	if topicID.Valid {
+		v := topicID.String
+		u.TopicID = &v
 	}
 	if subjectTags == nil {
 		u.SubjectTags = []string{}
@@ -190,6 +195,14 @@ func (s *TeachingUnitStore) CreateUnit(ctx context.Context, in CreateTeachingUni
 func (s *TeachingUnitStore) GetUnit(ctx context.Context, id string) (*TeachingUnit, error) {
 	return scanTeachingUnit(s.db.QueryRowContext(ctx,
 		`SELECT `+teachingUnitColumns+` FROM teaching_units WHERE id = $1`, id))
+}
+
+// GetUnitByTopicID returns the unit linked to the given topic, or (nil, nil) if
+// no unit has that topic_id. Each topic maps to at most one unit (enforced by a
+// partial unique index on teaching_units.topic_id WHERE topic_id IS NOT NULL).
+func (s *TeachingUnitStore) GetUnitByTopicID(ctx context.Context, topicID string) (*TeachingUnit, error) {
+	return scanTeachingUnit(s.db.QueryRowContext(ctx,
+		`SELECT `+teachingUnitColumns+` FROM teaching_units WHERE topic_id = $1`, topicID))
 }
 
 // GetDocument returns the unit_documents row for unitID.
