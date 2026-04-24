@@ -841,3 +841,42 @@ GH_TOKEN=$(cat .gh-token) gh pr create \
 ## Code Review
 
 Reviewers append findings here following `docs/code-review.md` format. Author responds inline with `→ Response:` and status `[FIXED]` / `[WONTFIX]`.
+
+## Post-Execution Report
+
+**Status:** Complete
+
+**Implemented**
+
+- Migration 0016: `teaching_units`, `unit_documents`, `unit_revisions` tables with CHECK constraints, GIN indexes on subject/standards tags, scope-slug unique index.
+- Drizzle schema exports: `teachingUnits`, `unitDocuments`, `unitRevisions`.
+- Go `TeachingUnitStore`: CreateUnit (seeds empty doc in tx), GetUnit, GetDocument, UpdateUnit (dynamic setClauses), SaveDocument (upsert + bumps unit updated_at), DeleteUnit (cascade), ListUnitsForScope. 11 store tests.
+- Go `TeachingUnitHandler`: scope-aware CRUD with canViewUnit (spec 012 access table + plan-031 narrowing: deny org students), canEditUnit (scope-based roles), document validation (envelope check, attrs.id enforcement, block type allowlist). 49 handler integration tests covering full access matrix.
+- Tiptap editor: StarterKit + custom `problem-ref` node (atom, ReactNodeViewRenderer, fetches problem card from API). Extensions typed as `AnyExtension[]`.
+- `TeachingUnitEditor` component: save/dirty callbacks, auto-assigns nanoid to blocks missing attrs.id, "Insert Problem" prompt.
+- `TeachingUnitViewer` component: read-only rendering with same extensions.
+- Teacher pages: `/teacher/units/new` (create form), `/teacher/units/{id}/edit` (Tiptap editor), `/teacher/units/{id}` (read-only view). Client helpers in `src/lib/teaching-units.ts`.
+- 5 Vitest editor tests: render, save roundtrip, problem-ref card, auto-ID assignment.
+
+**Verification**
+
+- Go: 12 packages green (handlers 57s, store 22s)
+- Vitest: 275 passed / 11 skipped / 0 failures (46 files)
+- Migration idempotent on both bridge + bridge_test
+
+**Bugs found by tests**
+
+- `assignMissingTopLevelNodeIds` crashed on paragraph/heading nodes (no `id` in their ProseMirror schema). Fixed by checking `node.type.spec.attrs` for an `id` key.
+- Document position offset was wrong (`offset + 1` → `offset`). Fixed.
+
+**Deviations from plan**
+
+- Migration number 0016 (plan draft said 0015 but that was taken by 030e's backref cleanup).
+- Tiptap v3 type signatures differ from plan's v2 sketches; fixed with `AnyExtension[]` cast and `any` on callback params.
+- `bun` not on PATH in this environment; used `~/.bun/bin/bun` directly.
+
+**Follow-up**
+
+- Plan 032: migrate existing `topic.lessonContent` into teaching units.
+- Plan 033: full block palette, lifecycle transitions, render projection.
+- Problem picker UI (currently a plain prompt for problem ID) → plan 033 or 036.
