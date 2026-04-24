@@ -64,6 +64,12 @@ func (h *TeachingUnitHandler) Routes(r chi.Router) {
 		r.Get("/", h.ListUnits)
 		r.Post("/", h.CreateUnit)
 	})
+	// by-topic lookup must be registered BEFORE the /{id} wildcard route so Chi
+	// does not attempt to parse "by-topic" as a UUID parameter.
+	r.Route("/api/units/by-topic/{topicId}", func(r chi.Router) {
+		r.Use(ValidateUUIDParam("topicId"))
+		r.Get("/", h.GetUnitByTopic)
+	})
 	r.Route("/api/units/{id}", func(r chi.Router) {
 		r.Use(ValidateUUIDParam("id"))
 		r.Get("/", h.GetUnit)
@@ -457,6 +463,33 @@ func (h *TeachingUnitHandler) GetDocument(w http.ResponseWriter, r *http.Request
 		return
 	}
 	writeJSON(w, http.StatusOK, doc)
+}
+
+// GetUnitByTopic — GET /api/units/by-topic/{topicId}
+// Looks up the teaching unit linked to the given topic. Returns 404 if no unit
+// is linked to that topic or if the caller cannot view the found unit.
+func (h *TeachingUnitHandler) GetUnitByTopic(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	topicID := chi.URLParam(r, "topicId")
+
+	unit, err := h.Units.GetUnitByTopicID(r.Context(), topicID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if unit == nil {
+		writeError(w, http.StatusNotFound, "Not found")
+		return
+	}
+	if !h.canViewUnit(r.Context(), claims, unit) {
+		writeError(w, http.StatusNotFound, "Not found") // don't leak existence
+		return
+	}
+	writeJSON(w, http.StatusOK, unit)
 }
 
 // SaveDocument — PUT /api/units/{id}/document

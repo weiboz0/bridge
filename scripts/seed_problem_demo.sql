@@ -183,6 +183,95 @@ VALUES
   ('00000000-0000-0000-0000-000000304004', '00000000-0000-0000-0000-000000020004', NULL, 'Hidden: end of list', E'1 5 7 2 8 11\n19', '4 5',              false, 3)
 ON CONFLICT (id) DO NOTHING;
 
+-- ---------- Teaching units — one per topic ----------
+-- Unit UUID scheme: 0000000a10NN where NN = topic sort_order (01, 02)
+-- scope = 'org', scope_id = Bridge Demo School
+-- topic_id links back to the topic so /api/units/by-topic/{topicId} works.
+-- created_by = eve@demo.edu
+--
+-- The partial unique index on topic_id means each topic can have at most one
+-- unit. The inserts use ON CONFLICT (topic_id) WHERE topic_id IS NOT NULL DO
+-- NOTHING so re-runs are no-ops even if migration 0017 already created a unit
+-- for these topics with a different (random) UUID.
+
+INSERT INTO teaching_units (
+  id, scope, scope_id, title, slug, summary, grade_level,
+  subject_tags, standards_tags, estimated_minutes,
+  status, created_by, topic_id
+)
+VALUES
+  (
+    '00000000-0000-0000-0000-0000000a1001',
+    'org',
+    'd386983b-6da4-4cb8-8057-f2aa70d27c07',
+    'Warm-ups',
+    NULL,
+    'Simple I/O: read from input(), print a result.',
+    '9-12',
+    '{}', '{}', NULL,
+    'classroom_ready',
+    'd0d3b031-a483-4214-97fb-48c9584f4dcb',
+    '00000000-0000-0000-0000-000000010001'
+  ),
+  (
+    '00000000-0000-0000-0000-0000000a1002',
+    'org',
+    'd386983b-6da4-4cb8-8057-f2aa70d27c07',
+    'Arrays',
+    NULL,
+    'Work with lists of numbers.',
+    '9-12',
+    '{}', '{}', NULL,
+    'classroom_ready',
+    'd0d3b031-a483-4214-97fb-48c9584f4dcb',
+    '00000000-0000-0000-0000-000000010002'
+  )
+ON CONFLICT (topic_id) WHERE topic_id IS NOT NULL DO NOTHING;
+
+-- Unit documents: one doc per unit, with problem-ref blocks for each topic problem.
+-- We look up the actual unit_id by topic_id so this works whether the unit came
+-- from the seed above or from migration 0017 (which uses random UUIDs).
+
+INSERT INTO unit_documents (unit_id, blocks)
+SELECT
+  tu.id,
+  jsonb_build_object(
+    'type', 'doc',
+    'content', jsonb_build_array(
+      jsonb_build_object('type', 'problem-ref', 'attrs', jsonb_build_object(
+        'id', 'b000',
+        'problemId', '00000000-0000-0000-0000-000000020001',
+        'pinnedRevision', NULL::text, 'visibility', 'always', 'overrideStarter', NULL::text)),
+      jsonb_build_object('type', 'problem-ref', 'attrs', jsonb_build_object(
+        'id', 'b001',
+        'problemId', '00000000-0000-0000-0000-000000020002',
+        'pinnedRevision', NULL::text, 'visibility', 'always', 'overrideStarter', NULL::text))
+    )
+  )
+FROM teaching_units tu
+WHERE tu.topic_id = '00000000-0000-0000-0000-000000010001'
+ON CONFLICT (unit_id) DO NOTHING;
+
+INSERT INTO unit_documents (unit_id, blocks)
+SELECT
+  tu.id,
+  jsonb_build_object(
+    'type', 'doc',
+    'content', jsonb_build_array(
+      jsonb_build_object('type', 'problem-ref', 'attrs', jsonb_build_object(
+        'id', 'b000',
+        'problemId', '00000000-0000-0000-0000-000000020003',
+        'pinnedRevision', NULL::text, 'visibility', 'always', 'overrideStarter', NULL::text)),
+      jsonb_build_object('type', 'problem-ref', 'attrs', jsonb_build_object(
+        'id', 'b001',
+        'problemId', '00000000-0000-0000-0000-000000020004',
+        'pinnedRevision', NULL::text, 'visibility', 'always', 'overrideStarter', NULL::text))
+    )
+  )
+FROM teaching_units tu
+WHERE tu.topic_id = '00000000-0000-0000-0000-000000010002'
+ON CONFLICT (unit_id) DO NOTHING;
+
 -- ---------- Class + memberships + classroom ----------
 
 INSERT INTO classes (id, course_id, org_id, title, term, join_code, status)

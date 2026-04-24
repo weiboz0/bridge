@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -803,4 +804,112 @@ func TestTeachingUnitHandler_List_InvalidScope_400(t *testing.T) {
 	w := httptest.NewRecorder()
 	fx.h.ListUnits(w, req)
 	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+// ==================== GetUnitByTopic ====================
+
+// setupTopicForUnit creates a minimal course + topic in the DB so a unit can
+// have its topic_id FK set. Returns the topicID. Registers cleanup.
+func setupTopicForUnit(t *testing.T, db *sql.DB, orgID, userID, suffix string) string {
+	t.Helper()
+	ctx := context.Background()
+
+	// Derive deterministic hex UUIDs from the suffix using FNV-like hashing.
+	h1 := fnvHash(suffix + "c")
+	h2 := fnvHash(suffix + "t")
+	courseID := fmt.Sprintf("00000000-0000-0000-bbbb-%012x", h1)
+	topicID := fmt.Sprintf("00000000-0000-0000-bbbb-%012x", h2)
+
+	_, err := db.ExecContext(ctx, `
+		INSERT INTO courses (id, org_id, created_by, title, description, grade_level, language, is_published)
+		VALUES ($1, $2, $3, $4, '', '9-12', 'python', false)
+		ON CONFLICT (id) DO NOTHING`,
+		courseID, orgID, userID, "Course-"+suffix)
+	require.NoError(t, err)
+
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO topics (id, course_id, title, description, sort_order, lesson_content)
+		VALUES ($1, $2, $3, '', 0, '{}'::jsonb)
+		ON CONFLICT (id) DO NOTHING`,
+		topicID, courseID, "Topic-"+suffix)
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		db.ExecContext(ctx, `DELETE FROM topics WHERE id = $1`, topicID)
+		db.ExecContext(ctx, `DELETE FROM courses WHERE id = $1`, courseID)
+	})
+	return topicID
+}
+
+// fnvHash converts a string to a stable uint64 (48-bit masked) suitable for
+// building deterministic hex UUID segments in tests.
+func fnvHash(s string) uint64 {
+	var h uint64 = 14695981039346656037
+	for i := 0; i < len(s); i++ {
+		h ^= uint64(s[i])
+		h *= 1099511628211
+	}
+	return h & 0xffffffffffff
+}
+
+func TestTeachingUnitHandler_GetUnitByTopic_200(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	ctx := context.Background()
+
+	// Create an org unit, then link it to a topic.
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "classroom_ready", "Topic Unit", fx.teacher1.ID)
+	topicID := setupTopicForUnit(t, fx.sqlDB, fx.org1.ID, fx.teacher1.ID, t.Name())
+
+	_, err := fx.sqlDB.ExecContext(ctx,
+		`UPDATE teaching_units SET topic_id = $1 WHERE id = $2`, topicID, u.ID)
+	require.NoError(t, err)
+
+	w := doUnitGet(t, fx.h.GetUnitByTopic, "/api/units/by-topic/"+topicID,
+		map[string]string{"topicId": topicID},
+		fx.claims(fx.teacher1, false))
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var resp store.TeachingUnit
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, u.ID, resp.ID)
+	require.NotNil(t, resp.TopicID)
+	assert.Equal(t, topicID, *resp.TopicID)
+}
+
+func TestTeachingUnitHandler_GetUnitByTopic_UnknownID_404(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	unknownID := "00000000-0000-0000-0000-000000000099"
+	w := doUnitGet(t, fx.h.GetUnitByTopic, "/api/units/by-topic/"+unknownID,
+		map[string]string{"topicId": unknownID},
+		fx.claims(fx.admin, true))
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func TestTeachingUnitHandler_GetUnitByTopic_NoAccess_404(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	ctx := context.Background()
+
+	// Create a personal unit owned by outsider and link it to a topic.
+	uid := fx.outsider.ID
+	u := fx.mkUnit(t, "personal", &uid, "draft", "Private Unit", fx.outsider.ID)
+	topicID := setupTopicForUnit(t, fx.sqlDB, fx.org1.ID, fx.outsider.ID, t.Name())
+
+	_, err := fx.sqlDB.ExecContext(ctx,
+		`UPDATE teaching_units SET topic_id = $1 WHERE id = $2`, topicID, u.ID)
+	require.NoError(t, err)
+
+	// teacher1 cannot view a personal unit owned by outsider.
+	w := doUnitGet(t, fx.h.GetUnitByTopic, "/api/units/by-topic/"+topicID,
+		map[string]string{"topicId": topicID},
+		fx.claims(fx.teacher1, false))
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func TestTeachingUnitHandler_GetUnitByTopic_NoAuth_401(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	unknownID := "00000000-0000-0000-0000-000000000098"
+	w := doUnitGet(t, fx.h.GetUnitByTopic, "/api/units/by-topic/"+unknownID,
+		map[string]string{"topicId": unknownID},
+		nil)
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
 }
