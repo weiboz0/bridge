@@ -161,14 +161,12 @@ function TeachingUnitEditor({ initialDoc, onSave, onDirty, unitId, collaborative
   const isCollaborative = Boolean(collaborative) && yjsExtensions.length > 0
 
   const editor = useEditor({
+    immediatelyRender: false,
     extensions: [
       ...teachingUnitExtensions(),
       makeSlashCommandExtension(),
       ...(isCollaborative ? yjsExtensions : []),
     ],
-    // When collaborative and connected, Yjs drives state. When collaborative
-    // but not yet connected (or Hocuspocus is down), seed from initialDoc so
-    // the editor isn't blank — prevents accidental overwrites of existing content.
     content: isCollaborative && connected
       ? undefined
       : (initialDoc ?? { type: "doc", content: [] }),

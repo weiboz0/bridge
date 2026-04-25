@@ -9,6 +9,7 @@ export interface TeachingUnitViewerProps {
 
 export function TeachingUnitViewer({ doc }: TeachingUnitViewerProps) {
   const editor = useEditor({
+    immediatelyRender: false,
     extensions: teachingUnitExtensions(),
     content: doc ?? { type: "doc", content: [] },
     editable: false,
