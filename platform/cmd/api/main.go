@@ -235,6 +235,15 @@ func main() {
 			Orgs:  stores.Orgs,
 		}
 		unitH.Routes(r)
+
+		if llmBackend != nil {
+			unitAIH := &handlers.UnitAIHandler{
+				Units:   stores.TeachingUnits,
+				Orgs:    stores.Orgs,
+				Backend: llmBackend,
+			}
+			unitAIH.Routes(r)
+		}
 	})
 
 	// Start server
