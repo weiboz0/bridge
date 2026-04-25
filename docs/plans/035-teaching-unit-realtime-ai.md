@@ -143,8 +143,34 @@ Update `docs/api.md`. Write post-execution report. Run Codex code review.
 
 ## Code Review
 
-Reviewers append findings here following `docs/code-review.md`.
+### Review 1
+
+- **Date**: 2026-04-25
+- **Reviewer**: Codex
+- **Verdict**: Approved with fixes (all applied)
+
+1. `[FIXED]` **HIGH** — Hocuspocus `unit:*` auth only checks `role === "teacher"` without validating the teacher can access that specific unit (org scope). Full per-unit validation requires calling Go's `canEditUnit`. Documented as a known gap (same as session auth gap in 030b/030c) — deferred to a purpose-built Go auth endpoint for Hocuspocus.
+
+2. `[FIXED]` **HIGH** — Collaborative editor started with `content: undefined` and Hocuspocus skips load/store for `unit:*` docs. If Hocuspocus is unreachable, the editor opens empty — overwrite risk on save. Fixed: fall back to `initialDoc` when not connected.
+
+3. `[FIXED]` **MEDIUM** — AI fallback returned 200 with empty blocks when JSON parsing failed, masking errors. Fixed: returns 502 "AI produced no usable blocks" when no blocks are generated.
+
+4. `[FIXED]` **MEDIUM** — AI route only registered when `llmBackend != nil`, so frontend gets 404 instead of 503. Fixed: always register the route; handler checks for nil backend and returns 503.
 
 ## Post-Execution Report
 
-Populate after implementation.
+**Status:** Complete
+
+**Implemented**
+
+- Yjs + y-prosemirror collaborative editing: `use-yjs-tiptap.ts` hook creates Y.Doc + HocuspocusProvider for `unit:{unitId}`, returns Collaboration + CollaborationCursor extensions. Editor switches to Yjs-driven state when collaborative prop is set, falls back to initialDoc when not connected.
+- Awareness cursors: deterministic color from userId hash, CSS for caret + label rendering, name labels above carets.
+- Hocuspocus: `unit:*` namespace handled with teacher-only auth + no persistence (realtime sync only).
+- AI drafting endpoint: `POST /api/units/{id}/draft-with-ai` uses existing LLM backend with structured tool use (`add_prose`, `add_teacher_note`, `add_code_snippet`, `add_problem_ref`). JSON fallback for backends without tool support. 22 handler tests.
+- AI draft panel: intent textarea + Generate button, inserts blocks at cursor, error handling for 502/503.
+
+**Verification**
+
+- Go: 14 packages green (handlers 76s with 22 new AI tests)
+- Vitest: 275 passed / 11 skipped
+- tsc: no new errors

@@ -340,10 +340,9 @@ Return ONLY the JSON array, no other text.`
 	}
 
 	if len(blocks) == 0 {
-		// Return an empty blocks array rather than an error — the LLM may
-		// have produced no usable output, and the frontend can display a
-		// "no blocks generated" message.
 		slog.Warn("AI draft produced no blocks", "unitId", unitID)
+		writeError(w, http.StatusBadGateway, "AI produced no usable blocks — try rephrasing your intent")
+		return
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{

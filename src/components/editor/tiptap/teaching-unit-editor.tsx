@@ -166,10 +166,12 @@ function TeachingUnitEditor({ initialDoc, onSave, onDirty, unitId, collaborative
       makeSlashCommandExtension(),
       ...(isCollaborative ? yjsExtensions : []),
     ],
-    // When collaborative, omit `content` so Yjs drives the initial state.
-    // We still pass initialDoc as a content seed when not yet connected so
-    // the editor isn't blank during the brief connection window.
-    content: isCollaborative ? undefined : (initialDoc ?? { type: "doc", content: [] }),
+    // When collaborative and connected, Yjs drives state. When collaborative
+    // but not yet connected (or Hocuspocus is down), seed from initialDoc so
+    // the editor isn't blank — prevents accidental overwrites of existing content.
+    content: isCollaborative && connected
+      ? undefined
+      : (initialDoc ?? { type: "doc", content: [] }),
     onCreate({ editor: e }: any) {
       assignMissingTopLevelNodeIds(e as Editor)
     },

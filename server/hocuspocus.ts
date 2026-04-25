@@ -79,7 +79,10 @@ const server = new Server({
     // Plan 035 — unit:{unitId} namespace for teaching unit collaborative editing.
     // The Hocuspocus server provides realtime CRDT sync only; persistence happens
     // via the teaching-unit API (save button), not Hocuspocus's onStoreDocument.
-    // Auth: only teachers (role === "teacher") may edit unit documents.
+    // Auth: role === "teacher" check only. Per-unit scope/ownership validation
+    // (e.g., verifying the teacher belongs to the unit's org) requires calling
+    // Go's canEditUnit — deferred to a follow-up that adds a purpose-built Go
+    // auth endpoint for Hocuspocus (same gap as session auth noted in 030b/030c).
     if (parts[0] === "unit" && parts[1]) {
       if (role !== "teacher") {
         throw new Error("Access denied: only teachers may collaborate on unit documents");
