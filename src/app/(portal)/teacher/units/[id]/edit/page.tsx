@@ -428,6 +428,7 @@ export default function EditUnitPage() {
           ref={editorRef}
           initialDoc={doc ?? undefined}
           onSave={handleSave}
+          unitId={id}
           collaborative={
             session?.user?.id
               ? {

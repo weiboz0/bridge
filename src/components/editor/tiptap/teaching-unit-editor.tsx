@@ -1,11 +1,12 @@
 "use client"
 
-import { useCallback, useImperativeHandle, forwardRef } from "react"
+import { useCallback, useImperativeHandle, useState, forwardRef } from "react"
 import { nanoid } from "nanoid"
 import { EditorContent, type Editor, type JSONContent, useEditor } from "@tiptap/react"
 import { InputRule } from "@tiptap/core"
 import { Button } from "@/components/ui/button"
 import { teachingUnitExtensions } from "./extensions"
+import { AIDraftPanel } from "./ai-draft-panel"
 import { useYjsTiptap } from "@/lib/yjs/use-yjs-tiptap"
 
 /** Options for enabling real-time collaborative editing via Yjs/Hocuspocus. */
@@ -24,6 +25,11 @@ export interface TeachingUnitEditorProps {
   initialDoc?: JSONContent
   onSave: (doc: JSONContent) => Promise<void>
   onDirty?: (dirty: boolean) => void
+  /**
+   * The teaching unit ID. Used for AI drafting and derived from collaborative
+   * options when omitted.
+   */
+  unitId?: string
   /**
    * When provided, the editor runs in collaborative mode via Yjs + Hocuspocus.
    * Yjs becomes the source of truth; `initialDoc` is ignored once any remote
@@ -137,7 +143,11 @@ function makeSlashCommandExtension() {
 }
 
 export const TeachingUnitEditor = forwardRef<TeachingUnitEditorHandle, TeachingUnitEditorProps>(
-function TeachingUnitEditor({ initialDoc, onSave, onDirty, collaborative }, ref) {
+function TeachingUnitEditor({ initialDoc, onSave, onDirty, unitId, collaborative }, ref) {
+  const [showAIPanel, setShowAIPanel] = useState(false)
+
+  // Resolve the unit ID from the explicit prop or the collaborative options.
+  const resolvedUnitId = unitId ?? collaborative?.unitId ?? ""
   // Collaborative mode: set up Yjs binding when `collaborative` is provided.
   // The hook is always called (Rules of Hooks) but does nothing when
   // `unitId` or `userId` are empty strings.
@@ -232,6 +242,15 @@ function TeachingUnitEditor({ initialDoc, onSave, onDirty, collaborative }, ref)
       .run()
   }, [editor])
 
+  const handleInsertAIBlocks = useCallback((blocks: unknown[]) => {
+    if (!editor) return
+    // Insert each block at the current cursor position (or end of document).
+    for (const block of blocks) {
+      editor.chain().focus().insertContent(block as JSONContent).run()
+    }
+    onDirty?.(true)
+  }, [editor, onDirty])
+
   const handleSave = useCallback(async () => {
     if (!editor) {
       return
@@ -262,6 +281,15 @@ function TeachingUnitEditor({ initialDoc, onSave, onDirty, collaborative }, ref)
         <Button onClick={handleInsertMediaEmbed} variant="outline" size="sm">
           + Media
         </Button>
+        {resolvedUnitId && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setShowAIPanel((prev) => !prev)}
+          >
+            {showAIPanel ? "Close AI" : "Draft with AI"}
+          </Button>
+        )}
         <Button variant="default" size="sm" onClick={handleSave}>
           Save
         </Button>
@@ -288,6 +316,13 @@ function TeachingUnitEditor({ initialDoc, onSave, onDirty, collaborative }, ref)
         ))}{" "}
         to insert a block.
       </p>
+      {showAIPanel && resolvedUnitId && (
+        <AIDraftPanel
+          unitId={resolvedUnitId}
+          onInsertBlocks={handleInsertAIBlocks}
+          onClose={() => setShowAIPanel(false)}
+        />
+      )}
       <div className="rounded-lg border border-zinc-200 bg-zinc-50">
         <EditorContent editor={editor} className="min-h-60 px-3 py-2" />
       </div>
