@@ -242,6 +242,12 @@ func main() {
 			Backend: llmBackend, // may be nil — handler returns 503
 		}
 		unitAIH.Routes(r)
+
+		collectionH := &handlers.UnitCollectionHandler{
+			Collections: stores.UnitCollections,
+			Orgs:        stores.Orgs,
+		}
+		collectionH.Routes(r)
 	})
 
 	// Start server

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -74,6 +75,7 @@ func (h *TeachingUnitHandler) Routes(r chi.Router) {
 	r.Route("/api/units", func(r chi.Router) {
 		r.Get("/", h.ListUnits)
 		r.Post("/", h.CreateUnit)
+		r.Get("/search", h.SearchUnits)
 	})
 	// by-topic lookup must be registered BEFORE the /{id} wildcard route so Chi
 	// does not attempt to parse "by-topic" as a UUID parameter.
@@ -279,6 +281,85 @@ func (h *TeachingUnitHandler) ListUnits(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": visible})
+}
+
+// SearchUnits — GET /api/units/search?q=&scope=&gradeLevel=&tags=&limit=&cursor=
+// Returns units matching FTS query and/or structured filters, with visibility
+// filtering. When q is non-empty, results are ranked by FTS relevance;
+// otherwise they are ordered by updated_at DESC.
+func (h *TeachingUnitHandler) SearchUnits(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	q := r.URL.Query()
+	filter := store.SearchUnitsFilter{
+		Query:           q.Get("q"),
+		Scope:           q.Get("scope"),
+		Status:          q.Get("status"),
+		GradeLevel:      q.Get("gradeLevel"),
+		ViewerID:        claims.UserID,
+		IsPlatformAdmin: claims.IsPlatformAdmin,
+	}
+
+	if scopeID := q.Get("scopeId"); scopeID != "" {
+		filter.ScopeID = &scopeID
+	}
+
+	if filter.Scope != "" && !validUnitScopes[filter.Scope] {
+		writeError(w, http.StatusBadRequest, "scope must be platform, org, or personal")
+		return
+	}
+
+	if tags := q.Get("tags"); tags != "" {
+		filter.SubjectTags = strings.Split(tags, ",")
+	}
+
+	if limitStr := q.Get("limit"); limitStr != "" {
+		l, err := strconv.Atoi(limitStr)
+		if err != nil || l < 1 {
+			writeError(w, http.StatusBadRequest, "limit must be a positive integer")
+			return
+		}
+		filter.Limit = l
+	}
+
+	// Build viewer's org list for visibility. Only include orgs where the
+	// viewer has teacher or admin roles (students are denied org access per
+	// plan 031).
+	if !claims.IsPlatformAdmin {
+		orgs, err := h.Orgs.GetUserMemberships(r.Context(), claims.UserID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "Database error")
+			return
+		}
+		for _, m := range orgs {
+			if m.Status == "active" && (m.Role == "org_admin" || m.Role == "teacher") {
+				filter.ViewerOrgs = append(filter.ViewerOrgs, m.OrgID)
+			}
+		}
+	}
+
+	units, err := h.Units.SearchUnits(r.Context(), filter)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+
+	// Build nextCursor for non-FTS browse pagination.
+	var nextCursor *string
+	if filter.Query == "" && len(units) > 0 && filter.Limit > 0 && len(units) == filter.Limit {
+		last := units[len(units)-1]
+		cursor := last.UpdatedAt.Format("2006-01-02T15:04:05.000000Z07:00") + "|" + last.ID
+		nextCursor = &cursor
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"items":      units,
+		"nextCursor": nextCursor,
+	})
 }
 
 // CreateUnit — POST /api/units
