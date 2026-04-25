@@ -95,6 +95,20 @@ export async function transitionUnit(id: string, status: string): Promise<Teachi
 }
 
 /**
+ * Fetch the projected (role-filtered) document for a unit.
+ * Returns null if the unit is inaccessible or the request fails.
+ */
+export async function fetchProjectedDocument(
+  id: string,
+  role?: string
+): Promise<{ type: string; content: unknown[] } | null> {
+  const params = role ? `?role=${encodeURIComponent(role)}` : ""
+  const res = await fetch(`/api/units/${id}/projected${params}`)
+  if (!res.ok) return null
+  return res.json() as Promise<{ type: string; content: unknown[] }>
+}
+
+/**
  * Persist the block document for a unit. Returns the updated document row.
  */
 export async function saveUnitDocument(id: string, blocks: unknown): Promise<UnitDocument> {

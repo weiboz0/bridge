@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState, useCallback } from "react"
+import { useEffect, useState, useCallback, useRef } from "react"
 import { useParams } from "next/navigation"
 import Link from "next/link"
 import type { JSONContent } from "@tiptap/react"
@@ -11,10 +11,15 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { TeachingUnitEditor } from "@/components/editor/tiptap/teaching-unit-editor"
+import {
+  TeachingUnitEditor,
+  type TeachingUnitEditorHandle,
+} from "@/components/editor/tiptap/teaching-unit-editor"
+import { TeachingUnitViewer } from "@/components/editor/tiptap/teaching-unit-viewer"
 import {
   fetchUnit,
   fetchUnitDocument,
+  fetchProjectedDocument,
   saveUnitDocument,
   transitionUnit,
   type TeachingUnit,
@@ -134,10 +139,17 @@ function TransitionButton({ unit, onTransitioned }: TransitionButtonProps) {
   )
 }
 
+type PreviewState =
+  | { active: false }
+  | { active: true; doc: JSONContent }
+
 export default function EditUnitPage() {
   const { id } = useParams<{ id: string }>()
   const [state, setState] = useState<LoadState>({ status: "loading" })
   const [saveMessage, setSaveMessage] = useState<string | null>(null)
+  const [preview, setPreview] = useState<PreviewState>({ active: false })
+  const [previewLoading, setPreviewLoading] = useState(false)
+  const editorRef = useRef<TeachingUnitEditorHandle>(null)
 
   useEffect(() => {
     async function load() {
@@ -165,9 +177,10 @@ export default function EditUnitPage() {
         await saveUnitDocument(id, doc)
         setSaveMessage("Saved")
         setTimeout(() => setSaveMessage(null), 2500)
-      } catch {
+      } catch (err) {
         setSaveMessage("Save failed")
         setTimeout(() => setSaveMessage(null), 3000)
+        throw err
       }
     },
     [id]
@@ -178,6 +191,33 @@ export default function EditUnitPage() {
       prev.status === "ready" ? { ...prev, unit: updated } : prev
     )
   }, [])
+
+  const handlePreviewToggle = useCallback(async () => {
+    if (preview.active) {
+      setPreview({ active: false })
+      return
+    }
+
+    // Auto-save before switching to preview
+    setPreviewLoading(true)
+    try {
+      if (editorRef.current) {
+        await editorRef.current.save()
+      }
+      const projected = await fetchProjectedDocument(id, "student")
+      if (projected) {
+        setPreview({ active: true, doc: projected as JSONContent })
+      } else {
+        setSaveMessage("Preview unavailable")
+        setTimeout(() => setSaveMessage(null), 3000)
+      }
+    } catch {
+      setSaveMessage("Preview failed")
+      setTimeout(() => setSaveMessage(null), 3000)
+    } finally {
+      setPreviewLoading(false)
+    }
+  }, [id, preview.active])
 
   if (state.status === "loading") {
     return (
@@ -227,6 +267,14 @@ export default function EditUnitPage() {
               {saveMessage}
             </span>
           )}
+          <Button
+            variant={preview.active ? "default" : "outline"}
+            size="sm"
+            onClick={handlePreviewToggle}
+            disabled={previewLoading}
+          >
+            {previewLoading ? "Loading..." : preview.active ? "Edit" : "Preview"}
+          </Button>
           <TransitionButton unit={unit} onTransitioned={handleTransitioned} />
           <Link
             href={`/teacher/units/${id}`}
@@ -237,11 +285,21 @@ export default function EditUnitPage() {
         </div>
       </div>
 
-      {/* Editor */}
-      <TeachingUnitEditor
-        initialDoc={doc ?? undefined}
-        onSave={handleSave}
-      />
+      {/* Editor or Preview */}
+      {preview.active ? (
+        <div className="space-y-2">
+          <p className="text-xs text-zinc-400 font-medium uppercase tracking-wide">
+            Student view (read-only)
+          </p>
+          <TeachingUnitViewer doc={preview.doc} />
+        </div>
+      ) : (
+        <TeachingUnitEditor
+          ref={editorRef}
+          initialDoc={doc ?? undefined}
+          onSave={handleSave}
+        />
+      )}
     </div>
   )
 }
