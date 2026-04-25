@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback } from "react"
+import { useCallback, useImperativeHandle, forwardRef } from "react"
 import { nanoid } from "nanoid"
 import { EditorContent, type Editor, type JSONContent, useEditor } from "@tiptap/react"
 import { InputRule } from "@tiptap/core"
@@ -11,6 +11,11 @@ export interface TeachingUnitEditorProps {
   initialDoc?: JSONContent
   onSave: (doc: JSONContent) => Promise<void>
   onDirty?: (dirty: boolean) => void
+}
+
+export interface TeachingUnitEditorHandle {
+  /** Programmatically trigger a save of the current document. */
+  save: () => Promise<void>
 }
 
 function assignMissingTopLevelNodeIds(editor: Editor) {
@@ -98,12 +103,21 @@ function makeSlashCommandExtension() {
           visibility: "always",
           overrideStarter: null,
         }),
+        makeRule("solution", "solution-ref", { solutionId: "", reveal: "always" }),
+        makeRule("testcase", "test-case-ref", {
+          testCaseId: "",
+          problemRefId: "",
+          showToStudent: true,
+        }),
+        makeRule("cue", "live-cue"),
+        makeRule("assignment", "assignment-variant", { title: "", timeLimitMinutes: null }),
       ]
     },
   })
 }
 
-export function TeachingUnitEditor({ initialDoc, onSave, onDirty }: TeachingUnitEditorProps) {
+export const TeachingUnitEditor = forwardRef<TeachingUnitEditorHandle, TeachingUnitEditorProps>(
+function TeachingUnitEditor({ initialDoc, onSave, onDirty }, ref) {
   const editor = useEditor({
     extensions: [
       ...teachingUnitExtensions(),
@@ -192,6 +206,10 @@ export function TeachingUnitEditor({ initialDoc, onSave, onDirty }: TeachingUnit
     onDirty?.(false)
   }, [editor, onDirty, onSave])
 
+  useImperativeHandle(ref, () => ({
+    save: handleSave,
+  }), [handleSave])
+
   return (
     <div className="space-y-3">
       {/* Toolbar */}
@@ -213,14 +231,19 @@ export function TeachingUnitEditor({ initialDoc, onSave, onDirty }: TeachingUnit
         </Button>
       </div>
       <p className="text-xs text-zinc-400">
-        Tip: type <code className="rounded bg-zinc-100 px-1">/note</code>,{" "}
-        <code className="rounded bg-zinc-100 px-1">/code</code>,{" "}
-        <code className="rounded bg-zinc-100 px-1">/media</code>, or{" "}
-        <code className="rounded bg-zinc-100 px-1">/problem</code> to insert a block.
+        Tip: type{" "}
+        {["/note", "/code", "/media", "/problem", "/solution", "/testcase", "/cue", "/assignment"].map((cmd, i, arr) => (
+          <span key={cmd}>
+            <code className="rounded bg-zinc-100 px-1">{cmd}</code>
+            {i < arr.length - 1 ? ", " : ""}
+          </span>
+        ))}{" "}
+        to insert a block.
       </p>
       <div className="rounded-lg border border-zinc-200 bg-zinc-50">
         <EditorContent editor={editor} className="min-h-60 px-3 py-2" />
       </div>
     </div>
   )
-}
+})
+TeachingUnitEditor.displayName = "TeachingUnitEditor"
