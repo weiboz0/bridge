@@ -1248,3 +1248,314 @@ func TestTeachingUnitHandler_SaveDocument_NewBlockMissingID_400(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 	assert.Contains(t, w.Body.String(), "teacher-note")
 }
+
+// ==================== GetProjectedDocument ====================
+
+// projectedDoc is the document used across projection tests. It contains one
+// of each block type exercised by the projection pipeline.
+var projectedDoc = map[string]any{
+	"type": "doc",
+	"content": []any{
+		map[string]any{"type": "prose", "attrs": map[string]any{"id": "b01"}},
+		map[string]any{"type": "paragraph"},
+		map[string]any{"type": "heading", "attrs": map[string]any{"level": 2}},
+		map[string]any{"type": "teacher-note", "attrs": map[string]any{"id": "b04"}},
+		map[string]any{"type": "live-cue", "attrs": map[string]any{"id": "b05", "trigger": "manual"}},
+		map[string]any{"type": "problem-ref", "attrs": map[string]any{"id": "b06", "visibility": "always"}},
+		map[string]any{"type": "solution-ref", "attrs": map[string]any{"id": "b07", "reveal": "always"}},
+		map[string]any{"type": "solution-ref", "attrs": map[string]any{"id": "b08", "reveal": "after-submit"}},
+		map[string]any{"type": "test-case-ref", "attrs": map[string]any{"id": "b09"}},
+		map[string]any{"type": "assignment-variant", "attrs": map[string]any{"id": "b10"}},
+		map[string]any{"type": "code-snippet", "attrs": map[string]any{"id": "b11", "language": "python"}},
+	},
+}
+
+// saveProjectedDoc saves projectedDoc to the unit and returns the unit.
+func saveProjectedDoc(t *testing.T, fx *unitFixture, unit *store.TeachingUnit) {
+	t.Helper()
+	w := doUnitPut(t, fx.h.SaveDocument, "/api/units/"+unit.ID+"/document",
+		projectedDoc, map[string]string{"id": unit.ID}, fx.claims(fx.teacher1, false))
+	require.Equal(t, http.StatusOK, w.Code)
+}
+
+// parseProjectedContent reads the projected response and returns block types.
+func parseProjectedContent(t *testing.T, w *httptest.ResponseRecorder) []string {
+	t.Helper()
+	var resp struct {
+		Type    string            `json:"type"`
+		Content []json.RawMessage `json:"content"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "doc", resp.Type)
+
+	types := make([]string, 0, len(resp.Content))
+	for _, raw := range resp.Content {
+		var block struct {
+			Type string `json:"type"`
+		}
+		require.NoError(t, json.Unmarshal(raw, &block))
+		types = append(types, block.Type)
+	}
+	return types
+}
+
+func TestTeachingUnitHandler_Projected_Teacher_Default_SeesAll(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Projected Unit", fx.teacher1.ID)
+	saveProjectedDoc(t, fx, u)
+
+	w := doUnitGet(t, fx.h.GetProjectedDocument, "/api/units/"+u.ID+"/projected",
+		map[string]string{"id": u.ID}, fx.claims(fx.teacher1, false))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	types := parseProjectedContent(t, w)
+	// Teacher should see all 11 blocks.
+	assert.Len(t, types, 11, "teacher should see all blocks")
+	assert.Contains(t, types, "teacher-note")
+	assert.Contains(t, types, "live-cue")
+	assert.Contains(t, types, "assignment-variant")
+	assert.Contains(t, types, "solution-ref")
+}
+
+func TestTeachingUnitHandler_Projected_Teacher_PreviewAsStudent(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Preview Unit", fx.teacher1.ID)
+	saveProjectedDoc(t, fx, u)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/units/"+u.ID+"/projected?role=student", nil)
+	req = withClaims(req, fx.claims(fx.teacher1, false))
+	req = withChiParams(req, map[string]string{"id": u.ID})
+	w := httptest.NewRecorder()
+	fx.h.GetProjectedDocument(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	types := parseProjectedContent(t, w)
+	// Student view: teacher-note, live-cue, assignment-variant, solution-ref(after-submit) omitted.
+	assert.NotContains(t, types, "teacher-note")
+	assert.NotContains(t, types, "live-cue")
+	assert.NotContains(t, types, "assignment-variant")
+	// prose, paragraph, heading, problem-ref(always), solution-ref(always), test-case-ref, code-snippet = 7
+	assert.Len(t, types, 7, "student projection should show 7 blocks")
+}
+
+func TestTeachingUnitHandler_Projected_Admin_Default_SeesAll(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Admin Projected", fx.teacher1.ID)
+	saveProjectedDoc(t, fx, u)
+
+	w := doUnitGet(t, fx.h.GetProjectedDocument, "/api/units/"+u.ID+"/projected",
+		map[string]string{"id": u.ID}, fx.claims(fx.admin, true))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	types := parseProjectedContent(t, w)
+	assert.Len(t, types, 11, "admin should see all blocks")
+}
+
+func TestTeachingUnitHandler_Projected_Student_Default_Filtered(t *testing.T) {
+	// Note: students can't view org units in plan-031. Use a platform
+	// classroom_ready unit so student can view it.
+	fx := newUnitFixture(t, t.Name())
+	u := fx.mkUnit(t, "platform", nil, "classroom_ready", "Student Projected", fx.admin.ID)
+	// Save doc as admin.
+	w := doUnitPut(t, fx.h.SaveDocument, "/api/units/"+u.ID+"/document",
+		projectedDoc, map[string]string{"id": u.ID}, fx.claims(fx.admin, true))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	// Student requests projected document.
+	w2 := doUnitGet(t, fx.h.GetProjectedDocument, "/api/units/"+u.ID+"/projected",
+		map[string]string{"id": u.ID}, fx.claims(fx.student1, false))
+	require.Equal(t, http.StatusOK, w2.Code)
+
+	types := parseProjectedContent(t, w2)
+	assert.NotContains(t, types, "teacher-note")
+	assert.NotContains(t, types, "live-cue")
+	assert.NotContains(t, types, "assignment-variant")
+	assert.Len(t, types, 7, "student should see 7 blocks")
+}
+
+func TestTeachingUnitHandler_Projected_Student_CannotEscalateRole(t *testing.T) {
+	// Student requests ?role=teacher but should still get student projection.
+	fx := newUnitFixture(t, t.Name())
+	u := fx.mkUnit(t, "platform", nil, "classroom_ready", "Escalation Unit", fx.admin.ID)
+	w := doUnitPut(t, fx.h.SaveDocument, "/api/units/"+u.ID+"/document",
+		projectedDoc, map[string]string{"id": u.ID}, fx.claims(fx.admin, true))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/units/"+u.ID+"/projected?role=teacher", nil)
+	req = withClaims(req, fx.claims(fx.student1, false))
+	req = withChiParams(req, map[string]string{"id": u.ID})
+	w2 := httptest.NewRecorder()
+	fx.h.GetProjectedDocument(w2, req)
+
+	require.Equal(t, http.StatusOK, w2.Code)
+	types := parseProjectedContent(t, w2)
+	// Student is locked to student role — teacher-notes should still be omitted.
+	assert.NotContains(t, types, "teacher-note")
+}
+
+func TestTeachingUnitHandler_Projected_SolutionRef_RevealAlways_Student(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	u := fx.mkUnit(t, "platform", nil, "classroom_ready", "Sol Always", fx.admin.ID)
+
+	doc := map[string]any{
+		"type": "doc",
+		"content": []any{
+			map[string]any{"type": "solution-ref", "attrs": map[string]any{"id": "sr1", "reveal": "always"}},
+		},
+	}
+	w := doUnitPut(t, fx.h.SaveDocument, "/api/units/"+u.ID+"/document",
+		doc, map[string]string{"id": u.ID}, fx.claims(fx.admin, true))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	w2 := doUnitGet(t, fx.h.GetProjectedDocument, "/api/units/"+u.ID+"/projected",
+		map[string]string{"id": u.ID}, fx.claims(fx.student1, false))
+	require.Equal(t, http.StatusOK, w2.Code)
+
+	types := parseProjectedContent(t, w2)
+	assert.Contains(t, types, "solution-ref")
+}
+
+func TestTeachingUnitHandler_Projected_SolutionRef_AfterSubmit_NoState_Student_Omitted(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	u := fx.mkUnit(t, "platform", nil, "classroom_ready", "Sol NoState", fx.admin.ID)
+
+	doc := map[string]any{
+		"type": "doc",
+		"content": []any{
+			map[string]any{"type": "solution-ref", "attrs": map[string]any{"id": "sr1", "reveal": "after-submit"}},
+		},
+	}
+	w := doUnitPut(t, fx.h.SaveDocument, "/api/units/"+u.ID+"/document",
+		doc, map[string]string{"id": u.ID}, fx.claims(fx.admin, true))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	w2 := doUnitGet(t, fx.h.GetProjectedDocument, "/api/units/"+u.ID+"/projected",
+		map[string]string{"id": u.ID}, fx.claims(fx.student1, false))
+	require.Equal(t, http.StatusOK, w2.Code)
+
+	types := parseProjectedContent(t, w2)
+	assert.NotContains(t, types, "solution-ref", "after-submit with no state should be omitted")
+}
+
+func TestTeachingUnitHandler_Projected_SolutionRef_AfterSubmit_WithState_Student_Included(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	u := fx.mkUnit(t, "platform", nil, "classroom_ready", "Sol WithState", fx.admin.ID)
+
+	doc := map[string]any{
+		"type": "doc",
+		"content": []any{
+			map[string]any{"type": "solution-ref", "attrs": map[string]any{"id": "sr1", "reveal": "after-submit"}},
+		},
+	}
+	w := doUnitPut(t, fx.h.SaveDocument, "/api/units/"+u.ID+"/document",
+		doc, map[string]string{"id": u.ID}, fx.claims(fx.admin, true))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/units/"+u.ID+"/projected?attemptStates=sr1:submitted", nil)
+	req = withClaims(req, fx.claims(fx.student1, false))
+	req = withChiParams(req, map[string]string{"id": u.ID})
+	w2 := httptest.NewRecorder()
+	fx.h.GetProjectedDocument(w2, req)
+
+	require.Equal(t, http.StatusOK, w2.Code)
+	types := parseProjectedContent(t, w2)
+	assert.Contains(t, types, "solution-ref", "after-submit with submitted state should be included")
+}
+
+func TestTeachingUnitHandler_Projected_NonViewer_404(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "No Access", fx.teacher1.ID)
+	saveProjectedDoc(t, fx, u)
+
+	w := doUnitGet(t, fx.h.GetProjectedDocument, "/api/units/"+u.ID+"/projected",
+		map[string]string{"id": u.ID}, fx.claims(fx.outsider, false))
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func TestTeachingUnitHandler_Projected_NoAuth_401(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "No Auth", fx.teacher1.ID)
+
+	w := doUnitGet(t, fx.h.GetProjectedDocument, "/api/units/"+u.ID+"/projected",
+		map[string]string{"id": u.ID}, nil)
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
+func TestTeachingUnitHandler_Projected_InvalidRole_400(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Bad Role", fx.teacher1.ID)
+	saveProjectedDoc(t, fx, u)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/units/"+u.ID+"/projected?role=superuser", nil)
+	req = withClaims(req, fx.claims(fx.teacher1, false))
+	req = withChiParams(req, map[string]string{"id": u.ID})
+	w := httptest.NewRecorder()
+	fx.h.GetProjectedDocument(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestTeachingUnitHandler_Projected_InvalidAttemptState_400(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Bad State", fx.teacher1.ID)
+	saveProjectedDoc(t, fx, u)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/units/"+u.ID+"/projected?attemptStates=b1:invalid", nil)
+	req = withClaims(req, fx.claims(fx.teacher1, false))
+	req = withChiParams(req, map[string]string{"id": u.ID})
+	w := httptest.NewRecorder()
+	fx.h.GetProjectedDocument(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestTeachingUnitHandler_Projected_PersonalUnit_OwnerIsTeacher(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	uid := fx.outsider.ID
+	u := fx.mkUnit(t, "personal", &uid, "draft", "Personal Proj", fx.outsider.ID)
+
+	doc := map[string]any{
+		"type": "doc",
+		"content": []any{
+			map[string]any{"type": "teacher-note", "attrs": map[string]any{"id": "tn1"}},
+			map[string]any{"type": "prose", "attrs": map[string]any{"id": "p1"}},
+		},
+	}
+	w := doUnitPut(t, fx.h.SaveDocument, "/api/units/"+u.ID+"/document",
+		doc, map[string]string{"id": u.ID}, fx.claims(fx.outsider, false))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	// Owner should see teacher-notes (they're treated as teacher).
+	w2 := doUnitGet(t, fx.h.GetProjectedDocument, "/api/units/"+u.ID+"/projected",
+		map[string]string{"id": u.ID}, fx.claims(fx.outsider, false))
+	require.Equal(t, http.StatusOK, w2.Code)
+	types := parseProjectedContent(t, w2)
+	assert.Contains(t, types, "teacher-note", "personal unit owner should be treated as teacher")
+}
+
+func TestTeachingUnitHandler_Projected_EmptyDoc(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Empty Doc", fx.teacher1.ID)
+
+	// The default seeded document should be an empty doc.
+	w := doUnitGet(t, fx.h.GetProjectedDocument, "/api/units/"+u.ID+"/projected",
+		map[string]string{"id": u.ID}, fx.claims(fx.teacher1, false))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var resp struct {
+		Type    string            `json:"type"`
+		Content []json.RawMessage `json:"content"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "doc", resp.Type)
+	// Empty or nil content should return an empty array.
+	assert.NotNil(t, resp.Content)
+}
+
+func TestTeachingUnitHandler_Projected_NotFound_404(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	fakeID := "00000000-0000-0000-0000-000000000001"
+	w := doUnitGet(t, fx.h.GetProjectedDocument, "/api/units/"+fakeID+"/projected",
+		map[string]string{"id": fakeID}, fx.claims(fx.admin, true))
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}

@@ -12,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/weiboz0/bridge/platform/internal/auth"
+	"github.com/weiboz0/bridge/platform/internal/projection"
 	"github.com/weiboz0/bridge/platform/internal/store"
 )
 
@@ -42,24 +43,29 @@ var validUnitStatuses = map[string]bool{
 	"archived":        true,
 }
 
-// knownBlockTypes is the plan-031 allowlist for top-level block types in a
-// unit document. It is kept as a package-level variable so tests can inspect
-// it directly.
+// knownBlockTypes is the allowlist for top-level block types in a unit
+// document. It is kept as a package-level variable so tests can inspect it
+// directly. Expanded in plan 033b to include solution-ref, test-case-ref,
+// live-cue, and assignment-variant.
 var knownBlockTypes = map[string]bool{
-	"prose":          true,
-	"problem-ref":    true,
-	"paragraph":      true,
-	"heading":        true,
-	"bulletList":     true,
-	"orderedList":    true,
-	"listItem":       true,
-	"codeBlock":      true,
-	"blockquote":     true,
-	"horizontalRule": true,
-	"hardBreak":      true,
-	"teacher-note":   true,
-	"code-snippet":   true,
-	"media-embed":    true,
+	"prose":              true,
+	"problem-ref":        true,
+	"paragraph":          true,
+	"heading":            true,
+	"bulletList":         true,
+	"orderedList":        true,
+	"listItem":           true,
+	"codeBlock":          true,
+	"blockquote":         true,
+	"horizontalRule":     true,
+	"hardBreak":          true,
+	"teacher-note":       true,
+	"code-snippet":       true,
+	"media-embed":        true,
+	"solution-ref":       true,
+	"test-case-ref":      true,
+	"live-cue":           true,
+	"assignment-variant": true,
 }
 
 const maxUnitTitleLen = 255
@@ -82,6 +88,7 @@ func (h *TeachingUnitHandler) Routes(r chi.Router) {
 		r.Delete("/", h.DeleteUnit)
 		r.Get("/document", h.GetDocument)
 		r.Put("/document", h.SaveDocument)
+		r.Get("/projected", h.GetProjectedDocument)
 		r.Post("/transition", h.TransitionUnit)
 		r.Get("/revisions", h.ListRevisions)
 		r.Route("/revisions/{revisionId}", func(r chi.Router) {
@@ -180,11 +187,15 @@ func validateBlockDocument(raw json.RawMessage) error {
 	// Standard StarterKit structural blocks (paragraph, heading, etc.)
 	// don't need IDs — they're just rich text.
 	blockTypesRequiringID := map[string]bool{
-		"prose":        true,
-		"problem-ref":  true,
-		"teacher-note": true,
-		"code-snippet": true,
-		"media-embed":  true,
+		"prose":              true,
+		"problem-ref":        true,
+		"teacher-note":       true,
+		"code-snippet":       true,
+		"media-embed":        true,
+		"solution-ref":       true,
+		"test-case-ref":      true,
+		"live-cue":           true,
+		"assignment-variant": true,
 	}
 
 	// Walk top-level blocks.
@@ -477,6 +488,142 @@ func (h *TeachingUnitHandler) GetDocument(w http.ResponseWriter, r *http.Request
 		return
 	}
 	writeJSON(w, http.StatusOK, doc)
+}
+
+// GetProjectedDocument — GET /api/units/{id}/projected?role=student&attemptStates=b03:submitted,b05:not_started
+// Returns the unit document filtered through the projection pipeline.
+// Teachers/admins can pass ?role=student to preview the student view.
+// Students always receive the student projection regardless of query param.
+func (h *TeachingUnitHandler) GetProjectedDocument(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	unitID := chi.URLParam(r, "id")
+
+	unit, err := h.Units.GetUnit(r.Context(), unitID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if unit == nil || !h.canViewUnit(r.Context(), claims, unit) {
+		writeError(w, http.StatusNotFound, "Not found")
+		return
+	}
+
+	// Determine the caller's actual role.
+	actualRole := h.resolveViewerRole(r.Context(), claims, unit)
+
+	// Parse optional ?role query param. Students are locked to "student"
+	// regardless of what they request.
+	role := actualRole
+	if qRole := r.URL.Query().Get("role"); qRole != "" {
+		requested := projection.ViewerRole(qRole)
+		switch requested {
+		case projection.RoleStudent, projection.RoleTeacher, projection.RoleAdmin:
+			// Only privileged users may request a different role (e.g., preview).
+			// Students are always forced to "student".
+			if actualRole == projection.RoleStudent {
+				role = projection.RoleStudent
+			} else {
+				role = requested
+			}
+		default:
+			writeError(w, http.StatusBadRequest, "invalid role value; must be student, teacher, or platform_admin")
+			return
+		}
+	}
+
+	// Parse optional ?attemptStates query param: comma-separated blockId:state pairs.
+	attemptStates := map[string]projection.AttemptState{}
+	if raw := r.URL.Query().Get("attemptStates"); raw != "" {
+		pairs := strings.Split(raw, ",")
+		for _, pair := range pairs {
+			parts := strings.SplitN(pair, ":", 2)
+			if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+				writeError(w, http.StatusBadRequest, "attemptStates must be comma-separated blockId:state pairs")
+				return
+			}
+			state := projection.AttemptState(parts[1])
+			switch state {
+			case projection.AttemptNotStarted, projection.AttemptSubmitted,
+				projection.AttemptPassed, projection.AttemptFailed:
+				attemptStates[parts[0]] = state
+			default:
+				writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid attempt state %q; must be not_started, submitted, passed, or failed", parts[1]))
+				return
+			}
+		}
+	}
+
+	// Fetch document.
+	doc, err := h.Units.GetDocument(r.Context(), unitID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if doc == nil {
+		writeError(w, http.StatusNotFound, "Document not found")
+		return
+	}
+
+	// Extract content array from the document envelope.
+	var envelope struct {
+		Type    string            `json:"type"`
+		Content []json.RawMessage `json:"content"`
+	}
+	if err := json.Unmarshal(doc.Blocks, &envelope); err != nil {
+		writeError(w, http.StatusInternalServerError, "Malformed document")
+		return
+	}
+
+	// Run projection.
+	filtered := projection.ProjectBlocks(envelope.Content, role, attemptStates)
+
+	// Return reconstructed document.
+	writeJSON(w, http.StatusOK, map[string]any{
+		"type":    "doc",
+		"content": filtered,
+	})
+}
+
+// resolveViewerRole determines the caller's effective projection role based on
+// their platform status, org membership, or personal ownership.
+func (h *TeachingUnitHandler) resolveViewerRole(ctx context.Context, c *auth.Claims, u *store.TeachingUnit) projection.ViewerRole {
+	if c.IsPlatformAdmin {
+		return projection.RoleAdmin
+	}
+
+	switch u.Scope {
+	case "personal":
+		// The owner of a personal unit is treated as a teacher for projection.
+		if u.ScopeID != nil && *u.ScopeID == c.UserID {
+			return projection.RoleTeacher
+		}
+		return projection.RoleStudent
+
+	case "org":
+		if u.ScopeID == nil {
+			return projection.RoleStudent
+		}
+		roles, _ := h.Orgs.GetUserRolesInOrg(ctx, *u.ScopeID, c.UserID)
+		for _, m := range roles {
+			if m.Status != "active" {
+				continue
+			}
+			if m.Role == "org_admin" || m.Role == "teacher" {
+				return projection.RoleTeacher
+			}
+		}
+		return projection.RoleStudent
+
+	case "platform":
+		// Non-admin viewing a platform unit → student.
+		return projection.RoleStudent
+	}
+
+	return projection.RoleStudent
 }
 
 // GetUnitByTopic — GET /api/units/by-topic/{topicId}
