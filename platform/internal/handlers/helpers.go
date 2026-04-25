@@ -8,6 +8,7 @@ import (
 	"regexp"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/lib/pq"
 )
 
@@ -53,20 +54,32 @@ func requireUUID(w http.ResponseWriter, r *http.Request, param string) (string, 
 	return val, true
 }
 
+// constraintCodes is the set of 23xxx integrity constraint violation codes.
+var constraintCodes = map[string]bool{
+	"23000": true, // integrity_constraint_violation
+	"23001": true, // restrict_violation
+	"23502": true, // not_null_violation
+	"23503": true, // foreign_key_violation
+	"23505": true, // unique_violation
+	"23514": true, // check_violation
+	"23P01": true, // exclusion_violation
+}
+
 // isConstraintError returns true if err is a PostgreSQL constraint violation
-// (unique, check, foreign-key). Callers should map these to 409 Conflict.
+// (unique, check, foreign-key). Handles both lib/pq and pgx driver errors.
+// Callers should map these to 409 Conflict or 400 Bad Request as appropriate.
 func isConstraintError(err error) bool {
+	// Check lib/pq errors (used by some code paths).
 	var pqErr *pq.Error
 	if errors.As(err, &pqErr) {
-		// 23xxx family: integrity constraint violations.
-		switch pqErr.Code {
-		case "23000", // integrity_constraint_violation
-			"23001", // restrict_violation
-			"23502", // not_null_violation
-			"23503", // foreign_key_violation
-			"23505", // unique_violation
-			"23514", // check_violation
-			"23P01": // exclusion_violation
+		if constraintCodes[string(pqErr.Code)] {
+			return true
+		}
+	}
+	// Check pgx/pgconn errors (used by pgx stdlib adapter).
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		if constraintCodes[pgErr.Code] {
 			return true
 		}
 	}

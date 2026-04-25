@@ -532,6 +532,151 @@ func (s *TeachingUnitStore) GetRevision(ctx context.Context, revisionID string) 
 		WHERE id = $1`, revisionID))
 }
 
+// ── Search ──────────────────────────────────────────────────────────────────
+
+// SearchUnitsFilter describes the filter / pagination for SearchUnits.
+// When Query is non-empty, results are ranked by FTS relevance; otherwise
+// they are ordered by updated_at DESC (recent-first browse).
+type SearchUnitsFilter struct {
+	Query           string     // FTS query text (plainto_tsquery)
+	Scope           string     // "" = all visible; platform | org | personal
+	ScopeID         *string
+	Status          string     // "" = any visible
+	GradeLevel      string
+	SubjectTags     []string   // AND semantics (subject_tags @> $tags)
+	ViewerID        string
+	ViewerOrgs      []string   // org IDs where viewer has teacher/admin membership
+	IsPlatformAdmin bool
+	Limit           int        // default 20, max 100
+	CursorCreatedAt *time.Time // keyset cursor for non-FTS browse
+	CursorID        *string
+}
+
+// SearchUnits returns teaching units matching the filter. When Query is
+// non-empty, results are filtered by FTS (plainto_tsquery) and ranked by
+// ts_rank. Otherwise results are ordered by updated_at DESC with keyset
+// cursor pagination.
+func (s *TeachingUnitStore) SearchUnits(ctx context.Context, f SearchUnitsFilter) ([]TeachingUnit, error) {
+	where := []string{}
+	args := []any{}
+	idx := 1
+
+	// ── Visibility gate (mirrors canViewUnit in the handler) ──
+	if f.IsPlatformAdmin {
+		// platform admins see everything — no visibility filter
+	} else {
+		clauses := []string{
+			// Platform scope: published statuses visible to any authenticated user.
+			"(scope = 'platform' AND status IN ('classroom_ready','coach_ready','archived'))",
+		}
+		// Org scope: teachers/admins in the org can see all statuses.
+		if len(f.ViewerOrgs) > 0 {
+			clauses = append(clauses, fmt.Sprintf(
+				"(scope = 'org' AND scope_id = ANY($%d))", idx))
+			args = append(args, pq.Array(f.ViewerOrgs))
+			idx++
+		}
+		// Personal scope: owner only.
+		if f.ViewerID != "" {
+			clauses = append(clauses, fmt.Sprintf(
+				"(scope = 'personal' AND scope_id = $%d)", idx))
+			args = append(args, f.ViewerID)
+			idx++
+			// Authors always see their own units regardless of scope.
+			clauses = append(clauses, fmt.Sprintf(
+				"(created_by = $%d)", idx))
+			args = append(args, f.ViewerID)
+			idx++
+		}
+		where = append(where, "("+strings.Join(clauses, " OR ")+")")
+	}
+
+	// ── Structured filters ──
+	if f.Scope != "" {
+		where = append(where, fmt.Sprintf("scope = $%d", idx))
+		args = append(args, f.Scope)
+		idx++
+	}
+	if f.ScopeID != nil {
+		where = append(where, fmt.Sprintf("scope_id = $%d", idx))
+		args = append(args, *f.ScopeID)
+		idx++
+	}
+	if f.Status != "" {
+		where = append(where, fmt.Sprintf("status = $%d", idx))
+		args = append(args, f.Status)
+		idx++
+	}
+	if f.GradeLevel != "" {
+		where = append(where, fmt.Sprintf("grade_level = $%d", idx))
+		args = append(args, f.GradeLevel)
+		idx++
+	}
+	if len(f.SubjectTags) > 0 {
+		where = append(where, fmt.Sprintf("subject_tags @> $%d", idx))
+		args = append(args, pq.Array(f.SubjectTags))
+		idx++
+	}
+
+	// ── FTS vs browse ──
+	hasFTS := f.Query != ""
+	var queryParamIdx int
+	if hasFTS {
+		where = append(where, fmt.Sprintf(
+			"search_vector @@ plainto_tsquery('english', $%d)", idx))
+		queryParamIdx = idx
+		args = append(args, f.Query)
+		idx++
+	}
+
+	// ── Cursor (browse mode only — FTS sorts by rank) ──
+	if !hasFTS && f.CursorCreatedAt != nil && f.CursorID != nil {
+		where = append(where, fmt.Sprintf(
+			"(updated_at, id) < ($%d, $%d)", idx, idx+1))
+		args = append(args, *f.CursorCreatedAt, *f.CursorID)
+		idx += 2
+	}
+
+	// ── Limit ──
+	limit := f.Limit
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
+	}
+
+	// ── Build query ──
+	q := `SELECT ` + teachingUnitColumns + ` FROM teaching_units`
+	if len(where) > 0 {
+		q += ` WHERE ` + strings.Join(where, " AND ")
+	}
+	if hasFTS {
+		q += fmt.Sprintf(
+			` ORDER BY ts_rank(search_vector, plainto_tsquery('english', $%d)) DESC, id DESC`,
+			queryParamIdx)
+	} else {
+		q += ` ORDER BY updated_at DESC, id DESC`
+	}
+	q += fmt.Sprintf(` LIMIT %d`, limit)
+
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []TeachingUnit{}
+	for rows.Next() {
+		u, err := scanTeachingUnit(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *u)
+	}
+	return out, rows.Err()
+}
+
 // ── Overlay / Fork ──────────────────────────────────────────────────────────
 
 // UnitOverlay represents a row from unit_overlays.
