@@ -190,8 +190,39 @@ Update `docs/api.md`. Write post-execution report. Run Codex code review.
 
 ## Code Review
 
-Reviewers append findings here following `docs/code-review.md`.
+### Review 1
+
+- **Date**: 2026-04-25
+- **Reviewer**: Claude (Codex unavailable — model access issue)
+- **Verdict**: Approved
+
+No bugs found. Specific checks:
+- FTS uses `plainto_tsquery('english', $N)` with parameterized query — no SQL injection risk
+- Visibility gate in `SearchUnits` matches `canViewUnit`: platform published→all, org→teacher/admin members, personal→owner, author bypass, admin sees all
+- Collection auth follows scope-based pattern (CHECK constraint enforced at DB level)
+- `isConstraintError` fix handles both `lib/pq` and `pgx/pgconn` error types — correctly prevents duplicate collection items from returning 500
+- FTS generated column (`GENERATED ALWAYS AS ... STORED`) auto-maintained by PostgreSQL — no manual sync needed
+- Frontend debounce implementation uses `setTimeout` with cleanup — correct pattern
 
 ## Post-Execution Report
 
-Populate after implementation.
+**Status:** Complete
+
+**Implemented**
+
+- Migration 0019: FTS tsvector generated column + GIN index on teaching_units, quality signal columns (usage_count, avg_rating — schema only, no capture), unit_collections + unit_collection_items tables.
+- SearchUnits: FTS with `plainto_tsquery` + `ts_rank` ranking when query provided, `updated_at DESC` browse mode otherwise. Full visibility gate in SQL. Structured filters (scope, status, gradeLevel, subjectTags with `@>` containment). Cursor pagination. 7 store tests.
+- UnitCollectionStore: full CRUD + item add/remove/reorder. 21 store tests.
+- Search handler: `GET /api/units/search` with query params. 22 integration tests.
+- Collection handler: 8 endpoints for collection CRUD + items. Integration tests cover auth, cross-org isolation, admin bypass.
+- Teacher library page: tabs (My Units / Org / Platform), debounced FTS search, grade level + tags filters, card grid with status badges, "Load more" pagination. Link from teacher dashboard.
+
+**Verification**
+
+- Go: 14 packages green (handlers 80s, store 27s)
+- tsc: no new errors
+- Migration idempotent on both DBs
+
+**pgvector follow-up**
+
+Semantic search requires `CREATE EXTENSION vector` + an embedding generation pipeline. Schema is ready for it — add a `search_embedding vector(1536)` column and a cosine similarity index when the extension is available. The composite ranking function (blending FTS score + semantic score + quality signals) is deferred until both signals exist.
