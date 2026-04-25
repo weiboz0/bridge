@@ -29,6 +29,9 @@ var backendAliases = map[string]string{
 	"bailian":   "aliyun",
 	"dashscope": "aliyun",
 	"qwen":      "aliyun",
+	// DeepSeek — OpenAI-compatible
+	"deepseek": "deepseek",
+	"ds":       "deepseek",
 }
 
 // ── Ark (ByteDance Volcengine) ──────────────────────────────────────────────
@@ -72,6 +75,16 @@ var nvidiaModels = []string{
 	"qwen/qwq-32b",
 	"google/gemma-2-27b-it",
 	"nvidia/llama-3.1-nemotron-70b-instruct",
+}
+
+// ── DeepSeek — OpenAI-compatible ───────────────────────────────────────────
+
+const deepseekBaseURL = "https://api.deepseek.com"
+const deepseekDefaultModel = "deepseek-chat"
+
+var deepseekModels = []string{
+	"deepseek-chat",
+	"deepseek-reasoner",
 }
 
 // ── OpenRouter — routes to 300+ models via OpenAI-compatible API ────────────
@@ -148,6 +161,12 @@ func CreateBackend(cfg LLMConfig) (Backend, error) {
 			cfg.BaseURL = dashscopeBaseURL
 		}
 		return NewOpenAIBackend(cfg, "aliyun", dashscopeDefaultModel, dashscopeModels), nil
+
+	case "deepseek":
+		if cfg.BaseURL == "" {
+			cfg.BaseURL = deepseekBaseURL
+		}
+		return NewOpenAIBackend(cfg, "deepseek", deepseekDefaultModel, deepseekModels), nil
 
 	case "anthropic":
 		return NewAnthropicBackend(cfg), nil

@@ -52,6 +52,8 @@ func TestCreateBackend_Aliases(t *testing.T) {
 		{"nim", "nvidia"},
 		{"or", "openrouter"},
 		{"local", "ollama"},
+		{"deepseek", "deepseek"},
+		{"ds", "deepseek"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.alias, func(t *testing.T) {
@@ -77,6 +79,7 @@ func TestCreateBackend_DefaultBaseURLs(t *testing.T) {
 		{"ark", arkBaseURL},
 		{"nvidia", nvidiaBaseURL},
 		{"aliyun", dashscopeBaseURL},
+		{"deepseek", deepseekBaseURL},
 		{"openrouter", openrouterBaseURL},
 	}
 	for _, tc := range tests {
