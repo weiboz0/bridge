@@ -1561,3 +1561,216 @@ func TestTeachingUnitStore_GetLineage_ThreeGenerations(t *testing.T) {
 	assert.Equal(t, parentUnit.ID, lineage[1].UnitID)
 	assert.Equal(t, child.ID, lineage[2].UnitID)
 }
+
+// ── SearchUnits ────────────────────────────────────────────────────────────
+
+func TestTeachingUnitStore_SearchUnits_FTS(t *testing.T) {
+	units, orgs, orgID, userID := setupUnitEnv(t, t.Name())
+	ctx := context.Background()
+	db := testDB(t)
+
+	// Add viewer as teacher in org so org-scoped units are visible.
+	_, err := orgs.AddOrgMember(ctx, AddMemberInput{
+		OrgID: orgID, UserID: userID, Role: "teacher", Status: "active",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		db.ExecContext(ctx, "DELETE FROM org_memberships WHERE user_id = $1 AND org_id = $2", userID, orgID)
+	})
+
+	// Create units with distinct titles and summaries for FTS matching.
+	mustCreateUnit(t, units, CreateTeachingUnitInput{
+		Scope: "org", ScopeID: &orgID, Title: "Introduction to Python Loops",
+		Summary: "Learn about for and while loops", CreatedBy: userID,
+	})
+	mustCreateUnit(t, units, CreateTeachingUnitInput{
+		Scope: "org", ScopeID: &orgID, Title: "Data Structures Arrays",
+		Summary: "Working with arrays and lists", CreatedBy: userID,
+	})
+
+	// Search for "loops" — should match the first unit.
+	results, err := units.SearchUnits(ctx, SearchUnitsFilter{
+		Query:      "loops",
+		ViewerID:   userID,
+		ViewerOrgs: []string{orgID},
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, results, "FTS search for 'loops' should return results")
+
+	found := false
+	for _, u := range results {
+		if u.Title == "Introduction to Python Loops" {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "should find the loops unit via FTS")
+}
+
+func TestTeachingUnitStore_SearchUnits_BrowseMode(t *testing.T) {
+	units, orgs, orgID, userID := setupUnitEnv(t, t.Name())
+	ctx := context.Background()
+	db := testDB(t)
+
+	_, err := orgs.AddOrgMember(ctx, AddMemberInput{
+		OrgID: orgID, UserID: userID, Role: "teacher", Status: "active",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		db.ExecContext(ctx, "DELETE FROM org_memberships WHERE user_id = $1 AND org_id = $2", userID, orgID)
+	})
+
+	u1 := mustCreateUnit(t, units, CreateTeachingUnitInput{
+		Scope: "org", ScopeID: &orgID, Title: "Browse Unit A", CreatedBy: userID,
+	})
+	u2 := mustCreateUnit(t, units, CreateTeachingUnitInput{
+		Scope: "org", ScopeID: &orgID, Title: "Browse Unit B", CreatedBy: userID,
+	})
+
+	// Force u1 to have a newer updated_at so it comes first.
+	future := time.Now().Add(1 * time.Hour)
+	_, err = db.ExecContext(ctx, "UPDATE teaching_units SET updated_at = $1 WHERE id = $2", future, u1.ID)
+	require.NoError(t, err)
+
+	results, err := units.SearchUnits(ctx, SearchUnitsFilter{
+		Scope:      "org",
+		ScopeID:    &orgID,
+		ViewerID:   userID,
+		ViewerOrgs: []string{orgID},
+	})
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(results), 2)
+
+	// u1 should come before u2 because it has a newer updated_at.
+	var u1Idx, u2Idx int
+	for i, u := range results {
+		if u.ID == u1.ID {
+			u1Idx = i
+		}
+		if u.ID == u2.ID {
+			u2Idx = i
+		}
+	}
+	assert.Less(t, u1Idx, u2Idx, "u1 (newer updated_at) should come before u2")
+}
+
+func TestTeachingUnitStore_SearchUnits_ScopeVisibility(t *testing.T) {
+	units, _, _, userID := setupUnitEnv(t, t.Name())
+	ctx := context.Background()
+
+	// Create a personal unit.
+	mustCreateUnit(t, units, CreateTeachingUnitInput{
+		Scope: "personal", ScopeID: &userID, Title: "My Personal Unit", CreatedBy: userID,
+	})
+
+	// Search as the owner — should see personal unit.
+	results, err := units.SearchUnits(ctx, SearchUnitsFilter{
+		Scope:    "personal",
+		ScopeID:  &userID,
+		ViewerID: userID,
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, results)
+
+	// Search as a different user — should NOT see the personal unit.
+	otherUser := "00000000-0000-0000-0000-000000000099"
+	results2, err := units.SearchUnits(ctx, SearchUnitsFilter{
+		Scope:    "personal",
+		ScopeID:  &userID,
+		ViewerID: otherUser,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, results2, "other user should not see personal unit")
+}
+
+func TestTeachingUnitStore_SearchUnits_EmptyResults(t *testing.T) {
+	units, _, _, userID := setupUnitEnv(t, t.Name())
+	ctx := context.Background()
+
+	results, err := units.SearchUnits(ctx, SearchUnitsFilter{
+		Query:    "xyznonexistentquerythatmatchesnothing",
+		ViewerID: userID,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, results)
+	assert.NotNil(t, results, "empty results should be non-nil slice")
+}
+
+func TestTeachingUnitStore_SearchUnits_SubjectTagFilter(t *testing.T) {
+	units, orgs, orgID, userID := setupUnitEnv(t, t.Name())
+	ctx := context.Background()
+	db := testDB(t)
+
+	_, err := orgs.AddOrgMember(ctx, AddMemberInput{
+		OrgID: orgID, UserID: userID, Role: "teacher", Status: "active",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		db.ExecContext(ctx, "DELETE FROM org_memberships WHERE user_id = $1 AND org_id = $2", userID, orgID)
+	})
+
+	mustCreateUnit(t, units, CreateTeachingUnitInput{
+		Scope: "org", ScopeID: &orgID, Title: "Tagged Unit",
+		SubjectTags: []string{"math", "cs"}, CreatedBy: userID,
+	})
+	mustCreateUnit(t, units, CreateTeachingUnitInput{
+		Scope: "org", ScopeID: &orgID, Title: "Other Tagged Unit",
+		SubjectTags: []string{"science"}, CreatedBy: userID,
+	})
+
+	results, err := units.SearchUnits(ctx, SearchUnitsFilter{
+		SubjectTags: []string{"math"},
+		ViewerID:    userID,
+		ViewerOrgs:  []string{orgID},
+	})
+	require.NoError(t, err)
+
+	for _, u := range results {
+		found := false
+		for _, tag := range u.SubjectTags {
+			if tag == "math" {
+				found = true
+				break
+			}
+		}
+		assert.True(t, found, "all results should have the 'math' tag, got %v for %s", u.SubjectTags, u.Title)
+	}
+}
+
+func TestTeachingUnitStore_SearchUnits_PlatformAdminSeesAll(t *testing.T) {
+	units, _, _, userID := setupUnitEnv(t, t.Name())
+	ctx := context.Background()
+
+	mustCreateUnit(t, units, CreateTeachingUnitInput{
+		Scope: "personal", ScopeID: &userID, Title: "Admin Visible Unit",
+		CreatedBy: userID,
+	})
+
+	results, err := units.SearchUnits(ctx, SearchUnitsFilter{
+		IsPlatformAdmin: true,
+		ViewerID:        "00000000-0000-0000-0000-000000000001",
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, results, "platform admin should see units across scopes")
+}
+
+func TestTeachingUnitStore_SearchUnits_GradeLevelFilter(t *testing.T) {
+	units, _, _, userID := setupUnitEnv(t, t.Name())
+	ctx := context.Background()
+
+	grade := "K-5"
+	mustCreateUnit(t, units, CreateTeachingUnitInput{
+		Scope: "personal", ScopeID: &userID, Title: "K5 Unit",
+		GradeLevel: &grade, CreatedBy: userID,
+	})
+
+	results, err := units.SearchUnits(ctx, SearchUnitsFilter{
+		GradeLevel: "K-5",
+		ViewerID:   userID,
+	})
+	require.NoError(t, err)
+	for _, u := range results {
+		require.NotNil(t, u.GradeLevel)
+		assert.Equal(t, "K-5", *u.GradeLevel)
+	}
+}
