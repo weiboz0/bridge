@@ -1,11 +1,11 @@
 "use client"
 
-import { useCallback, useImperativeHandle, useState, forwardRef } from "react"
+import { useCallback, useEffect, useImperativeHandle, useRef, useState, forwardRef } from "react"
 import { nanoid } from "nanoid"
 import { EditorContent, type Editor, type JSONContent, useEditor } from "@tiptap/react"
-import { InputRule } from "@tiptap/core"
 import { Button } from "@/components/ui/button"
 import { teachingUnitExtensions } from "./extensions"
+import { SlashCommandExtension } from "./slash-menu"
 import { AIDraftPanel } from "./ai-draft-panel"
 import { useYjsTiptap } from "@/lib/yjs/use-yjs-tiptap"
 
@@ -76,75 +76,195 @@ function assignMissingTopLevelNodeIds(editor: Editor) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// AI block type mapping
+// ---------------------------------------------------------------------------
+
 /**
- * Slash command input rules.
- * When the user types /note, /code, /media, or /problem at the start of a
- * paragraph (preceded only by optional whitespace), the typed trigger text is
- * replaced with the corresponding custom block node.
- *
- * Tiptap InputRule receives the full match and returns a replacement via the
- * `handler` callback.  We use a plain text regex pattern so the rule fires
- * exactly once per trigger word.
+ * Maps AI-generated block types (e.g. "prose", "teacher-note", "code-snippet")
+ * to valid Tiptap JSONContent that the editor can insert. The AI endpoint uses
+ * its own vocabulary for block types — this function bridges the gap.
  */
-function makeSlashCommandExtension() {
-  // We cannot add InputRules to an existing node type here, so we return a
-  // lightweight anonymous Tiptap extension that only contributes input rules.
-  const { Extension } = require("@tiptap/core") as typeof import("@tiptap/core")
-  return Extension.create({
-    name: "slash-commands",
-    addInputRules() {
-      const makeRule = (
-        trigger: string,
-        nodeType: string,
-        extraAttrs: Record<string, unknown> = {}
-      ) =>
-        new InputRule({
-          // Match the slash command only at the start of a text block
-          // (after whitespace or at position 0) to avoid false triggers
-          // on inline text like "url/code".
-          find: new RegExp(`(?:^|\\s)/${trigger}$`),
-          handler: ({ state, range, chain }) => {
-            const type = state.schema.nodes[nodeType]
-            if (!type) return null
+function mapAIBlockToTiptap(block: Record<string, unknown>): JSONContent {
+  const blockType = typeof block.type === "string" ? block.type : ""
 
-            chain()
-              .deleteRange(range)
-              .insertContent({
-                type: nodeType,
-                attrs: { id: nanoid(), ...extraAttrs },
-              })
-              .run()
+  // The Go endpoint returns blocks with structured `content` arrays (valid
+  // Tiptap JSON). Text-only fallback for plain-string responses.
+  const hasStructuredContent = Array.isArray(block.content)
+  const text =
+    typeof block.text === "string"
+      ? block.text
+      : typeof block.content === "string"
+        ? block.content
+        : ""
 
-            return null
+  switch (blockType) {
+    case "prose":
+      // Go returns: { type:"prose", content:[{type:"paragraph",...}] }
+      // "prose" isn't a Tiptap node — unwrap to its children (paragraphs).
+      if (hasStructuredContent) {
+        return {
+          type: "doc",
+          content: block.content as JSONContent[],
+        }
+      }
+      if (!text) return { type: "paragraph" }
+      return {
+        type: "doc",
+        content: text.split(/\n{2,}/).map((chunk: string) => ({
+          type: "paragraph",
+          content: chunk.trim()
+            ? [{ type: "text", text: chunk.trim() }]
+            : [],
+        })),
+      }
+
+    case "heading": {
+      const level =
+        typeof block.level === "number" && block.level >= 1 && block.level <= 3
+          ? block.level
+          : 2
+      return {
+        type: "heading",
+        attrs: { level },
+        content: text ? [{ type: "text", text }] : [],
+      }
+    }
+
+    case "teacher-note":
+      // Go returns valid Tiptap JSON with content array — pass through
+      if (hasStructuredContent) {
+        return {
+          type: "teacher-note",
+          attrs: { id: nanoid(), ...(block.attrs as Record<string, unknown> ?? {}) },
+          content: block.content as JSONContent[],
+        }
+      }
+      return {
+        type: "teacher-note",
+        attrs: { id: nanoid() },
+        content: [
+          {
+            type: "paragraph",
+            content: text ? [{ type: "text", text }] : [],
           },
-        })
+        ],
+      }
 
-      return [
-        makeRule("note", "teacher-note"),
-        makeRule("code", "code-snippet", { language: "python", code: "" }),
-        makeRule("media", "media-embed", { url: "", alt: "", mediaType: "image" }),
-        makeRule("problem", "problem-ref", {
-          problemId: "",
+    case "code-snippet": {
+      // Go returns: { type:"code-snippet", attrs:{id, language, code} }
+      // Attrs come from Go — merge with a fresh ID
+      const attrs = (block.attrs as Record<string, unknown>) ?? {}
+      const language =
+        typeof attrs.language === "string" ? attrs.language
+        : typeof block.language === "string" ? block.language
+        : "python"
+      const code =
+        typeof attrs.code === "string" ? attrs.code
+        : typeof block.code === "string" ? block.code
+        : text
+      return {
+        type: "code-snippet",
+        attrs: { id: nanoid(), language, code },
+      }
+    }
+
+    case "problem-ref":
+    case "problem": {
+      const attrs = (block.attrs as Record<string, unknown>) ?? {}
+      const problemId =
+        typeof attrs.problemId === "string" ? attrs.problemId
+        : typeof block.problemId === "string" ? block.problemId
+        : ""
+      const visibility =
+        typeof attrs.visibility === "string" ? attrs.visibility : "always"
+      return {
+        type: "problem-ref",
+        attrs: {
+          id: nanoid(),
+          problemId,
           pinnedRevision: null,
-          visibility: "always",
+          visibility,
           overrideStarter: null,
-        }),
-        makeRule("solution", "solution-ref", { solutionId: "", reveal: "always" }),
-        makeRule("testcase", "test-case-ref", {
-          testCaseId: "",
-          problemRefId: "",
-          showToStudent: true,
-        }),
-        makeRule("cue", "live-cue"),
-        makeRule("assignment", "assignment-variant", { title: "", timeLimitMinutes: null }),
-      ]
-    },
-  })
+        },
+      }
+    }
+
+    case "solution-ref":
+    case "solution": {
+      const solutionId =
+        typeof block.solutionId === "string" ? block.solutionId : ""
+      return {
+        type: "solution-ref",
+        attrs: { id: nanoid(), solutionId, reveal: "always" },
+      }
+    }
+
+    case "media-embed":
+    case "media": {
+      const url = typeof block.url === "string" ? block.url : ""
+      const alt = typeof block.alt === "string" ? block.alt : ""
+      const mediaType =
+        typeof block.mediaType === "string" ? block.mediaType : "image"
+      return {
+        type: "media-embed",
+        attrs: { id: nanoid(), url, alt, mediaType },
+      }
+    }
+
+    case "live-cue":
+      return {
+        type: "live-cue",
+        attrs: { id: nanoid() },
+        content: [
+          {
+            type: "paragraph",
+            content: text ? [{ type: "text", text }] : [],
+          },
+        ],
+      }
+
+    case "assignment-variant":
+    case "assignment": {
+      const title = typeof block.title === "string" ? block.title : ""
+      const timeLimitMinutes =
+        typeof block.timeLimitMinutes === "number"
+          ? block.timeLimitMinutes
+          : null
+      return {
+        type: "assignment-variant",
+        attrs: { id: nanoid(), title, timeLimitMinutes },
+        content: [
+          {
+            type: "paragraph",
+            content: text ? [{ type: "text", text }] : [],
+          },
+        ],
+      }
+    }
+
+    default:
+      // Fallback: wrap any text content in a paragraph.
+      if (text) {
+        return {
+          type: "paragraph",
+          content: [{ type: "text", text }],
+        }
+      }
+      // Last resort: try to use the block as-is (it might already be valid
+      // Tiptap JSON).
+      return block as JSONContent
+  }
 }
 
 export const TeachingUnitEditor = forwardRef<TeachingUnitEditorHandle, TeachingUnitEditorProps>(
 function TeachingUnitEditor({ initialDoc, onSave, onDirty, unitId, collaborative }, ref) {
   const [showAIPanel, setShowAIPanel] = useState(false)
+  const [showInlineAI, setShowInlineAI] = useState(false)
+  const [inlineAIPrompt, setInlineAIPrompt] = useState("")
+  const [inlineAILoading, setInlineAILoading] = useState(false)
+  const [inlineAIError, setInlineAIError] = useState<string | null>(null)
+  const inlineAIRef = useRef<HTMLInputElement>(null)
 
   // Resolve the unit ID from the explicit prop or the collaborative options.
   const resolvedUnitId = unitId ?? collaborative?.unitId ?? ""
@@ -164,89 +284,36 @@ function TeachingUnitEditor({ initialDoc, onSave, onDirty, unitId, collaborative
     immediatelyRender: false,
     extensions: [
       ...teachingUnitExtensions(),
-      makeSlashCommandExtension(),
+      SlashCommandExtension,
       ...(isCollaborative ? yjsExtensions : []),
     ],
     content: isCollaborative && connected
       ? undefined
       : (initialDoc ?? { type: "doc", content: [] }),
-    onCreate({ editor: e }: any) {
-      assignMissingTopLevelNodeIds(e as Editor)
+    onCreate({ editor: e }: { editor: Editor }) {
+      assignMissingTopLevelNodeIds(e)
     },
-    onUpdate({ editor: e }: any) {
-      assignMissingTopLevelNodeIds(e as Editor)
+    onUpdate({ editor: e }: { editor: Editor }) {
+      assignMissingTopLevelNodeIds(e)
       onDirty?.(true)
     },
   })
 
-  const handleInsertProblem = useCallback(() => {
-    if (!editor) {
-      return
-    }
-
-    const problemId = window.prompt("Enter problem ID")
-    if (!problemId) {
-      return
-    }
-
-    editor
-      .chain()
-      .focus()
-      .insertContent({
-        type: "problem-ref",
-        attrs: {
-          id: nanoid(),
-          problemId: problemId.trim(),
-          pinnedRevision: null,
-          visibility: "always",
-          overrideStarter: null,
-        },
-      })
-      .run()
-  }, [editor])
-
-  const handleInsertTeacherNote = useCallback(() => {
-    if (!editor) return
-    editor
-      .chain()
-      .focus()
-      .insertContent({
-        type: "teacher-note",
-        attrs: { id: nanoid() },
-        content: [{ type: "paragraph" }],
-      })
-      .run()
-  }, [editor])
-
-  const handleInsertCodeSnippet = useCallback(() => {
-    if (!editor) return
-    editor
-      .chain()
-      .focus()
-      .insertContent({
-        type: "code-snippet",
-        attrs: { id: nanoid(), language: "python", code: "" },
-      })
-      .run()
-  }, [editor])
-
-  const handleInsertMediaEmbed = useCallback(() => {
-    if (!editor) return
-    editor
-      .chain()
-      .focus()
-      .insertContent({
-        type: "media-embed",
-        attrs: { id: nanoid(), url: "", alt: "", mediaType: "image" },
-      })
-      .run()
-  }, [editor])
-
   const handleInsertAIBlocks = useCallback((blocks: unknown[]) => {
     if (!editor) return
-    // Insert each block at the current cursor position (or end of document).
+    // Map AI output types to valid Tiptap node types, then insert.
     for (const block of blocks) {
-      editor.chain().focus().insertContent(block as JSONContent).run()
+      if (typeof block !== "object" || block === null) continue
+      const mapped = mapAIBlockToTiptap(block as Record<string, unknown>)
+      // A "doc" wrapper means the mapper produced multiple nodes (e.g. prose
+      // split into paragraphs). Insert each child individually.
+      if (mapped.type === "doc" && Array.isArray(mapped.content)) {
+        for (const child of mapped.content) {
+          editor.chain().focus().insertContent(child).run()
+        }
+      } else {
+        editor.chain().focus().insertContent(mapped).run()
+      }
     }
     onDirty?.(true)
   }, [editor, onDirty])
@@ -265,22 +332,41 @@ function TeachingUnitEditor({ initialDoc, onSave, onDirty, unitId, collaborative
     save: handleSave,
   }), [handleSave])
 
+  // Listen for the inline AI trigger from the slash menu
+  useEffect(() => {
+    const handler = () => {
+      setShowInlineAI(true)
+      setInlineAIPrompt("")
+      setInlineAIError(null)
+      setTimeout(() => inlineAIRef.current?.focus(), 50)
+    }
+    window.addEventListener("tiptap:ai-write-inline", handler)
+    return () => window.removeEventListener("tiptap:ai-write-inline", handler)
+  }, [])
+
+  const handleInlineAISubmit = useCallback(async () => {
+    if (!inlineAIPrompt.trim() || !resolvedUnitId) return
+    setInlineAILoading(true)
+    setInlineAIError(null)
+    try {
+      const { draftWithAI } = await import("@/lib/teaching-units")
+      const result = await draftWithAI(resolvedUnitId, inlineAIPrompt)
+      if (result?.blocks) {
+        handleInsertAIBlocks(result.blocks)
+      }
+      setShowInlineAI(false)
+      setInlineAIPrompt("")
+    } catch (err) {
+      setInlineAIError(err instanceof Error ? err.message : "AI generation failed")
+    } finally {
+      setInlineAILoading(false)
+    }
+  }, [inlineAIPrompt, resolvedUnitId, handleInsertAIBlocks])
+
   return (
     <div className="space-y-3">
       {/* Toolbar */}
       <div className="flex flex-wrap items-center gap-2">
-        <Button onClick={handleInsertProblem} variant="outline" size="sm">
-          + Problem
-        </Button>
-        <Button onClick={handleInsertTeacherNote} variant="outline" size="sm">
-          + Teacher Note
-        </Button>
-        <Button onClick={handleInsertCodeSnippet} variant="outline" size="sm">
-          + Code
-        </Button>
-        <Button onClick={handleInsertMediaEmbed} variant="outline" size="sm">
-          + Media
-        </Button>
         {resolvedUnitId && (
           <Button
             variant="outline"
@@ -307,14 +393,7 @@ function TeachingUnitEditor({ initialDoc, onSave, onDirty, unitId, collaborative
         )}
       </div>
       <p className="text-xs text-zinc-400">
-        Tip: type{" "}
-        {["/note", "/code", "/media", "/problem", "/solution", "/testcase", "/cue", "/assignment"].map((cmd, i, arr) => (
-          <span key={cmd}>
-            <code className="rounded bg-zinc-100 px-1">{cmd}</code>
-            {i < arr.length - 1 ? ", " : ""}
-          </span>
-        ))}{" "}
-        to insert a block.
+        Tip: type <code className="rounded bg-zinc-100 px-1">/</code> to open the command menu and insert blocks.
       </p>
       {showAIPanel && resolvedUnitId && (
         <AIDraftPanel
@@ -322,6 +401,31 @@ function TeachingUnitEditor({ initialDoc, onSave, onDirty, unitId, collaborative
           onInsertBlocks={handleInsertAIBlocks}
           onClose={() => setShowAIPanel(false)}
         />
+      )}
+      {showInlineAI && (
+        <div className="flex items-center gap-2 rounded-lg border border-blue-300 bg-blue-50 px-3 py-2">
+          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded bg-blue-100 text-[10px] font-bold text-blue-600">AI</span>
+          <input
+            ref={inlineAIRef}
+            type="text"
+            placeholder="Describe what to generate..."
+            value={inlineAIPrompt}
+            onChange={(e) => setInlineAIPrompt(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleInlineAISubmit() }
+              if (e.key === "Escape") { setShowInlineAI(false) }
+            }}
+            disabled={inlineAILoading}
+            className="flex-1 bg-transparent text-sm outline-none placeholder:text-blue-400"
+          />
+          <Button size="sm" variant="default" onClick={handleInlineAISubmit} disabled={inlineAILoading || !inlineAIPrompt.trim()}>
+            {inlineAILoading ? "Generating..." : "Generate"}
+          </Button>
+          <button type="button" onClick={() => setShowInlineAI(false)} className="text-zinc-400 hover:text-zinc-600 text-sm">
+            Esc
+          </button>
+          {inlineAIError && <span className="text-xs text-red-600">{inlineAIError}</span>}
+        </div>
       )}
       <div className="rounded-lg border border-zinc-200 bg-zinc-50">
         <EditorContent editor={editor} className="min-h-60 px-3 py-2" />
