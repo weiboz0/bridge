@@ -73,6 +73,18 @@ type UpdateTeachingUnitInput struct {
 	Status           *string
 }
 
+// UnitRevision is a snapshot of a unit's blocks content captured when the unit
+// transitions to classroom_ready or coach_ready. Reason records the target
+// status that triggered the snapshot (e.g. "classroom_ready").
+type UnitRevision struct {
+	ID        string          `json:"id"`
+	UnitID    string          `json:"unitId"`
+	Blocks    json.RawMessage `json:"blocks"`
+	Reason    *string         `json:"reason"`
+	CreatedBy string          `json:"createdBy"`
+	CreatedAt time.Time       `json:"createdAt"`
+}
+
 // TeachingUnitStore manages teaching_units and unit_documents rows.
 type TeachingUnitStore struct{ db *sql.DB }
 
@@ -378,4 +390,143 @@ func (s *TeachingUnitStore) ListUnitsForScope(ctx context.Context, scope, scopeI
 		out = append(out, *u)
 	}
 	return out, rows.Err()
+}
+
+// validUnitTransitions encodes the spec-012 state machine. Keys are
+// "currentStatus→targetStatus" pairs.
+var validUnitTransitions = map[string]bool{
+	"draft→reviewed":           true,
+	"reviewed→classroom_ready": true,
+	"reviewed→coach_ready":     true,
+	// Any non-draft → archived.
+	"reviewed→archived":        true,
+	"classroom_ready→archived": true,
+	"coach_ready→archived":     true,
+	"archived→archived":        true, // idempotent archive
+	// Unarchive.
+	"archived→classroom_ready": true,
+}
+
+// snapshotStatuses are target statuses that trigger a unit_revisions snapshot.
+var snapshotStatuses = map[string]bool{
+	"classroom_ready": true,
+	"coach_ready":     true,
+}
+
+// SetUnitStatus atomically transitions a teaching unit's status and, when the
+// target is classroom_ready or coach_ready, snapshots the current
+// unit_documents.blocks into a unit_revisions row. Returns the updated unit.
+//
+// Invalid transitions return ErrInvalidTransition (defined in problems.go).
+// A non-existent unit returns sql.ErrNoRows (handler maps to 404).
+func (s *TeachingUnitStore) SetUnitStatus(ctx context.Context, unitID, newStatus, callerID string) (*TeachingUnit, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	var currentStatus string
+	err = tx.QueryRowContext(ctx,
+		`SELECT status FROM teaching_units WHERE id = $1 FOR UPDATE`, unitID,
+	).Scan(&currentStatus)
+	if err == sql.ErrNoRows {
+		return nil, sql.ErrNoRows
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	key := currentStatus + "→" + newStatus
+	if !validUnitTransitions[key] {
+		return nil, ErrInvalidTransition
+	}
+
+	// Snapshot blocks if transitioning to a publish status.
+	if snapshotStatuses[newStatus] {
+		reason := newStatus
+		_, err = tx.ExecContext(ctx, `
+			INSERT INTO unit_revisions (unit_id, blocks, reason, created_by)
+			SELECT $1, blocks, $2, $3
+			FROM unit_documents
+			WHERE unit_id = $1`,
+			unitID, reason, callerID,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("set unit status: create revision: %w", err)
+		}
+	}
+
+	// Update the status.
+	now := time.Now()
+	unit, err := scanTeachingUnit(tx.QueryRowContext(ctx,
+		`UPDATE teaching_units SET status = $1, updated_at = $2
+		 WHERE id = $3
+		 RETURNING `+teachingUnitColumns,
+		newStatus, now, unitID,
+	))
+	if err != nil {
+		return nil, err
+	}
+	if unit == nil {
+		return nil, fmt.Errorf("set unit status: update returned no row")
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return unit, nil
+}
+
+// scanUnitRevision reads a single unit_revisions row.
+func scanUnitRevision(row interface{ Scan(...any) error }) (*UnitRevision, error) {
+	var r UnitRevision
+	var blocks []byte
+	var reason sql.NullString
+
+	err := row.Scan(&r.ID, &r.UnitID, &blocks, &reason, &r.CreatedBy, &r.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	r.Blocks = json.RawMessage(blocks)
+	if reason.Valid {
+		r.Reason = &reason.String
+	}
+	return &r, nil
+}
+
+// ListRevisions returns all revisions for the given unit, ordered by
+// created_at DESC (newest first).
+func (s *TeachingUnitStore) ListRevisions(ctx context.Context, unitID string) ([]UnitRevision, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, unit_id, blocks, reason, created_by, created_at
+		FROM unit_revisions
+		WHERE unit_id = $1
+		ORDER BY created_at DESC`, unitID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []UnitRevision{}
+	for rows.Next() {
+		r, err := scanUnitRevision(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *r)
+	}
+	return out, rows.Err()
+}
+
+// GetRevision returns a single unit_revisions row by ID, or (nil, nil) if not
+// found.
+func (s *TeachingUnitStore) GetRevision(ctx context.Context, revisionID string) (*UnitRevision, error) {
+	return scanUnitRevision(s.db.QueryRowContext(ctx, `
+		SELECT id, unit_id, blocks, reason, created_by, created_at
+		FROM unit_revisions
+		WHERE id = $1`, revisionID))
 }

@@ -81,6 +81,20 @@ export async function createUnit(data: CreateUnitInput): Promise<TeachingUnit> {
 }
 
 /**
+ * Transition a unit to a new lifecycle status.
+ * Throws on invalid transition (409) or any other non-OK response.
+ */
+export async function transitionUnit(id: string, status: string): Promise<TeachingUnit> {
+  const res = await fetch(`/api/units/${id}/transition`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ status }),
+  })
+  if (!res.ok) throw new Error(await res.text())
+  return res.json() as Promise<TeachingUnit>
+}
+
+/**
  * Persist the block document for a unit. Returns the updated document row.
  */
 export async function saveUnitDocument(id: string, blocks: unknown): Promise<UnitDocument> {

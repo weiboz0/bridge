@@ -69,6 +69,8 @@ func newUnitFixture(t *testing.T, suffix string) *unitFixture {
 		})
 		require.NoError(t, err)
 		t.Cleanup(func() {
+			db.ExecContext(ctx, "DELETE FROM unit_revisions WHERE unit_id IN (SELECT id FROM teaching_units WHERE created_by = $1)", u.ID)
+			db.ExecContext(ctx, "DELETE FROM unit_revisions WHERE created_by = $1", u.ID)
 			db.ExecContext(ctx, "DELETE FROM unit_documents WHERE unit_id IN (SELECT id FROM teaching_units WHERE created_by = $1)", u.ID)
 			db.ExecContext(ctx, "DELETE FROM teaching_units WHERE created_by = $1 OR scope_id = $1", u.ID)
 			db.ExecContext(ctx, "DELETE FROM org_memberships WHERE user_id = $1", u.ID)
@@ -119,6 +121,7 @@ func (fx *unitFixture) mkUnit(t *testing.T, scope string, scopeID *string, statu
 	require.NoError(t, err)
 	require.NotNil(t, u)
 	t.Cleanup(func() {
+		fx.sqlDB.ExecContext(ctx, "DELETE FROM unit_revisions WHERE unit_id = $1", u.ID)
 		fx.sqlDB.ExecContext(ctx, "DELETE FROM unit_documents WHERE unit_id = $1", u.ID)
 		fx.sqlDB.ExecContext(ctx, "DELETE FROM teaching_units WHERE id = $1", u.ID)
 	})
@@ -148,6 +151,22 @@ func doUnitPost(t *testing.T, h http.HandlerFunc, path string, body any, claims 
 	req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(b))
 	if claims != nil {
 		req = withClaims(req, claims)
+	}
+	w := httptest.NewRecorder()
+	h(w, req)
+	return w
+}
+
+func doUnitPostWithParams(t *testing.T, h http.HandlerFunc, path string, body any, params map[string]string, claims *auth.Claims) *httptest.ResponseRecorder {
+	t.Helper()
+	b, err := json.Marshal(body)
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(b))
+	if claims != nil {
+		req = withClaims(req, claims)
+	}
+	if params != nil {
+		req = withChiParams(req, params)
 	}
 	w := httptest.NewRecorder()
 	h(w, req)
@@ -912,4 +931,320 @@ func TestTeachingUnitHandler_GetUnitByTopic_NoAuth_401(t *testing.T) {
 		map[string]string{"topicId": unknownID},
 		nil)
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
+// ==================== TransitionUnit ====================
+
+func TestTeachingUnitHandler_Transition_DraftToReviewed_200(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Draft Unit", fx.teacher1.ID)
+
+	w := doUnitPostWithParams(t, fx.h.TransitionUnit, "/api/units/"+u.ID+"/transition",
+		map[string]any{"status": "reviewed"},
+		map[string]string{"id": u.ID},
+		fx.claims(fx.teacher1, false))
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var resp store.TeachingUnit
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "reviewed", resp.Status)
+}
+
+func TestTeachingUnitHandler_Transition_ReviewedToClassroomReady_200_CreatesRevision(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	ctx := context.Background()
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Publish Unit", fx.teacher1.ID)
+
+	// Save some blocks.
+	blocks := json.RawMessage(`{"type":"doc","content":[{"type":"prose","attrs":{"id":"b1"}}]}`)
+	_, err := fx.h.Units.SaveDocument(ctx, u.ID, blocks)
+	require.NoError(t, err)
+
+	// draft→reviewed
+	w := doUnitPostWithParams(t, fx.h.TransitionUnit, "/api/units/"+u.ID+"/transition",
+		map[string]any{"status": "reviewed"},
+		map[string]string{"id": u.ID},
+		fx.claims(fx.teacher1, false))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	// reviewed→classroom_ready
+	w = doUnitPostWithParams(t, fx.h.TransitionUnit, "/api/units/"+u.ID+"/transition",
+		map[string]any{"status": "classroom_ready"},
+		map[string]string{"id": u.ID},
+		fx.claims(fx.teacher1, false))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var resp store.TeachingUnit
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "classroom_ready", resp.Status)
+
+	// GET /revisions should show 1 revision.
+	w2 := doUnitGet(t, fx.h.ListRevisions, "/api/units/"+u.ID+"/revisions",
+		map[string]string{"id": u.ID},
+		fx.claims(fx.teacher1, false))
+	require.Equal(t, http.StatusOK, w2.Code)
+
+	var revResp struct {
+		Items []store.UnitRevision `json:"items"`
+	}
+	require.NoError(t, json.Unmarshal(w2.Body.Bytes(), &revResp))
+	require.Len(t, revResp.Items, 1)
+	require.NotNil(t, revResp.Items[0].Reason)
+	assert.Equal(t, "classroom_ready", *revResp.Items[0].Reason)
+}
+
+func TestTeachingUnitHandler_Transition_InvalidSkip_409(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Skip Unit", fx.teacher1.ID)
+
+	// draft→classroom_ready should be 409 (skips reviewed).
+	w := doUnitPostWithParams(t, fx.h.TransitionUnit, "/api/units/"+u.ID+"/transition",
+		map[string]any{"status": "classroom_ready"},
+		map[string]string{"id": u.ID},
+		fx.claims(fx.teacher1, false))
+	assert.Equal(t, http.StatusConflict, w.Code)
+}
+
+func TestTeachingUnitHandler_Transition_NonEditor_403(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Auth Unit", fx.teacher1.ID)
+
+	// teacher2 is in org2, not org1 — can't even view the unit → 404.
+	w := doUnitPostWithParams(t, fx.h.TransitionUnit, "/api/units/"+u.ID+"/transition",
+		map[string]any{"status": "reviewed"},
+		map[string]string{"id": u.ID},
+		fx.claims(fx.teacher2, false))
+	assert.Equal(t, http.StatusNotFound, w.Code)
+
+	// student1 is in org1 but can't view org units in plan-031 → 404.
+	w2 := doUnitPostWithParams(t, fx.h.TransitionUnit, "/api/units/"+u.ID+"/transition",
+		map[string]any{"status": "reviewed"},
+		map[string]string{"id": u.ID},
+		fx.claims(fx.student1, false))
+	assert.Equal(t, http.StatusNotFound, w2.Code)
+}
+
+func TestTeachingUnitHandler_Transition_NonExistent_404(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	fakeID := "00000000-0000-0000-0000-000000000001"
+
+	w := doUnitPostWithParams(t, fx.h.TransitionUnit, "/api/units/"+fakeID+"/transition",
+		map[string]any{"status": "reviewed"},
+		map[string]string{"id": fakeID},
+		fx.claims(fx.admin, true))
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func TestTeachingUnitHandler_Transition_InvalidTargetStatus_400(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Bad Status", fx.teacher1.ID)
+
+	w := doUnitPostWithParams(t, fx.h.TransitionUnit, "/api/units/"+u.ID+"/transition",
+		map[string]any{"status": "galaxy"},
+		map[string]string{"id": u.ID},
+		fx.claims(fx.teacher1, false))
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestTeachingUnitHandler_Transition_NoAuth_401(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "NoAuth Unit", fx.teacher1.ID)
+
+	w := doUnitPostWithParams(t, fx.h.TransitionUnit, "/api/units/"+u.ID+"/transition",
+		map[string]any{"status": "reviewed"},
+		map[string]string{"id": u.ID},
+		nil)
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
+// ==================== ListRevisions ====================
+
+func TestTeachingUnitHandler_ListRevisions_200(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	ctx := context.Background()
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Rev List Unit", fx.teacher1.ID)
+
+	// Transition through to classroom_ready.
+	_, err := fx.h.Units.SetUnitStatus(ctx, u.ID, "reviewed", fx.teacher1.ID)
+	require.NoError(t, err)
+	_, err = fx.h.Units.SetUnitStatus(ctx, u.ID, "classroom_ready", fx.teacher1.ID)
+	require.NoError(t, err)
+
+	w := doUnitGet(t, fx.h.ListRevisions, "/api/units/"+u.ID+"/revisions",
+		map[string]string{"id": u.ID},
+		fx.claims(fx.teacher1, false))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var resp struct {
+		Items []store.UnitRevision `json:"items"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp.Items, 1)
+}
+
+func TestTeachingUnitHandler_ListRevisions_NoAccess_404(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Rev Access Unit", fx.teacher1.ID)
+
+	w := doUnitGet(t, fx.h.ListRevisions, "/api/units/"+u.ID+"/revisions",
+		map[string]string{"id": u.ID},
+		fx.claims(fx.outsider, false))
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+// ==================== GetRevision ====================
+
+func TestTeachingUnitHandler_GetRevision_200(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	ctx := context.Background()
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Get Rev Unit", fx.teacher1.ID)
+
+	// Create a revision.
+	_, err := fx.h.Units.SetUnitStatus(ctx, u.ID, "reviewed", fx.teacher1.ID)
+	require.NoError(t, err)
+	_, err = fx.h.Units.SetUnitStatus(ctx, u.ID, "classroom_ready", fx.teacher1.ID)
+	require.NoError(t, err)
+
+	revs, err := fx.h.Units.ListRevisions(ctx, u.ID)
+	require.NoError(t, err)
+	require.Len(t, revs, 1)
+
+	w := doUnitGet(t, fx.h.GetRevision, "/api/units/"+u.ID+"/revisions/"+revs[0].ID,
+		map[string]string{"id": u.ID, "revisionId": revs[0].ID},
+		fx.claims(fx.teacher1, false))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var resp store.UnitRevision
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, revs[0].ID, resp.ID)
+	assert.Equal(t, u.ID, resp.UnitID)
+}
+
+func TestTeachingUnitHandler_GetRevision_NotFound_404(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Rev Not Found", fx.teacher1.ID)
+	fakeRevID := "00000000-0000-0000-0000-000000000099"
+
+	w := doUnitGet(t, fx.h.GetRevision, "/api/units/"+u.ID+"/revisions/"+fakeRevID,
+		map[string]string{"id": u.ID, "revisionId": fakeRevID},
+		fx.claims(fx.teacher1, false))
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func TestTeachingUnitHandler_GetRevision_WrongUnit_404(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	ctx := context.Background()
+
+	u1 := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Unit1 Rev", fx.teacher1.ID)
+	u2 := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Unit2 Rev", fx.teacher1.ID)
+
+	// Create a revision on u1.
+	_, err := fx.h.Units.SetUnitStatus(ctx, u1.ID, "reviewed", fx.teacher1.ID)
+	require.NoError(t, err)
+	_, err = fx.h.Units.SetUnitStatus(ctx, u1.ID, "classroom_ready", fx.teacher1.ID)
+	require.NoError(t, err)
+
+	revs, err := fx.h.Units.ListRevisions(ctx, u1.ID)
+	require.NoError(t, err)
+	require.Len(t, revs, 1)
+
+	// Try to access u1's revision via u2's path → 404.
+	w := doUnitGet(t, fx.h.GetRevision, "/api/units/"+u2.ID+"/revisions/"+revs[0].ID,
+		map[string]string{"id": u2.ID, "revisionId": revs[0].ID},
+		fx.claims(fx.teacher1, false))
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+// ==================== Block Allowlist Expansion (Task 3) ====================
+
+func TestTeachingUnitHandler_SaveDocument_TeacherNote_200(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Note Unit", fx.teacher1.ID)
+
+	doc := map[string]any{
+		"type": "doc",
+		"content": []any{
+			map[string]any{
+				"type":  "teacher-note",
+				"attrs": map[string]any{"id": "tn-001"},
+				"content": []any{
+					map[string]any{"type": "paragraph", "content": []any{
+						map[string]any{"type": "text", "text": "This is for teachers only"},
+					}},
+				},
+			},
+		},
+	}
+
+	w := doUnitPut(t, fx.h.SaveDocument, "/api/units/"+u.ID+"/document", doc,
+		map[string]string{"id": u.ID}, fx.claims(fx.teacher1, false))
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestTeachingUnitHandler_SaveDocument_CodeSnippet_200(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Snippet Unit", fx.teacher1.ID)
+
+	doc := map[string]any{
+		"type": "doc",
+		"content": []any{
+			map[string]any{
+				"type": "code-snippet",
+				"attrs": map[string]any{
+					"id":       "cs-001",
+					"language": "python",
+					"code":     "print('hello')",
+				},
+			},
+		},
+	}
+
+	w := doUnitPut(t, fx.h.SaveDocument, "/api/units/"+u.ID+"/document", doc,
+		map[string]string{"id": u.ID}, fx.claims(fx.teacher1, false))
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestTeachingUnitHandler_SaveDocument_MediaEmbed_200(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Media Unit", fx.teacher1.ID)
+
+	doc := map[string]any{
+		"type": "doc",
+		"content": []any{
+			map[string]any{
+				"type": "media-embed",
+				"attrs": map[string]any{
+					"id":   "me-001",
+					"url":  "https://example.com/image.png",
+					"alt":  "Example image",
+					"type": "image",
+				},
+			},
+		},
+	}
+
+	w := doUnitPut(t, fx.h.SaveDocument, "/api/units/"+u.ID+"/document", doc,
+		map[string]string{"id": u.ID}, fx.claims(fx.teacher1, false))
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestTeachingUnitHandler_SaveDocument_NewBlockMissingID_400(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "No ID Unit", fx.teacher1.ID)
+
+	// teacher-note without attrs.id → 400.
+	doc := map[string]any{
+		"type": "doc",
+		"content": []any{
+			map[string]any{
+				"type":  "teacher-note",
+				"attrs": map[string]any{},
+			},
+		},
+	}
+
+	w := doUnitPut(t, fx.h.SaveDocument, "/api/units/"+u.ID+"/document", doc,
+		map[string]string{"id": u.ID}, fx.claims(fx.teacher1, false))
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "teacher-note")
 }
