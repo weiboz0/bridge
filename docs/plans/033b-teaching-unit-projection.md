@@ -206,7 +206,17 @@ Write post-execution report.
 
 ## Code Review
 
-Reviewers append findings here following `docs/code-review.md`.
+### Review 1
+
+- **Date**: 2026-04-24
+- **Reviewer**: Codex
+- **Verdict**: Approved with fixes
+
+1. `[FIXED]` `attemptStates` parser rejected `in_progress` — a valid spec-012 state. Added `AttemptInProgress` constant and accepted it in the parser.
+
+2. `[FIXED]` Preview toggle proceeded after failed auto-save, showing stale projected content. `handleSave` now re-throws after showing "Save failed" so the preview catch block fires.
+
+3. `[WONTFIX]` Student unit page flattens 401 to "unavailable" instead of redirecting to login. The portal layout handles unauthenticated users at a higher level; the Go API enforces auth. Acceptable for MVP.
 
 ## Post-Execution Report
 

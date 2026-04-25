@@ -177,9 +177,10 @@ export default function EditUnitPage() {
         await saveUnitDocument(id, doc)
         setSaveMessage("Saved")
         setTimeout(() => setSaveMessage(null), 2500)
-      } catch {
+      } catch (err) {
         setSaveMessage("Save failed")
         setTimeout(() => setSaveMessage(null), 3000)
+        throw err
       }
     },
     [id]

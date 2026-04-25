@@ -547,11 +547,11 @@ func (h *TeachingUnitHandler) GetProjectedDocument(w http.ResponseWriter, r *htt
 			}
 			state := projection.AttemptState(parts[1])
 			switch state {
-			case projection.AttemptNotStarted, projection.AttemptSubmitted,
-				projection.AttemptPassed, projection.AttemptFailed:
+			case projection.AttemptNotStarted, projection.AttemptInProgress,
+				projection.AttemptSubmitted, projection.AttemptPassed, projection.AttemptFailed:
 				attemptStates[parts[0]] = state
 			default:
-				writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid attempt state %q; must be not_started, submitted, passed, or failed", parts[1]))
+				writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid attempt state %q; must be not_started, in_progress, submitted, passed, or failed", parts[1]))
 				return
 			}
 		}

@@ -19,10 +19,11 @@ const (
 type AttemptState string
 
 const (
-	AttemptNotStarted AttemptState = "not_started"
-	AttemptSubmitted  AttemptState = "submitted"
-	AttemptPassed     AttemptState = "passed"
-	AttemptFailed     AttemptState = "failed"
+	AttemptNotStarted  AttemptState = "not_started"
+	AttemptInProgress  AttemptState = "in_progress"
+	AttemptSubmitted   AttemptState = "submitted"
+	AttemptPassed      AttemptState = "passed"
+	AttemptFailed      AttemptState = "failed"
 )
 
 // alwaysInclude is the set of block types that are shown to all viewers
