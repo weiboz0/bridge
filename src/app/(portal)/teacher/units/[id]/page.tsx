@@ -1,12 +1,12 @@
 "use client"
 
-import { useEffect, useState } from "react"
-import { useParams } from "next/navigation"
+import { useEffect, useState, useCallback } from "react"
+import { useParams, useRouter } from "next/navigation"
 import Link from "next/link"
 import type { JSONContent } from "@tiptap/react"
-import { buttonVariants } from "@/components/ui/button"
+import { Button, buttonVariants } from "@/components/ui/button"
 import { TeachingUnitViewer } from "@/components/editor/tiptap/teaching-unit-viewer"
-import { fetchUnit, fetchUnitDocument, type TeachingUnit } from "@/lib/teaching-units"
+import { fetchUnit, fetchUnitDocument, forkUnit, type TeachingUnit } from "@/lib/teaching-units"
 
 type LoadState =
   | { status: "loading" }
@@ -15,7 +15,10 @@ type LoadState =
 
 export default function ViewUnitPage() {
   const { id } = useParams<{ id: string }>()
+  const router = useRouter()
   const [state, setState] = useState<LoadState>({ status: "loading" })
+  const [forking, setForking] = useState(false)
+  const [forkError, setForkError] = useState<string | null>(null)
 
   useEffect(() => {
     async function load() {
@@ -36,6 +39,18 @@ export default function ViewUnitPage() {
     }
     load()
   }, [id])
+
+  const handleFork = useCallback(async () => {
+    setForking(true)
+    setForkError(null)
+    try {
+      const child = await forkUnit(id, {})
+      router.push(`/teacher/units/${child.id}/edit`)
+    } catch (err) {
+      setForkError(err instanceof Error ? err.message : "Fork failed")
+      setForking(false)
+    }
+  }, [id, router])
 
   if (state.status === "loading") {
     return (
@@ -75,12 +90,25 @@ export default function ViewUnitPage() {
           </div>
           <h1 className="text-2xl font-bold">{unit.title}</h1>
         </div>
-        <Link
-          href={`/teacher/units/${id}/edit`}
-          className={buttonVariants({ variant: "outline", size: "sm" }) + " shrink-0"}
-        >
-          Edit
-        </Link>
+        <div className="flex items-center gap-2 shrink-0">
+          {forkError && (
+            <span className="text-xs text-destructive max-w-48 text-right">{forkError}</span>
+          )}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleFork}
+            disabled={forking}
+          >
+            {forking ? "Forking..." : "Fork"}
+          </Button>
+          <Link
+            href={`/teacher/units/${id}/edit`}
+            className={buttonVariants({ variant: "outline", size: "sm" })}
+          >
+            Edit
+          </Link>
+        </div>
       </div>
 
       {/* Metadata */}

@@ -666,6 +666,17 @@ export const unitRevisions = pgTable(
   })
 );
 
+export const unitOverlays = pgTable("unit_overlays", {
+  childUnitId: uuid("child_unit_id").primaryKey().references(() => teachingUnits.id, { onDelete: "cascade" }),
+  parentUnitId: uuid("parent_unit_id").notNull().references(() => teachingUnits.id, { onDelete: "cascade" }),
+  parentRevisionId: uuid("parent_revision_id").references(() => unitRevisions.id, { onDelete: "set null" }),
+  blockOverrides: jsonb("block_overrides").$type<Record<string, { action: string; block?: unknown }>>().notNull().default({}),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  parentIdx: index("unit_overlays_parent_idx").on(t.parentUnitId),
+}));
+
 // --- Parent Reports ---
 
 export const parentReports = pgTable(

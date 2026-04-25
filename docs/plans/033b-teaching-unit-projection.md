@@ -220,4 +220,19 @@ Write post-execution report.
 
 ## Post-Execution Report
 
-Populate after implementation.
+**Status:** Complete
+
+**Implemented**
+
+- Pure projection pipeline (`platform/internal/projection/project.go`): filters blocks by `(viewer_role, attempt_state)` per spec 012 projection table. Covers all block types: always-include (prose, paragraph, heading, etc.), teacher-only (teacher-note, live-cue, assignment-variant), conditional (problem-ref visibility, solution-ref reveal logic). 37 unit tests.
+- Handler: `GET /api/units/{id}/projected?role=student&attemptStates=b03:submitted`. Role resolution: students locked to student projection, teachers/admins can preview as student. 15 handler integration tests.
+- Block allowlist expanded: `solution-ref`, `test-case-ref`, `live-cue`, `assignment-variant` added to `knownBlockTypes` + `blockTypesRequiringID`.
+- Tiptap nodes: `solution-ref` (atom, green border, reveal badge), `test-case-ref` (atom, orange border, visibility badge), `live-cue` (rich text, blue border, trigger badge), `assignment-variant` (rich text, purple border, time limit badge). All registered in extensions.ts with slash commands.
+- Student-facing unit page (`/student/units/{id}`): fetches projected document, renders with TeachingUnitViewer.
+- Editor preview toggle: "Preview as Student" button, auto-saves before fetching projection, renders read-only viewer inline.
+
+**Verification**
+
+- Go: 13 packages green (new `projection` package)
+- Vitest: 275 passed / 11 skipped
+- tsc: no new errors

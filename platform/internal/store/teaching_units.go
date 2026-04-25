@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/lib/pq"
+	overlayPkg "github.com/weiboz0/bridge/platform/internal/overlay"
 )
 
 // TeachingUnit is the core row from teaching_units. Scope is "platform"
@@ -529,4 +530,369 @@ func (s *TeachingUnitStore) GetRevision(ctx context.Context, revisionID string) 
 		SELECT id, unit_id, blocks, reason, created_by, created_at
 		FROM unit_revisions
 		WHERE id = $1`, revisionID))
+}
+
+// ── Overlay / Fork ──────────────────────────────────────────────────────────
+
+// UnitOverlay represents a row from unit_overlays.
+type UnitOverlay struct {
+	ChildUnitID      string          `json:"childUnitId"`
+	ParentUnitID     string          `json:"parentUnitId"`
+	ParentRevisionID *string         `json:"parentRevisionId"`
+	BlockOverrides   json.RawMessage `json:"blockOverrides"`
+	CreatedAt        time.Time       `json:"createdAt"`
+	UpdatedAt        time.Time       `json:"updatedAt"`
+}
+
+// ForkTarget is defined in problems.go and reused here for unit forks.
+
+// UpdateOverlayInput carries the optional partial-update fields for an overlay.
+// A nil pointer means "leave unchanged". For ParentRevisionID, a pointer to ""
+// means "set to NULL" (floating).
+type UpdateOverlayInput struct {
+	ParentRevisionID *string         // nil = unchanged; ptr to "" = set NULL (float)
+	BlockOverrides   json.RawMessage // nil = unchanged
+}
+
+// LineageEntry is a single node in the overlay chain (root-first).
+type LineageEntry struct {
+	UnitID    string    `json:"unitId"`
+	Title     string    `json:"title"`
+	Scope     string    `json:"scope"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+// ForkUnit creates a new teaching unit derived from sourceID. A transaction
+// inserts the child unit, seeds an empty unit_documents row, and creates a
+// unit_overlays row linking child → source (parent_revision_id = NULL = floating).
+// Returns the new child unit, or (nil, nil) if the source does not exist.
+func (s *TeachingUnitStore) ForkUnit(ctx context.Context, sourceID string, target ForkTarget) (*TeachingUnit, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	// Load the source unit to copy its title.
+	src, err := scanTeachingUnit(tx.QueryRowContext(ctx,
+		`SELECT `+teachingUnitColumns+` FROM teaching_units WHERE id = $1 FOR UPDATE`, sourceID))
+	if err != nil {
+		return nil, err
+	}
+	if src == nil {
+		return nil, nil
+	}
+
+	title := src.Title + " (fork)"
+	if target.Title != nil && *target.Title != "" {
+		title = *target.Title
+	}
+
+	child, err := scanTeachingUnit(tx.QueryRowContext(ctx, `
+		INSERT INTO teaching_units (
+		  scope, scope_id, title, summary, status, created_by
+		) VALUES ($1,$2,$3,$4,'draft',$5)
+		RETURNING `+teachingUnitColumns,
+		target.Scope, target.ScopeID, title, src.Summary, target.CallerID,
+	))
+	if err != nil {
+		return nil, fmt.Errorf("fork unit: insert child: %w", err)
+	}
+	if child == nil {
+		return nil, fmt.Errorf("fork unit: insert returned no row")
+	}
+
+	// Seed an empty document for the child.
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO unit_documents (unit_id)
+		VALUES ($1)
+		ON CONFLICT (unit_id) DO NOTHING`, child.ID,
+	); err != nil {
+		return nil, fmt.Errorf("fork unit: seed document: %w", err)
+	}
+
+	// Create the overlay row linking child → parent (floating).
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO unit_overlays (child_unit_id, parent_unit_id, parent_revision_id, block_overrides)
+		VALUES ($1, $2, NULL, '{}'::jsonb)`,
+		child.ID, sourceID,
+	); err != nil {
+		return nil, fmt.Errorf("fork unit: insert overlay: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return child, nil
+}
+
+// GetOverlay returns the overlay row for the given child unit, or (nil, nil)
+// if the unit has no overlay (i.e. it is not a fork).
+func (s *TeachingUnitStore) GetOverlay(ctx context.Context, childUnitID string) (*UnitOverlay, error) {
+	var o UnitOverlay
+	var parentRevID sql.NullString
+	var overrides []byte
+
+	err := s.db.QueryRowContext(ctx, `
+		SELECT child_unit_id, parent_unit_id, parent_revision_id,
+		       block_overrides, created_at, updated_at
+		FROM unit_overlays
+		WHERE child_unit_id = $1`, childUnitID,
+	).Scan(&o.ChildUnitID, &o.ParentUnitID, &parentRevID,
+		&overrides, &o.CreatedAt, &o.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if parentRevID.Valid {
+		v := parentRevID.String
+		o.ParentRevisionID = &v
+	}
+	o.BlockOverrides = json.RawMessage(overrides)
+	return &o, nil
+}
+
+// UpdateOverlay applies partial updates to the overlay row. Nil fields are
+// unchanged. For ParentRevisionID, a pointer to "" clears the column to NULL
+// (switches to floating mode).
+func (s *TeachingUnitStore) UpdateOverlay(ctx context.Context, childUnitID string, in UpdateOverlayInput) (*UnitOverlay, error) {
+	setClauses := []string{}
+	args := []any{}
+	argIdx := 1
+
+	if in.ParentRevisionID != nil {
+		setClauses = append(setClauses, fmt.Sprintf("parent_revision_id = $%d", argIdx))
+		if *in.ParentRevisionID == "" {
+			args = append(args, nil)
+		} else {
+			args = append(args, *in.ParentRevisionID)
+		}
+		argIdx++
+	}
+	if in.BlockOverrides != nil {
+		setClauses = append(setClauses, fmt.Sprintf("block_overrides = $%d::jsonb", argIdx))
+		args = append(args, []byte(in.BlockOverrides))
+		argIdx++
+	}
+
+	if len(setClauses) == 0 {
+		return s.GetOverlay(ctx, childUnitID)
+	}
+
+	setClauses = append(setClauses, fmt.Sprintf("updated_at = $%d", argIdx))
+	args = append(args, time.Now())
+	argIdx++
+
+	args = append(args, childUnitID)
+	q := fmt.Sprintf(
+		`UPDATE unit_overlays SET %s WHERE child_unit_id = $%d
+		 RETURNING child_unit_id, parent_unit_id, parent_revision_id,
+		           block_overrides, created_at, updated_at`,
+		strings.Join(setClauses, ", "), argIdx,
+	)
+
+	var o UnitOverlay
+	var parentRevID sql.NullString
+	var overrides []byte
+
+	err := s.db.QueryRowContext(ctx, q, args...).Scan(
+		&o.ChildUnitID, &o.ParentUnitID, &parentRevID,
+		&overrides, &o.CreatedAt, &o.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if parentRevID.Valid {
+		v := parentRevID.String
+		o.ParentRevisionID = &v
+	}
+	o.BlockOverrides = json.RawMessage(overrides)
+	return &o, nil
+}
+
+// GetComposedDocument returns the composed (overlay-merged) document for a unit.
+//   - If the unit has no overlay, it returns the unit's own document blocks.
+//   - If the unit has an overlay, it loads the parent blocks (from a pinned
+//     revision or the latest published revision), the child's own blocks, and the
+//     overlay's block_overrides, then calls overlay.ComposeDocument.
+//
+// Returns (nil, nil) if the unit has no document row.
+func (s *TeachingUnitStore) GetComposedDocument(ctx context.Context, unitID string) (json.RawMessage, error) {
+	ov, err := s.GetOverlay(ctx, unitID)
+	if err != nil {
+		return nil, err
+	}
+
+	// No overlay — return the unit's own blocks directly.
+	if ov == nil {
+		doc, err := s.GetDocument(ctx, unitID)
+		if err != nil {
+			return nil, err
+		}
+		if doc == nil {
+			return nil, nil
+		}
+		return doc.Blocks, nil
+	}
+
+	// Load parent blocks.
+	var parentBlocks json.RawMessage
+	if ov.ParentRevisionID != nil {
+		// Pinned to a specific revision.
+		rev, err := s.GetRevision(ctx, *ov.ParentRevisionID)
+		if err != nil {
+			return nil, fmt.Errorf("composed doc: load pinned revision: %w", err)
+		}
+		if rev == nil || rev.UnitID != ov.ParentUnitID {
+			// Pinned revision was deleted or belongs to wrong unit —
+			// fall through to latest published, same as floating.
+			parentBlocks, err = s.latestPublishedBlocks(ctx, ov.ParentUnitID)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			parentBlocks = rev.Blocks
+		}
+	} else {
+		// Floating — use the parent's latest published revision.
+		parentBlocks, err = s.latestPublishedBlocks(ctx, ov.ParentUnitID)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// If the parent has no published revision, fall back to the parent's
+	// current document. This handles draft-to-draft forks where the parent
+	// has never been published.
+	if parentBlocks == nil {
+		parentDoc, err := s.GetDocument(ctx, ov.ParentUnitID)
+		if err != nil {
+			return nil, fmt.Errorf("composed doc: load parent document: %w", err)
+		}
+		if parentDoc != nil {
+			parentBlocks = parentDoc.Blocks
+		}
+	}
+
+	// Load child's own document blocks.
+	childDoc, err := s.GetDocument(ctx, unitID)
+	if err != nil {
+		return nil, fmt.Errorf("composed doc: load child document: %w", err)
+	}
+
+	// Parse blocks into slices.
+	parentContent := extractContent(parentBlocks)
+	childContent := extractContent(childDoc.Blocks)
+
+	// Parse block overrides.
+	overrides := map[string]overlayPkg.BlockOverride{}
+	if len(ov.BlockOverrides) > 0 && string(ov.BlockOverrides) != "{}" {
+		if err := json.Unmarshal(ov.BlockOverrides, &overrides); err != nil {
+			return nil, fmt.Errorf("composed doc: parse block_overrides: %w", err)
+		}
+	}
+
+	// Compose.
+	composed := overlayPkg.ComposeDocument(parentContent, childContent, overrides)
+
+	// Wrap in document envelope.
+	result := map[string]any{
+		"type":    "doc",
+		"content": composed,
+	}
+	return json.Marshal(result)
+}
+
+// latestPublishedBlocks returns the blocks from the parent's latest published
+// revision (reason IN ('classroom_ready', 'coach_ready'), newest first).
+// Returns nil if the parent has no published revision.
+func (s *TeachingUnitStore) latestPublishedBlocks(ctx context.Context, unitID string) (json.RawMessage, error) {
+	var blocks []byte
+	err := s.db.QueryRowContext(ctx, `
+		SELECT blocks FROM unit_revisions
+		WHERE unit_id = $1 AND reason IN ('classroom_ready', 'coach_ready')
+		ORDER BY created_at DESC
+		LIMIT 1`, unitID,
+	).Scan(&blocks)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return json.RawMessage(blocks), nil
+}
+
+// extractContent parses a doc-envelope JSON and returns the content array
+// as individual raw messages. Returns nil for nil/empty input.
+func extractContent(raw json.RawMessage) []json.RawMessage {
+	if len(raw) == 0 {
+		return nil
+	}
+	var envelope struct {
+		Content []json.RawMessage `json:"content"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return nil
+	}
+	return envelope.Content
+}
+
+// GetLineage walks the overlay chain from the given unit up to its root,
+// returning a root-first ordered list of LineageEntry. Max depth is 10 to
+// prevent infinite loops.
+func (s *TeachingUnitStore) GetLineage(ctx context.Context, unitID string) ([]LineageEntry, error) {
+	const maxDepth = 10
+
+	// Collect the chain bottom-up with cycle detection.
+	chain := []LineageEntry{}
+	visited := map[string]bool{}
+	currentID := unitID
+
+	for i := 0; i < maxDepth; i++ {
+		var entry LineageEntry
+		var scopeID sql.NullString
+		err := s.db.QueryRowContext(ctx, `
+			SELECT id, title, scope, created_at FROM teaching_units WHERE id = $1`,
+			currentID,
+		).Scan(&entry.UnitID, &entry.Title, &entry.Scope, &entry.CreatedAt)
+		if err == sql.ErrNoRows {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		_ = scopeID // not used in LineageEntry
+
+		chain = append(chain, entry)
+		visited[currentID] = true
+
+		// Look for a parent overlay.
+		var parentID string
+		err = s.db.QueryRowContext(ctx, `
+			SELECT parent_unit_id FROM unit_overlays WHERE child_unit_id = $1`,
+			currentID,
+		).Scan(&parentID)
+		if err == sql.ErrNoRows {
+			break // reached the root
+		}
+		if err != nil {
+			return nil, err
+		}
+		if visited[parentID] {
+			break // cycle detected — stop traversal
+		}
+		currentID = parentID
+	}
+
+	// Reverse to root-first order.
+	for i, j := 0, len(chain)-1; i < j; i, j = i+1, j-1 {
+		chain[i], chain[j] = chain[j], chain[i]
+	}
+
+	return chain, nil
 }

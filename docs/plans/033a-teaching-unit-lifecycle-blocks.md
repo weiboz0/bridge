@@ -213,8 +213,30 @@ node_modules/.bin/tsc --noEmit
 
 ## Code Review
 
-Reviewers append findings here following `docs/code-review.md`.
+### Review 1
+
+- **Date**: 2026-04-24
+- **Reviewer**: Codex
+- **Verdict**: Approved with fixes (all applied)
+
+1. `[FIXED]` **MUST FIX** — `SetUnitStatus` returned `ErrInvalidTransition` for non-existent units, causing the handler to return 409 instead of 404. Fixed: now returns `sql.ErrNoRows`; handler maps to 404.
+
+2. `[FIXED]` **MUST FIX** — Slash command regex `/${trigger}$` triggered on inline text like `url/code`. Fixed: anchored to whitespace or start-of-block with `(?:^|\\s)/${trigger}$`.
 
 ## Post-Execution Report
 
-Populate after implementation.
+**Status:** Complete
+
+**Implemented**
+
+- Store: `SetUnitStatus` with spec-012 state machine (draft→reviewed→classroom_ready|coach_ready, any-non-draft→archived, archived→classroom_ready). `unit_revisions` snapshot created atomically on classroom_ready/coach_ready transitions. `ListRevisions` + `GetRevision`. 12 store tests.
+- Handler: `POST /api/units/{id}/transition` (body: `{status}`), `GET /api/units/{id}/revisions`, `GET /api/units/{id}/revisions/{revisionId}`. ErrInvalidTransition → 409, sql.ErrNoRows → 404. 11 handler integration tests.
+- Block allowlist expanded: `teacher-note`, `code-snippet`, `media-embed` added to `knownBlockTypes` + `blockTypesRequiringID`. 4 integration tests.
+- Tiptap nodes: `teacher-note` (rich text, amber border), `code-snippet` (atom, syntax display, language selector), `media-embed` (atom, image/video/PDF/link). All registered in extensions.ts.
+- Editor UI: slash commands (`/note`, `/code`, `/media`, `/problem`), status badge (color-coded), transition dropdown.
+
+**Verification**
+
+- Go: 12 packages green
+- Vitest: 275 passed / 11 skipped
+- tsc: no new errors

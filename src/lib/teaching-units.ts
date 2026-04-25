@@ -108,6 +108,107 @@ export async function fetchProjectedDocument(
   return res.json() as Promise<{ type: string; content: unknown[] }>
 }
 
+// ---------- Fork / overlay / lineage helpers (plan 034) ----------
+
+export interface UnitOverlay {
+  childUnitId: string
+  parentUnitId: string
+  parentRevisionId: string | null
+  blockOverrides: unknown
+  createdAt: string
+  updatedAt: string
+}
+
+export interface LineageEntry {
+  unitId: string
+  title: string
+  scope: string
+  createdAt: string
+}
+
+export interface UnitRevision {
+  id: string
+  unitId: string
+  blocks: unknown
+  reason: string | null
+  createdBy: string
+  createdAt: string
+}
+
+/**
+ * Fork a unit. Returns the new child unit.
+ */
+export async function forkUnit(
+  id: string,
+  data: { scope?: string; scopeId?: string; title?: string }
+): Promise<TeachingUnit> {
+  const res = await fetch(`/api/units/${id}/fork`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) throw new Error(await res.text())
+  return res.json() as Promise<TeachingUnit>
+}
+
+/**
+ * Fetch the overlay for a forked unit. Returns null if the unit has no overlay (not a fork).
+ */
+export async function fetchOverlay(id: string): Promise<UnitOverlay | null> {
+  const res = await fetch(`/api/units/${id}/overlay`)
+  if (res.status === 404) return null
+  if (!res.ok) throw new Error(await res.text())
+  return res.json() as Promise<UnitOverlay>
+}
+
+/**
+ * Partially update the overlay. Pass parentRevisionId="" to unpin (float).
+ */
+export async function updateOverlay(
+  id: string,
+  data: { parentRevisionId?: string | null; blockOverrides?: unknown }
+): Promise<UnitOverlay> {
+  const res = await fetch(`/api/units/${id}/overlay`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) throw new Error(await res.text())
+  return res.json() as Promise<UnitOverlay>
+}
+
+/**
+ * Fetch the overlay-composed document for a unit. Returns null on any failure.
+ */
+export async function fetchComposedDocument(
+  id: string
+): Promise<{ unitId: string; blocks: unknown; updatedAt: string } | null> {
+  const res = await fetch(`/api/units/${id}/composed`)
+  if (!res.ok) return null
+  return res.json() as Promise<{ unitId: string; blocks: unknown; updatedAt: string }>
+}
+
+/**
+ * Fetch the overlay lineage (root-first). Returns null on any failure.
+ */
+export async function fetchLineage(id: string): Promise<{ items: LineageEntry[] } | null> {
+  const res = await fetch(`/api/units/${id}/lineage`)
+  if (!res.ok) return null
+  return res.json() as Promise<{ items: LineageEntry[] }>
+}
+
+/**
+ * List revisions for a unit. Returns an empty array on failure.
+ */
+export async function listRevisions(id: string): Promise<UnitRevision[]> {
+  const res = await fetch(`/api/units/${id}/revisions`)
+  if (!res.ok) return []
+  const body = await res.json() as { items: UnitRevision[] }
+  return body.items ?? []
+}
+
+// ---------- Block document ----------
+
 /**
  * Persist the block document for a unit. Returns the updated document row.
  */
