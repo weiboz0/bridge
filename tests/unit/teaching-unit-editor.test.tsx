@@ -68,7 +68,6 @@ describe("TeachingUnitEditor", () => {
     render(<TeachingUnitEditor initialDoc={emptyDoc()} onSave={onSave} />);
 
     // The toolbar and editor container must be present
-    expect(screen.getByRole("button", { name: /\+ problem/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /save/i })).toBeInTheDocument();
   });
 
