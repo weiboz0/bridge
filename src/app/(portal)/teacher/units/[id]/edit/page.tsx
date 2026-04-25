@@ -22,7 +22,13 @@ import {
   fetchProjectedDocument,
   saveUnitDocument,
   transitionUnit,
+  fetchLineage,
+  fetchOverlay,
+  updateOverlay,
+  listRevisions,
   type TeachingUnit,
+  type UnitOverlay,
+  type LineageEntry,
 } from "@/lib/teaching-units"
 
 type LoadState =
@@ -151,6 +157,12 @@ export default function EditUnitPage() {
   const [previewLoading, setPreviewLoading] = useState(false)
   const editorRef = useRef<TeachingUnitEditorHandle>(null)
 
+  // Lineage and overlay state
+  const [lineage, setLineage] = useState<LineageEntry[] | null>(null)
+  const [overlay, setOverlay] = useState<UnitOverlay | null>(null)
+  const [pinBusy, setPinBusy] = useState(false)
+  const [pinError, setPinError] = useState<string | null>(null)
+
   useEffect(() => {
     async function load() {
       try {
@@ -169,6 +181,17 @@ export default function EditUnitPage() {
       }
     }
     load()
+  }, [id])
+
+  // Load lineage and overlay in parallel (non-blocking — failures are silent)
+  useEffect(() => {
+    fetchLineage(id).then((data) => {
+      if (data) setLineage(data.items)
+    }).catch(() => {/* ignore */})
+
+    fetchOverlay(id).then((data) => {
+      setOverlay(data)
+    }).catch(() => {/* ignore */})
   }, [id])
 
   const handleSave = useCallback(
@@ -218,6 +241,42 @@ export default function EditUnitPage() {
       setPreviewLoading(false)
     }
   }, [id, preview.active])
+
+  const handlePinToCurrent = useCallback(async () => {
+    if (!overlay) return
+    setPinBusy(true)
+    setPinError(null)
+    try {
+      // Fetch parent's revisions and pick the latest
+      const revisions = await listRevisions(overlay.parentUnitId)
+      if (revisions.length === 0) {
+        setPinError("No published revisions to pin to.")
+        return
+      }
+      // Revisions are ordered newest-first by the API
+      const latest = revisions[0]
+      const updated = await updateOverlay(id, { parentRevisionId: latest.id })
+      setOverlay(updated)
+    } catch (err) {
+      setPinError(err instanceof Error ? err.message : "Pin failed")
+    } finally {
+      setPinBusy(false)
+    }
+  }, [id, overlay])
+
+  const handleUnpin = useCallback(async () => {
+    setPinBusy(true)
+    setPinError(null)
+    try {
+      // Empty string signals the Go backend to set parent_revision_id = NULL
+      const updated = await updateOverlay(id, { parentRevisionId: "" })
+      setOverlay(updated)
+    } catch (err) {
+      setPinError(err instanceof Error ? err.message : "Unpin failed")
+    } finally {
+      setPinBusy(false)
+    }
+  }, [id])
 
   if (state.status === "loading") {
     return (
@@ -284,6 +343,69 @@ export default function EditUnitPage() {
           </Link>
         </div>
       </div>
+
+      {/* Lineage breadcrumb — only shown when the unit has ancestors */}
+      {lineage && lineage.length > 1 && (
+        <div className="flex items-center gap-1 text-sm text-muted-foreground flex-wrap">
+          {lineage.map((entry, idx) => {
+            const isLast = idx === lineage.length - 1
+            return (
+              <span key={entry.unitId} className="flex items-center gap-1">
+                {idx > 0 && <span className="text-zinc-300">&gt;</span>}
+                {isLast ? (
+                  <span className="text-foreground font-medium">{entry.title}</span>
+                ) : (
+                  <Link
+                    href={`/teacher/units/${entry.unitId}`}
+                    className="hover:text-foreground underline underline-offset-2"
+                  >
+                    {entry.title}
+                  </Link>
+                )}
+              </span>
+            )
+          })}
+        </div>
+      )}
+
+      {/* Pin/float toggle — only shown for forked units (overlay exists) */}
+      {overlay && (
+        <div className="flex items-center gap-3 py-2 px-3 rounded-md border border-zinc-200 bg-zinc-50 text-sm">
+          <span className="text-muted-foreground shrink-0">Parent sync:</span>
+          {overlay.parentRevisionId ? (
+            <>
+              <span className="inline-flex items-center rounded px-2 py-0.5 text-xs font-semibold border border-yellow-200 bg-yellow-100 text-yellow-800">
+                Pinned to revision {new Date(overlay.updatedAt).toLocaleDateString()}
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleUnpin}
+                disabled={pinBusy}
+              >
+                {pinBusy ? "Updating..." : "Unpin (follow latest)"}
+              </Button>
+            </>
+          ) : (
+            <>
+              <span className="inline-flex items-center rounded px-2 py-0.5 text-xs font-semibold border border-green-200 bg-green-100 text-green-700">
+                Following latest
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handlePinToCurrent}
+                disabled={pinBusy}
+              >
+                {pinBusy ? "Updating..." : "Pin to current"}
+              </Button>
+            </>
+          )}
+          {pinError && (
+            <span className="text-xs text-destructive">{pinError}</span>
+          )}
+        </div>
+      )}
 
       {/* Editor or Preview */}
       {preview.active ? (
