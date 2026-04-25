@@ -80,11 +80,11 @@ var nvidiaModels = []string{
 // ── DeepSeek — OpenAI-compatible ───────────────────────────────────────────
 
 const deepseekBaseURL = "https://api.deepseek.com"
-const deepseekDefaultModel = "deepseek-chat"
+const deepseekDefaultModel = "deepseek-v4-flash"
 
 var deepseekModels = []string{
-	"deepseek-chat",
-	"deepseek-reasoner",
+	"deepseek-v4-flash",
+	"deepseek-v4-pro",
 }
 
 // ── OpenRouter — routes to 300+ models via OpenAI-compatible API ────────────
