@@ -186,8 +186,38 @@ Update `docs/api.md`. Write post-execution report. Run Codex code review.
 
 ## Code Review
 
-Reviewers append findings here following `docs/code-review.md`.
+### Review 1
+
+- **Date**: 2026-04-24
+- **Reviewer**: Codex
+- **Verdict**: Approved with fixes (all applied)
+
+1. `[FIXED]` **HIGH** — `GetComposedDocument` did not validate that a pinned revision belongs to the parent unit. A child editor could pin to any revision ID, leaking unrelated unit content. Fixed: `rev.UnitID == ov.ParentUnitID` check; falls back to latest published if mismatch.
+
+2. `[FIXED]` **MEDIUM** — `GetLineage` had no cycle detection. Self-referential or mutual overlay cycles would emit a truncated repeating chain. Fixed: visited-node `map[string]bool`; breaks on revisit.
+
+3. `[FIXED]` **MEDIUM** — Edit page showed stale overlay/lineage from the previous unit during rapid navigation. Fixed: reset state to `null` on id change + cancellation guard on async responses.
 
 ## Post-Execution Report
 
-Populate after implementation.
+**Status:** Complete
+
+**Implemented**
+
+- Migration 0018: `unit_overlays` table (child PK → parent FK, optional pinned revision, block_overrides JSONB).
+- Pure overlay composition algorithm (`platform/internal/overlay/compose.go`): walks parent blocks, applies hide/replace overrides, inserts child-anchored blocks after their anchor, orphaned anchors fall to end. 13 unit tests.
+- Store: `ForkUnit` (tx: create child + overlay + empty doc), `GetOverlay`, `UpdateOverlay` (pin/float + overrides), `GetComposedDocument` (floating vs pinned resolution with parent-unit validation), `GetLineage` (chain traversal with cycle detection, max depth 10). 17 store tests.
+- Handler: `POST /api/units/{id}/fork`, `GET/PATCH /api/units/{id}/overlay`, `GET /api/units/{id}/composed`, `GET /api/units/{id}/lineage`. 27 handler integration tests.
+- Frontend: fork button on unit view, lineage breadcrumb in editor, pin/float toggle with instant state update, stale-state guard on navigation.
+- Drizzle schema: `unitOverlays` export added.
+
+**Verification**
+
+- Go: 14 packages green (overlay 0.003s, handlers 69s, store 23s)
+- Vitest: 275 passed / 11 skipped
+- tsc: no new errors
+
+**Follow-up**
+
+- Block-level override editing UI (hide/replace individual parent blocks from the editor) — teachers can use the API directly for now.
+- Composed document should feed into the projection pipeline for student views of forked units (requires wiring `GET /api/units/{id}/projected` to call `GetComposedDocument` first when an overlay exists).
