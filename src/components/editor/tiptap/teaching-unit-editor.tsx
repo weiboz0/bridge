@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useImperativeHandle, useState, forwardRef } from "react"
+import { useCallback, useEffect, useImperativeHandle, useRef, useState, forwardRef } from "react"
 import { nanoid } from "nanoid"
 import { EditorContent, type Editor, type JSONContent, useEditor } from "@tiptap/react"
 import { Button } from "@/components/ui/button"
@@ -234,6 +234,11 @@ function mapAIBlockToTiptap(block: Record<string, unknown>): JSONContent {
 export const TeachingUnitEditor = forwardRef<TeachingUnitEditorHandle, TeachingUnitEditorProps>(
 function TeachingUnitEditor({ initialDoc, onSave, onDirty, unitId, collaborative }, ref) {
   const [showAIPanel, setShowAIPanel] = useState(false)
+  const [showInlineAI, setShowInlineAI] = useState(false)
+  const [inlineAIPrompt, setInlineAIPrompt] = useState("")
+  const [inlineAILoading, setInlineAILoading] = useState(false)
+  const [inlineAIError, setInlineAIError] = useState<string | null>(null)
+  const inlineAIRef = useRef<HTMLInputElement>(null)
 
   // Resolve the unit ID from the explicit prop or the collaborative options.
   const resolvedUnitId = unitId ?? collaborative?.unitId ?? ""
@@ -301,6 +306,37 @@ function TeachingUnitEditor({ initialDoc, onSave, onDirty, unitId, collaborative
     save: handleSave,
   }), [handleSave])
 
+  // Listen for the inline AI trigger from the slash menu
+  useEffect(() => {
+    const handler = () => {
+      setShowInlineAI(true)
+      setInlineAIPrompt("")
+      setInlineAIError(null)
+      setTimeout(() => inlineAIRef.current?.focus(), 50)
+    }
+    window.addEventListener("tiptap:ai-write-inline", handler)
+    return () => window.removeEventListener("tiptap:ai-write-inline", handler)
+  }, [])
+
+  const handleInlineAISubmit = useCallback(async () => {
+    if (!inlineAIPrompt.trim() || !resolvedUnitId) return
+    setInlineAILoading(true)
+    setInlineAIError(null)
+    try {
+      const { draftWithAI } = await import("@/lib/teaching-units")
+      const result = await draftWithAI(resolvedUnitId, inlineAIPrompt)
+      if (result?.blocks) {
+        handleInsertAIBlocks(result.blocks)
+      }
+      setShowInlineAI(false)
+      setInlineAIPrompt("")
+    } catch (err) {
+      setInlineAIError(err instanceof Error ? err.message : "AI generation failed")
+    } finally {
+      setInlineAILoading(false)
+    }
+  }, [inlineAIPrompt, resolvedUnitId, handleInsertAIBlocks])
+
   return (
     <div className="space-y-3">
       {/* Toolbar */}
@@ -339,6 +375,31 @@ function TeachingUnitEditor({ initialDoc, onSave, onDirty, unitId, collaborative
           onInsertBlocks={handleInsertAIBlocks}
           onClose={() => setShowAIPanel(false)}
         />
+      )}
+      {showInlineAI && (
+        <div className="flex items-center gap-2 rounded-lg border border-blue-300 bg-blue-50 px-3 py-2">
+          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded bg-blue-100 text-[10px] font-bold text-blue-600">AI</span>
+          <input
+            ref={inlineAIRef}
+            type="text"
+            placeholder="Describe what to generate..."
+            value={inlineAIPrompt}
+            onChange={(e) => setInlineAIPrompt(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleInlineAISubmit() }
+              if (e.key === "Escape") { setShowInlineAI(false) }
+            }}
+            disabled={inlineAILoading}
+            className="flex-1 bg-transparent text-sm outline-none placeholder:text-blue-400"
+          />
+          <Button size="sm" variant="default" onClick={handleInlineAISubmit} disabled={inlineAILoading || !inlineAIPrompt.trim()}>
+            {inlineAILoading ? "Generating..." : "Generate"}
+          </Button>
+          <button type="button" onClick={() => setShowInlineAI(false)} className="text-zinc-400 hover:text-zinc-600 text-sm">
+            Esc
+          </button>
+          {inlineAIError && <span className="text-xs text-red-600">{inlineAIError}</span>}
+        </div>
       )}
       <div className="rounded-lg border border-zinc-200 bg-zinc-50">
         <EditorContent editor={editor} className="min-h-60 px-3 py-2" />

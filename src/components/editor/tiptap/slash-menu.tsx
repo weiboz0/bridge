@@ -27,7 +27,7 @@ export interface SlashMenuItem {
   description: string
   /** A short text badge shown to the left of the label (e.g. "H1", "P"). */
   badge: string
-  category: "text" | "teaching"
+  category: "text" | "teaching" | "ai"
   /** Execute the command on the editor, replacing the slash trigger range. */
   command: (props: { editor: Editor; range: Range }) => void
 }
@@ -257,7 +257,22 @@ const TEACHING_ITEMS: SlashMenuItem[] = [
   },
 ]
 
-const ALL_ITEMS: SlashMenuItem[] = [...TEXT_ITEMS, ...TEACHING_ITEMS]
+const AI_ITEMS: SlashMenuItem[] = [
+  {
+    id: "aiWriter",
+    label: "AI Writer",
+    description: "Generate content with AI inline",
+    badge: "AI",
+    category: "ai",
+    command: ({ editor, range }) => {
+      editor.chain().focus().deleteRange(range).run()
+      // Signal the editor to show the inline AI prompt at the current cursor position
+      window.dispatchEvent(new CustomEvent("tiptap:ai-write-inline"))
+    },
+  },
+]
+
+const ALL_ITEMS: SlashMenuItem[] = [...AI_ITEMS, ...TEXT_ITEMS, ...TEACHING_ITEMS]
 
 // ---------------------------------------------------------------------------
 // Filter logic
@@ -344,6 +359,7 @@ export const SlashMenuList = forwardRef<SlashMenuListHandle, SlashMenuListProps>
     }
 
     // Group items by category for rendering.
+    const aiItems = items.filter((i) => i.category === "ai")
     const textItems = items.filter((i) => i.category === "text")
     const teachingItems = items.filter((i) => i.category === "teaching")
 
@@ -390,6 +406,7 @@ export const SlashMenuList = forwardRef<SlashMenuListHandle, SlashMenuListProps>
         ref={containerRef}
         className="max-h-80 w-64 overflow-y-auto rounded-lg border border-zinc-200 bg-white shadow-lg"
       >
+        {renderCategory("AI", aiItems)}
         {renderCategory("Text formatting", textItems)}
         {renderCategory("Teaching blocks", teachingItems)}
       </div>
