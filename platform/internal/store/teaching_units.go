@@ -747,9 +747,9 @@ func (s *TeachingUnitStore) GetComposedDocument(ctx context.Context, unitID stri
 		if err != nil {
 			return nil, fmt.Errorf("composed doc: load pinned revision: %w", err)
 		}
-		if rev == nil {
-			// Pinned revision was deleted (ON DELETE SET NULL) — fall through to
-			// latest published, same as floating.
+		if rev == nil || rev.UnitID != ov.ParentUnitID {
+			// Pinned revision was deleted or belongs to wrong unit —
+			// fall through to latest published, same as floating.
 			parentBlocks, err = s.latestPublishedBlocks(ctx, ov.ParentUnitID)
 			if err != nil {
 				return nil, err
@@ -848,8 +848,9 @@ func extractContent(raw json.RawMessage) []json.RawMessage {
 func (s *TeachingUnitStore) GetLineage(ctx context.Context, unitID string) ([]LineageEntry, error) {
 	const maxDepth = 10
 
-	// Collect the chain bottom-up.
+	// Collect the chain bottom-up with cycle detection.
 	chain := []LineageEntry{}
+	visited := map[string]bool{}
 	currentID := unitID
 
 	for i := 0; i < maxDepth; i++ {
@@ -868,6 +869,7 @@ func (s *TeachingUnitStore) GetLineage(ctx context.Context, unitID string) ([]Li
 		_ = scopeID // not used in LineageEntry
 
 		chain = append(chain, entry)
+		visited[currentID] = true
 
 		// Look for a parent overlay.
 		var parentID string
@@ -880,6 +882,9 @@ func (s *TeachingUnitStore) GetLineage(ctx context.Context, unitID string) ([]Li
 		}
 		if err != nil {
 			return nil, err
+		}
+		if visited[parentID] {
+			break // cycle detected — stop traversal
 		}
 		currentID = parentID
 	}

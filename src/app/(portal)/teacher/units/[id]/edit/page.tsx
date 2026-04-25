@@ -183,15 +183,21 @@ export default function EditUnitPage() {
     load()
   }, [id])
 
-  // Load lineage and overlay in parallel (non-blocking — failures are silent)
+  // Load lineage and overlay in parallel. Reset stale state on id change.
   useEffect(() => {
+    setLineage(null)
+    setOverlay(null)
+    let cancelled = false
+
     fetchLineage(id).then((data) => {
-      if (data) setLineage(data.items)
+      if (!cancelled && data) setLineage(data.items)
     }).catch(() => {/* ignore */})
 
     fetchOverlay(id).then((data) => {
-      setOverlay(data)
+      if (!cancelled) setOverlay(data)
     }).catch(() => {/* ignore */})
+
+    return () => { cancelled = true }
   }, [id])
 
   const handleSave = useCallback(
