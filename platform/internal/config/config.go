@@ -105,6 +105,8 @@ func resolveLLMAPIKey(backend string) string {
 		"ark":        "ARK_API_KEY",
 		"doubao":     "ARK_API_KEY",
 		"nvidia":     "NVIDIA_API_KEY",
+		"deepseek":   "DEEPSEEK_API_KEY",
+		"ds":         "DEEPSEEK_API_KEY",
 	}
 	if envName, ok := envVars[backend]; ok {
 		return os.Getenv(envName)
