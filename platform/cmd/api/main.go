@@ -235,6 +235,13 @@ func main() {
 			Orgs:  stores.Orgs,
 		}
 		unitH.Routes(r)
+
+		unitAIH := &handlers.UnitAIHandler{
+			Units:   stores.TeachingUnits,
+			Orgs:    stores.Orgs,
+			Backend: llmBackend, // may be nil — handler returns 503
+		}
+		unitAIH.Routes(r)
 	})
 
 	// Start server

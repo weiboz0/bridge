@@ -224,3 +224,29 @@ export async function saveUnitDocument(id: string, blocks: unknown): Promise<Uni
   }
   return res.json() as Promise<UnitDocument>
 }
+
+// ---------- AI drafting (plan 035) ----------
+
+export interface AIDraftResult {
+  blocks: unknown[]
+}
+
+/**
+ * Call the AI drafting endpoint to generate teaching unit blocks from a
+ * natural-language intent description.
+ *
+ * Returns `{ blocks: [...] }` — the caller inserts these into the editor.
+ * Throws on any non-OK response (including 503 when AI is not configured).
+ */
+export async function draftWithAI(unitId: string, intent: string): Promise<AIDraftResult> {
+  const res = await fetch(`/api/units/${unitId}/draft-with-ai`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ intent }),
+  })
+  if (!res.ok) {
+    const body = await res.json().catch(() => null)
+    throw new Error(body?.error ?? `draftWithAI: ${res.status}`)
+  }
+  return res.json() as Promise<AIDraftResult>
+}

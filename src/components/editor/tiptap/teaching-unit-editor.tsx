@@ -1,16 +1,42 @@
 "use client"
 
-import { useCallback, useImperativeHandle, forwardRef } from "react"
+import { useCallback, useImperativeHandle, useState, forwardRef } from "react"
 import { nanoid } from "nanoid"
 import { EditorContent, type Editor, type JSONContent, useEditor } from "@tiptap/react"
 import { InputRule } from "@tiptap/core"
 import { Button } from "@/components/ui/button"
 import { teachingUnitExtensions } from "./extensions"
+import { AIDraftPanel } from "./ai-draft-panel"
+import { useYjsTiptap } from "@/lib/yjs/use-yjs-tiptap"
+
+/** Options for enabling real-time collaborative editing via Yjs/Hocuspocus. */
+export interface CollaborativeOptions {
+  /** The unit ID — used as the Hocuspocus document name (`unit:{unitId}`). */
+  unitId: string
+  /** Authenticated user ID — used for the Hocuspocus auth token and cursor color. */
+  userId: string
+  /** Display name shown on the awareness cursor label. */
+  userName: string
+  /** Optional explicit cursor color. Derived from userId hash when omitted. */
+  userColor?: string
+}
 
 export interface TeachingUnitEditorProps {
   initialDoc?: JSONContent
   onSave: (doc: JSONContent) => Promise<void>
   onDirty?: (dirty: boolean) => void
+  /**
+   * The teaching unit ID. Used for AI drafting and derived from collaborative
+   * options when omitted.
+   */
+  unitId?: string
+  /**
+   * When provided, the editor runs in collaborative mode via Yjs + Hocuspocus.
+   * Yjs becomes the source of truth; `initialDoc` is ignored once any remote
+   * state has synced.  The `onSave` callback still works — it serializes the
+   * current editor JSON and calls the save API.
+   */
+  collaborative?: CollaborativeOptions
 }
 
 export interface TeachingUnitEditorHandle {
@@ -117,13 +143,35 @@ function makeSlashCommandExtension() {
 }
 
 export const TeachingUnitEditor = forwardRef<TeachingUnitEditorHandle, TeachingUnitEditorProps>(
-function TeachingUnitEditor({ initialDoc, onSave, onDirty }, ref) {
+function TeachingUnitEditor({ initialDoc, onSave, onDirty, unitId, collaborative }, ref) {
+  const [showAIPanel, setShowAIPanel] = useState(false)
+
+  // Resolve the unit ID from the explicit prop or the collaborative options.
+  const resolvedUnitId = unitId ?? collaborative?.unitId ?? ""
+  // Collaborative mode: set up Yjs binding when `collaborative` is provided.
+  // The hook is always called (Rules of Hooks) but does nothing when
+  // `unitId` or `userId` are empty strings.
+  const { extensions: yjsExtensions, connected } = useYjsTiptap({
+    unitId: collaborative?.unitId ?? "",
+    userId: collaborative?.userId ?? "",
+    userName: collaborative?.userName ?? "",
+    userColor: collaborative?.userColor,
+  })
+
+  const isCollaborative = Boolean(collaborative) && yjsExtensions.length > 0
+
   const editor = useEditor({
     extensions: [
       ...teachingUnitExtensions(),
       makeSlashCommandExtension(),
+      ...(isCollaborative ? yjsExtensions : []),
     ],
-    content: initialDoc ?? { type: "doc", content: [] },
+    // When collaborative and connected, Yjs drives state. When collaborative
+    // but not yet connected (or Hocuspocus is down), seed from initialDoc so
+    // the editor isn't blank — prevents accidental overwrites of existing content.
+    content: isCollaborative && connected
+      ? undefined
+      : (initialDoc ?? { type: "doc", content: [] }),
     onCreate({ editor: e }: any) {
       assignMissingTopLevelNodeIds(e as Editor)
     },
@@ -196,6 +244,15 @@ function TeachingUnitEditor({ initialDoc, onSave, onDirty }, ref) {
       .run()
   }, [editor])
 
+  const handleInsertAIBlocks = useCallback((blocks: unknown[]) => {
+    if (!editor) return
+    // Insert each block at the current cursor position (or end of document).
+    for (const block of blocks) {
+      editor.chain().focus().insertContent(block as JSONContent).run()
+    }
+    onDirty?.(true)
+  }, [editor, onDirty])
+
   const handleSave = useCallback(async () => {
     if (!editor) {
       return
@@ -213,7 +270,7 @@ function TeachingUnitEditor({ initialDoc, onSave, onDirty }, ref) {
   return (
     <div className="space-y-3">
       {/* Toolbar */}
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <Button onClick={handleInsertProblem} variant="outline" size="sm">
           + Problem
         </Button>
@@ -226,9 +283,30 @@ function TeachingUnitEditor({ initialDoc, onSave, onDirty }, ref) {
         <Button onClick={handleInsertMediaEmbed} variant="outline" size="sm">
           + Media
         </Button>
+        {resolvedUnitId && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setShowAIPanel((prev) => !prev)}
+          >
+            {showAIPanel ? "Close AI" : "Draft with AI"}
+          </Button>
+        )}
         <Button variant="default" size="sm" onClick={handleSave}>
           Save
         </Button>
+        {/* Collaborative status indicator — only shown in collaborative mode */}
+        {collaborative && (
+          <span
+            className={
+              connected
+                ? "ml-auto text-xs font-medium text-green-600"
+                : "ml-auto text-xs font-medium text-zinc-400"
+            }
+          >
+            {connected ? "Live" : "Connecting..."}
+          </span>
+        )}
       </div>
       <p className="text-xs text-zinc-400">
         Tip: type{" "}
@@ -240,6 +318,13 @@ function TeachingUnitEditor({ initialDoc, onSave, onDirty }, ref) {
         ))}{" "}
         to insert a block.
       </p>
+      {showAIPanel && resolvedUnitId && (
+        <AIDraftPanel
+          unitId={resolvedUnitId}
+          onInsertBlocks={handleInsertAIBlocks}
+          onClose={() => setShowAIPanel(false)}
+        />
+      )}
       <div className="rounded-lg border border-zinc-200 bg-zinc-50">
         <EditorContent editor={editor} className="min-h-60 px-3 py-2" />
       </div>
