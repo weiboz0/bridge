@@ -69,6 +69,8 @@ func newUnitFixture(t *testing.T, suffix string) *unitFixture {
 		})
 		require.NoError(t, err)
 		t.Cleanup(func() {
+			db.ExecContext(ctx, "DELETE FROM unit_overlays WHERE child_unit_id IN (SELECT id FROM teaching_units WHERE created_by = $1 OR scope_id = $1)", u.ID)
+			db.ExecContext(ctx, "DELETE FROM unit_overlays WHERE parent_unit_id IN (SELECT id FROM teaching_units WHERE created_by = $1 OR scope_id = $1)", u.ID)
 			db.ExecContext(ctx, "DELETE FROM unit_revisions WHERE unit_id IN (SELECT id FROM teaching_units WHERE created_by = $1)", u.ID)
 			db.ExecContext(ctx, "DELETE FROM unit_revisions WHERE created_by = $1", u.ID)
 			db.ExecContext(ctx, "DELETE FROM unit_documents WHERE unit_id IN (SELECT id FROM teaching_units WHERE created_by = $1)", u.ID)
@@ -121,6 +123,7 @@ func (fx *unitFixture) mkUnit(t *testing.T, scope string, scopeID *string, statu
 	require.NoError(t, err)
 	require.NotNil(t, u)
 	t.Cleanup(func() {
+		fx.sqlDB.ExecContext(ctx, "DELETE FROM unit_overlays WHERE child_unit_id = $1 OR parent_unit_id = $1", u.ID)
 		fx.sqlDB.ExecContext(ctx, "DELETE FROM unit_revisions WHERE unit_id = $1", u.ID)
 		fx.sqlDB.ExecContext(ctx, "DELETE FROM unit_documents WHERE unit_id = $1", u.ID)
 		fx.sqlDB.ExecContext(ctx, "DELETE FROM teaching_units WHERE id = $1", u.ID)
@@ -1558,4 +1561,582 @@ func TestTeachingUnitHandler_Projected_NotFound_404(t *testing.T) {
 	w := doUnitGet(t, fx.h.GetProjectedDocument, "/api/units/"+fakeID+"/projected",
 		map[string]string{"id": fakeID}, fx.claims(fx.admin, true))
 	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+// ==================== ForkUnit ====================
+
+// forkCleanup deletes the child unit and its overlay/doc/revision rows created
+// by a fork. Needed for units created via the handler (bypassing mkUnit).
+func (fx *unitFixture) forkCleanup(t *testing.T, childID string) {
+	t.Helper()
+	ctx := context.Background()
+	t.Cleanup(func() {
+		fx.sqlDB.ExecContext(ctx, "DELETE FROM unit_overlays WHERE child_unit_id = $1", childID)
+		fx.sqlDB.ExecContext(ctx, "DELETE FROM unit_revisions WHERE unit_id = $1", childID)
+		fx.sqlDB.ExecContext(ctx, "DELETE FROM unit_documents WHERE unit_id = $1", childID)
+		fx.sqlDB.ExecContext(ctx, "DELETE FROM teaching_units WHERE id = $1", childID)
+	})
+}
+
+func TestTeachingUnitHandler_Fork_CreatesChildOverlayDoc(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	ctx := context.Background()
+	source := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Fork Source", fx.teacher1.ID)
+
+	w := doUnitPostWithParams(t, fx.h.ForkUnit, "/api/units/"+source.ID+"/fork",
+		map[string]any{"scope": "org", "scopeId": fx.org1.ID},
+		map[string]string{"id": source.ID},
+		fx.claims(fx.teacher1, false))
+	require.Equal(t, http.StatusCreated, w.Code)
+
+	var child store.TeachingUnit
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &child))
+	fx.forkCleanup(t, child.ID)
+
+	assert.Equal(t, "Fork Source (fork)", child.Title)
+	assert.Equal(t, "draft", child.Status)
+	assert.Equal(t, "org", child.Scope)
+
+	// Overlay must exist.
+	ov, err := fx.h.Units.GetOverlay(ctx, child.ID)
+	require.NoError(t, err)
+	require.NotNil(t, ov)
+	assert.Equal(t, child.ID, ov.ChildUnitID)
+	assert.Equal(t, source.ID, ov.ParentUnitID)
+
+	// Document must exist.
+	doc, err := fx.h.Units.GetDocument(ctx, child.ID)
+	require.NoError(t, err)
+	require.NotNil(t, doc)
+}
+
+func TestTeachingUnitHandler_Fork_CustomTitle(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	source := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Source", fx.teacher1.ID)
+
+	w := doUnitPostWithParams(t, fx.h.ForkUnit, "/api/units/"+source.ID+"/fork",
+		map[string]any{"scope": "org", "scopeId": fx.org1.ID, "title": "My Custom Fork"},
+		map[string]string{"id": source.ID},
+		fx.claims(fx.teacher1, false))
+	require.Equal(t, http.StatusCreated, w.Code)
+
+	var child store.TeachingUnit
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &child))
+	fx.forkCleanup(t, child.ID)
+
+	assert.Equal(t, "My Custom Fork", child.Title)
+}
+
+func TestTeachingUnitHandler_Fork_DefaultScopeInference(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	// teacher1 is in exactly one org (org1), so scope defaults to "org".
+	source := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Infer Source", fx.teacher1.ID)
+
+	w := doUnitPostWithParams(t, fx.h.ForkUnit, "/api/units/"+source.ID+"/fork",
+		map[string]any{},
+		map[string]string{"id": source.ID},
+		fx.claims(fx.teacher1, false))
+	require.Equal(t, http.StatusCreated, w.Code)
+
+	var child store.TeachingUnit
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &child))
+	fx.forkCleanup(t, child.ID)
+
+	assert.Equal(t, "org", child.Scope)
+	require.NotNil(t, child.ScopeID)
+	assert.Equal(t, fx.org1.ID, *child.ScopeID)
+}
+
+func TestTeachingUnitHandler_Fork_SourceNotFound_404(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	fakeID := "00000000-0000-0000-0000-000000000099"
+
+	w := doUnitPostWithParams(t, fx.h.ForkUnit, "/api/units/"+fakeID+"/fork",
+		map[string]any{"scope": "personal", "scopeId": fx.teacher1.ID},
+		map[string]string{"id": fakeID},
+		fx.claims(fx.teacher1, false))
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func TestTeachingUnitHandler_Fork_SourceNotVisible_404(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	// teacher2 can't view org1 units.
+	source := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Hidden Source", fx.teacher1.ID)
+
+	w := doUnitPostWithParams(t, fx.h.ForkUnit, "/api/units/"+source.ID+"/fork",
+		map[string]any{"scope": "org", "scopeId": fx.org2.ID},
+		map[string]string{"id": source.ID},
+		fx.claims(fx.teacher2, false))
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func TestTeachingUnitHandler_Fork_NotAuthorizedForTargetScope_403(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	source := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Auth Source", fx.teacher1.ID)
+
+	// teacher1 tries to fork into org2 where they're not a member.
+	w := doUnitPostWithParams(t, fx.h.ForkUnit, "/api/units/"+source.ID+"/fork",
+		map[string]any{"scope": "org", "scopeId": fx.org2.ID},
+		map[string]string{"id": source.ID},
+		fx.claims(fx.teacher1, false))
+	assert.Equal(t, http.StatusForbidden, w.Code)
+}
+
+func TestTeachingUnitHandler_Fork_NoAuth_401(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	source := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "NoAuth Source", fx.teacher1.ID)
+
+	w := doUnitPostWithParams(t, fx.h.ForkUnit, "/api/units/"+source.ID+"/fork",
+		map[string]any{"scope": "personal"},
+		map[string]string{"id": source.ID},
+		nil)
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
+// ==================== GetOverlay ====================
+
+func TestTeachingUnitHandler_GetOverlay_200(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	ctx := context.Background()
+	source := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Overlay Source", fx.teacher1.ID)
+
+	child, err := fx.h.Units.ForkUnit(ctx, source.ID, store.ForkTarget{
+		Scope: "org", ScopeID: &fx.org1.ID, CallerID: fx.teacher1.ID,
+	})
+	require.NoError(t, err)
+	fx.forkCleanup(t, child.ID)
+
+	w := doUnitGet(t, fx.h.GetOverlay, "/api/units/"+child.ID+"/overlay",
+		map[string]string{"id": child.ID},
+		fx.claims(fx.teacher1, false))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var ov store.UnitOverlay
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &ov))
+	assert.Equal(t, child.ID, ov.ChildUnitID)
+	assert.Equal(t, source.ID, ov.ParentUnitID)
+}
+
+func TestTeachingUnitHandler_GetOverlay_NonForkedUnit_404(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "No Overlay", fx.teacher1.ID)
+
+	w := doUnitGet(t, fx.h.GetOverlay, "/api/units/"+u.ID+"/overlay",
+		map[string]string{"id": u.ID},
+		fx.claims(fx.teacher1, false))
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func TestTeachingUnitHandler_GetOverlay_NoAccess_404(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	ctx := context.Background()
+	source := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Private Overlay", fx.teacher1.ID)
+
+	child, err := fx.h.Units.ForkUnit(ctx, source.ID, store.ForkTarget{
+		Scope: "org", ScopeID: &fx.org1.ID, CallerID: fx.teacher1.ID,
+	})
+	require.NoError(t, err)
+	fx.forkCleanup(t, child.ID)
+
+	// teacher2 (org2) can't view org1 units.
+	w := doUnitGet(t, fx.h.GetOverlay, "/api/units/"+child.ID+"/overlay",
+		map[string]string{"id": child.ID},
+		fx.claims(fx.teacher2, false))
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+// ==================== PatchOverlay ====================
+
+func TestTeachingUnitHandler_PatchOverlay_HideOverride(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	ctx := context.Background()
+	source := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Patch Source", fx.teacher1.ID)
+
+	child, err := fx.h.Units.ForkUnit(ctx, source.ID, store.ForkTarget{
+		Scope: "org", ScopeID: &fx.org1.ID, CallerID: fx.teacher1.ID,
+	})
+	require.NoError(t, err)
+	fx.forkCleanup(t, child.ID)
+
+	w := doUnitPatch(t, fx.h.PatchOverlay, "/api/units/"+child.ID+"/overlay",
+		map[string]any{"blockOverrides": map[string]any{"b1": map[string]any{"action": "hide"}}},
+		map[string]string{"id": child.ID},
+		fx.claims(fx.teacher1, false))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var ov store.UnitOverlay
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &ov))
+	var parsed map[string]interface{}
+	require.NoError(t, json.Unmarshal(ov.BlockOverrides, &parsed))
+	assert.Contains(t, parsed, "b1")
+}
+
+func TestTeachingUnitHandler_PatchOverlay_PinRevision(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	ctx := context.Background()
+	source := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Pin Source", fx.teacher1.ID)
+
+	// Publish to create a revision.
+	blocks := json.RawMessage(`{"type":"doc","content":[{"type":"prose","attrs":{"id":"b1"}}]}`)
+	_, err := fx.h.Units.SaveDocument(ctx, source.ID, blocks)
+	require.NoError(t, err)
+	_, err = fx.h.Units.SetUnitStatus(ctx, source.ID, "reviewed", fx.teacher1.ID)
+	require.NoError(t, err)
+	_, err = fx.h.Units.SetUnitStatus(ctx, source.ID, "classroom_ready", fx.teacher1.ID)
+	require.NoError(t, err)
+
+	revs, err := fx.h.Units.ListRevisions(ctx, source.ID)
+	require.NoError(t, err)
+	require.Len(t, revs, 1)
+
+	child, err := fx.h.Units.ForkUnit(ctx, source.ID, store.ForkTarget{
+		Scope: "org", ScopeID: &fx.org1.ID, CallerID: fx.teacher1.ID,
+	})
+	require.NoError(t, err)
+	fx.forkCleanup(t, child.ID)
+
+	// Pin to the revision.
+	w := doUnitPatch(t, fx.h.PatchOverlay, "/api/units/"+child.ID+"/overlay",
+		map[string]any{"parentRevisionId": revs[0].ID},
+		map[string]string{"id": child.ID},
+		fx.claims(fx.teacher1, false))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var ov store.UnitOverlay
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &ov))
+	require.NotNil(t, ov.ParentRevisionID)
+	assert.Equal(t, revs[0].ID, *ov.ParentRevisionID)
+}
+
+func TestTeachingUnitHandler_PatchOverlay_FloatBack(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	ctx := context.Background()
+	source := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Float Source", fx.teacher1.ID)
+
+	// Publish to create a revision.
+	blocks := json.RawMessage(`{"type":"doc","content":[{"type":"prose","attrs":{"id":"b1"}}]}`)
+	_, err := fx.h.Units.SaveDocument(ctx, source.ID, blocks)
+	require.NoError(t, err)
+	_, err = fx.h.Units.SetUnitStatus(ctx, source.ID, "reviewed", fx.teacher1.ID)
+	require.NoError(t, err)
+	_, err = fx.h.Units.SetUnitStatus(ctx, source.ID, "classroom_ready", fx.teacher1.ID)
+	require.NoError(t, err)
+
+	revs, err := fx.h.Units.ListRevisions(ctx, source.ID)
+	require.NoError(t, err)
+	require.Len(t, revs, 1)
+
+	child, err := fx.h.Units.ForkUnit(ctx, source.ID, store.ForkTarget{
+		Scope: "org", ScopeID: &fx.org1.ID, CallerID: fx.teacher1.ID,
+	})
+	require.NoError(t, err)
+	fx.forkCleanup(t, child.ID)
+
+	// Pin, then float.
+	_, err = fx.h.Units.UpdateOverlay(ctx, child.ID, store.UpdateOverlayInput{
+		ParentRevisionID: &revs[0].ID,
+	})
+	require.NoError(t, err)
+
+	// Float: set parentRevisionId to ""
+	w := doUnitPatch(t, fx.h.PatchOverlay, "/api/units/"+child.ID+"/overlay",
+		map[string]any{"parentRevisionId": ""},
+		map[string]string{"id": child.ID},
+		fx.claims(fx.teacher1, false))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var ov store.UnitOverlay
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &ov))
+	assert.Nil(t, ov.ParentRevisionID, "empty string should set to NULL (floating)")
+}
+
+func TestTeachingUnitHandler_PatchOverlay_NotForked_404(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "No Fork", fx.teacher1.ID)
+
+	w := doUnitPatch(t, fx.h.PatchOverlay, "/api/units/"+u.ID+"/overlay",
+		map[string]any{"blockOverrides": map[string]any{}},
+		map[string]string{"id": u.ID},
+		fx.claims(fx.teacher1, false))
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func TestTeachingUnitHandler_PatchOverlay_NotEditor_403(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	ctx := context.Background()
+	source := fx.mkUnit(t, "platform", nil, "classroom_ready", "Platform Source", fx.admin.ID)
+
+	child, err := fx.h.Units.ForkUnit(ctx, source.ID, store.ForkTarget{
+		Scope: "org", ScopeID: &fx.org1.ID, CallerID: fx.teacher1.ID,
+	})
+	require.NoError(t, err)
+	fx.forkCleanup(t, child.ID)
+
+	// teacher2 is in org2, can't edit org1 units → 404 (can't view).
+	w := doUnitPatch(t, fx.h.PatchOverlay, "/api/units/"+child.ID+"/overlay",
+		map[string]any{"blockOverrides": map[string]any{}},
+		map[string]string{"id": child.ID},
+		fx.claims(fx.teacher2, false))
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func TestTeachingUnitHandler_PatchOverlay_NoAuth_401(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	ctx := context.Background()
+	source := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Auth Source", fx.teacher1.ID)
+
+	child, err := fx.h.Units.ForkUnit(ctx, source.ID, store.ForkTarget{
+		Scope: "org", ScopeID: &fx.org1.ID, CallerID: fx.teacher1.ID,
+	})
+	require.NoError(t, err)
+	fx.forkCleanup(t, child.ID)
+
+	w := doUnitPatch(t, fx.h.PatchOverlay, "/api/units/"+child.ID+"/overlay",
+		map[string]any{},
+		map[string]string{"id": child.ID},
+		nil)
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
+// ==================== GetComposedDocument ====================
+
+func TestTeachingUnitHandler_Composed_ForkedUnit_EqualsParent(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	ctx := context.Background()
+	source := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Compose Source", fx.teacher1.ID)
+
+	// Save blocks to source and publish.
+	blocks := json.RawMessage(`{"type":"doc","content":[{"type":"prose","attrs":{"id":"b1"},"content":[{"type":"text","text":"hello"}]}]}`)
+	_, err := fx.h.Units.SaveDocument(ctx, source.ID, blocks)
+	require.NoError(t, err)
+	_, err = fx.h.Units.SetUnitStatus(ctx, source.ID, "reviewed", fx.teacher1.ID)
+	require.NoError(t, err)
+	_, err = fx.h.Units.SetUnitStatus(ctx, source.ID, "classroom_ready", fx.teacher1.ID)
+	require.NoError(t, err)
+
+	child, err := fx.h.Units.ForkUnit(ctx, source.ID, store.ForkTarget{
+		Scope: "org", ScopeID: &fx.org1.ID, CallerID: fx.teacher1.ID,
+	})
+	require.NoError(t, err)
+	fx.forkCleanup(t, child.ID)
+
+	w := doUnitGet(t, fx.h.GetComposedDocument, "/api/units/"+child.ID+"/composed",
+		map[string]string{"id": child.ID},
+		fx.claims(fx.teacher1, false))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var doc map[string]interface{}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &doc))
+	assert.Equal(t, "doc", doc["type"])
+	content := doc["content"].([]interface{})
+	require.Len(t, content, 1)
+}
+
+func TestTeachingUnitHandler_Composed_HideOverride(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	ctx := context.Background()
+	source := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Hide Compose", fx.teacher1.ID)
+
+	blocks := json.RawMessage(`{"type":"doc","content":[{"type":"prose","attrs":{"id":"b1"}},{"type":"prose","attrs":{"id":"b2"}}]}`)
+	_, err := fx.h.Units.SaveDocument(ctx, source.ID, blocks)
+	require.NoError(t, err)
+	_, err = fx.h.Units.SetUnitStatus(ctx, source.ID, "reviewed", fx.teacher1.ID)
+	require.NoError(t, err)
+	_, err = fx.h.Units.SetUnitStatus(ctx, source.ID, "classroom_ready", fx.teacher1.ID)
+	require.NoError(t, err)
+
+	child, err := fx.h.Units.ForkUnit(ctx, source.ID, store.ForkTarget{
+		Scope: "org", ScopeID: &fx.org1.ID, CallerID: fx.teacher1.ID,
+	})
+	require.NoError(t, err)
+	fx.forkCleanup(t, child.ID)
+
+	// Hide b1.
+	_, err = fx.h.Units.UpdateOverlay(ctx, child.ID, store.UpdateOverlayInput{
+		BlockOverrides: json.RawMessage(`{"b1":{"action":"hide"}}`),
+	})
+	require.NoError(t, err)
+
+	w := doUnitGet(t, fx.h.GetComposedDocument, "/api/units/"+child.ID+"/composed",
+		map[string]string{"id": child.ID},
+		fx.claims(fx.teacher1, false))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var doc map[string]interface{}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &doc))
+	content := doc["content"].([]interface{})
+	assert.Len(t, content, 1, "hide should omit b1")
+}
+
+func TestTeachingUnitHandler_Composed_ReplaceOverride(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	ctx := context.Background()
+	source := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Replace Compose", fx.teacher1.ID)
+
+	blocks := json.RawMessage(`{"type":"doc","content":[{"type":"prose","attrs":{"id":"b1"}}]}`)
+	_, err := fx.h.Units.SaveDocument(ctx, source.ID, blocks)
+	require.NoError(t, err)
+	_, err = fx.h.Units.SetUnitStatus(ctx, source.ID, "reviewed", fx.teacher1.ID)
+	require.NoError(t, err)
+	_, err = fx.h.Units.SetUnitStatus(ctx, source.ID, "classroom_ready", fx.teacher1.ID)
+	require.NoError(t, err)
+
+	child, err := fx.h.Units.ForkUnit(ctx, source.ID, store.ForkTarget{
+		Scope: "org", ScopeID: &fx.org1.ID, CallerID: fx.teacher1.ID,
+	})
+	require.NoError(t, err)
+	fx.forkCleanup(t, child.ID)
+
+	_, err = fx.h.Units.UpdateOverlay(ctx, child.ID, store.UpdateOverlayInput{
+		BlockOverrides: json.RawMessage(`{"b1":{"action":"replace","block":{"type":"prose","attrs":{"id":"b1-new"}}}}`),
+	})
+	require.NoError(t, err)
+
+	w := doUnitGet(t, fx.h.GetComposedDocument, "/api/units/"+child.ID+"/composed",
+		map[string]string{"id": child.ID},
+		fx.claims(fx.teacher1, false))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var doc map[string]interface{}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &doc))
+	content := doc["content"].([]interface{})
+	require.Len(t, content, 1)
+	b := content[0].(map[string]interface{})
+	attrs := b["attrs"].(map[string]interface{})
+	assert.Equal(t, "b1-new", attrs["id"])
+}
+
+func TestTeachingUnitHandler_Composed_NonForkedUnit(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	ctx := context.Background()
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Plain Unit", fx.teacher1.ID)
+
+	blocks := json.RawMessage(`{"type":"doc","content":[{"type":"prose","attrs":{"id":"p1"}}]}`)
+	_, err := fx.h.Units.SaveDocument(ctx, u.ID, blocks)
+	require.NoError(t, err)
+
+	w := doUnitGet(t, fx.h.GetComposedDocument, "/api/units/"+u.ID+"/composed",
+		map[string]string{"id": u.ID},
+		fx.claims(fx.teacher1, false))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var doc map[string]interface{}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &doc))
+	assert.Equal(t, "doc", doc["type"])
+}
+
+func TestTeachingUnitHandler_Composed_NoAccess_404(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Hidden Compose", fx.teacher1.ID)
+
+	w := doUnitGet(t, fx.h.GetComposedDocument, "/api/units/"+u.ID+"/composed",
+		map[string]string{"id": u.ID},
+		fx.claims(fx.outsider, false))
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func TestTeachingUnitHandler_Composed_NoAuth_401(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Auth Compose", fx.teacher1.ID)
+
+	w := doUnitGet(t, fx.h.GetComposedDocument, "/api/units/"+u.ID+"/composed",
+		map[string]string{"id": u.ID},
+		nil)
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
+// ==================== GetLineage ====================
+
+func TestTeachingUnitHandler_Lineage_NonForked_JustSelf(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Lone Unit", fx.teacher1.ID)
+
+	w := doUnitGet(t, fx.h.GetLineage, "/api/units/"+u.ID+"/lineage",
+		map[string]string{"id": u.ID},
+		fx.claims(fx.teacher1, false))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var resp struct {
+		Items []store.LineageEntry `json:"items"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp.Items, 1)
+	assert.Equal(t, u.ID, resp.Items[0].UnitID)
+}
+
+func TestTeachingUnitHandler_Lineage_ChildParent(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	ctx := context.Background()
+	parent := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Parent", fx.teacher1.ID)
+
+	child, err := fx.h.Units.ForkUnit(ctx, parent.ID, store.ForkTarget{
+		Scope: "org", ScopeID: &fx.org1.ID, CallerID: fx.teacher1.ID,
+	})
+	require.NoError(t, err)
+	fx.forkCleanup(t, child.ID)
+
+	w := doUnitGet(t, fx.h.GetLineage, "/api/units/"+child.ID+"/lineage",
+		map[string]string{"id": child.ID},
+		fx.claims(fx.teacher1, false))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var resp struct {
+		Items []store.LineageEntry `json:"items"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp.Items, 2, "should have parent + child")
+	assert.Equal(t, parent.ID, resp.Items[0].UnitID, "root-first")
+	assert.Equal(t, child.ID, resp.Items[1].UnitID)
+}
+
+func TestTeachingUnitHandler_Lineage_ThreeGenerations(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	ctx := context.Background()
+	grandparent := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Grandparent", fx.teacher1.ID)
+
+	parentUnit, err := fx.h.Units.ForkUnit(ctx, grandparent.ID, store.ForkTarget{
+		Scope: "org", ScopeID: &fx.org1.ID, CallerID: fx.teacher1.ID,
+	})
+	require.NoError(t, err)
+	fx.forkCleanup(t, parentUnit.ID)
+
+	child, err := fx.h.Units.ForkUnit(ctx, parentUnit.ID, store.ForkTarget{
+		Scope: "org", ScopeID: &fx.org1.ID, CallerID: fx.teacher1.ID,
+	})
+	require.NoError(t, err)
+	fx.forkCleanup(t, child.ID)
+
+	w := doUnitGet(t, fx.h.GetLineage, "/api/units/"+child.ID+"/lineage",
+		map[string]string{"id": child.ID},
+		fx.claims(fx.teacher1, false))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var resp struct {
+		Items []store.LineageEntry `json:"items"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp.Items, 3, "grandparent → parent → child = 3 entries")
+	assert.Equal(t, grandparent.ID, resp.Items[0].UnitID)
+	assert.Equal(t, parentUnit.ID, resp.Items[1].UnitID)
+	assert.Equal(t, child.ID, resp.Items[2].UnitID)
+}
+
+func TestTeachingUnitHandler_Lineage_NoAccess_404(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Hidden Lineage", fx.teacher1.ID)
+
+	w := doUnitGet(t, fx.h.GetLineage, "/api/units/"+u.ID+"/lineage",
+		map[string]string{"id": u.ID},
+		fx.claims(fx.outsider, false))
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func TestTeachingUnitHandler_Lineage_NoAuth_401(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Auth Lineage", fx.teacher1.ID)
+
+	w := doUnitGet(t, fx.h.GetLineage, "/api/units/"+u.ID+"/lineage",
+		map[string]string{"id": u.ID},
+		nil)
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
 }

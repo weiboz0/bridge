@@ -95,6 +95,12 @@ func (h *TeachingUnitHandler) Routes(r chi.Router) {
 			r.Use(ValidateUUIDParam("revisionId"))
 			r.Get("/", h.GetRevision)
 		})
+		// Overlay / fork endpoints (plan 034).
+		r.Post("/fork", h.ForkUnit)
+		r.Get("/overlay", h.GetOverlay)
+		r.Patch("/overlay", h.PatchOverlay)
+		r.Get("/composed", h.GetComposedDocument)
+		r.Get("/lineage", h.GetLineage)
 	})
 }
 
@@ -805,4 +811,258 @@ func (h *TeachingUnitHandler) GetRevision(w http.ResponseWriter, r *http.Request
 		return
 	}
 	writeJSON(w, http.StatusOK, rev)
+}
+
+// ---------- Overlay / Fork handlers (plan 034) ----------
+
+// ForkUnit — POST /api/units/{id}/fork
+// Body: { scope?, scopeId?, title? }
+// Requires: canViewUnit on source + authorized-for-scope on target.
+// If scope is omitted, infer from caller's memberships (like problem fork).
+func (h *TeachingUnitHandler) ForkUnit(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	sourceID := chi.URLParam(r, "id")
+
+	var body struct {
+		Scope   string  `json:"scope"`
+		ScopeID *string `json:"scopeId"`
+		Title   *string `json:"title"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+
+	// Default target inference (same pattern as problem fork).
+	if body.Scope == "" {
+		orgs, err := h.Orgs.GetUserMemberships(r.Context(), claims.UserID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "Database error")
+			return
+		}
+		activeOrgs := unitOrgIDs(orgs)
+		if len(activeOrgs) == 1 {
+			body.Scope = "org"
+			orgID := activeOrgs[0]
+			body.ScopeID = &orgID
+		} else {
+			body.Scope = "personal"
+			uid := claims.UserID
+			body.ScopeID = &uid
+		}
+	}
+
+	if !validUnitScopes[body.Scope] {
+		writeError(w, http.StatusBadRequest, "scope must be platform, org, or personal")
+		return
+	}
+
+	// Source must be visible to the caller.
+	source, err := h.Units.GetUnit(r.Context(), sourceID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if source == nil || !h.canViewUnit(r.Context(), claims, source) {
+		writeError(w, http.StatusNotFound, "Not found")
+		return
+	}
+
+	// Caller must be authorized for the target scope.
+	if !h.canEditUnit(r.Context(), claims, body.Scope, body.ScopeID) {
+		writeError(w, http.StatusForbidden, "not authorized for target scope")
+		return
+	}
+
+	child, err := h.Units.ForkUnit(r.Context(), sourceID, store.ForkTarget{
+		Scope:    body.Scope,
+		ScopeID:  body.ScopeID,
+		Title:    body.Title,
+		CallerID: claims.UserID,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to fork unit")
+		return
+	}
+	if child == nil {
+		writeError(w, http.StatusNotFound, "Not found")
+		return
+	}
+	writeJSON(w, http.StatusCreated, child)
+}
+
+// unitOrgIDs extracts active org IDs from user memberships.
+func unitOrgIDs(ms []store.UserMembershipWithOrg) []string {
+	out := make([]string, 0, len(ms))
+	for _, m := range ms {
+		if m.Status == "active" {
+			out = append(out, m.OrgID)
+		}
+	}
+	return out
+}
+
+// GetOverlay — GET /api/units/{id}/overlay
+// Returns the overlay row or 404 if the unit has no overlay.
+// Auth: canViewUnit on the child unit.
+func (h *TeachingUnitHandler) GetOverlay(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	unitID := chi.URLParam(r, "id")
+
+	unit, err := h.Units.GetUnit(r.Context(), unitID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if unit == nil || !h.canViewUnit(r.Context(), claims, unit) {
+		writeError(w, http.StatusNotFound, "Not found")
+		return
+	}
+
+	ov, err := h.Units.GetOverlay(r.Context(), unitID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if ov == nil {
+		writeError(w, http.StatusNotFound, "No overlay")
+		return
+	}
+	writeJSON(w, http.StatusOK, ov)
+}
+
+// PatchOverlay — PATCH /api/units/{id}/overlay
+// Body: { parentRevisionId?, blockOverrides? }
+// Auth: canEditUnit on the child.
+func (h *TeachingUnitHandler) PatchOverlay(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	unitID := chi.URLParam(r, "id")
+
+	unit, err := h.Units.GetUnit(r.Context(), unitID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if unit == nil || !h.canViewUnit(r.Context(), claims, unit) {
+		writeError(w, http.StatusNotFound, "Not found")
+		return
+	}
+	if !h.canEditUnit(r.Context(), claims, unit.Scope, unit.ScopeID) {
+		writeError(w, http.StatusForbidden, "Not authorized to edit overlay")
+		return
+	}
+
+	// Verify the overlay exists before attempting to update.
+	existing, err := h.Units.GetOverlay(r.Context(), unitID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if existing == nil {
+		writeError(w, http.StatusNotFound, "No overlay")
+		return
+	}
+
+	var body struct {
+		ParentRevisionID *string         `json:"parentRevisionId"`
+		BlockOverrides   json.RawMessage `json:"blockOverrides"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+
+	updated, err := h.Units.UpdateOverlay(r.Context(), unitID, store.UpdateOverlayInput{
+		ParentRevisionID: body.ParentRevisionID,
+		BlockOverrides:   body.BlockOverrides,
+	})
+	if err != nil {
+		if isConstraintError(err) {
+			writeError(w, http.StatusBadRequest, "invalid parentRevisionId")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if updated == nil {
+		writeError(w, http.StatusNotFound, "No overlay")
+		return
+	}
+	writeJSON(w, http.StatusOK, updated)
+}
+
+// GetComposedDocument — GET /api/units/{id}/composed
+// Returns the composed document (overlay-merged), ready for projection.
+// Auth: canViewUnit.
+func (h *TeachingUnitHandler) GetComposedDocument(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	unitID := chi.URLParam(r, "id")
+
+	unit, err := h.Units.GetUnit(r.Context(), unitID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if unit == nil || !h.canViewUnit(r.Context(), claims, unit) {
+		writeError(w, http.StatusNotFound, "Not found")
+		return
+	}
+
+	composed, err := h.Units.GetComposedDocument(r.Context(), unitID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if composed == nil {
+		writeError(w, http.StatusNotFound, "Document not found")
+		return
+	}
+
+	// The store already returns a full envelope {"type":"doc","content":[...]}.
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write(composed)
+}
+
+// GetLineage — GET /api/units/{id}/lineage
+// Returns the overlay chain as a breadcrumb list (root-first).
+// Auth: canViewUnit.
+func (h *TeachingUnitHandler) GetLineage(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	unitID := chi.URLParam(r, "id")
+
+	unit, err := h.Units.GetUnit(r.Context(), unitID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if unit == nil || !h.canViewUnit(r.Context(), claims, unit) {
+		writeError(w, http.StatusNotFound, "Not found")
+		return
+	}
+
+	lineage, err := h.Units.GetLineage(r.Context(), unitID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": lineage})
 }

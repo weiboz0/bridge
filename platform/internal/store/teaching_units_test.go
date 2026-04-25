@@ -27,6 +27,8 @@ func setupUnitEnv(t *testing.T, suffix string) (*TeachingUnitStore, *OrgStore, s
 
 	ctx := context.Background()
 	t.Cleanup(func() {
+		db.ExecContext(ctx, `DELETE FROM unit_overlays WHERE child_unit_id IN (SELECT id FROM teaching_units WHERE created_by = $1)`, user.ID)
+		db.ExecContext(ctx, `DELETE FROM unit_overlays WHERE parent_unit_id IN (SELECT id FROM teaching_units WHERE created_by = $1)`, user.ID)
 		db.ExecContext(ctx, `DELETE FROM teaching_units WHERE created_by = $1`, user.ID)
 	})
 
@@ -1031,4 +1033,531 @@ func TestTeachingUnitStore_GetRevision_NotFound(t *testing.T) {
 	got, err := units.GetRevision(ctx, "00000000-0000-0000-0000-000000000000")
 	require.NoError(t, err)
 	assert.Nil(t, got)
+}
+
+// ── ForkUnit ────────────────────────────────────────────────────────────────
+
+func TestTeachingUnitStore_ForkUnit_CreatesChildOverlayDoc(t *testing.T) {
+	units, _, orgID, userID := setupUnitEnv(t, t.Name())
+	ctx := context.Background()
+
+	source := mustCreateUnit(t, units, CreateTeachingUnitInput{
+		Scope: "platform", Title: "Source Unit", Summary: "Source summary", CreatedBy: userID,
+	})
+
+	child, err := units.ForkUnit(ctx, source.ID, ForkTarget{
+		Scope: "org", ScopeID: &orgID, CallerID: userID,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, child)
+	assert.Equal(t, "draft", child.Status)
+	assert.Equal(t, "org", child.Scope)
+	require.NotNil(t, child.ScopeID)
+	assert.Equal(t, orgID, *child.ScopeID)
+	assert.Equal(t, "Source Unit (fork)", child.Title)
+	assert.Equal(t, "Source summary", child.Summary)
+
+	// Overlay must exist.
+	ov, err := units.GetOverlay(ctx, child.ID)
+	require.NoError(t, err)
+	require.NotNil(t, ov)
+	assert.Equal(t, child.ID, ov.ChildUnitID)
+	assert.Equal(t, source.ID, ov.ParentUnitID)
+	assert.Nil(t, ov.ParentRevisionID, "fork should be floating (nil revision)")
+	assert.Equal(t, json.RawMessage(`{}`), ov.BlockOverrides)
+
+	// Document must exist.
+	doc, err := units.GetDocument(ctx, child.ID)
+	require.NoError(t, err)
+	require.NotNil(t, doc)
+}
+
+func TestTeachingUnitStore_ForkUnit_CustomTitle(t *testing.T) {
+	units, _, orgID, userID := setupUnitEnv(t, t.Name())
+	ctx := context.Background()
+
+	source := mustCreateUnit(t, units, CreateTeachingUnitInput{
+		Scope: "platform", Title: "Source", CreatedBy: userID,
+	})
+
+	title := "My Adaptation"
+	child, err := units.ForkUnit(ctx, source.ID, ForkTarget{
+		Scope: "org", ScopeID: &orgID, Title: &title, CallerID: userID,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, child)
+	assert.Equal(t, "My Adaptation", child.Title)
+}
+
+func TestTeachingUnitStore_ForkUnit_SourceNotFound(t *testing.T) {
+	units, _, orgID, userID := setupUnitEnv(t, t.Name())
+	ctx := context.Background()
+
+	child, err := units.ForkUnit(ctx, "00000000-0000-0000-0000-000000000000", ForkTarget{
+		Scope: "org", ScopeID: &orgID, CallerID: userID,
+	})
+	require.NoError(t, err)
+	assert.Nil(t, child)
+}
+
+// ── GetOverlay / UpdateOverlay ──────────────────────────────────────────────
+
+func TestTeachingUnitStore_GetOverlay_NoOverlay(t *testing.T) {
+	units, _, _, userID := setupUnitEnv(t, t.Name())
+	ctx := context.Background()
+
+	u := mustCreateUnit(t, units, CreateTeachingUnitInput{
+		Scope: "personal", ScopeID: &userID, Title: "No Overlay", CreatedBy: userID,
+	})
+
+	ov, err := units.GetOverlay(ctx, u.ID)
+	require.NoError(t, err)
+	assert.Nil(t, ov, "non-forked unit should have no overlay")
+}
+
+func TestTeachingUnitStore_UpdateOverlay_PinRevision(t *testing.T) {
+	units, _, orgID, userID := setupUnitEnv(t, t.Name())
+	ctx := context.Background()
+
+	source := mustCreateUnit(t, units, CreateTeachingUnitInput{
+		Scope: "platform", Title: "Pin Source", CreatedBy: userID,
+	})
+
+	// Save blocks and publish to create a revision.
+	blocks := json.RawMessage(`{"type":"doc","content":[{"type":"prose","attrs":{"id":"b1"}}]}`)
+	_, err := units.SaveDocument(ctx, source.ID, blocks)
+	require.NoError(t, err)
+	_, err = units.SetUnitStatus(ctx, source.ID, "reviewed", userID)
+	require.NoError(t, err)
+	_, err = units.SetUnitStatus(ctx, source.ID, "classroom_ready", userID)
+	require.NoError(t, err)
+
+	revs, err := units.ListRevisions(ctx, source.ID)
+	require.NoError(t, err)
+	require.Len(t, revs, 1)
+	revID := revs[0].ID
+
+	child, err := units.ForkUnit(ctx, source.ID, ForkTarget{
+		Scope: "org", ScopeID: &orgID, CallerID: userID,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, child)
+
+	// Pin to the revision.
+	updated, err := units.UpdateOverlay(ctx, child.ID, UpdateOverlayInput{
+		ParentRevisionID: &revID,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	require.NotNil(t, updated.ParentRevisionID)
+	assert.Equal(t, revID, *updated.ParentRevisionID)
+}
+
+func TestTeachingUnitStore_UpdateOverlay_Float(t *testing.T) {
+	units, _, orgID, userID := setupUnitEnv(t, t.Name())
+	ctx := context.Background()
+
+	source := mustCreateUnit(t, units, CreateTeachingUnitInput{
+		Scope: "platform", Title: "Float Source", CreatedBy: userID,
+	})
+
+	// Save blocks, publish, create a revision.
+	blocks := json.RawMessage(`{"type":"doc","content":[{"type":"prose","attrs":{"id":"b1"}}]}`)
+	_, err := units.SaveDocument(ctx, source.ID, blocks)
+	require.NoError(t, err)
+	_, err = units.SetUnitStatus(ctx, source.ID, "reviewed", userID)
+	require.NoError(t, err)
+	_, err = units.SetUnitStatus(ctx, source.ID, "classroom_ready", userID)
+	require.NoError(t, err)
+
+	revs, err := units.ListRevisions(ctx, source.ID)
+	require.NoError(t, err)
+	require.Len(t, revs, 1)
+	revID := revs[0].ID
+
+	child, err := units.ForkUnit(ctx, source.ID, ForkTarget{
+		Scope: "org", ScopeID: &orgID, CallerID: userID,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, child)
+
+	// Pin first.
+	_, err = units.UpdateOverlay(ctx, child.ID, UpdateOverlayInput{
+		ParentRevisionID: &revID,
+	})
+	require.NoError(t, err)
+
+	// Float back (empty string = NULL).
+	emptyRev := ""
+	updated, err := units.UpdateOverlay(ctx, child.ID, UpdateOverlayInput{
+		ParentRevisionID: &emptyRev,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	assert.Nil(t, updated.ParentRevisionID, "empty string should set to NULL (floating)")
+}
+
+func TestTeachingUnitStore_UpdateOverlay_BlockOverrides(t *testing.T) {
+	units, _, orgID, userID := setupUnitEnv(t, t.Name())
+	ctx := context.Background()
+
+	source := mustCreateUnit(t, units, CreateTeachingUnitInput{
+		Scope: "platform", Title: "Override Source", CreatedBy: userID,
+	})
+
+	child, err := units.ForkUnit(ctx, source.ID, ForkTarget{
+		Scope: "org", ScopeID: &orgID, CallerID: userID,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, child)
+
+	overrides := json.RawMessage(`{"b1":{"action":"hide"}}`)
+	updated, err := units.UpdateOverlay(ctx, child.ID, UpdateOverlayInput{
+		BlockOverrides: overrides,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+
+	// Parse back the overrides.
+	var parsed map[string]interface{}
+	require.NoError(t, json.Unmarshal(updated.BlockOverrides, &parsed))
+	assert.Contains(t, parsed, "b1")
+}
+
+func TestTeachingUnitStore_UpdateOverlay_NoFields(t *testing.T) {
+	units, _, orgID, userID := setupUnitEnv(t, t.Name())
+	ctx := context.Background()
+
+	source := mustCreateUnit(t, units, CreateTeachingUnitInput{
+		Scope: "platform", Title: "NoField Source", CreatedBy: userID,
+	})
+
+	child, err := units.ForkUnit(ctx, source.ID, ForkTarget{
+		Scope: "org", ScopeID: &orgID, CallerID: userID,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, child)
+
+	// No fields → returns existing overlay unchanged.
+	updated, err := units.UpdateOverlay(ctx, child.ID, UpdateOverlayInput{})
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	assert.Equal(t, child.ID, updated.ChildUnitID)
+}
+
+// ── GetComposedDocument ─────────────────────────────────────────────────────
+
+func TestTeachingUnitStore_GetComposedDocument_NoOverlay(t *testing.T) {
+	units, _, _, userID := setupUnitEnv(t, t.Name())
+	ctx := context.Background()
+
+	u := mustCreateUnit(t, units, CreateTeachingUnitInput{
+		Scope: "personal", ScopeID: &userID, Title: "Plain Unit", CreatedBy: userID,
+	})
+
+	blocks := json.RawMessage(`{"type":"doc","content":[{"type":"prose","attrs":{"id":"p1"}}]}`)
+	_, err := units.SaveDocument(ctx, u.ID, blocks)
+	require.NoError(t, err)
+
+	composed, err := units.GetComposedDocument(ctx, u.ID)
+	require.NoError(t, err)
+	require.NotNil(t, composed)
+
+	// Should be the unit's own document.
+	var doc map[string]interface{}
+	require.NoError(t, json.Unmarshal(composed, &doc))
+	assert.Equal(t, "doc", doc["type"])
+}
+
+func TestTeachingUnitStore_GetComposedDocument_ForkedFloating(t *testing.T) {
+	units, _, orgID, userID := setupUnitEnv(t, t.Name())
+	ctx := context.Background()
+
+	source := mustCreateUnit(t, units, CreateTeachingUnitInput{
+		Scope: "platform", Title: "Compose Source", CreatedBy: userID,
+	})
+
+	// Save blocks to source and publish.
+	sourceBlocks := json.RawMessage(`{"type":"doc","content":[{"type":"prose","attrs":{"id":"b1"},"content":[{"type":"text","text":"hello"}]}]}`)
+	_, err := units.SaveDocument(ctx, source.ID, sourceBlocks)
+	require.NoError(t, err)
+	_, err = units.SetUnitStatus(ctx, source.ID, "reviewed", userID)
+	require.NoError(t, err)
+	_, err = units.SetUnitStatus(ctx, source.ID, "classroom_ready", userID)
+	require.NoError(t, err)
+
+	// Fork.
+	child, err := units.ForkUnit(ctx, source.ID, ForkTarget{
+		Scope: "org", ScopeID: &orgID, CallerID: userID,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, child)
+
+	// Composed doc should equal parent's published revision blocks.
+	composed, err := units.GetComposedDocument(ctx, child.ID)
+	require.NoError(t, err)
+	require.NotNil(t, composed)
+
+	var doc map[string]interface{}
+	require.NoError(t, json.Unmarshal(composed, &doc))
+	assert.Equal(t, "doc", doc["type"])
+	content, ok := doc["content"].([]interface{})
+	require.True(t, ok)
+	require.Len(t, content, 1, "composed should have 1 parent block")
+}
+
+func TestTeachingUnitStore_GetComposedDocument_HideOverride(t *testing.T) {
+	units, _, orgID, userID := setupUnitEnv(t, t.Name())
+	ctx := context.Background()
+
+	source := mustCreateUnit(t, units, CreateTeachingUnitInput{
+		Scope: "platform", Title: "Hide Source", CreatedBy: userID,
+	})
+
+	sourceBlocks := json.RawMessage(`{"type":"doc","content":[{"type":"prose","attrs":{"id":"b1"}},{"type":"prose","attrs":{"id":"b2"}}]}`)
+	_, err := units.SaveDocument(ctx, source.ID, sourceBlocks)
+	require.NoError(t, err)
+	_, err = units.SetUnitStatus(ctx, source.ID, "reviewed", userID)
+	require.NoError(t, err)
+	_, err = units.SetUnitStatus(ctx, source.ID, "classroom_ready", userID)
+	require.NoError(t, err)
+
+	child, err := units.ForkUnit(ctx, source.ID, ForkTarget{
+		Scope: "org", ScopeID: &orgID, CallerID: userID,
+	})
+	require.NoError(t, err)
+
+	// Add hide override on b1.
+	overrides := json.RawMessage(`{"b1":{"action":"hide"}}`)
+	_, err = units.UpdateOverlay(ctx, child.ID, UpdateOverlayInput{
+		BlockOverrides: overrides,
+	})
+	require.NoError(t, err)
+
+	composed, err := units.GetComposedDocument(ctx, child.ID)
+	require.NoError(t, err)
+	require.NotNil(t, composed)
+
+	var doc map[string]interface{}
+	require.NoError(t, json.Unmarshal(composed, &doc))
+	content := doc["content"].([]interface{})
+	// Only b2 should remain.
+	assert.Len(t, content, 1, "hide override should omit b1")
+	b := content[0].(map[string]interface{})
+	attrs := b["attrs"].(map[string]interface{})
+	assert.Equal(t, "b2", attrs["id"])
+}
+
+func TestTeachingUnitStore_GetComposedDocument_ReplaceOverride(t *testing.T) {
+	units, _, orgID, userID := setupUnitEnv(t, t.Name())
+	ctx := context.Background()
+
+	source := mustCreateUnit(t, units, CreateTeachingUnitInput{
+		Scope: "platform", Title: "Replace Source", CreatedBy: userID,
+	})
+
+	sourceBlocks := json.RawMessage(`{"type":"doc","content":[{"type":"prose","attrs":{"id":"b1"}},{"type":"prose","attrs":{"id":"b2"}}]}`)
+	_, err := units.SaveDocument(ctx, source.ID, sourceBlocks)
+	require.NoError(t, err)
+	_, err = units.SetUnitStatus(ctx, source.ID, "reviewed", userID)
+	require.NoError(t, err)
+	_, err = units.SetUnitStatus(ctx, source.ID, "classroom_ready", userID)
+	require.NoError(t, err)
+
+	child, err := units.ForkUnit(ctx, source.ID, ForkTarget{
+		Scope: "org", ScopeID: &orgID, CallerID: userID,
+	})
+	require.NoError(t, err)
+
+	// Replace b1 with a different block.
+	overrides := json.RawMessage(`{"b1":{"action":"replace","block":{"type":"prose","attrs":{"id":"b1-replaced"},"content":[{"type":"text","text":"replaced"}]}}}`)
+	_, err = units.UpdateOverlay(ctx, child.ID, UpdateOverlayInput{
+		BlockOverrides: overrides,
+	})
+	require.NoError(t, err)
+
+	composed, err := units.GetComposedDocument(ctx, child.ID)
+	require.NoError(t, err)
+	require.NotNil(t, composed)
+
+	var doc map[string]interface{}
+	require.NoError(t, json.Unmarshal(composed, &doc))
+	content := doc["content"].([]interface{})
+	assert.Len(t, content, 2)
+	// First block should be the replacement.
+	b := content[0].(map[string]interface{})
+	attrs := b["attrs"].(map[string]interface{})
+	assert.Equal(t, "b1-replaced", attrs["id"])
+}
+
+func TestTeachingUnitStore_GetComposedDocument_PinnedRevision(t *testing.T) {
+	units, _, orgID, userID := setupUnitEnv(t, t.Name())
+	ctx := context.Background()
+
+	source := mustCreateUnit(t, units, CreateTeachingUnitInput{
+		Scope: "platform", Title: "Pinned Source", CreatedBy: userID,
+	})
+
+	// Version 1: save blocks and publish.
+	blocksV1 := json.RawMessage(`{"type":"doc","content":[{"type":"prose","attrs":{"id":"b1"},"content":[{"type":"text","text":"v1"}]}]}`)
+	_, err := units.SaveDocument(ctx, source.ID, blocksV1)
+	require.NoError(t, err)
+	_, err = units.SetUnitStatus(ctx, source.ID, "reviewed", userID)
+	require.NoError(t, err)
+	_, err = units.SetUnitStatus(ctx, source.ID, "classroom_ready", userID)
+	require.NoError(t, err)
+
+	revsV1, err := units.ListRevisions(ctx, source.ID)
+	require.NoError(t, err)
+	require.Len(t, revsV1, 1)
+	revV1ID := revsV1[0].ID
+
+	// Version 2: update blocks and re-publish (archive → classroom_ready creates a new revision).
+	_, err = units.SetUnitStatus(ctx, source.ID, "archived", userID)
+	require.NoError(t, err)
+	blocksV2 := json.RawMessage(`{"type":"doc","content":[{"type":"prose","attrs":{"id":"b1"},"content":[{"type":"text","text":"v2"}]}]}`)
+	_, err = units.SaveDocument(ctx, source.ID, blocksV2)
+	require.NoError(t, err)
+	_, err = units.SetUnitStatus(ctx, source.ID, "classroom_ready", userID)
+	require.NoError(t, err)
+
+	// Fork and pin to v1.
+	child, err := units.ForkUnit(ctx, source.ID, ForkTarget{
+		Scope: "org", ScopeID: &orgID, CallerID: userID,
+	})
+	require.NoError(t, err)
+
+	_, err = units.UpdateOverlay(ctx, child.ID, UpdateOverlayInput{
+		ParentRevisionID: &revV1ID,
+	})
+	require.NoError(t, err)
+
+	composed, err := units.GetComposedDocument(ctx, child.ID)
+	require.NoError(t, err)
+	require.NotNil(t, composed)
+
+	// Composed should show v1 content, not v2.
+	var doc map[string]interface{}
+	require.NoError(t, json.Unmarshal(composed, &doc))
+	content := doc["content"].([]interface{})
+	require.Len(t, content, 1)
+	block := content[0].(map[string]interface{})
+	inner := block["content"].([]interface{})
+	text := inner[0].(map[string]interface{})
+	assert.Equal(t, "v1", text["text"], "pinned revision should use v1 blocks")
+}
+
+func TestTeachingUnitStore_GetComposedDocument_FloatingUsesLatest(t *testing.T) {
+	units, _, orgID, userID := setupUnitEnv(t, t.Name())
+	ctx := context.Background()
+
+	source := mustCreateUnit(t, units, CreateTeachingUnitInput{
+		Scope: "platform", Title: "Float Latest Source", CreatedBy: userID,
+	})
+
+	// Version 1: save blocks and publish.
+	blocksV1 := json.RawMessage(`{"type":"doc","content":[{"type":"prose","attrs":{"id":"b1"},"content":[{"type":"text","text":"v1"}]}]}`)
+	_, err := units.SaveDocument(ctx, source.ID, blocksV1)
+	require.NoError(t, err)
+	_, err = units.SetUnitStatus(ctx, source.ID, "reviewed", userID)
+	require.NoError(t, err)
+	_, err = units.SetUnitStatus(ctx, source.ID, "classroom_ready", userID)
+	require.NoError(t, err)
+
+	// Fork (floating by default).
+	child, err := units.ForkUnit(ctx, source.ID, ForkTarget{
+		Scope: "org", ScopeID: &orgID, CallerID: userID,
+	})
+	require.NoError(t, err)
+
+	// Version 2: update parent and re-publish.
+	_, err = units.SetUnitStatus(ctx, source.ID, "archived", userID)
+	require.NoError(t, err)
+	blocksV2 := json.RawMessage(`{"type":"doc","content":[{"type":"prose","attrs":{"id":"b1"},"content":[{"type":"text","text":"v2"}]}]}`)
+	_, err = units.SaveDocument(ctx, source.ID, blocksV2)
+	require.NoError(t, err)
+	_, err = units.SetUnitStatus(ctx, source.ID, "classroom_ready", userID)
+	require.NoError(t, err)
+
+	// Composed should now use v2 (latest published).
+	composed, err := units.GetComposedDocument(ctx, child.ID)
+	require.NoError(t, err)
+	require.NotNil(t, composed)
+
+	var doc map[string]interface{}
+	require.NoError(t, json.Unmarshal(composed, &doc))
+	content := doc["content"].([]interface{})
+	require.Len(t, content, 1)
+	block := content[0].(map[string]interface{})
+	inner := block["content"].([]interface{})
+	text := inner[0].(map[string]interface{})
+	assert.Equal(t, "v2", text["text"], "floating should use latest published revision")
+}
+
+// ── GetLineage ──────────────────────────────────────────────────────────────
+
+func TestTeachingUnitStore_GetLineage_NoOverlay(t *testing.T) {
+	units, _, _, userID := setupUnitEnv(t, t.Name())
+	ctx := context.Background()
+
+	u := mustCreateUnit(t, units, CreateTeachingUnitInput{
+		Scope: "personal", ScopeID: &userID, Title: "Lone Unit", CreatedBy: userID,
+	})
+
+	lineage, err := units.GetLineage(ctx, u.ID)
+	require.NoError(t, err)
+	require.Len(t, lineage, 1, "non-forked unit should have lineage of just itself")
+	assert.Equal(t, u.ID, lineage[0].UnitID)
+	assert.Equal(t, "Lone Unit", lineage[0].Title)
+}
+
+func TestTeachingUnitStore_GetLineage_ChildParent(t *testing.T) {
+	units, _, orgID, userID := setupUnitEnv(t, t.Name())
+	ctx := context.Background()
+
+	parent := mustCreateUnit(t, units, CreateTeachingUnitInput{
+		Scope: "platform", Title: "Parent", CreatedBy: userID,
+	})
+
+	child, err := units.ForkUnit(ctx, parent.ID, ForkTarget{
+		Scope: "org", ScopeID: &orgID, CallerID: userID,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, child)
+
+	lineage, err := units.GetLineage(ctx, child.ID)
+	require.NoError(t, err)
+	require.Len(t, lineage, 2, "child → parent = 2 entries")
+	// Root-first.
+	assert.Equal(t, parent.ID, lineage[0].UnitID)
+	assert.Equal(t, child.ID, lineage[1].UnitID)
+}
+
+func TestTeachingUnitStore_GetLineage_ThreeGenerations(t *testing.T) {
+	units, _, orgID, userID := setupUnitEnv(t, t.Name())
+	ctx := context.Background()
+
+	grandparent := mustCreateUnit(t, units, CreateTeachingUnitInput{
+		Scope: "platform", Title: "Grandparent", CreatedBy: userID,
+	})
+
+	parentUnit, err := units.ForkUnit(ctx, grandparent.ID, ForkTarget{
+		Scope: "org", ScopeID: &orgID, CallerID: userID,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, parentUnit)
+
+	child, err := units.ForkUnit(ctx, parentUnit.ID, ForkTarget{
+		Scope: "personal", ScopeID: &userID, CallerID: userID,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, child)
+
+	lineage, err := units.GetLineage(ctx, child.ID)
+	require.NoError(t, err)
+	require.Len(t, lineage, 3, "child → parent → grandparent = 3 entries")
+	// Root-first.
+	assert.Equal(t, grandparent.ID, lineage[0].UnitID)
+	assert.Equal(t, parentUnit.ID, lineage[1].UnitID)
+	assert.Equal(t, child.ID, lineage[2].UnitID)
 }
