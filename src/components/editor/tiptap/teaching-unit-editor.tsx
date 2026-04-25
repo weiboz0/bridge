@@ -6,11 +6,31 @@ import { EditorContent, type Editor, type JSONContent, useEditor } from "@tiptap
 import { InputRule } from "@tiptap/core"
 import { Button } from "@/components/ui/button"
 import { teachingUnitExtensions } from "./extensions"
+import { useYjsTiptap } from "@/lib/yjs/use-yjs-tiptap"
+
+/** Options for enabling real-time collaborative editing via Yjs/Hocuspocus. */
+export interface CollaborativeOptions {
+  /** The unit ID — used as the Hocuspocus document name (`unit:{unitId}`). */
+  unitId: string
+  /** Authenticated user ID — used for the Hocuspocus auth token and cursor color. */
+  userId: string
+  /** Display name shown on the awareness cursor label. */
+  userName: string
+  /** Optional explicit cursor color. Derived from userId hash when omitted. */
+  userColor?: string
+}
 
 export interface TeachingUnitEditorProps {
   initialDoc?: JSONContent
   onSave: (doc: JSONContent) => Promise<void>
   onDirty?: (dirty: boolean) => void
+  /**
+   * When provided, the editor runs in collaborative mode via Yjs + Hocuspocus.
+   * Yjs becomes the source of truth; `initialDoc` is ignored once any remote
+   * state has synced.  The `onSave` callback still works — it serializes the
+   * current editor JSON and calls the save API.
+   */
+  collaborative?: CollaborativeOptions
 }
 
 export interface TeachingUnitEditorHandle {
@@ -117,13 +137,29 @@ function makeSlashCommandExtension() {
 }
 
 export const TeachingUnitEditor = forwardRef<TeachingUnitEditorHandle, TeachingUnitEditorProps>(
-function TeachingUnitEditor({ initialDoc, onSave, onDirty }, ref) {
+function TeachingUnitEditor({ initialDoc, onSave, onDirty, collaborative }, ref) {
+  // Collaborative mode: set up Yjs binding when `collaborative` is provided.
+  // The hook is always called (Rules of Hooks) but does nothing when
+  // `unitId` or `userId` are empty strings.
+  const { extensions: yjsExtensions, connected } = useYjsTiptap({
+    unitId: collaborative?.unitId ?? "",
+    userId: collaborative?.userId ?? "",
+    userName: collaborative?.userName ?? "",
+    userColor: collaborative?.userColor,
+  })
+
+  const isCollaborative = Boolean(collaborative) && yjsExtensions.length > 0
+
   const editor = useEditor({
     extensions: [
       ...teachingUnitExtensions(),
       makeSlashCommandExtension(),
+      ...(isCollaborative ? yjsExtensions : []),
     ],
-    content: initialDoc ?? { type: "doc", content: [] },
+    // When collaborative, omit `content` so Yjs drives the initial state.
+    // We still pass initialDoc as a content seed when not yet connected so
+    // the editor isn't blank during the brief connection window.
+    content: isCollaborative ? undefined : (initialDoc ?? { type: "doc", content: [] }),
     onCreate({ editor: e }: any) {
       assignMissingTopLevelNodeIds(e as Editor)
     },
@@ -213,7 +249,7 @@ function TeachingUnitEditor({ initialDoc, onSave, onDirty }, ref) {
   return (
     <div className="space-y-3">
       {/* Toolbar */}
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <Button onClick={handleInsertProblem} variant="outline" size="sm">
           + Problem
         </Button>
@@ -229,6 +265,18 @@ function TeachingUnitEditor({ initialDoc, onSave, onDirty }, ref) {
         <Button variant="default" size="sm" onClick={handleSave}>
           Save
         </Button>
+        {/* Collaborative status indicator — only shown in collaborative mode */}
+        {collaborative && (
+          <span
+            className={
+              connected
+                ? "ml-auto text-xs font-medium text-green-600"
+                : "ml-auto text-xs font-medium text-zinc-400"
+            }
+          >
+            {connected ? "Live" : "Connecting..."}
+          </span>
+        )}
       </div>
       <p className="text-xs text-zinc-400">
         Tip: type{" "}

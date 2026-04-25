@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback, useRef } from "react"
 import { useParams } from "next/navigation"
+import { useSession } from "next-auth/react"
 import Link from "next/link"
 import type { JSONContent } from "@tiptap/react"
 import { Button, buttonVariants } from "@/components/ui/button"
@@ -151,6 +152,7 @@ type PreviewState =
 
 export default function EditUnitPage() {
   const { id } = useParams<{ id: string }>()
+  const { data: session } = useSession()
   const [state, setState] = useState<LoadState>({ status: "loading" })
   const [saveMessage, setSaveMessage] = useState<string | null>(null)
   const [preview, setPreview] = useState<PreviewState>({ active: false })
@@ -426,6 +428,15 @@ export default function EditUnitPage() {
           ref={editorRef}
           initialDoc={doc ?? undefined}
           onSave={handleSave}
+          collaborative={
+            session?.user?.id
+              ? {
+                  unitId: id,
+                  userId: session.user.id,
+                  userName: session.user.name ?? session.user.email ?? "Teacher",
+                }
+              : undefined
+          }
         />
       )}
     </div>

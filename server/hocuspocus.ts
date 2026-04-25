@@ -76,6 +76,17 @@ const server = new Server({
       return { userId, role };
     }
 
+    // Plan 035 — unit:{unitId} namespace for teaching unit collaborative editing.
+    // The Hocuspocus server provides realtime CRDT sync only; persistence happens
+    // via the teaching-unit API (save button), not Hocuspocus's onStoreDocument.
+    // Auth: only teachers (role === "teacher") may edit unit documents.
+    if (parts[0] === "unit" && parts[1]) {
+      if (role !== "teacher") {
+        throw new Error("Access denied: only teachers may collaborate on unit documents");
+      }
+      return { userId, role };
+    }
+
     if (documentName === "noop") {
       return { userId, role };
     }
@@ -84,7 +95,9 @@ const server = new Server({
   },
 
   async onLoadDocument({ document, documentName }: { document: Y.Doc; documentName: string }) {
-    if (documentName.startsWith("broadcast:") || documentName === "noop") return document;
+    // unit:* documents are not persisted via Hocuspocus — realtime sync only.
+    // The editor saves to the teaching-unit API on demand.
+    if (documentName.startsWith("broadcast:") || documentName === "noop" || documentName.startsWith("unit:")) return document;
 
     try {
       let yjsState: string | null = null;
@@ -107,7 +120,9 @@ const server = new Server({
   },
 
   async onStoreDocument({ document, documentName }: { document: Y.Doc; documentName: string }) {
-    if (documentName.startsWith("broadcast:") || documentName === "noop") return;
+    // unit:* documents are not persisted via Hocuspocus — realtime sync only.
+    // The editor saves to the teaching-unit API on demand.
+    if (documentName.startsWith("broadcast:") || documentName === "noop" || documentName.startsWith("unit:")) return;
 
     try {
       const update = Y.encodeStateAsUpdate(document);
