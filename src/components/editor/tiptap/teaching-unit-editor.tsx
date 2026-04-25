@@ -87,6 +87,10 @@ function assignMissingTopLevelNodeIds(editor: Editor) {
  */
 function mapAIBlockToTiptap(block: Record<string, unknown>): JSONContent {
   const blockType = typeof block.type === "string" ? block.type : ""
+
+  // The Go endpoint returns blocks with structured `content` arrays (valid
+  // Tiptap JSON). Text-only fallback for plain-string responses.
+  const hasStructuredContent = Array.isArray(block.content)
   const text =
     typeof block.text === "string"
       ? block.text
@@ -96,8 +100,14 @@ function mapAIBlockToTiptap(block: Record<string, unknown>): JSONContent {
 
   switch (blockType) {
     case "prose":
-      // "prose" maps to one or more paragraphs. Split on double-newlines so
-      // multi-paragraph prose becomes multiple paragraph nodes.
+      // Go returns: { type:"prose", content:[{type:"paragraph",...}] }
+      // "prose" isn't a Tiptap node — unwrap to its children (paragraphs).
+      if (hasStructuredContent) {
+        return {
+          type: "doc",
+          content: block.content as JSONContent[],
+        }
+      }
       if (!text) return { type: "paragraph" }
       return {
         type: "doc",
@@ -122,6 +132,14 @@ function mapAIBlockToTiptap(block: Record<string, unknown>): JSONContent {
     }
 
     case "teacher-note":
+      // Go returns valid Tiptap JSON with content array — pass through
+      if (hasStructuredContent) {
+        return {
+          type: "teacher-note",
+          attrs: { id: nanoid(), ...(block.attrs as Record<string, unknown> ?? {}) },
+          content: block.content as JSONContent[],
+        }
+      }
       return {
         type: "teacher-note",
         attrs: { id: nanoid() },
@@ -134,14 +152,17 @@ function mapAIBlockToTiptap(block: Record<string, unknown>): JSONContent {
       }
 
     case "code-snippet": {
+      // Go returns: { type:"code-snippet", attrs:{id, language, code} }
+      // Attrs come from Go — merge with a fresh ID
+      const attrs = (block.attrs as Record<string, unknown>) ?? {}
       const language =
-        typeof block.language === "string" ? block.language : "python"
+        typeof attrs.language === "string" ? attrs.language
+        : typeof block.language === "string" ? block.language
+        : "python"
       const code =
-        typeof block.code === "string"
-          ? block.code
-          : typeof block.text === "string"
-            ? block.text
-            : ""
+        typeof attrs.code === "string" ? attrs.code
+        : typeof block.code === "string" ? block.code
+        : text
       return {
         type: "code-snippet",
         attrs: { id: nanoid(), language, code },
@@ -150,15 +171,20 @@ function mapAIBlockToTiptap(block: Record<string, unknown>): JSONContent {
 
     case "problem-ref":
     case "problem": {
+      const attrs = (block.attrs as Record<string, unknown>) ?? {}
       const problemId =
-        typeof block.problemId === "string" ? block.problemId : ""
+        typeof attrs.problemId === "string" ? attrs.problemId
+        : typeof block.problemId === "string" ? block.problemId
+        : ""
+      const visibility =
+        typeof attrs.visibility === "string" ? attrs.visibility : "always"
       return {
         type: "problem-ref",
         attrs: {
           id: nanoid(),
           problemId,
           pinnedRevision: null,
-          visibility: "always",
+          visibility,
           overrideStarter: null,
         },
       }
