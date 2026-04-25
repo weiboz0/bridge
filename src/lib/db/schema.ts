@@ -677,6 +677,49 @@ export const unitOverlays = pgTable("unit_overlays", {
   parentIdx: index("unit_overlays_parent_idx").on(t.parentUnitId),
 }));
 
+// --- Unit Collections ---
+
+export const unitCollections = pgTable(
+  "unit_collections",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    scope: varchar("scope", { length: 16 })
+      .$type<"platform" | "org" | "personal">()
+      .notNull(),
+    scopeId: uuid("scope_id"),
+    title: varchar("title", { length: 255 }).notNull(),
+    description: text("description").notNull().default(""),
+    createdBy: uuid("created_by")
+      .notNull()
+      .references(() => users.id),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => ({
+    scopeIdx: index("unit_collections_scope_idx").on(t.scope, t.scopeId),
+  })
+);
+
+export const unitCollectionItems = pgTable(
+  "unit_collection_items",
+  {
+    collectionId: uuid("collection_id")
+      .notNull()
+      .references(() => unitCollections.id, { onDelete: "cascade" }),
+    unitId: uuid("unit_id")
+      .notNull()
+      .references(() => teachingUnits.id, { onDelete: "cascade" }),
+    sortOrder: integer("sort_order").notNull().default(0),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.collectionId, t.unitId] }),
+  })
+);
+
 // --- Parent Reports ---
 
 export const parentReports = pgTable(
