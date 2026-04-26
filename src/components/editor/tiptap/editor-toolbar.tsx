@@ -26,6 +26,8 @@ import {
   ChevronDown,
   HelpCircle,
   Monitor,
+  Sun,
+  Moon,
 } from "lucide-react"
 import { ALL_ITEMS, type SlashMenuItem } from "./slash-menu"
 
@@ -488,6 +490,10 @@ interface EditorToolbarProps {
   presentationMode?: boolean
   /** Toggle presentation mode. */
   onTogglePresentation?: () => void
+  /** Whether editor dark mode is active (Gap 8). */
+  editorDark?: boolean
+  /** Toggle editor dark mode. */
+  onToggleDarkMode?: () => void
 }
 
 export function EditorToolbar({
@@ -500,6 +506,8 @@ export function EditorToolbar({
   onShowHelp,
   presentationMode,
   onTogglePresentation,
+  editorDark,
+  onToggleDarkMode,
 }: EditorToolbarProps) {
   const [showLinkInput, setShowLinkInput] = useState(false)
   const [showColorPicker, setShowColorPicker] = useState(false)
@@ -668,8 +676,17 @@ export function EditorToolbar({
 
       {showShortcuts && <ShortcutsModal onClose={() => setShowShortcuts(false)} />}
 
-      {/* Right side: Present, AI, Help, Save, Collab status */}
+      {/* Right side: Dark mode, Present, AI, Help, Save, Collab status */}
       <div className="ml-auto flex items-center gap-2">
+        {onToggleDarkMode && (
+          <ToolbarButton
+            onClick={onToggleDarkMode}
+            active={editorDark}
+            title={editorDark ? "Light mode" : "Dark mode"}
+          >
+            {editorDark ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}
+          </ToolbarButton>
+        )}
         {onTogglePresentation && (
           <ToolbarButton
             onClick={onTogglePresentation}

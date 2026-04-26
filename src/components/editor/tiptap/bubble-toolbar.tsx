@@ -21,6 +21,7 @@ import {
   Unlink,
   Loader2,
   ChevronDown,
+  Pilcrow,
 } from "lucide-react"
 
 // ---------------------------------------------------------------------------
@@ -324,6 +325,124 @@ function AIDropdown({ editor, unitId, onClose }: AIDropdownProps) {
 }
 
 // ---------------------------------------------------------------------------
+// Turn Into dropdown for bubble menu (Gap 7)
+// ---------------------------------------------------------------------------
+
+interface TurnIntoItem {
+  label: string
+  nodeType: string
+  level?: number
+  action: (editor: Editor) => void
+}
+
+const TURN_INTO_ITEMS: TurnIntoItem[] = [
+  {
+    label: "Paragraph",
+    nodeType: "paragraph",
+    action: (editor) => editor.chain().focus().setParagraph().run(),
+  },
+  {
+    label: "Heading 1",
+    nodeType: "heading",
+    level: 1,
+    action: (editor) => editor.chain().focus().setHeading({ level: 1 }).run(),
+  },
+  {
+    label: "Heading 2",
+    nodeType: "heading",
+    level: 2,
+    action: (editor) => editor.chain().focus().setHeading({ level: 2 }).run(),
+  },
+  {
+    label: "Heading 3",
+    nodeType: "heading",
+    level: 3,
+    action: (editor) => editor.chain().focus().setHeading({ level: 3 }).run(),
+  },
+  {
+    label: "Bullet List",
+    nodeType: "bulletList",
+    action: (editor) => editor.chain().focus().toggleBulletList().run(),
+  },
+  {
+    label: "Blockquote",
+    nodeType: "blockquote",
+    action: (editor) => editor.chain().focus().toggleBlockquote().run(),
+  },
+  {
+    label: "Code Block",
+    nodeType: "codeBlock",
+    action: (editor) => editor.chain().focus().toggleCodeBlock().run(),
+  },
+]
+
+function TurnIntoDropdown({ editor }: { editor: Editor }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  // Determine current block type label
+  const current = TURN_INTO_ITEMS.find((item) => {
+    if (item.nodeType === "heading" && item.level !== undefined) {
+      return editor.isActive("heading", { level: item.level })
+    }
+    return editor.isActive(item.nodeType)
+  })
+  const currentLabel = current?.label ?? "Paragraph"
+
+  useEffect(() => {
+    if (!open) return
+    const handleClickOutside = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false)
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside)
+    return () => document.removeEventListener("mousedown", handleClickOutside)
+  }, [open])
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        title="Turn into"
+        className={
+          "flex h-7 items-center gap-0.5 rounded px-1.5 text-xs font-medium text-zinc-600 transition-colors " +
+          "hover:bg-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400"
+        }
+      >
+        <Pilcrow className="h-3 w-3" />
+        <span className="max-w-16 truncate">{currentLabel}</span>
+        <ChevronDown className="h-2.5 w-2.5" />
+      </button>
+      {open && (
+        <div className="absolute left-0 top-full z-50 mt-1 w-36 rounded-lg border border-zinc-200 bg-white py-1 shadow-lg">
+          {TURN_INTO_ITEMS.map((item) => {
+            const isActive = item.label === currentLabel
+            return (
+              <button
+                key={item.label}
+                type="button"
+                className={
+                  "flex w-full items-center px-3 py-1.5 text-left text-sm transition-colors hover:bg-zinc-100 " +
+                  (isActive ? "bg-zinc-50 font-medium text-zinc-900" : "text-zinc-600")
+                }
+                onClick={() => {
+                  item.action(editor)
+                  setOpen(false)
+                }}
+              >
+                {item.label}
+              </button>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Bubble toolbar
 // ---------------------------------------------------------------------------
 
@@ -367,6 +486,12 @@ export function BubbleToolbar({ editor, unitId }: BubbleToolbarProps) {
         <ColorPicker editor={editor} onClose={() => setShowColorPicker(false)} />
       ) : (
         <>
+          {/* Turn Into dropdown (Gap 7) */}
+          <TurnIntoDropdown editor={editor} />
+
+          {/* Divider */}
+          <div className="mx-0.5 h-5 w-px bg-zinc-200" aria-hidden="true" />
+
           {/* Inline formatting */}
           <ToolbarButton
             onClick={() => editor.chain().focus().toggleBold().run()}
