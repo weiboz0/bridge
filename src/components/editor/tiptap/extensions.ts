@@ -26,6 +26,11 @@ import { SolutionRefNode } from "./solution-ref-node"
 import { TestCaseRefNode } from "./test-case-ref-node"
 import { LiveCueNode } from "./live-cue-node"
 import { AssignmentVariantNode } from "./assignment-variant-node"
+import { CalloutNode } from "./callout-node"
+import { ToggleNode } from "./toggle-node"
+import { BookmarkNode } from "./bookmark-node"
+import { TocNode } from "./toc-node"
+import { ColumnsNode, ColumnNode } from "./columns-node"
 
 export function teachingUnitExtensions(): AnyExtension[] {
   return [
@@ -71,5 +76,12 @@ export function teachingUnitExtensions(): AnyExtension[] {
     TestCaseRefNode,
     LiveCueNode,
     AssignmentVariantNode,
+    // Phase 3 block types
+    CalloutNode,
+    ToggleNode,
+    BookmarkNode,
+    TocNode,
+    ColumnsNode,
+    ColumnNode,
   ] as AnyExtension[]
 }

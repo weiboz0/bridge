@@ -38,6 +38,31 @@ export interface SlashMenuItem {
 
 const TEXT_ITEMS: SlashMenuItem[] = [
   {
+    id: "table",
+    label: "Table",
+    description: "Insert a 3×3 table",
+    badge: "TB",
+    category: "text",
+    command: ({ editor, range }) => {
+      editor
+        .chain()
+        .focus()
+        .deleteRange(range)
+        .insertTable({ rows: 3, cols: 3, withHeaderRow: true })
+        .run()
+    },
+  },
+  {
+    id: "taskList",
+    label: "To-do List",
+    description: "Interactive checklist with checkboxes",
+    badge: "☑",
+    category: "text",
+    command: ({ editor, range }) => {
+      editor.chain().focus().deleteRange(range).toggleTaskList().run()
+    },
+  },
+  {
     id: "heading1",
     label: "Heading 1",
     description: "Large section heading",
@@ -257,6 +282,105 @@ const TEACHING_ITEMS: SlashMenuItem[] = [
   },
 ]
 
+const BLOCK_ITEMS: SlashMenuItem[] = [
+  {
+    id: "callout",
+    label: "Callout",
+    description: "Info, warning, tip, or danger callout box",
+    badge: "CL",
+    category: "teaching",
+    command: ({ editor, range }) => {
+      editor
+        .chain()
+        .focus()
+        .deleteRange(range)
+        .insertContent({
+          type: "callout",
+          attrs: { id: nanoid(), variant: "info" },
+          content: [{ type: "paragraph" }],
+        })
+        .run()
+    },
+  },
+  {
+    id: "toggle",
+    label: "Toggle",
+    description: "Collapsible block with editable summary",
+    badge: "▶",
+    category: "teaching",
+    command: ({ editor, range }) => {
+      editor
+        .chain()
+        .focus()
+        .deleteRange(range)
+        .insertContent({
+          type: "toggle-block",
+          attrs: { id: nanoid(), summary: "" },
+          content: [{ type: "paragraph" }],
+        })
+        .run()
+    },
+  },
+  {
+    id: "bookmark",
+    label: "Bookmark",
+    description: "Link preview card with title and description",
+    badge: "BM",
+    category: "teaching",
+    command: ({ editor, range }) => {
+      editor
+        .chain()
+        .focus()
+        .deleteRange(range)
+        .insertContent({
+          type: "bookmark",
+          attrs: { id: nanoid(), url: "", title: null, description: null, image: null },
+        })
+        .run()
+    },
+  },
+  {
+    id: "toc",
+    label: "Table of Contents",
+    description: "Auto-generated list of document headings",
+    badge: "TC",
+    category: "teaching",
+    command: ({ editor, range }) => {
+      editor
+        .chain()
+        .focus()
+        .deleteRange(range)
+        .insertContent({
+          type: "toc",
+          attrs: { id: nanoid() },
+        })
+        .run()
+    },
+  },
+  {
+    id: "columns",
+    label: "Columns",
+    description: "Two-column side-by-side layout",
+    badge: "||",
+    category: "teaching",
+    command: ({ editor, range }) => {
+      editor
+        .chain()
+        .focus()
+        .deleteRange(range)
+        .insertContent({
+          type: "columns",
+          attrs: { id: nanoid() },
+          content: [
+            { type: "column", content: [{ type: "paragraph" }] },
+            { type: "column", content: [{ type: "paragraph" }] },
+          ],
+        })
+        .run()
+    },
+  },
+]
+
 const AI_ITEMS: SlashMenuItem[] = [
   {
     id: "aiWriter",
@@ -272,7 +396,7 @@ const AI_ITEMS: SlashMenuItem[] = [
   },
 ]
 
-export const ALL_ITEMS: SlashMenuItem[] = [...AI_ITEMS, ...TEXT_ITEMS, ...TEACHING_ITEMS]
+export const ALL_ITEMS: SlashMenuItem[] = [...AI_ITEMS, ...TEXT_ITEMS, ...TEACHING_ITEMS, ...BLOCK_ITEMS]
 
 // ---------------------------------------------------------------------------
 // Filter logic

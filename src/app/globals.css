@@ -267,6 +267,25 @@
 .ProseMirror [style*="text-align: center"] { text-align: center; }
 .ProseMirror [style*="text-align: right"] { text-align: right; }
 
+/* ── Callout (Plan 037) ─────────────────────────────────────────────────── */
+.callout-node { margin: 0.75rem 0; }
+
+/* ── Toggle / collapsible (Plan 037) ───────────────────────────────────── */
+.toggle-node { margin: 0.5rem 0; }
+
+/* ── Bookmark (Plan 037) ────────────────────────────────────────────────── */
+.bookmark-node { margin: 0.75rem 0; }
+.bookmark-node a { text-decoration: none; }
+
+/* ── Table of Contents (Plan 037) ──────────────────────────────────────── */
+.toc-node { margin: 1rem 0; }
+
+/* ── Columns layout (Plan 037) ─────────────────────────────────────────── */
+.columns-node { margin: 0.75rem 0; }
+.columns-node .column-node { min-width: 0; flex: 1; }
+/* Keep the NodeViewContent flex children arranged in a row */
+.columns-node [data-node-view-content] { display: flex; flex-direction: row; gap: 1rem; width: 100%; }
+
 /* ── Collaboration cursor styles (Plan 035) ─────────────────────────────── */
 /* Rendered by @tiptap/extension-collaboration-cursor for co-editor labels.  */
 .collaboration-cursor__caret {

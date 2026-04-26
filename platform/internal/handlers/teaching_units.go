@@ -67,6 +67,21 @@ var knownBlockTypes = map[string]bool{
 	"test-case-ref":      true,
 	"live-cue":           true,
 	"assignment-variant": true,
+	// Table (StarterKit-adjacent, no custom ID needed)
+	"table":       true,
+	"tableRow":    true,
+	"tableCell":   true,
+	"tableHeader": true,
+	// Task list (StarterKit-adjacent, no custom ID needed)
+	"taskList": true,
+	"taskItem": true,
+	// Phase 3 custom block types
+	"callout":      true,
+	"toggle-block": true,
+	"bookmark":     true,
+	"toc":          true,
+	"columns":      true,
+	"column":       true,
 }
 
 const maxUnitTitleLen = 255
@@ -193,7 +208,8 @@ func validateBlockDocument(raw json.RawMessage) error {
 
 	// Block types that carry attrs.id (custom teaching-unit blocks).
 	// Standard StarterKit structural blocks (paragraph, heading, etc.)
-	// don't need IDs — they're just rich text.
+	// don't need IDs — they're just rich text. Table/taskList extensions
+	// are StarterKit-adjacent and also don't use custom IDs.
 	blockTypesRequiringID := map[string]bool{
 		"prose":              true,
 		"problem-ref":        true,
@@ -204,6 +220,12 @@ func validateBlockDocument(raw json.RawMessage) error {
 		"test-case-ref":      true,
 		"live-cue":           true,
 		"assignment-variant": true,
+		// Phase 3 custom block types
+		"callout":      true,
+		"toggle-block": true,
+		"bookmark":     true,
+		"toc":          true,
+		"columns":      true,
 	}
 
 	// Walk top-level blocks.
