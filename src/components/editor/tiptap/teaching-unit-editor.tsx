@@ -6,9 +6,11 @@ import { EditorContent, type Editor, type JSONContent, useEditor } from "@tiptap
 import { Button } from "@/components/ui/button"
 import { teachingUnitExtensions } from "./extensions"
 import { SlashCommandExtension } from "./slash-menu"
+import { BlockKeyboardShortcuts } from "./keyboard-shortcuts"
 import { AIDraftPanel } from "./ai-draft-panel"
 import { BubbleToolbar } from "./bubble-toolbar"
 import { EditorToolbar } from "./editor-toolbar"
+import { BlockHandle } from "./block-handle"
 import { useYjsTiptap } from "@/lib/yjs/use-yjs-tiptap"
 
 /** Options for enabling real-time collaborative editing via Yjs/Hocuspocus. */
@@ -392,6 +394,7 @@ function TeachingUnitEditor({ initialDoc, onSave, onDirty, unitId, collaborative
     extensions: [
       ...teachingUnitExtensions(),
       SlashCommandExtension,
+      BlockKeyboardShortcuts,
       ...(isCollaborative ? yjsExtensions : []),
     ],
     content: isCollaborative && connected
@@ -438,6 +441,13 @@ function TeachingUnitEditor({ initialDoc, onSave, onDirty, unitId, collaborative
   useImperativeHandle(ref, () => ({
     save: handleSave,
   }), [handleSave])
+
+  // Listen for keyboard-shortcut–triggered save (Mod-Enter)
+  useEffect(() => {
+    const handler = () => { handleSave() }
+    window.addEventListener("tiptap:save", handler)
+    return () => window.removeEventListener("tiptap:save", handler)
+  }, [handleSave])
 
   // Listen for the inline AI trigger from the slash menu
   useEffect(() => {
@@ -520,10 +530,11 @@ function TeachingUnitEditor({ initialDoc, onSave, onDirty, unitId, collaborative
         </div>
       )}
 
-      {/* Editor content with bubble toolbar */}
-      <div className="rounded-b-lg border border-t-0 border-zinc-200 bg-zinc-50">
+      {/* Editor content with bubble toolbar and block handle */}
+      <div className="relative rounded-b-lg border border-t-0 border-zinc-200 bg-zinc-50">
         {editor && <BubbleToolbar editor={editor} />}
-        <EditorContent editor={editor} className="min-h-60 px-3 py-2" />
+        {editor && <BlockHandle editor={editor} />}
+        <EditorContent editor={editor} className="min-h-60 px-3 py-2 pl-10" />
       </div>
     </div>
   )
