@@ -1,4 +1,5 @@
 import type { AnyExtension } from "@tiptap/react"
+import { Extension } from "@tiptap/core"
 import StarterKit from "@tiptap/starter-kit"
 import Underline from "@tiptap/extension-underline"
 import Link from "@tiptap/extension-link"
@@ -33,6 +34,47 @@ import { TocNode } from "./toc-node"
 import { ColumnsNode, ColumnNode } from "./columns-node"
 import { MathBlockNode, MathInlineNode } from "./math-node"
 import { EmojiPickerExtension } from "./emoji-picker"
+import { MentionNode, MentionSuggestionExtension } from "./mention-node"
+
+// ---------------------------------------------------------------------------
+// Block-level color attribute (Gap 3)
+// ---------------------------------------------------------------------------
+
+export const BLOCK_COLORS = [
+  { label: "Default", value: "" },
+  { label: "Light Gray", value: "block-color-gray" },
+  { label: "Light Yellow", value: "block-color-yellow" },
+  { label: "Light Green", value: "block-color-green" },
+  { label: "Light Blue", value: "block-color-blue" },
+  { label: "Light Purple", value: "block-color-purple" },
+  { label: "Light Pink", value: "block-color-pink" },
+  { label: "Light Red", value: "block-color-red" },
+] as const
+
+const BlockColorExtension = Extension.create({
+  name: "blockColor",
+
+  addGlobalAttributes() {
+    return [
+      {
+        types: ["paragraph", "heading", "bulletList", "orderedList", "blockquote", "codeBlock", "taskList"],
+        attributes: {
+          blockColor: {
+            default: null,
+            parseHTML: (element: HTMLElement) => element.getAttribute("data-block-color") || null,
+            renderHTML: (attributes: Record<string, unknown>) => {
+              if (!attributes.blockColor) return {}
+              return {
+                "data-block-color": attributes.blockColor as string,
+                class: attributes.blockColor as string,
+              }
+            },
+          },
+        },
+      },
+    ]
+  },
+})
 
 export function teachingUnitExtensions(): AnyExtension[] {
   return [
@@ -90,5 +132,10 @@ export function teachingUnitExtensions(): AnyExtension[] {
     MathInlineNode,
     // Emoji picker (:shortcode: suggestion)
     EmojiPickerExtension,
+    // @-mention (inline user pills)
+    MentionNode,
+    MentionSuggestionExtension,
+    // Block-level color (data-block-color attribute)
+    BlockColorExtension,
   ] as AnyExtension[]
 }

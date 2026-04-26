@@ -16,7 +16,11 @@ import {
   MoveDown,
   ChevronRight,
   Plus,
+  Palette,
+  Link2,
+  Clipboard,
 } from "lucide-react"
+import { BLOCK_COLORS } from "./extensions"
 import {
   moveBlockUp,
   moveBlockDown,
@@ -126,10 +130,20 @@ interface BlockHandleProps {
   editor: Editor
 }
 
+// ---------------------------------------------------------------------------
+// Platform detection for shortcut labels (Gap 10)
+// ---------------------------------------------------------------------------
+
+const IS_MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.userAgent)
+const MOD = IS_MAC ? "⌘" : "Ctrl"
+const SHIFT = IS_MAC ? "⇧" : "Shift"
+const DEL = IS_MAC ? "⌫" : "Del"
+
 export function BlockHandle({ editor }: BlockHandleProps) {
   const [hovered, setHovered] = useState<HoveredBlock | null>(null)
   const [menuOpen, setMenuOpen] = useState(false)
   const [turnIntoOpen, setTurnIntoOpen] = useState(false)
+  const [colorOpen, setColorOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
   const handleRef = useRef<HTMLDivElement>(null)
   const editorContainerRef = useRef<HTMLElement | null>(null)
@@ -148,7 +162,7 @@ export function BlockHandle({ editor }: BlockHandleProps) {
   // moving the mouse from the editor to the handle doesn't trigger mouseleave.
   useEffect(() => {
     // Listen on the wrapper that contains both the editor and the handle
-    const wrapper = editor.view.dom.closest("[data-block-handle-wrapper]") ?? editor.view.dom.parentElement ?? editor.view.dom
+    const wrapper = (editor.view.dom.closest("[data-block-handle-wrapper]") ?? editor.view.dom.parentElement ?? editor.view.dom) as HTMLElement
 
     const handleMouseMove = (e: MouseEvent) => {
       if (menuOpen) return
@@ -204,6 +218,7 @@ export function BlockHandle({ editor }: BlockHandleProps) {
       ) {
         setMenuOpen(false)
         setTurnIntoOpen(false)
+        setColorOpen(false)
         lockedPosRef.current = null
       }
     }
@@ -218,6 +233,7 @@ export function BlockHandle({ editor }: BlockHandleProps) {
       if (e.key === "Escape") {
         setMenuOpen(false)
         setTurnIntoOpen(false)
+        setColorOpen(false)
         lockedPosRef.current = null
       }
     }
@@ -245,48 +261,47 @@ export function BlockHandle({ editor }: BlockHandleProps) {
   )
 
   // Actions
+  const closeMenu = useCallback(() => {
+    setMenuOpen(false)
+    setTurnIntoOpen(false)
+    setColorOpen(false)
+    lockedPosRef.current = null
+  }, [])
+
   const handleDelete = useCallback(() => {
     const pos = lockedPosRef.current ?? hovered?.pos
     if (pos == null) return
     focusBlock(pos)
     deleteBlock(editor)
-    setMenuOpen(false)
-    setTurnIntoOpen(false)
-    lockedPosRef.current = null
+    closeMenu()
     setHovered(null)
-  }, [editor, hovered, focusBlock])
+  }, [editor, hovered, focusBlock, closeMenu])
 
   const handleDuplicate = useCallback(() => {
     const pos = lockedPosRef.current ?? hovered?.pos
     if (pos == null) return
     focusBlock(pos)
     duplicateBlock(editor)
-    setMenuOpen(false)
-    setTurnIntoOpen(false)
-    lockedPosRef.current = null
-  }, [editor, hovered, focusBlock])
+    closeMenu()
+  }, [editor, hovered, focusBlock, closeMenu])
 
   const handleMoveUp = useCallback(() => {
     const pos = lockedPosRef.current ?? hovered?.pos
     if (pos == null) return
     focusBlock(pos)
     moveBlockUp(editor)
-    setMenuOpen(false)
-    setTurnIntoOpen(false)
-    lockedPosRef.current = null
+    closeMenu()
     setHovered(null)
-  }, [editor, hovered, focusBlock])
+  }, [editor, hovered, focusBlock, closeMenu])
 
   const handleMoveDown = useCallback(() => {
     const pos = lockedPosRef.current ?? hovered?.pos
     if (pos == null) return
     focusBlock(pos)
     moveBlockDown(editor)
-    setMenuOpen(false)
-    setTurnIntoOpen(false)
-    lockedPosRef.current = null
+    closeMenu()
     setHovered(null)
-  }, [editor, hovered, focusBlock])
+  }, [editor, hovered, focusBlock, closeMenu])
 
   const handleTurnInto = useCallback(
     (item: TurnIntoItem) => {
@@ -294,12 +309,55 @@ export function BlockHandle({ editor }: BlockHandleProps) {
       if (pos == null) return
       focusBlock(pos)
       item.action(editor)
-      setMenuOpen(false)
-      setTurnIntoOpen(false)
-      lockedPosRef.current = null
+      closeMenu()
     },
-    [editor, hovered, focusBlock],
+    [editor, hovered, focusBlock, closeMenu],
   )
+
+  // Gap 3: Apply block color
+  const handleSetBlockColor = useCallback(
+    (colorClass: string) => {
+      const pos = lockedPosRef.current ?? hovered?.pos
+      if (pos == null) return
+      focusBlock(pos)
+      const node = editor.state.doc.nodeAt(pos)
+      if (!node) return
+      // Update the blockColor attribute
+      editor.chain().focus().updateAttributes(node.type.name, {
+        blockColor: colorClass || null,
+      }).run()
+      closeMenu()
+    },
+    [editor, hovered, focusBlock, closeMenu],
+  )
+
+  // Gap 9: Copy to clipboard
+  const handleCopyToClipboard = useCallback(() => {
+    const pos = lockedPosRef.current ?? hovered?.pos
+    if (pos == null) return
+    const node = editor.state.doc.nodeAt(pos)
+    if (!node) return
+    const text = node.textContent
+    navigator.clipboard.writeText(text).catch(() => {
+      // Fallback: silently fail
+    })
+    closeMenu()
+  }, [editor, hovered, closeMenu])
+
+  // Gap 9: Copy anchor link
+  const handleCopyLink = useCallback(() => {
+    const pos = lockedPosRef.current ?? hovered?.pos
+    if (pos == null) return
+    const node = editor.state.doc.nodeAt(pos)
+    if (!node) return
+    // Use node's id attr if available, otherwise generate from position
+    const blockId = (node.attrs as Record<string, unknown>)?.id ?? `pos-${pos}`
+    const url = `${window.location.origin}${window.location.pathname}#block-${blockId}`
+    navigator.clipboard.writeText(url).catch(() => {
+      // Fallback: silently fail
+    })
+    closeMenu()
+  }, [editor, hovered, closeMenu])
 
   // Handle "+" button on empty paragraphs — trigger slash menu
   const handlePlusClick = useCallback(() => {
@@ -321,6 +379,7 @@ export function BlockHandle({ editor }: BlockHandleProps) {
       setMenuOpen((prev) => {
         if (prev) {
           setTurnIntoOpen(false)
+          setColorOpen(false)
           lockedPosRef.current = null
         }
         return !prev
@@ -477,36 +536,98 @@ export function BlockHandle({ editor }: BlockHandleProps) {
         <div
           ref={menuRef}
           className={
-            "absolute left-0 top-full z-50 mt-1 w-48 rounded-md border border-zinc-200 " +
+            "absolute left-0 top-full z-50 mt-1 w-52 rounded-md border border-zinc-200 " +
             "bg-white py-1 shadow-lg"
           }
         >
           <MenuItem
             icon={<Trash2 className="h-3.5 w-3.5" />}
             label="Delete"
-            shortcut=""
+            shortcut={`${MOD}${SHIFT}${DEL}`}
             onClick={handleDelete}
           />
           <MenuItem
             icon={<Copy className="h-3.5 w-3.5" />}
             label="Duplicate"
-            shortcut=""
+            shortcut={`${MOD}${SHIFT}D`}
             onClick={handleDuplicate}
           />
           <MenuSeparator />
           <MenuItem
             icon={<MoveUp className="h-3.5 w-3.5" />}
             label="Move Up"
-            shortcut=""
+            shortcut={`${MOD}${SHIFT}↑`}
             onClick={handleMoveUp}
           />
           <MenuItem
             icon={<MoveDown className="h-3.5 w-3.5" />}
             label="Move Down"
-            shortcut=""
+            shortcut={`${MOD}${SHIFT}↓`}
             onClick={handleMoveDown}
           />
           <MenuSeparator />
+          {/* Copy actions (Gap 9) */}
+          <MenuItem
+            icon={<Clipboard className="h-3.5 w-3.5" />}
+            label="Copy to Clipboard"
+            shortcut={`${MOD}C`}
+            onClick={handleCopyToClipboard}
+          />
+          <MenuItem
+            icon={<Link2 className="h-3.5 w-3.5" />}
+            label="Copy Link"
+            shortcut=""
+            onClick={handleCopyLink}
+          />
+          <MenuSeparator />
+          {/* Color submenu (Gap 3) */}
+          <div className="relative">
+            <button
+              type="button"
+              className={
+                "flex w-full items-center justify-between px-3 py-1.5 text-left text-sm " +
+                "text-zinc-700 transition-colors hover:bg-zinc-100 " +
+                (colorOpen ? "bg-zinc-50" : "")
+              }
+              onClick={() => { setColorOpen(!colorOpen); setTurnIntoOpen(false) }}
+              onMouseEnter={() => { setColorOpen(true); setTurnIntoOpen(false) }}
+            >
+              <span className="flex items-center gap-2">
+                <Palette className="h-3.5 w-3.5 text-zinc-500" />
+                <span>Color</span>
+              </span>
+              <ChevronRight className="h-3.5 w-3.5 text-zinc-400" />
+            </button>
+            {colorOpen && (
+              <div
+                className={
+                  "absolute left-full top-0 z-50 ml-1 w-40 rounded-md border border-zinc-200 " +
+                  "bg-white py-1 shadow-lg"
+                }
+              >
+                {BLOCK_COLORS.map((color) => (
+                  <button
+                    key={color.label}
+                    type="button"
+                    className={
+                      "flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm " +
+                      "text-zinc-700 transition-colors hover:bg-zinc-100"
+                    }
+                    onClick={() => handleSetBlockColor(color.value)}
+                  >
+                    {color.value ? (
+                      <span className={`h-4 w-4 rounded border border-zinc-200 ${color.value}`} />
+                    ) : (
+                      <span className="flex h-4 w-4 items-center justify-center rounded border border-zinc-200 text-[8px] text-zinc-400">
+                        x
+                      </span>
+                    )}
+                    <span>{color.label}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
           {/* Turn into submenu */}
           <div className="relative">
             <button
@@ -516,8 +637,8 @@ export function BlockHandle({ editor }: BlockHandleProps) {
                 "text-zinc-700 transition-colors hover:bg-zinc-100 " +
                 (turnIntoOpen ? "bg-zinc-50" : "")
               }
-              onClick={() => setTurnIntoOpen(!turnIntoOpen)}
-              onMouseEnter={() => setTurnIntoOpen(true)}
+              onClick={() => { setTurnIntoOpen(!turnIntoOpen); setColorOpen(false) }}
+              onMouseEnter={() => { setTurnIntoOpen(true); setColorOpen(false) }}
             >
               <span className="flex items-center gap-2">
                 <span className="flex h-3.5 w-3.5 items-center justify-center text-[10px] font-bold text-zinc-500">

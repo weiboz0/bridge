@@ -433,6 +433,26 @@ const AI_ITEMS: SlashMenuItem[] = [
       window.dispatchEvent(new CustomEvent("tiptap:ai-write-inline"))
     },
   },
+  {
+    id: "aiContinue",
+    label: "Continue Writing",
+    description: "Let AI continue from where you left off",
+    badge: "AI",
+    category: "ai",
+    command: ({ editor, range }) => {
+      editor.chain().focus().deleteRange(range).run()
+      // Capture last 500 chars before cursor as context
+      const { from } = editor.state.selection
+      // Map the ProseMirror pos to roughly a text offset
+      const textBefore = editor.state.doc.textBetween(0, from, " ")
+      const context = textBefore.slice(-500)
+      const intent = `Continue writing from: ${context}`
+      // Signal the editor with the pre-filled prompt
+      window.dispatchEvent(
+        new CustomEvent("tiptap:ai-continue", { detail: { intent } }),
+      )
+    },
+  },
 ]
 
 export const ALL_ITEMS: SlashMenuItem[] = [...AI_ITEMS, ...TEXT_ITEMS, ...MATH_ITEMS, ...TEACHING_ITEMS, ...BLOCK_ITEMS]
