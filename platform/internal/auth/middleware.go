@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 )
 
@@ -30,8 +31,30 @@ func NewMiddleware(secret string) *Middleware {
 
 // RequireAuth validates the JWT and injects claims into context.
 // Also handles impersonation via bridge-impersonate cookie.
+//
+// When DEV_SKIP_AUTH is set, auth is bypassed and a dev user is injected.
+// The env var value is the user ID to impersonate; set to "admin" for a
+// platform admin, or a UUID for a specific user.
 func (m *Middleware) RequireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Dev auth bypass — never use in production
+		if devUser := os.Getenv("DEV_SKIP_AUTH"); devUser != "" {
+			claims := &Claims{
+				UserID:          devUser,
+				Name:            "Dev User",
+				Email:           "dev@localhost",
+				IsPlatformAdmin: devUser == "admin",
+			}
+			// If it looks like a UUID, use it as-is. Otherwise treat "admin"
+			// as a platform admin with a placeholder ID.
+			if devUser == "admin" {
+				claims.UserID = "00000000-0000-0000-0000-000000000001"
+			}
+			ctx := context.WithValue(r.Context(), claimsKey, claims)
+			next.ServeHTTP(w, r.WithContext(ctx))
+			return
+		}
+
 		// Try Authorization header first, then session cookies
 		tokenStr := ""
 		if authHeader := r.Header.Get("Authorization"); strings.HasPrefix(authHeader, "Bearer ") {
