@@ -15,6 +15,7 @@ import { ContextMenu } from "./context-menu"
 import { useYjsTiptap } from "@/lib/yjs/use-yjs-tiptap"
 import { uploadFile } from "./media-embed-node"
 import { HelpOverlay, shouldShowHelp } from "./help-overlay"
+import { TableToolbar } from "./table-toolbar"
 
 /** Options for enabling real-time collaborative editing via Yjs/Hocuspocus. */
 export interface CollaborativeOptions {
@@ -49,6 +50,126 @@ export interface TeachingUnitEditorProps {
 export interface TeachingUnitEditorHandle {
   /** Programmatically trigger a save of the current document. */
   save: () => Promise<void>
+}
+
+// ---------------------------------------------------------------------------
+// Sticky TOC sidebar (Gap 4)
+// ---------------------------------------------------------------------------
+
+type HeadingEntry = {
+  level: number
+  text: string
+  pos: number
+}
+
+function TocSidebar({ editor }: { editor: Editor }) {
+  const [headings, setHeadings] = useState<HeadingEntry[]>([])
+  const [activeIndex, setActiveIndex] = useState(0)
+
+  useEffect(() => {
+    function collectHeadings() {
+      const entries: HeadingEntry[] = []
+      editor.state.doc.forEach((node, offset) => {
+        if (node.type.name === "heading") {
+          entries.push({
+            level: node.attrs.level as number,
+            text: node.textContent,
+            pos: offset,
+          })
+        }
+      })
+      setHeadings(entries)
+    }
+
+    collectHeadings()
+    editor.on("update", collectHeadings)
+    return () => {
+      editor.off("update", collectHeadings)
+    }
+  }, [editor])
+
+  // Track which heading is currently in view
+  useEffect(() => {
+    if (headings.length === 0) return
+
+    const handleScroll = () => {
+      let closest = 0
+      let closestDist = Infinity
+
+      for (let i = 0; i < headings.length; i++) {
+        try {
+          const domPos = editor.view.domAtPos(headings[i].pos + 1)
+          const el = domPos.node as HTMLElement
+          const target = el.nodeType === 3 ? el.parentElement : el
+          if (!target) continue
+          const rect = target.getBoundingClientRect()
+          const dist = Math.abs(rect.top - 80) // offset for toolbar
+          if (dist < closestDist) {
+            closestDist = dist
+            closest = i
+          }
+        } catch {
+          // Ignore
+        }
+      }
+      setActiveIndex(closest)
+    }
+
+    const scrollEl = editor.view.dom.closest(".overflow-y-auto") ?? window
+    scrollEl.addEventListener("scroll", handleScroll, { passive: true })
+    return () => scrollEl.removeEventListener("scroll", handleScroll)
+  }, [editor, headings])
+
+  // Only show when document has 3+ headings
+  if (headings.length < 3) return null
+
+  function scrollToHeading(pos: number) {
+    editor
+      .chain()
+      .focus()
+      .setTextSelection(pos + 1)
+      .run()
+
+    try {
+      const domPos = editor.view.domAtPos(pos + 1)
+      const el = domPos.node as HTMLElement
+      const target = el.nodeType === 3 ? el.parentElement : el
+      target?.scrollIntoView({ behavior: "smooth", block: "start" })
+    } catch {
+      // Ignore
+    }
+  }
+
+  return (
+    <div className="sticky top-20 hidden w-48 shrink-0 xl:block">
+      <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-zinc-400">
+        On this page
+      </p>
+      <nav aria-label="Table of contents sidebar">
+        <ul className="space-y-0.5 border-l border-zinc-200">
+          {headings.map((h, i) => (
+            <li
+              key={i}
+              style={{ paddingLeft: `${(h.level - 1) * 8 + 12}px` }}
+            >
+              <button
+                type="button"
+                onClick={() => scrollToHeading(h.pos)}
+                className={
+                  "block w-full truncate text-left text-xs transition-colors " +
+                  (i === activeIndex
+                    ? "font-medium text-zinc-900 -ml-px border-l-2 border-zinc-900 pl-[10px]"
+                    : "text-zinc-500 hover:text-zinc-700")
+                }
+              >
+                {h.text || "Untitled"}
+              </button>
+            </li>
+          ))}
+        </ul>
+      </nav>
+    </div>
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -88,6 +209,8 @@ const KNOWN_NODE_TYPES = new Set([
   // Math / KaTeX nodes
   "math-block",
   "math-inline",
+  // Inline mention pill
+  "mention",
 ])
 
 /**
@@ -401,6 +524,10 @@ function TeachingUnitEditor({ initialDoc, onSave, onDirty, unitId, collaborative
   const [showAIPanel, setShowAIPanel] = useState(false)
   const [showHelp, setShowHelp] = useState(() => shouldShowHelp())
   const [presentationMode, setPresentationMode] = useState(false)
+  const [editorDark, setEditorDark] = useState(() => {
+    if (typeof window === "undefined") return false
+    return localStorage.getItem("bridge:editor-theme") === "dark"
+  })
   const [showInlineAI, setShowInlineAI] = useState(false)
   const [inlineAIPrompt, setInlineAIPrompt] = useState("")
   const [inlineAILoading, setInlineAILoading] = useState(false)
@@ -553,6 +680,42 @@ function TeachingUnitEditor({ initialDoc, onSave, onDirty, unitId, collaborative
     return () => window.removeEventListener("tiptap:ai-write-inline", handler)
   }, [])
 
+  // Listen for AI "Continue Writing" from the slash menu
+  useEffect(() => {
+    const handler = async (e: Event) => {
+      const detail = (e as CustomEvent).detail as { intent?: string } | undefined
+      if (!detail?.intent || !resolvedUnitId) return
+      setShowInlineAI(true)
+      setInlineAIPrompt(detail.intent)
+      setInlineAILoading(true)
+      setInlineAIError(null)
+      try {
+        const { draftWithAI } = await import("@/lib/teaching-units")
+        const result = await draftWithAI(resolvedUnitId, detail.intent)
+        if (result?.blocks) {
+          handleInsertAIBlocks(result.blocks)
+        }
+        setShowInlineAI(false)
+        setInlineAIPrompt("")
+      } catch (err) {
+        setInlineAIError(err instanceof Error ? err.message : "AI generation failed")
+      } finally {
+        setInlineAILoading(false)
+      }
+    }
+    window.addEventListener("tiptap:ai-continue", handler)
+    return () => window.removeEventListener("tiptap:ai-continue", handler)
+  }, [resolvedUnitId, handleInsertAIBlocks])
+
+  // Dark mode toggle (Gap 8)
+  const toggleDarkMode = useCallback(() => {
+    setEditorDark((prev) => {
+      const next = !prev
+      localStorage.setItem("bridge:editor-theme", next ? "dark" : "light")
+      return next
+    })
+  }, [])
+
   // Presentation mode: make the editor read-only and hide editing chrome.
   const togglePresentationMode = useCallback(() => {
     if (!editor) return
@@ -612,7 +775,8 @@ function TeachingUnitEditor({ initialDoc, onSave, onDirty, unitId, collaborative
   }
 
   return (
-    <div className="space-y-0">
+    <div className="flex gap-4">
+    <div className="min-w-0 flex-1 space-y-0">
       {/* Help overlay (first visit + re-openable) */}
       {showHelp && (
         <HelpOverlay
@@ -633,6 +797,8 @@ function TeachingUnitEditor({ initialDoc, onSave, onDirty, unitId, collaborative
           onShowHelp={() => setShowHelp(true)}
           presentationMode={presentationMode}
           onTogglePresentation={togglePresentationMode}
+          editorDark={editorDark}
+          onToggleDarkMode={toggleDarkMode}
         />
       )}
 
@@ -649,10 +815,11 @@ function TeachingUnitEditor({ initialDoc, onSave, onDirty, unitId, collaborative
       {/* Editor content with bubble toolbar, block handle, and context menu.
           data-block-handle-wrapper lets BlockHandle listen on this div so the
           handle doesn't disappear when the mouse moves from editor to handle. */}
-      <div className="relative border border-t-0 border-zinc-200 bg-zinc-50" data-block-handle-wrapper>
+      <div className={`relative border border-t-0 border-zinc-200 ${editorDark ? "editor-dark bg-[#1c1c1e]" : "bg-zinc-50"}`} data-block-handle-wrapper>
         {editor && <BubbleToolbar editor={editor} unitId={resolvedUnitId || undefined} />}
         {editor && <BlockHandle editor={editor} />}
         {editor && <ContextMenu editor={editor} />}
+        {editor && <TableToolbar editor={editor} />}
         <EditorContent editor={editor} className="min-h-60 px-3 py-2 pl-10" />
         {/* Inline AI prompt — rendered inside the editor area at the bottom of content */}
         {showInlineAI && (
@@ -684,6 +851,9 @@ function TeachingUnitEditor({ initialDoc, onSave, onDirty, unitId, collaborative
 
       {/* Word count / character count footer */}
       {editor && <EditorFooter editor={editor} />}
+    </div>
+    {/* Sticky TOC sidebar (Gap 4) — only visible on xl+ screens */}
+    {editor && !presentationMode && <TocSidebar editor={editor} />}
     </div>
   )
 })
