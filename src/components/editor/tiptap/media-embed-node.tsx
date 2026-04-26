@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useState } from "react"
+import { useCallback, useRef, useState } from "react"
 import { nanoid } from "nanoid"
 import { Node, mergeAttributes } from "@tiptap/core"
 import {
@@ -98,17 +98,34 @@ function MediaPreview({ url, alt, mediaType }: { url: string; alt: string; media
   }
 }
 
+/** Upload a file to the Go backend and return the URL. */
+export async function uploadFile(file: File): Promise<string> {
+  const formData = new FormData()
+  formData.append("file", file)
+  const res = await fetch("/api/uploads", { method: "POST", body: formData })
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: "Upload failed" }))
+    throw new Error(body.error || `Upload failed (${res.status})`)
+  }
+  const data = await res.json()
+  return data.url
+}
+
 function MediaEmbedNodeView({ node, updateAttributes }: NodeViewProps) {
   const { url, alt, mediaType } = node.attrs as MediaEmbedNodeAttrs
   const [editing, setEditing] = useState(false)
   const [draftUrl, setDraftUrl] = useState(url)
   const [draftAlt, setDraftAlt] = useState(alt)
   const [draftType, setDraftType] = useState<MediaType>(mediaType)
+  const [uploading, setUploading] = useState(false)
+  const [uploadError, setUploadError] = useState<string | null>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   const openEditor = useCallback(() => {
     setDraftUrl(url)
     setDraftAlt(alt)
     setDraftType(mediaType)
+    setUploadError(null)
     setEditing(true)
   }, [url, alt, mediaType])
 
@@ -120,6 +137,31 @@ function MediaEmbedNodeView({ node, updateAttributes }: NodeViewProps) {
   const handleCancel = useCallback(() => {
     setEditing(false)
   }, [])
+
+  const handleFileUpload = useCallback(async (file: File) => {
+    setUploading(true)
+    setUploadError(null)
+    try {
+      const uploadedUrl = await uploadFile(file)
+      setDraftUrl(uploadedUrl)
+      // Auto-detect media type from file MIME.
+      if (file.type.startsWith("image/")) {
+        setDraftType("image")
+      } else if (file.type === "application/pdf") {
+        setDraftType("pdf")
+      } else if (file.type.startsWith("video/")) {
+        setDraftType("video")
+      }
+      // Auto-set alt text from filename if empty.
+      if (!draftAlt.trim()) {
+        setDraftAlt(file.name.replace(/\.[^.]+$/, ""))
+      }
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : "Upload failed")
+    } finally {
+      setUploading(false)
+    }
+  }, [draftAlt])
 
   return (
     <NodeViewWrapper className="media-embed-node my-3" contentEditable={false}>
@@ -160,14 +202,40 @@ function MediaEmbedNodeView({ node, updateAttributes }: NodeViewProps) {
               </select>
             </div>
             <div className="space-y-1">
-              <label className="text-xs font-medium text-zinc-600">URL</label>
-              <Input
-                type="url"
-                value={draftUrl}
-                onChange={(e) => setDraftUrl(e.target.value)}
-                placeholder="https://..."
-                className="text-sm"
-              />
+              <label className="text-xs font-medium text-zinc-600">URL or Upload</label>
+              <div className="flex gap-2">
+                <Input
+                  type="url"
+                  value={draftUrl}
+                  onChange={(e) => setDraftUrl(e.target.value)}
+                  placeholder="https://..."
+                  className="flex-1 text-sm"
+                />
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml,application/pdf"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0]
+                    if (file) handleFileUpload(file)
+                    // Reset so the same file can be re-selected.
+                    e.target.value = ""
+                  }}
+                />
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-9 text-xs whitespace-nowrap"
+                  disabled={uploading}
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  {uploading ? "Uploading..." : "Upload"}
+                </Button>
+              </div>
+              {uploadError && (
+                <p className="text-xs text-red-600">{uploadError}</p>
+              )}
             </div>
             <div className="space-y-1">
               <label className="text-xs font-medium text-zinc-600">Alt text / label</label>

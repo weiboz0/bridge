@@ -82,6 +82,9 @@ var knownBlockTypes = map[string]bool{
 	"toc":          true,
 	"columns":      true,
 	"column":       true,
+	// Math / KaTeX nodes
+	"math-block":  true,
+	"math-inline": true,
 }
 
 const maxUnitTitleLen = 255
@@ -226,6 +229,9 @@ func validateBlockDocument(raw json.RawMessage) error {
 		"bookmark":     true,
 		"toc":          true,
 		"columns":      true,
+		// Math / KaTeX blocks
+		"math-block":  true,
+		"math-inline": true,
 	}
 
 	// Walk top-level blocks.

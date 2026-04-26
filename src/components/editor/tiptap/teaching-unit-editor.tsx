@@ -13,6 +13,8 @@ import { EditorToolbar } from "./editor-toolbar"
 import { BlockHandle } from "./block-handle"
 import { ContextMenu } from "./context-menu"
 import { useYjsTiptap } from "@/lib/yjs/use-yjs-tiptap"
+import { uploadFile } from "./media-embed-node"
+import { HelpOverlay, shouldShowHelp } from "./help-overlay"
 
 /** Options for enabling real-time collaborative editing via Yjs/Hocuspocus. */
 export interface CollaborativeOptions {
@@ -83,6 +85,9 @@ const KNOWN_NODE_TYPES = new Set([
   "test-case-ref",
   "live-cue",
   "assignment-variant",
+  // Math / KaTeX nodes
+  "math-block",
+  "math-inline",
 ])
 
 /**
@@ -394,6 +399,8 @@ function EditorFooter({ editor }: { editor: Editor }) {
 export const TeachingUnitEditor = forwardRef<TeachingUnitEditorHandle, TeachingUnitEditorProps>(
 function TeachingUnitEditor({ initialDoc, onSave, onDirty, unitId, collaborative }, ref) {
   const [showAIPanel, setShowAIPanel] = useState(false)
+  const [showHelp, setShowHelp] = useState(() => shouldShowHelp())
+  const [presentationMode, setPresentationMode] = useState(false)
   const [showInlineAI, setShowInlineAI] = useState(false)
   const [inlineAIPrompt, setInlineAIPrompt] = useState("")
   const [inlineAILoading, setInlineAILoading] = useState(false)
@@ -429,6 +436,62 @@ function TeachingUnitEditor({ initialDoc, onSave, onDirty, unitId, collaborative
     content: isCollaborative && connected
       ? undefined
       : (sanitizedInitialDoc ?? { type: "doc", content: [] }),
+    editorProps: {
+      handleDrop: (view, event) => {
+        const files = event.dataTransfer?.files
+        if (!files || files.length === 0) return false
+        const imageFiles = Array.from(files).filter((f) =>
+          f.type.startsWith("image/") || f.type === "application/pdf",
+        )
+        if (imageFiles.length === 0) return false
+        event.preventDefault()
+        for (const file of imageFiles) {
+          uploadFile(file).then((url) => {
+            view.dispatch(
+              view.state.tr.replaceSelectionWith(
+                view.state.schema.nodes["media-embed"].create({
+                  id: nanoid(),
+                  url,
+                  alt: file.name.replace(/\.[^.]+$/, ""),
+                  mediaType: file.type === "application/pdf" ? "pdf" : "image",
+                }),
+              ),
+            )
+          }).catch((err) => {
+            console.error("[TeachingUnitEditor] Drop upload failed:", err)
+          })
+        }
+        return true
+      },
+      handlePaste: (view, event) => {
+        const items = event.clipboardData?.items
+        if (!items) return false
+        const imageItems = Array.from(items).filter((item) =>
+          item.type.startsWith("image/"),
+        )
+        if (imageItems.length === 0) return false
+        event.preventDefault()
+        for (const item of imageItems) {
+          const file = item.getAsFile()
+          if (!file) continue
+          uploadFile(file).then((url) => {
+            view.dispatch(
+              view.state.tr.replaceSelectionWith(
+                view.state.schema.nodes["media-embed"].create({
+                  id: nanoid(),
+                  url,
+                  alt: "Pasted image",
+                  mediaType: "image",
+                }),
+              ),
+            )
+          }).catch((err) => {
+            console.error("[TeachingUnitEditor] Paste upload failed:", err)
+          })
+        }
+        return true
+      },
+    },
     onCreate({ editor: e }: { editor: Editor }) {
       assignMissingTopLevelNodeIds(e)
     },
@@ -490,6 +553,19 @@ function TeachingUnitEditor({ initialDoc, onSave, onDirty, unitId, collaborative
     return () => window.removeEventListener("tiptap:ai-write-inline", handler)
   }, [])
 
+  // Presentation mode: make the editor read-only and hide editing chrome.
+  const togglePresentationMode = useCallback(() => {
+    if (!editor) return
+    const entering = !presentationMode
+    setPresentationMode(entering)
+    editor.setEditable(!entering)
+    if (entering) {
+      // Hide AI panel when entering presentation mode.
+      setShowAIPanel(false)
+      setShowInlineAI(false)
+    }
+  }, [editor, presentationMode])
+
   const handleInlineAISubmit = useCallback(async () => {
     if (!inlineAIPrompt.trim() || !resolvedUnitId) return
     setInlineAILoading(true)
@@ -509,8 +585,42 @@ function TeachingUnitEditor({ initialDoc, onSave, onDirty, unitId, collaborative
     }
   }, [inlineAIPrompt, resolvedUnitId, handleInsertAIBlocks])
 
+  // Presentation mode: clean read-only view.
+  if (presentationMode) {
+    return (
+      <div className="relative min-h-screen bg-white">
+        {/* Floating exit button */}
+        <button
+          type="button"
+          onClick={togglePresentationMode}
+          className={
+            "fixed right-4 top-4 z-50 rounded-lg bg-zinc-900/80 px-4 py-2 text-sm font-medium text-white shadow-lg " +
+            "transition-opacity hover:bg-zinc-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/50"
+          }
+        >
+          Exit Presentation
+        </button>
+        {/* Document content in presentation style */}
+        <div className="mx-auto max-w-3xl px-8 py-12">
+          <EditorContent
+            editor={editor}
+            className="prose prose-lg max-w-none [&_.ProseMirror]:min-h-0 [&_.ProseMirror]:p-0"
+          />
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-0">
+      {/* Help overlay (first visit + re-openable) */}
+      {showHelp && (
+        <HelpOverlay
+          forceShow={true}
+          onDismiss={() => setShowHelp(false)}
+        />
+      )}
+
       {/* Fixed top toolbar (Phase 1) */}
       {editor && (
         <EditorToolbar
@@ -520,6 +630,9 @@ function TeachingUnitEditor({ initialDoc, onSave, onDirty, unitId, collaborative
           onToggleAI={() => setShowAIPanel((prev) => !prev)}
           showAI={showAIPanel}
           unitId={resolvedUnitId || undefined}
+          onShowHelp={() => setShowHelp(true)}
+          presentationMode={presentationMode}
+          onTogglePresentation={togglePresentationMode}
         />
       )}
 
