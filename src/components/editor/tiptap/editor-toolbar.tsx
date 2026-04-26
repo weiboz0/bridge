@@ -25,6 +25,7 @@ import {
   X,
   ChevronDown,
   HelpCircle,
+  Monitor,
 } from "lucide-react"
 import { ALL_ITEMS, type SlashMenuItem } from "./slash-menu"
 
@@ -481,6 +482,12 @@ interface EditorToolbarProps {
   onToggleAI?: () => void
   showAI?: boolean
   unitId?: string
+  /** Show the first-time help overlay. */
+  onShowHelp?: () => void
+  /** Whether presentation mode is active. */
+  presentationMode?: boolean
+  /** Toggle presentation mode. */
+  onTogglePresentation?: () => void
 }
 
 export function EditorToolbar({
@@ -490,6 +497,9 @@ export function EditorToolbar({
   onToggleAI,
   showAI,
   unitId,
+  onShowHelp,
+  presentationMode,
+  onTogglePresentation,
 }: EditorToolbarProps) {
   const [showLinkInput, setShowLinkInput] = useState(false)
   const [showColorPicker, setShowColorPicker] = useState(false)
@@ -648,7 +658,7 @@ export function EditorToolbar({
         <Redo2 className="h-3.5 w-3.5" />
       </ToolbarButton>
 
-      {/* Shortcuts reference */}
+      {/* Shortcuts + Help */}
       <ToolbarButton
         onClick={() => setShowShortcuts(true)}
         title="Keyboard shortcuts"
@@ -658,8 +668,31 @@ export function EditorToolbar({
 
       {showShortcuts && <ShortcutsModal onClose={() => setShowShortcuts(false)} />}
 
-      {/* Right side: AI, Save, Collab status */}
+      {/* Right side: Present, AI, Help, Save, Collab status */}
       <div className="ml-auto flex items-center gap-2">
+        {onTogglePresentation && (
+          <ToolbarButton
+            onClick={onTogglePresentation}
+            active={presentationMode}
+            title="Presentation mode"
+          >
+            <Monitor className="h-3.5 w-3.5" />
+          </ToolbarButton>
+        )}
+        {onShowHelp && (
+          <button
+            type="button"
+            onClick={onShowHelp}
+            className={
+              "flex h-7 items-center gap-1 rounded px-2 text-xs font-medium text-zinc-600 transition-colors " +
+              "hover:bg-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400"
+            }
+            title="Editor help"
+            aria-label="Editor help"
+          >
+            ?
+          </button>
+        )}
         {unitId && onToggleAI && (
           <button
             type="button"
