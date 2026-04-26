@@ -661,6 +661,26 @@ function TeachingUnitEditor({ initialDoc, onSave, onDirty, unitId, collaborative
     save: handleSave,
   }), [handleSave])
 
+  // Debounced autosave — saves 2 seconds after the last edit
+  const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => {
+    if (!editor) return
+
+    const handleUpdate = () => {
+      if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current)
+      autosaveTimerRef.current = setTimeout(() => {
+        const doc = editor.getJSON()
+        onSave(doc).then(() => onDirty?.(false)).catch(() => {})
+      }, 2000)
+    }
+
+    editor.on("update", handleUpdate)
+    return () => {
+      editor.off("update", handleUpdate)
+      if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current)
+    }
+  }, [editor, onSave, onDirty])
+
   // Listen for keyboard-shortcut–triggered save (Mod-Enter)
   useEffect(() => {
     const handler = () => { handleSave() }
