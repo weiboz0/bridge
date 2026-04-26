@@ -645,39 +645,41 @@ function TeachingUnitEditor({ initialDoc, onSave, onDirty, unitId, collaborative
         />
       )}
 
-      {/* Inline AI prompt */}
-      {showInlineAI && (
-        <div className="flex items-center gap-2 rounded-lg border border-blue-300 bg-blue-50 px-3 py-2">
-          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded bg-blue-100 text-[10px] font-bold text-blue-600">AI</span>
-          <input
-            ref={inlineAIRef}
-            type="text"
-            placeholder="Describe what to generate..."
-            value={inlineAIPrompt}
-            onChange={(e) => setInlineAIPrompt(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleInlineAISubmit() }
-              if (e.key === "Escape") { setShowInlineAI(false) }
-            }}
-            disabled={inlineAILoading}
-            className="flex-1 bg-transparent text-sm outline-none placeholder:text-blue-400"
-          />
-          <Button size="sm" variant="default" onClick={handleInlineAISubmit} disabled={inlineAILoading || !inlineAIPrompt.trim()}>
-            {inlineAILoading ? "Generating..." : "Generate"}
-          </Button>
-          <button type="button" onClick={() => setShowInlineAI(false)} className="text-zinc-400 hover:text-zinc-600 text-sm">
-            Esc
-          </button>
-          {inlineAIError && <span className="text-xs text-red-600">{inlineAIError}</span>}
-        </div>
-      )}
 
-      {/* Editor content with bubble toolbar, block handle, and context menu */}
-      <div className="relative border border-t-0 border-zinc-200 bg-zinc-50">
+      {/* Editor content with bubble toolbar, block handle, and context menu.
+          data-block-handle-wrapper lets BlockHandle listen on this div so the
+          handle doesn't disappear when the mouse moves from editor to handle. */}
+      <div className="relative border border-t-0 border-zinc-200 bg-zinc-50" data-block-handle-wrapper>
         {editor && <BubbleToolbar editor={editor} unitId={resolvedUnitId || undefined} />}
         {editor && <BlockHandle editor={editor} />}
         {editor && <ContextMenu editor={editor} />}
         <EditorContent editor={editor} className="min-h-60 px-3 py-2 pl-10" />
+        {/* Inline AI prompt — rendered inside the editor area at the bottom of content */}
+        {showInlineAI && (
+          <div className="mx-3 mb-2 flex items-center gap-2 rounded-lg border border-blue-300 bg-blue-50 px-3 py-2">
+            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded bg-blue-100 text-[10px] font-bold text-blue-600">AI</span>
+            <input
+              ref={inlineAIRef}
+              type="text"
+              placeholder="Describe what to generate..."
+              value={inlineAIPrompt}
+              onChange={(e) => setInlineAIPrompt(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleInlineAISubmit() }
+                if (e.key === "Escape") { setShowInlineAI(false) }
+              }}
+              disabled={inlineAILoading}
+              className="flex-1 bg-transparent text-sm outline-none placeholder:text-blue-400"
+            />
+            <Button size="sm" variant="default" onClick={handleInlineAISubmit} disabled={inlineAILoading || !inlineAIPrompt.trim()}>
+              {inlineAILoading ? "Generating..." : "Generate"}
+            </Button>
+            <button type="button" onClick={() => setShowInlineAI(false)} className="text-zinc-400 hover:text-zinc-600 text-sm">
+              Esc
+            </button>
+            {inlineAIError && <span className="text-xs text-red-600">{inlineAIError}</span>}
+          </div>
+        )}
       </div>
 
       {/* Word count / character count footer */}

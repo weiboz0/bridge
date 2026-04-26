@@ -143,25 +143,30 @@ export function BlockHandle({ editor }: BlockHandleProps) {
     ) as HTMLElement | null
   }, [editor])
 
-  // Track mouse position over the editor to find hovered blocks
+  // Track mouse position over the editor AND its wrapper (which includes
+  // the handle area) to find hovered blocks. We listen on the wrapper so
+  // moving the mouse from the editor to the handle doesn't trigger mouseleave.
   useEffect(() => {
-    const editorEl = editor.view.dom
+    // Listen on the wrapper that contains both the editor and the handle
+    const wrapper = editor.view.dom.closest("[data-block-handle-wrapper]") ?? editor.view.dom.parentElement ?? editor.view.dom
 
     const handleMouseMove = (e: MouseEvent) => {
-      // Don't update hover while the actions menu is open
       if (menuOpen) return
+
+      // If mouse is over the handle itself, keep it visible
+      if (handleRef.current?.contains(e.target as Node)) return
 
       const block = resolveHoveredBlock(editor, e.clientX, e.clientY)
       if (!block) {
-        // Only clear if we've moved far enough away from the handle itself
+        // Check if we're still near the handle
         if (handleRef.current) {
           const handleRect = handleRef.current.getBoundingClientRect()
-          const isOverHandle =
-            e.clientX >= handleRect.left - 8 &&
-            e.clientX <= handleRect.right + 8 &&
-            e.clientY >= handleRect.top - 4 &&
-            e.clientY <= handleRect.bottom + 4
-          if (isOverHandle) return
+          const isNearHandle =
+            e.clientX >= handleRect.left - 16 &&
+            e.clientX <= handleRect.right + 16 &&
+            e.clientY >= handleRect.top - 8 &&
+            e.clientY <= handleRect.bottom + 8
+          if (isNearHandle) return
         }
         setHovered(null)
         return
@@ -172,7 +177,6 @@ export function BlockHandle({ editor }: BlockHandleProps) {
 
     const handleMouseLeave = (e: MouseEvent) => {
       if (menuOpen) return
-      // Check if we moved to the handle itself
       if (handleRef.current) {
         const related = e.relatedTarget as Node | null
         if (related && handleRef.current.contains(related)) return
@@ -180,11 +184,11 @@ export function BlockHandle({ editor }: BlockHandleProps) {
       setHovered(null)
     }
 
-    editorEl.addEventListener("mousemove", handleMouseMove)
-    editorEl.addEventListener("mouseleave", handleMouseLeave)
+    wrapper.addEventListener("mousemove", handleMouseMove)
+    wrapper.addEventListener("mouseleave", handleMouseLeave)
     return () => {
-      editorEl.removeEventListener("mousemove", handleMouseMove)
-      editorEl.removeEventListener("mouseleave", handleMouseLeave)
+      wrapper.removeEventListener("mousemove", handleMouseMove)
+      wrapper.removeEventListener("mouseleave", handleMouseLeave)
     }
   }, [editor, menuOpen])
 
