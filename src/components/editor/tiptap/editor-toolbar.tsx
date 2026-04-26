@@ -24,6 +24,7 @@ import {
   Unlink,
   X,
   ChevronDown,
+  HelpCircle,
 } from "lucide-react"
 import { ALL_ITEMS, type SlashMenuItem } from "./slash-menu"
 
@@ -351,6 +352,124 @@ function ToolbarColorPicker({ editor, onClose }: ToolbarColorPickerProps) {
 }
 
 // ---------------------------------------------------------------------------
+// Keyboard shortcuts modal
+// ---------------------------------------------------------------------------
+
+const SHORTCUT_GROUPS = [
+  {
+    label: "Formatting",
+    items: [
+      { keys: "Cmd+B", desc: "Bold" },
+      { keys: "Cmd+I", desc: "Italic" },
+      { keys: "Cmd+U", desc: "Underline" },
+      { keys: "Cmd+Shift+X", desc: "Strikethrough" },
+      { keys: "Cmd+E", desc: "Inline code" },
+      { keys: "Cmd+K", desc: "Link" },
+    ],
+  },
+  {
+    label: "Blocks",
+    items: [
+      { keys: "Cmd+Shift+Up", desc: "Move block up" },
+      { keys: "Cmd+Shift+Down", desc: "Move block down" },
+      { keys: "Cmd+Shift+D", desc: "Duplicate block" },
+      { keys: "Cmd+Shift+Delete", desc: "Delete block" },
+    ],
+  },
+  {
+    label: "Navigation",
+    items: [
+      { keys: "Cmd+Enter", desc: "Save" },
+      { keys: "Cmd+Z", desc: "Undo" },
+      { keys: "Cmd+Shift+Z", desc: "Redo" },
+      { keys: "/", desc: "Slash menu" },
+    ],
+  },
+  {
+    label: "Lists",
+    items: [
+      { keys: "Tab", desc: "Indent" },
+      { keys: "Shift+Tab", desc: "Outdent" },
+    ],
+  },
+] as const
+
+function ShortcutsModal({ onClose }: { onClose: () => void }) {
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose()
+    }
+    const handleClick = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) onClose()
+    }
+    document.addEventListener("keydown", handleKey)
+    document.addEventListener("mousedown", handleClick)
+    return () => {
+      document.removeEventListener("keydown", handleKey)
+      document.removeEventListener("mousedown", handleClick)
+    }
+  }, [onClose])
+
+  // Detect Mac vs PC for shortcut display
+  const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.userAgent)
+  const modKey = isMac ? "⌘" : "Ctrl"
+
+  const formatKeys = (keys: string) =>
+    keys
+      .replace(/Cmd/g, modKey)
+      .replace(/Shift/g, isMac ? "⇧" : "Shift")
+      .replace(/Delete/g, isMac ? "⌫" : "Del")
+      .replace(/Up/g, "↑")
+      .replace(/Down/g, "↓")
+      .replace(/Enter/g, "↵")
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/20">
+      <div
+        ref={ref}
+        className="w-80 rounded-lg border border-zinc-200 bg-white p-4 shadow-xl"
+      >
+        <div className="mb-3 flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-zinc-900">Keyboard Shortcuts</h3>
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex h-6 w-6 items-center justify-center rounded text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600"
+            aria-label="Close"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+        <div className="space-y-3">
+          {SHORTCUT_GROUPS.map((group) => (
+            <div key={group.label}>
+              <p className="mb-1 text-[10px] font-medium uppercase tracking-wider text-zinc-400">
+                {group.label}
+              </p>
+              <div className="space-y-0.5">
+                {group.items.map((item) => (
+                  <div
+                    key={item.keys}
+                    className="flex items-center justify-between py-0.5 text-xs"
+                  >
+                    <span className="text-zinc-600">{item.desc}</span>
+                    <kbd className="rounded bg-zinc-100 px-1.5 py-0.5 font-mono text-[10px] text-zinc-500">
+                      {formatKeys(item.keys)}
+                    </kbd>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Main editor toolbar
 // ---------------------------------------------------------------------------
 
@@ -374,6 +493,7 @@ export function EditorToolbar({
 }: EditorToolbarProps) {
   const [showLinkInput, setShowLinkInput] = useState(false)
   const [showColorPicker, setShowColorPicker] = useState(false)
+  const [showShortcuts, setShowShortcuts] = useState(false)
 
   return (
     <div className="flex flex-wrap items-center gap-0.5 rounded-t-lg border border-zinc-200 bg-white px-2 py-1">
@@ -527,6 +647,16 @@ export function EditorToolbar({
       >
         <Redo2 className="h-3.5 w-3.5" />
       </ToolbarButton>
+
+      {/* Shortcuts reference */}
+      <ToolbarButton
+        onClick={() => setShowShortcuts(true)}
+        title="Keyboard shortcuts"
+      >
+        <HelpCircle className="h-3.5 w-3.5" />
+      </ToolbarButton>
+
+      {showShortcuts && <ShortcutsModal onClose={() => setShowShortcuts(false)} />}
 
       {/* Right side: AI, Save, Collab status */}
       <div className="ml-auto flex items-center gap-2">

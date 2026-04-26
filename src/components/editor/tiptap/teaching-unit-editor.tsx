@@ -11,6 +11,7 @@ import { AIDraftPanel } from "./ai-draft-panel"
 import { BubbleToolbar } from "./bubble-toolbar"
 import { EditorToolbar } from "./editor-toolbar"
 import { BlockHandle } from "./block-handle"
+import { ContextMenu } from "./context-menu"
 import { useYjsTiptap } from "@/lib/yjs/use-yjs-tiptap"
 
 /** Options for enabling real-time collaborative editing via Yjs/Hocuspocus. */
@@ -362,6 +363,34 @@ function mapAIBlockToTiptap(block: Record<string, unknown>): JSONContent {
 // require a migration. Deferred until a concrete need arises (new block type
 // requiring schema-level migration).
 
+// ---------------------------------------------------------------------------
+// Editor footer — word count / character count / reading time
+// ---------------------------------------------------------------------------
+
+function EditorFooter({ editor }: { editor: Editor }) {
+  // Force re-render on editor updates so counts stay current.
+  const [, setTick] = useState(0)
+  useEffect(() => {
+    const handler = () => setTick((t) => t + 1)
+    editor.on("update", handler)
+    return () => { editor.off("update", handler) }
+  }, [editor])
+
+  const charCount = editor.storage.characterCount?.characters() ?? 0
+  const wordCount = editor.storage.characterCount?.words() ?? 0
+  const readingTime = Math.max(1, Math.ceil(wordCount / 200))
+
+  return (
+    <div className="flex items-center gap-3 rounded-b-lg border border-t-0 border-zinc-200 bg-white px-3 py-1 text-xs text-zinc-400">
+      <span>{wordCount} {wordCount === 1 ? "word" : "words"}</span>
+      <span className="text-zinc-300">/</span>
+      <span>{charCount} {charCount === 1 ? "character" : "characters"}</span>
+      <span className="text-zinc-300">/</span>
+      <span>~{readingTime} min read</span>
+    </div>
+  )
+}
+
 export const TeachingUnitEditor = forwardRef<TeachingUnitEditorHandle, TeachingUnitEditorProps>(
 function TeachingUnitEditor({ initialDoc, onSave, onDirty, unitId, collaborative }, ref) {
   const [showAIPanel, setShowAIPanel] = useState(false)
@@ -530,12 +559,16 @@ function TeachingUnitEditor({ initialDoc, onSave, onDirty, unitId, collaborative
         </div>
       )}
 
-      {/* Editor content with bubble toolbar and block handle */}
-      <div className="relative rounded-b-lg border border-t-0 border-zinc-200 bg-zinc-50">
-        {editor && <BubbleToolbar editor={editor} />}
+      {/* Editor content with bubble toolbar, block handle, and context menu */}
+      <div className="relative border border-t-0 border-zinc-200 bg-zinc-50">
+        {editor && <BubbleToolbar editor={editor} unitId={resolvedUnitId || undefined} />}
         {editor && <BlockHandle editor={editor} />}
+        {editor && <ContextMenu editor={editor} />}
         <EditorContent editor={editor} className="min-h-60 px-3 py-2 pl-10" />
       </div>
+
+      {/* Word count / character count footer */}
+      {editor && <EditorFooter editor={editor} />}
     </div>
   )
 })
