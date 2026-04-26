@@ -17,6 +17,8 @@ export const portalConfigs: Record<string, PortalConfig> = {
     basePath: "/org",
     navItems: [
       { label: "Dashboard", href: "/org", icon: "layout-dashboard" },
+      { label: "Unit Library", href: "/teacher/units", icon: "file-text" },
+      { label: "Sessions", href: "/teacher/sessions", icon: "video" },
       { label: "Teachers", href: "/org/teachers", icon: "graduation-cap" },
       { label: "Students", href: "/org/students", icon: "users" },
       { label: "Courses", href: "/org/courses", icon: "book-open" },
@@ -30,6 +32,8 @@ export const portalConfigs: Record<string, PortalConfig> = {
     basePath: "/teacher",
     navItems: [
       { label: "Dashboard", href: "/teacher", icon: "layout-dashboard" },
+      { label: "Unit Library", href: "/teacher/units", icon: "file-text" },
+      { label: "Sessions", href: "/teacher/sessions", icon: "video" },
       { label: "My Courses", href: "/teacher/courses", icon: "book-open" },
       { label: "My Classes", href: "/teacher/classes", icon: "school" },
       { label: "Schedule", href: "/teacher/schedule", icon: "calendar" },
