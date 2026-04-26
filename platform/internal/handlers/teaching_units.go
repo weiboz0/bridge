@@ -93,34 +93,35 @@ func (h *TeachingUnitHandler) Routes(r chi.Router) {
 	r.Route("/api/units", func(r chi.Router) {
 		r.Get("/", h.ListUnits)
 		r.Post("/", h.CreateUnit)
+
+		// Static sub-paths MUST be registered before the {id} wildcard
 		r.Get("/search", h.SearchUnits)
-	})
-	// by-topic lookup must be registered BEFORE the /{id} wildcard route so Chi
-	// does not attempt to parse "by-topic" as a UUID parameter.
-	r.Route("/api/units/by-topic/{topicId}", func(r chi.Router) {
-		r.Use(ValidateUUIDParam("topicId"))
-		r.Get("/", h.GetUnitByTopic)
-	})
-	r.Route("/api/units/{id}", func(r chi.Router) {
-		r.Use(ValidateUUIDParam("id"))
-		r.Get("/", h.GetUnit)
-		r.Patch("/", h.UpdateUnit)
-		r.Delete("/", h.DeleteUnit)
-		r.Get("/document", h.GetDocument)
-		r.Put("/document", h.SaveDocument)
-		r.Get("/projected", h.GetProjectedDocument)
-		r.Post("/transition", h.TransitionUnit)
-		r.Get("/revisions", h.ListRevisions)
-		r.Route("/revisions/{revisionId}", func(r chi.Router) {
-			r.Use(ValidateUUIDParam("revisionId"))
-			r.Get("/", h.GetRevision)
+
+		r.Route("/by-topic/{topicId}", func(r chi.Router) {
+			r.Use(ValidateUUIDParam("topicId"))
+			r.Get("/", h.GetUnitByTopic)
 		})
-		// Overlay / fork endpoints (plan 034).
-		r.Post("/fork", h.ForkUnit)
-		r.Get("/overlay", h.GetOverlay)
-		r.Patch("/overlay", h.PatchOverlay)
-		r.Get("/composed", h.GetComposedDocument)
-		r.Get("/lineage", h.GetLineage)
+
+		r.Route("/{id}", func(r chi.Router) {
+			r.Use(ValidateUUIDParam("id"))
+			r.Get("/", h.GetUnit)
+			r.Patch("/", h.UpdateUnit)
+			r.Delete("/", h.DeleteUnit)
+			r.Get("/document", h.GetDocument)
+			r.Put("/document", h.SaveDocument)
+			r.Get("/projected", h.GetProjectedDocument)
+			r.Post("/transition", h.TransitionUnit)
+			r.Get("/revisions", h.ListRevisions)
+			r.Route("/revisions/{revisionId}", func(r chi.Router) {
+				r.Use(ValidateUUIDParam("revisionId"))
+				r.Get("/", h.GetRevision)
+			})
+			r.Post("/fork", h.ForkUnit)
+			r.Get("/overlay", h.GetOverlay)
+			r.Patch("/overlay", h.PatchOverlay)
+			r.Get("/composed", h.GetComposedDocument)
+			r.Get("/lineage", h.GetLineage)
+		})
 	})
 }
 
