@@ -272,7 +272,7 @@ const AI_ITEMS: SlashMenuItem[] = [
   },
 ]
 
-const ALL_ITEMS: SlashMenuItem[] = [...AI_ITEMS, ...TEXT_ITEMS, ...TEACHING_ITEMS]
+export const ALL_ITEMS: SlashMenuItem[] = [...AI_ITEMS, ...TEXT_ITEMS, ...TEACHING_ITEMS]
 
 // ---------------------------------------------------------------------------
 // Filter logic

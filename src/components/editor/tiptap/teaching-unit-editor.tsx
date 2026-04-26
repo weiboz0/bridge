@@ -7,6 +7,8 @@ import { Button } from "@/components/ui/button"
 import { teachingUnitExtensions } from "./extensions"
 import { SlashCommandExtension } from "./slash-menu"
 import { AIDraftPanel } from "./ai-draft-panel"
+import { BubbleToolbar } from "./bubble-toolbar"
+import { EditorToolbar } from "./editor-toolbar"
 import { useYjsTiptap } from "@/lib/yjs/use-yjs-tiptap"
 
 /** Options for enabling real-time collaborative editing via Yjs/Hocuspocus. */
@@ -469,37 +471,20 @@ function TeachingUnitEditor({ initialDoc, onSave, onDirty, unitId, collaborative
   }, [inlineAIPrompt, resolvedUnitId, handleInsertAIBlocks])
 
   return (
-    <div className="space-y-3">
-      {/* Toolbar */}
-      <div className="flex flex-wrap items-center gap-2">
-        {resolvedUnitId && (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setShowAIPanel((prev) => !prev)}
-          >
-            {showAIPanel ? "Close AI" : "Draft with AI"}
-          </Button>
-        )}
-        <Button variant="default" size="sm" onClick={handleSave}>
-          Save
-        </Button>
-        {/* Collaborative status indicator — only shown in collaborative mode */}
-        {collaborative && (
-          <span
-            className={
-              connected
-                ? "ml-auto text-xs font-medium text-green-600"
-                : "ml-auto text-xs font-medium text-zinc-400"
-            }
-          >
-            {connected ? "Live" : "Connecting..."}
-          </span>
-        )}
-      </div>
-      <p className="text-xs text-zinc-400">
-        Tip: type <code className="rounded bg-zinc-100 px-1">/</code> to open the command menu and insert blocks.
-      </p>
+    <div className="space-y-0">
+      {/* Fixed top toolbar (Phase 1) */}
+      {editor && (
+        <EditorToolbar
+          editor={editor}
+          collaborative={collaborative ? { connected } : undefined}
+          onSave={handleSave}
+          onToggleAI={() => setShowAIPanel((prev) => !prev)}
+          showAI={showAIPanel}
+          unitId={resolvedUnitId || undefined}
+        />
+      )}
+
+      {/* AI draft panel */}
       {showAIPanel && resolvedUnitId && (
         <AIDraftPanel
           unitId={resolvedUnitId}
@@ -507,6 +492,8 @@ function TeachingUnitEditor({ initialDoc, onSave, onDirty, unitId, collaborative
           onClose={() => setShowAIPanel(false)}
         />
       )}
+
+      {/* Inline AI prompt */}
       {showInlineAI && (
         <div className="flex items-center gap-2 rounded-lg border border-blue-300 bg-blue-50 px-3 py-2">
           <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded bg-blue-100 text-[10px] font-bold text-blue-600">AI</span>
@@ -532,7 +519,10 @@ function TeachingUnitEditor({ initialDoc, onSave, onDirty, unitId, collaborative
           {inlineAIError && <span className="text-xs text-red-600">{inlineAIError}</span>}
         </div>
       )}
-      <div className="rounded-lg border border-zinc-200 bg-zinc-50">
+
+      {/* Editor content with bubble toolbar */}
+      <div className="rounded-b-lg border border-t-0 border-zinc-200 bg-zinc-50">
+        {editor && <BubbleToolbar editor={editor} />}
         <EditorContent editor={editor} className="min-h-60 px-3 py-2" />
       </div>
     </div>

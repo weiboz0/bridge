@@ -166,13 +166,106 @@
   margin: 1rem 0;
 }
 
-.ProseMirror p.is-editor-empty:first-child::before {
-  content: "Type / to open the command menu...";
+/* ── Placeholder (via @tiptap/extension-placeholder) ──────────────────── */
+.ProseMirror p.is-editor-empty:first-child::before,
+.ProseMirror .is-empty::before {
   color: #a1a1aa;
   pointer-events: none;
   float: left;
   height: 0;
 }
+
+/* ── Highlight ──────────────────────────────────────────────────────────── */
+.ProseMirror mark {
+  background-color: #fef08a;
+  border-radius: 0.125rem;
+  padding: 0.0625rem 0;
+}
+
+/* ── Task list ──────────────────────────────────────────────────────────── */
+.ProseMirror ul[data-type="taskList"] {
+  list-style: none;
+  padding-left: 0;
+}
+
+.ProseMirror ul[data-type="taskList"] li {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin: 0.25rem 0;
+}
+
+.ProseMirror ul[data-type="taskList"] li > label {
+  flex-shrink: 0;
+  margin-top: 0.25rem;
+}
+
+.ProseMirror ul[data-type="taskList"] li > label input[type="checkbox"] {
+  cursor: pointer;
+  accent-color: #3f3f46;
+}
+
+.ProseMirror ul[data-type="taskList"] li > div {
+  flex: 1;
+}
+
+.ProseMirror ul[data-type="taskList"] li[data-checked="true"] > div {
+  text-decoration: line-through;
+  color: #a1a1aa;
+}
+
+/* ── Table ──────────────────────────────────────────────────────────────── */
+.ProseMirror table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 0.5rem 0;
+  overflow: hidden;
+}
+
+.ProseMirror table td,
+.ProseMirror table th {
+  border: 1px solid #e4e4e7;
+  padding: 0.5rem 0.75rem;
+  position: relative;
+  vertical-align: top;
+  min-width: 80px;
+}
+
+.ProseMirror table th {
+  background-color: #f4f4f5;
+  font-weight: 600;
+  text-align: left;
+}
+
+.ProseMirror table td > *,
+.ProseMirror table th > * {
+  margin: 0;
+}
+
+/* Table selected cell */
+.ProseMirror table .selectedCell {
+  background-color: #dbeafe;
+}
+
+/* Column resize handle */
+.ProseMirror .column-resize-handle {
+  position: absolute;
+  right: -2px;
+  top: 0;
+  bottom: -2px;
+  width: 4px;
+  background-color: #3b82f6;
+  cursor: col-resize;
+  z-index: 1;
+}
+
+.ProseMirror.resize-cursor {
+  cursor: col-resize;
+}
+
+/* ── Text alignment ────────────────────────────────────────────────────── */
+.ProseMirror [style*="text-align: center"] { text-align: center; }
+.ProseMirror [style*="text-align: right"] { text-align: right; }
 
 /* ── Collaboration cursor styles (Plan 035) ─────────────────────────────── */
 /* Rendered by @tiptap/extension-collaboration-cursor for co-editor labels.  */
