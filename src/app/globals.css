@@ -1,6 +1,7 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
+@import "katex/dist/katex.min.css";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -285,6 +286,11 @@
 .columns-node .column-node { min-width: 0; flex: 1; }
 /* Keep the NodeViewContent flex children arranged in a row */
 .columns-node [data-node-view-content] { display: flex; flex-direction: row; gap: 1rem; width: 100%; }
+
+/* ── Math / KaTeX (Plan 037) ───────────────────────────────────────────── */
+.math-block-node { margin: 0.75rem 0; }
+.math-inline-node { display: inline; }
+.math-block-node .katex-display { margin: 0; }
 
 /* ── Collaboration cursor styles (Plan 035) ─────────────────────────────── */
 /* Rendered by @tiptap/extension-collaboration-cursor for co-editor labels.  */
