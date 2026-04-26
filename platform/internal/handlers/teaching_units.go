@@ -408,6 +408,7 @@ func (h *TeachingUnitHandler) CreateUnit(w http.ResponseWriter, r *http.Request)
 		SubjectTags      []string `json:"subjectTags"`
 		StandardsTags    []string `json:"standardsTags"`
 		EstimatedMinutes *int     `json:"estimatedMinutes"`
+		MaterialType     string   `json:"materialType"`
 		Status           string   `json:"status"`
 	}
 	if !decodeJSON(w, r, &body) {
@@ -452,6 +453,7 @@ func (h *TeachingUnitHandler) CreateUnit(w http.ResponseWriter, r *http.Request)
 		SubjectTags:      body.SubjectTags,
 		StandardsTags:    body.StandardsTags,
 		EstimatedMinutes: body.EstimatedMinutes,
+		MaterialType:     body.MaterialType,
 		Status:           body.Status,
 		CreatedBy:        claims.UserID,
 	})

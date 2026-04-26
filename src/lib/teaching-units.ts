@@ -34,6 +34,7 @@ export interface CreateUnitInput {
   gradeLevel?: string
   subjectTags?: string[]
   estimatedMinutes?: number
+  materialType?: "notes" | "slides" | "worksheet" | "reference"
 }
 
 /**

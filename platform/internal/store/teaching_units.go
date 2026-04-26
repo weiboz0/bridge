@@ -27,6 +27,7 @@ type TeachingUnit struct {
 	SubjectTags      []string  `json:"subjectTags"`
 	StandardsTags    []string  `json:"standardsTags"`
 	EstimatedMinutes *int      `json:"estimatedMinutes"`
+	MaterialType     string    `json:"materialType"`
 	Status           string    `json:"status"`
 	CreatedBy        string    `json:"createdBy"`
 	CreatedAt        time.Time `json:"createdAt"`
@@ -53,6 +54,7 @@ type CreateTeachingUnitInput struct {
 	SubjectTags      []string
 	StandardsTags    []string
 	EstimatedMinutes *int
+	MaterialType     string // "" → "notes"
 	Status           string // "" → "draft"
 	CreatedBy        string
 }
@@ -93,8 +95,8 @@ type TeachingUnitStore struct{ db *sql.DB }
 func NewTeachingUnitStore(db *sql.DB) *TeachingUnitStore { return &TeachingUnitStore{db: db} }
 
 const teachingUnitColumns = `id, scope, scope_id, title, slug, summary,
-  grade_level, subject_tags, standards_tags, estimated_minutes, status,
-  created_by, created_at, updated_at, topic_id`
+  grade_level, subject_tags, standards_tags, estimated_minutes, material_type,
+  status, created_by, created_at, updated_at, topic_id`
 
 // scanTeachingUnit reads a teaching_units row. Returns (nil, nil) on
 // sql.ErrNoRows so callers can use a uniform "not found" check.
@@ -106,8 +108,8 @@ func scanTeachingUnit(row interface{ Scan(...any) error }) (*TeachingUnit, error
 
 	err := row.Scan(
 		&u.ID, &u.Scope, &scopeID, &u.Title, &slug, &u.Summary,
-		&gradeLevel, &subjectTags, &standardsTags, &estimatedMinutes, &u.Status,
-		&u.CreatedBy, &u.CreatedAt, &u.UpdatedAt, &topicID,
+		&gradeLevel, &subjectTags, &standardsTags, &estimatedMinutes, &u.MaterialType,
+		&u.Status, &u.CreatedBy, &u.CreatedAt, &u.UpdatedAt, &topicID,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -156,6 +158,9 @@ func (s *TeachingUnitStore) CreateUnit(ctx context.Context, in CreateTeachingUni
 	if in.Status == "" {
 		in.Status = "draft"
 	}
+	if in.MaterialType == "" {
+		in.MaterialType = "notes"
+	}
 	if in.SubjectTags == nil {
 		in.SubjectTags = []string{}
 	}
@@ -173,12 +178,12 @@ func (s *TeachingUnitStore) CreateUnit(ctx context.Context, in CreateTeachingUni
 		INSERT INTO teaching_units (
 		  scope, scope_id, title, slug, summary,
 		  grade_level, subject_tags, standards_tags,
-		  estimated_minutes, status, created_by
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+		  estimated_minutes, material_type, status, created_by
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
 		RETURNING `+teachingUnitColumns,
 		in.Scope, in.ScopeID, in.Title, in.Slug, in.Summary,
 		in.GradeLevel, pq.Array(in.SubjectTags), pq.Array(in.StandardsTags),
-		in.EstimatedMinutes, in.Status, in.CreatedBy,
+		in.EstimatedMinutes, in.MaterialType, in.Status, in.CreatedBy,
 	))
 	if err != nil {
 		return nil, err

@@ -40,6 +40,37 @@ const maxIntentLen = 2000
 // draftSystemPrompt is the system prompt sent to the LLM for unit drafting.
 // It describes the available block types and their JSON shapes so the LLM
 // can use the provided tools to generate a structured teaching unit.
+// materialTypeGuidelines maps material_type to AI writing style guidance.
+var materialTypeGuidelines = map[string]string{
+	"notes": `Writing style: DETAILED NOTES
+- Write full paragraphs with thorough explanations.
+- Include examples, analogies, and context.
+- Explain concepts step by step.
+- Target reading level appropriate for the grade.
+- Use teacher notes liberally for pedagogy tips.`,
+
+	"slides": `Writing style: CONCISE SLIDES
+- Use short, punchy bullet points — one idea per line.
+- Maximum 3-5 bullet points per prose block.
+- Headlines should be clear and scannable.
+- Minimize paragraphs — prefer lists and key phrases.
+- Teacher notes should contain the detailed explanation the teacher will say aloud.`,
+
+	"worksheet": `Writing style: PRACTICE WORKSHEET
+- Brief introductions only — focus on exercises and problems.
+- Reference problems heavily — this is practice material.
+- Include worked examples before independent practice.
+- Group problems by difficulty (easy → medium → hard).
+- Teacher notes should contain answer keys and common mistakes.`,
+
+	"reference": `Writing style: REFERENCE / CHEAT SHEET
+- Dense, lookup-friendly format.
+- Use tables, lists, and code snippets extensively.
+- No narrative flow — organize by topic/concept.
+- Include syntax summaries, common patterns, and quick examples.
+- Minimize prose — every word should earn its place.`,
+}
+
 const draftSystemPrompt = `You are a curriculum designer. Given a teacher's intent, generate a teaching unit composed of structured blocks.
 
 Use the provided tools to build the unit. Call them in sequence to compose the lesson.
@@ -286,8 +317,11 @@ func (h *UnitAIHandler) DraftWithAI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Enrich the system prompt with document context and unit metadata.
+	// Enrich the system prompt with material type guidance + document context.
 	enrichedSystemPrompt := draftSystemPrompt
+	if guide, ok := materialTypeGuidelines[unit.MaterialType]; ok {
+		enrichedSystemPrompt += "\n\n" + guide
+	}
 	enrichedSystemPrompt += h.buildDraftContext(r.Context(), unitID, unit)
 
 	// Build messages.
