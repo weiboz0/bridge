@@ -282,6 +282,45 @@ const TEACHING_ITEMS: SlashMenuItem[] = [
   },
 ]
 
+const MATH_ITEMS: SlashMenuItem[] = [
+  {
+    id: "math",
+    label: "Math Block",
+    description: "Display math equation (LaTeX / KaTeX)",
+    badge: "∑",
+    category: "text",
+    command: ({ editor, range }) => {
+      editor
+        .chain()
+        .focus()
+        .deleteRange(range)
+        .insertContent({
+          type: "math-block",
+          attrs: { id: nanoid(), latex: "" },
+        })
+        .run()
+    },
+  },
+  {
+    id: "mathInline",
+    label: "Inline Math",
+    description: "Inline math expression (LaTeX / KaTeX)",
+    badge: "x²",
+    category: "text",
+    command: ({ editor, range }) => {
+      editor
+        .chain()
+        .focus()
+        .deleteRange(range)
+        .insertContent({
+          type: "math-inline",
+          attrs: { id: nanoid(), latex: "" },
+        })
+        .run()
+    },
+  },
+]
+
 const BLOCK_ITEMS: SlashMenuItem[] = [
   {
     id: "callout",
@@ -396,7 +435,7 @@ const AI_ITEMS: SlashMenuItem[] = [
   },
 ]
 
-export const ALL_ITEMS: SlashMenuItem[] = [...AI_ITEMS, ...TEXT_ITEMS, ...TEACHING_ITEMS, ...BLOCK_ITEMS]
+export const ALL_ITEMS: SlashMenuItem[] = [...AI_ITEMS, ...TEXT_ITEMS, ...MATH_ITEMS, ...TEACHING_ITEMS, ...BLOCK_ITEMS]
 
 // ---------------------------------------------------------------------------
 // Filter logic

@@ -31,6 +31,8 @@ import { ToggleNode } from "./toggle-node"
 import { BookmarkNode } from "./bookmark-node"
 import { TocNode } from "./toc-node"
 import { ColumnsNode, ColumnNode } from "./columns-node"
+import { MathBlockNode, MathInlineNode } from "./math-node"
+import { EmojiPickerExtension } from "./emoji-picker"
 
 export function teachingUnitExtensions(): AnyExtension[] {
   return [
@@ -83,5 +85,10 @@ export function teachingUnitExtensions(): AnyExtension[] {
     TocNode,
     ColumnsNode,
     ColumnNode,
+    // Math / KaTeX nodes
+    MathBlockNode,
+    MathInlineNode,
+    // Emoji picker (:shortcode: suggestion)
+    EmojiPickerExtension,
   ] as AnyExtension[]
 }
