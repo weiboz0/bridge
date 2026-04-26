@@ -44,6 +44,98 @@ export interface TeachingUnitEditorHandle {
   save: () => Promise<void>
 }
 
+// ---------------------------------------------------------------------------
+// Phase 0 — Block validation on load
+// ---------------------------------------------------------------------------
+// Known block types registered in our Tiptap schema (StarterKit + custom nodes).
+// Used to sanitize loaded documents before passing to the editor.
+const KNOWN_NODE_TYPES = new Set([
+  // StarterKit built-in types
+  "doc",
+  "text",
+  "paragraph",
+  "heading",
+  "bulletList",
+  "orderedList",
+  "listItem",
+  "blockquote",
+  "codeBlock",
+  "horizontalRule",
+  "hardBreak",
+  // New extensions (Phase 1)
+  "taskList",
+  "taskItem",
+  "table",
+  "tableRow",
+  "tableCell",
+  "tableHeader",
+  // Custom teaching nodes
+  "problem-ref",
+  "teacher-note",
+  "code-snippet",
+  "media-embed",
+  "solution-ref",
+  "test-case-ref",
+  "live-cue",
+  "assignment-variant",
+])
+
+/**
+ * Sanitizes a loaded document JSON before passing to the editor.
+ * - Replaces blocks with unknown types with a paragraph containing a warning.
+ * - Assigns missing `attrs.id` for custom blocks that declare an id attr.
+ * This prevents corrupted or forward-incompatible documents from crashing
+ * the editor.
+ */
+function sanitizeDoc(doc: JSONContent): JSONContent {
+  if (!doc || doc.type !== "doc" || !Array.isArray(doc.content)) {
+    return doc
+  }
+
+  const sanitizedContent = doc.content.map((node) => sanitizeNode(node))
+  return { ...doc, content: sanitizedContent }
+}
+
+function sanitizeNode(node: JSONContent): JSONContent {
+  const nodeType = node.type ?? ""
+
+  // Check for unknown node types at this level
+  if (nodeType && !KNOWN_NODE_TYPES.has(nodeType)) {
+    console.warn(`[TeachingUnitEditor] Unknown block type "${nodeType}" replaced with paragraph fallback.`)
+    return {
+      type: "paragraph",
+      content: [
+        { type: "text", text: `[Unknown block type: ${nodeType}]` },
+      ],
+    }
+  }
+
+  // Assign missing id attrs for custom blocks that should have them
+  let attrs = node.attrs
+  if (attrs && typeof attrs === "object" && "id" in attrs) {
+    if (!attrs.id || (typeof attrs.id === "string" && attrs.id.length === 0)) {
+      console.warn(`[TeachingUnitEditor] Missing attrs.id on "${nodeType}" node, assigning one.`)
+      attrs = { ...attrs, id: nanoid() }
+    }
+  }
+
+  // Recursively sanitize child content
+  let content = node.content
+  if (Array.isArray(content)) {
+    content = content.map((child) => sanitizeNode(child))
+  }
+
+  if (attrs !== node.attrs || content !== node.content) {
+    return { ...node, attrs, content }
+  }
+
+  return node
+}
+
+// ---------------------------------------------------------------------------
+// Node ID assignment (existing)
+// ---------------------------------------------------------------------------
+
 function assignMissingTopLevelNodeIds(editor: Editor) {
   let transaction = editor.state.tr
   let needsUpdate = false
@@ -257,6 +349,15 @@ function mapAIBlockToTiptap(block: Record<string, unknown>): JSONContent {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Save format note (Phase 0, Task 0.2)
+// ---------------------------------------------------------------------------
+// Future: wrap the doc JSON in an envelope with a schema version marker, e.g.:
+//   { version: 1, doc: { type: "doc", content: [...] } }
+// The Go store currently handles raw doc JSON. Changing the save format would
+// require a migration. Deferred until a concrete need arises (new block type
+// requiring schema-level migration).
+
 export const TeachingUnitEditor = forwardRef<TeachingUnitEditorHandle, TeachingUnitEditorProps>(
 function TeachingUnitEditor({ initialDoc, onSave, onDirty, unitId, collaborative }, ref) {
   const [showAIPanel, setShowAIPanel] = useState(false)
@@ -280,6 +381,10 @@ function TeachingUnitEditor({ initialDoc, onSave, onDirty, unitId, collaborative
 
   const isCollaborative = Boolean(collaborative) && yjsExtensions.length > 0
 
+  // Phase 0: Sanitize loaded documents before passing to the editor.
+  // This strips unknown block types and assigns missing IDs.
+  const sanitizedInitialDoc = initialDoc ? sanitizeDoc(initialDoc) : undefined
+
   const editor = useEditor({
     immediatelyRender: false,
     extensions: [
@@ -289,7 +394,7 @@ function TeachingUnitEditor({ initialDoc, onSave, onDirty, unitId, collaborative
     ],
     content: isCollaborative && connected
       ? undefined
-      : (initialDoc ?? { type: "doc", content: [] }),
+      : (sanitizedInitialDoc ?? { type: "doc", content: [] }),
     onCreate({ editor: e }: { editor: Editor }) {
       assignMissingTopLevelNodeIds(e)
     },

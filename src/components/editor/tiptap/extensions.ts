@@ -1,5 +1,22 @@
 import type { AnyExtension } from "@tiptap/react"
 import StarterKit from "@tiptap/starter-kit"
+import Underline from "@tiptap/extension-underline"
+import Link from "@tiptap/extension-link"
+import Highlight from "@tiptap/extension-highlight"
+import { TextStyle } from "@tiptap/extension-text-style"
+import Color from "@tiptap/extension-color"
+import Subscript from "@tiptap/extension-subscript"
+import Superscript from "@tiptap/extension-superscript"
+import TextAlign from "@tiptap/extension-text-align"
+import Placeholder from "@tiptap/extension-placeholder"
+import CharacterCount from "@tiptap/extension-character-count"
+import Typography from "@tiptap/extension-typography"
+import TaskList from "@tiptap/extension-task-list"
+import TaskItem from "@tiptap/extension-task-item"
+import { Table } from "@tiptap/extension-table"
+import TableRow from "@tiptap/extension-table-row"
+import TableCell from "@tiptap/extension-table-cell"
+import TableHeader from "@tiptap/extension-table-header"
 
 import { ProblemRefNode } from "./problem-ref-node"
 import { TeacherNoteNode } from "./teacher-note-node"
@@ -15,6 +32,37 @@ export function teachingUnitExtensions(): AnyExtension[] {
     StarterKit.configure({
       heading: { levels: [1, 2, 3] },
     }),
+    // Inline formatting
+    Underline,
+    Link.configure({
+      openOnClick: false,
+      autolink: true,
+    }),
+    Highlight.configure({ multicolor: false }),
+    TextStyle,
+    Color,
+    Subscript,
+    Superscript,
+    // Block-level formatting
+    TextAlign.configure({
+      types: ["heading", "paragraph"],
+      alignments: ["left", "center", "right"],
+    }),
+    // UX polish
+    Placeholder.configure({
+      placeholder: "Type / for commands, or start writing...",
+    }),
+    CharacterCount,
+    Typography,
+    // Task lists
+    TaskList,
+    TaskItem.configure({ nested: true }),
+    // Tables
+    Table.configure({ resizable: true }),
+    TableRow,
+    TableCell,
+    TableHeader,
+    // Custom teaching nodes
     ProblemRefNode,
     TeacherNoteNode,
     CodeSnippetNode,
