@@ -478,7 +478,7 @@ export function BlockHandle({ editor }: BlockHandleProps) {
   // The handle sits to the left of the block.
   const editorRect = editor.view.dom.getBoundingClientRect()
   const handleTop = hovered.rect.top - editorRect.top
-  const handleLeft = -28 // 24px to the left of the block + 4px padding
+  const handleLeft = 8 // Inside the pl-10 (40px) left padding of the editor content
 
   return (
     <div
