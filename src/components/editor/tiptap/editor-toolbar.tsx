@@ -494,6 +494,10 @@ interface EditorToolbarProps {
   editorDark?: boolean
   /** Toggle editor dark mode. */
   onToggleDarkMode?: () => void
+  /** Current page width: standard, wide, or full. */
+  pageWidth?: "standard" | "wide" | "full"
+  /** Set page width. */
+  onSetPageWidth?: (w: "standard" | "wide" | "full") => void
 }
 
 export function EditorToolbar({
@@ -508,6 +512,8 @@ export function EditorToolbar({
   onTogglePresentation,
   editorDark,
   onToggleDarkMode,
+  pageWidth = "standard",
+  onSetPageWidth,
 }: EditorToolbarProps) {
   const [showLinkInput, setShowLinkInput] = useState(false)
   const [showColorPicker, setShowColorPicker] = useState(false)
@@ -678,6 +684,26 @@ export function EditorToolbar({
 
       {/* Right side: Dark mode, Present, AI, Help, Save, Collab status */}
       <div className="ml-auto flex items-center gap-2">
+        {/* Page width selector */}
+        {onSetPageWidth && (
+          <div className="flex items-center rounded-md border border-zinc-200">
+            {(["standard", "wide", "full"] as const).map((w) => (
+              <button
+                key={w}
+                type="button"
+                onClick={() => onSetPageWidth(w)}
+                className={`px-2 py-1 text-[10px] font-medium transition-colors ${
+                  pageWidth === w
+                    ? "bg-zinc-200 text-zinc-900"
+                    : "text-zinc-500 hover:text-zinc-700"
+                } ${w === "standard" ? "rounded-l-md" : w === "full" ? "rounded-r-md" : ""}`}
+                title={`${w.charAt(0).toUpperCase() + w.slice(1)} width`}
+              >
+                {w === "standard" ? "S" : w === "wide" ? "W" : "F"}
+              </button>
+            ))}
+          </div>
+        )}
         {onToggleDarkMode && (
           <ToolbarButton
             onClick={onToggleDarkMode}

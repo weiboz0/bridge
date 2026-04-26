@@ -167,13 +167,24 @@
   margin: 1rem 0;
 }
 
+/* ── Current line highlight ────────────────────────────────────────────── */
+.ProseMirror .has-focus {
+  background-color: rgba(244, 244, 245, 0.6);
+  border-radius: 0.25rem;
+  margin-left: -0.25rem;
+  margin-right: -0.25rem;
+  padding-left: 0.25rem;
+  padding-right: 0.25rem;
+}
+
 /* ── Placeholder (via @tiptap/extension-placeholder) ──────────────────── */
-.ProseMirror p.is-editor-empty:first-child::before,
 .ProseMirror .is-empty::before {
   color: #a1a1aa;
+  content: attr(data-placeholder);
   pointer-events: none;
   float: left;
   height: 0;
+  font-style: italic;
 }
 
 /* ── Highlight ──────────────────────────────────────────────────────────── */

@@ -424,13 +424,16 @@ const AI_ITEMS: SlashMenuItem[] = [
   {
     id: "aiWriter",
     label: "AI Writer",
-    description: "Generate content with AI inline",
+    description: "Type your prompt, then Cmd+J to generate",
     badge: "AI",
     category: "ai",
     command: ({ editor, range }) => {
+      // Clear the slash command text — the user types their prompt
+      // directly in the current paragraph, then presses Cmd+J to generate.
       editor.chain().focus().deleteRange(range).run()
-      // Signal the editor to show the inline AI prompt at the current cursor position
-      window.dispatchEvent(new CustomEvent("tiptap:ai-write-inline"))
+      // Mark this paragraph as an AI prompt by dispatching an event
+      // The editor component listens and enables AI-prompt mode
+      window.dispatchEvent(new CustomEvent("tiptap:ai-prompt-mode"))
     },
   },
   {

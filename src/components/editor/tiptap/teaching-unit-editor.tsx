@@ -528,11 +528,13 @@ function TeachingUnitEditor({ initialDoc, onSave, onDirty, unitId, collaborative
     if (typeof window === "undefined") return false
     return localStorage.getItem("bridge:editor-theme") === "dark"
   })
-  const [showInlineAI, setShowInlineAI] = useState(false)
-  const [inlineAIPrompt, setInlineAIPrompt] = useState("")
-  const [inlineAILoading, setInlineAILoading] = useState(false)
-  const [inlineAIError, setInlineAIError] = useState<string | null>(null)
-  const inlineAIRef = useRef<HTMLInputElement>(null)
+  const [aiPromptMode, setAiPromptMode] = useState(false)
+  const [aiGenerating, setAiGenerating] = useState(false)
+  type PageWidth = "standard" | "wide" | "full"
+  const [pageWidth, setPageWidth] = useState<PageWidth>(() => {
+    if (typeof window === "undefined") return "standard"
+    return (localStorage.getItem("bridge:editor-width") as PageWidth) || "standard"
+  })
 
   // Resolve the unit ID from the explicit prop or the collaborative options.
   const resolvedUnitId = unitId ?? collaborative?.unitId ?? ""
@@ -688,39 +690,70 @@ function TeachingUnitEditor({ initialDoc, onSave, onDirty, unitId, collaborative
     return () => window.removeEventListener("tiptap:save", handler)
   }, [handleSave])
 
-  // Listen for the inline AI trigger from the slash menu
+  // Listen for AI prompt mode from the slash menu — user types prompt in
+  // the current paragraph, then Cmd+J generates content
   useEffect(() => {
-    const handler = () => {
-      setShowInlineAI(true)
-      setInlineAIPrompt("")
-      setInlineAIError(null)
-      setTimeout(() => inlineAIRef.current?.focus(), 50)
-    }
-    window.addEventListener("tiptap:ai-write-inline", handler)
-    return () => window.removeEventListener("tiptap:ai-write-inline", handler)
+    const handler = () => setAiPromptMode(true)
+    window.addEventListener("tiptap:ai-prompt-mode", handler)
+    return () => window.removeEventListener("tiptap:ai-prompt-mode", handler)
   }, [])
+
+  // Cmd+J triggers AI generation when in prompt mode
+  useEffect(() => {
+    if (!aiPromptMode || !editor || !resolvedUnitId) return
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "j") {
+        e.preventDefault()
+        // Get the text of the current paragraph as the prompt
+        const { from } = editor.state.selection
+        const resolved = editor.state.doc.resolve(from)
+        const blockStart = resolved.before(1)
+        const blockEnd = resolved.after(1)
+        const promptText = editor.state.doc.textBetween(blockStart, blockEnd, " ").trim()
+
+        if (!promptText) return
+
+        setAiGenerating(true)
+        // Delete the prompt paragraph
+        editor.chain().focus().deleteRange({ from: blockStart, to: blockEnd }).run()
+
+        // Call AI
+        import("@/lib/teaching-units").then(({ draftWithAI }) => {
+          draftWithAI(resolvedUnitId, promptText)
+            .then((result) => {
+              if (result?.blocks) handleInsertAIBlocks(result.blocks)
+              setAiPromptMode(false)
+            })
+            .catch(() => setAiPromptMode(false))
+            .finally(() => setAiGenerating(false))
+        })
+      }
+      if (e.key === "Escape") {
+        setAiPromptMode(false)
+      }
+    }
+
+    document.addEventListener("keydown", handleKeyDown)
+    return () => document.removeEventListener("keydown", handleKeyDown)
+  }, [aiPromptMode, editor, resolvedUnitId, handleInsertAIBlocks])
 
   // Listen for AI "Continue Writing" from the slash menu
   useEffect(() => {
     const handler = async (e: Event) => {
       const detail = (e as CustomEvent).detail as { intent?: string } | undefined
       if (!detail?.intent || !resolvedUnitId) return
-      setShowInlineAI(true)
-      setInlineAIPrompt(detail.intent)
-      setInlineAILoading(true)
-      setInlineAIError(null)
+      setAiGenerating(true)
       try {
         const { draftWithAI } = await import("@/lib/teaching-units")
         const result = await draftWithAI(resolvedUnitId, detail.intent)
         if (result?.blocks) {
           handleInsertAIBlocks(result.blocks)
         }
-        setShowInlineAI(false)
-        setInlineAIPrompt("")
-      } catch (err) {
-        setInlineAIError(err instanceof Error ? err.message : "AI generation failed")
+      } catch {
+        // Silent — the content just doesn't appear
       } finally {
-        setInlineAILoading(false)
+        setAiGenerating(false)
       }
     }
     window.addEventListener("tiptap:ai-continue", handler)
@@ -745,28 +778,9 @@ function TeachingUnitEditor({ initialDoc, onSave, onDirty, unitId, collaborative
     if (entering) {
       // Hide AI panel when entering presentation mode.
       setShowAIPanel(false)
-      setShowInlineAI(false)
+      setAiPromptMode(false)
     }
   }, [editor, presentationMode])
-
-  const handleInlineAISubmit = useCallback(async () => {
-    if (!inlineAIPrompt.trim() || !resolvedUnitId) return
-    setInlineAILoading(true)
-    setInlineAIError(null)
-    try {
-      const { draftWithAI } = await import("@/lib/teaching-units")
-      const result = await draftWithAI(resolvedUnitId, inlineAIPrompt)
-      if (result?.blocks) {
-        handleInsertAIBlocks(result.blocks)
-      }
-      setShowInlineAI(false)
-      setInlineAIPrompt("")
-    } catch (err) {
-      setInlineAIError(err instanceof Error ? err.message : "AI generation failed")
-    } finally {
-      setInlineAILoading(false)
-    }
-  }, [inlineAIPrompt, resolvedUnitId, handleInsertAIBlocks])
 
   // Presentation mode: clean read-only view.
   if (presentationMode) {
@@ -819,6 +833,8 @@ function TeachingUnitEditor({ initialDoc, onSave, onDirty, unitId, collaborative
           onTogglePresentation={togglePresentationMode}
           editorDark={editorDark}
           onToggleDarkMode={toggleDarkMode}
+          pageWidth={pageWidth}
+          onSetPageWidth={(w: PageWidth) => { setPageWidth(w); localStorage.setItem("bridge:editor-width", w) }}
         />
       )}
 
@@ -835,36 +851,20 @@ function TeachingUnitEditor({ initialDoc, onSave, onDirty, unitId, collaborative
       {/* Editor content with bubble toolbar, block handle, and context menu.
           data-block-handle-wrapper lets BlockHandle listen on this div so the
           handle doesn't disappear when the mouse moves from editor to handle. */}
-      <div className={`relative border border-t-0 border-zinc-200 ${editorDark ? "editor-dark bg-[#1c1c1e]" : "bg-zinc-50"}`} data-block-handle-wrapper>
+      <div className={`relative border border-t-0 border-zinc-200 ${editorDark ? "editor-dark bg-[#1c1c1e]" : "bg-zinc-50"} ${pageWidth === "standard" ? "mx-auto max-w-3xl" : pageWidth === "wide" ? "mx-auto max-w-5xl" : ""}`} data-block-handle-wrapper>
         {editor && <BubbleToolbar editor={editor} unitId={resolvedUnitId || undefined} />}
         {editor && <BlockHandle editor={editor} />}
         {editor && <ContextMenu editor={editor} />}
         {editor && <TableToolbar editor={editor} />}
         <EditorContent editor={editor} className="min-h-60 px-3 py-2 pl-10" />
-        {/* Inline AI prompt — rendered inside the editor area at the bottom of content */}
-        {showInlineAI && (
-          <div className="mx-3 mb-2 flex items-center gap-2 rounded-lg border border-blue-300 bg-blue-50 px-3 py-2">
-            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded bg-blue-100 text-[10px] font-bold text-blue-600">AI</span>
-            <input
-              ref={inlineAIRef}
-              type="text"
-              placeholder="Describe what to generate..."
-              value={inlineAIPrompt}
-              onChange={(e) => setInlineAIPrompt(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleInlineAISubmit() }
-                if (e.key === "Escape") { setShowInlineAI(false) }
-              }}
-              disabled={inlineAILoading}
-              className="flex-1 bg-transparent text-sm outline-none placeholder:text-blue-400"
-            />
-            <Button size="sm" variant="default" onClick={handleInlineAISubmit} disabled={inlineAILoading || !inlineAIPrompt.trim()}>
-              {inlineAILoading ? "Generating..." : "Generate"}
-            </Button>
-            <button type="button" onClick={() => setShowInlineAI(false)} className="text-zinc-400 hover:text-zinc-600 text-sm">
-              Esc
-            </button>
-            {inlineAIError && <span className="text-xs text-red-600">{inlineAIError}</span>}
+        {/* AI prompt mode indicator */}
+        {aiPromptMode && (
+          <div className="mx-3 mb-2 flex items-center gap-2 rounded-lg border border-blue-300 bg-blue-50 px-3 py-1.5 text-xs text-blue-600">
+            <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded bg-blue-100 text-[9px] font-bold">AI</span>
+            {aiGenerating
+              ? <span>Generating...</span>
+              : <span>Type your prompt above, then press <kbd className="rounded bg-blue-100 px-1 font-mono">Cmd+J</kbd> to generate. <kbd className="rounded bg-blue-100 px-1 font-mono">Esc</kbd> to cancel.</span>
+            }
           </div>
         )}
       </div>

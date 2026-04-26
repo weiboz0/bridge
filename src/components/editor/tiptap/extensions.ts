@@ -34,6 +34,7 @@ import { TocNode } from "./toc-node"
 import { ColumnsNode, ColumnNode } from "./columns-node"
 import { MathBlockNode, MathInlineNode } from "./math-node"
 import { EmojiPickerExtension } from "./emoji-picker"
+import Focus from "@tiptap/extension-focus"
 import { MentionNode, MentionSuggestionExtension } from "./mention-node"
 
 // ---------------------------------------------------------------------------
@@ -97,12 +98,33 @@ export function teachingUnitExtensions(): AnyExtension[] {
       types: ["heading", "paragraph"],
       alignments: ["left", "center", "right"],
     }),
-    // UX polish
+    // UX polish — random tips on every empty paragraph
     Placeholder.configure({
-      placeholder: "Type / for commands, or start writing...",
+      placeholder: ({ node, pos }) => {
+        if (node.type.name === "heading") {
+          return `Heading ${node.attrs.level ?? ""}`
+        }
+        if (node.type.name !== "paragraph") return ""
+        if (pos === 0) return "Type / for commands, or start writing..."
+        const tips = [
+          "Type / for commands...",
+          "Press Cmd+B to bold, Cmd+I to italic",
+          "Type /ai to generate with AI",
+          "Drag blocks with the handle on the left",
+          "Press Cmd+Enter to save",
+          "Type /table to insert a table",
+          "Type :emoji: to insert emoji",
+          "Press Cmd+K to add a link",
+          "Type /callout for an info box",
+          "Press Cmd+Shift+D to duplicate a block",
+        ]
+        return tips[pos % tips.length]
+      },
+      showOnlyCurrent: true,
     }),
     CharacterCount,
     Typography,
+    Focus.configure({ className: "has-focus", mode: "deepest" }),
     // Task lists
     TaskList,
     TaskItem.configure({ nested: true }),
