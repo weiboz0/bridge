@@ -9,7 +9,10 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const classroomId = request.nextUrl.searchParams.get("classroomId") || undefined;
+  // Accept both classId (preferred) and classroomId (legacy) query params
+  const classId = request.nextUrl.searchParams.get("classId")
+    || request.nextUrl.searchParams.get("classroomId")
+    || undefined;
   const studentId = request.nextUrl.searchParams.get("studentId") || undefined;
   const sessionId = request.nextUrl.searchParams.get("sessionId") || undefined;
 
@@ -24,13 +27,13 @@ export async function GET(request: NextRequest) {
     // For now, require at least one filter to prevent listing all docs
   }
 
-  if (!effectiveOwnerId && !classroomId && !sessionId) {
+  if (!effectiveOwnerId && !classId && !sessionId) {
     return NextResponse.json({ error: "At least one filter required" }, { status: 400 });
   }
 
   const docs = await listDocuments(db, {
     ownerId: effectiveOwnerId,
-    classroomId,
+    classId,
     sessionId,
   });
 

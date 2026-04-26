@@ -404,6 +404,7 @@ export const documents = pgTable(
     ownerId: uuid("owner_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
+    /** @deprecated Legacy column name — use classId in application code. Rename requires migration. */
     classroomId: uuid("classroom_id"),
     sessionId: uuid("session_id"),
     topicId: uuid("topic_id"),

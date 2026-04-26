@@ -5,13 +5,13 @@ import type { Database } from "@/lib/db";
 export async function getAttendanceSummary(
   db: Database,
   studentId: string,
-  classroomId: string
+  classId: string
 ) {
-  // Get all sessions for this classroom
+  // Get all sessions for this class
   const allSessions = await db
     .select()
     .from(sessions)
-    .where(eq(sessions.classId, classroomId));
+    .where(eq(sessions.classId, classId));
 
   // Get sessions this student participated in
   const attended = await db
@@ -73,7 +73,7 @@ export async function getActiveSessionForStudent(db: Database, studentId: string
   const active = await db
     .select({
       sessionId: sessionParticipants.sessionId,
-      classroomId: sessions.classId,
+      classId: sessions.classId,
       startedAt: sessions.startedAt,
     })
     .from(sessionParticipants)
