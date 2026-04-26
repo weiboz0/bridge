@@ -343,38 +343,6 @@
 /* ── Mention pill ──────────────────────────────────────────────────────── */
 .mention-pill { display: inline; }
 
-/* ── Dark mode for editor (Gap 8) ──────────────────────────────────────── */
-.editor-dark .ProseMirror {
-  background-color: #1c1c1e;
-  color: #e5e5e5;
-}
-.editor-dark .ProseMirror blockquote {
-  border-left-color: #52525b;
-  color: #a1a1aa;
-}
-.editor-dark .ProseMirror pre {
-  background: #27272a;
-}
-.editor-dark .ProseMirror code {
-  background: #27272a;
-}
-.editor-dark .ProseMirror hr {
-  border-top-color: #3f3f46;
-}
-.editor-dark .ProseMirror mark {
-  background-color: #854d0e;
-}
-.editor-dark .ProseMirror table td,
-.editor-dark .ProseMirror table th {
-  border-color: #3f3f46;
-}
-.editor-dark .ProseMirror table th {
-  background-color: #27272a;
-}
-.editor-dark .ProseMirror p.is-editor-empty:first-child::before,
-.editor-dark .ProseMirror .is-empty::before {
-  color: #52525b;
-}
 
 /* ── Image resize handles (Gap 6) ──────────────────────────────────────── */
 .media-resize-handle {

@@ -524,10 +524,6 @@ function TeachingUnitEditor({ initialDoc, onSave, onDirty, unitId, collaborative
   const [showAIPanel, setShowAIPanel] = useState(false)
   const [showHelp, setShowHelp] = useState(() => shouldShowHelp())
   const [presentationMode, setPresentationMode] = useState(false)
-  const [editorDark, setEditorDark] = useState(() => {
-    if (typeof window === "undefined") return false
-    return localStorage.getItem("bridge:editor-theme") === "dark"
-  })
   const [aiPromptMode, setAiPromptMode] = useState(false)
   const [aiGenerating, setAiGenerating] = useState(false)
   type PageWidth = "standard" | "wide" | "full"
@@ -760,14 +756,6 @@ function TeachingUnitEditor({ initialDoc, onSave, onDirty, unitId, collaborative
     return () => window.removeEventListener("tiptap:ai-continue", handler)
   }, [resolvedUnitId, handleInsertAIBlocks])
 
-  // Dark mode toggle (Gap 8)
-  const toggleDarkMode = useCallback(() => {
-    setEditorDark((prev) => {
-      const next = !prev
-      localStorage.setItem("bridge:editor-theme", next ? "dark" : "light")
-      return next
-    })
-  }, [])
 
   // Presentation mode: make the editor read-only and hide editing chrome.
   const togglePresentationMode = useCallback(() => {
@@ -831,8 +819,6 @@ function TeachingUnitEditor({ initialDoc, onSave, onDirty, unitId, collaborative
           onShowHelp={() => setShowHelp(true)}
           presentationMode={presentationMode}
           onTogglePresentation={togglePresentationMode}
-          editorDark={editorDark}
-          onToggleDarkMode={toggleDarkMode}
           pageWidth={pageWidth}
           onSetPageWidth={(w: PageWidth) => { setPageWidth(w); localStorage.setItem("bridge:editor-width", w) }}
         />
@@ -851,7 +837,7 @@ function TeachingUnitEditor({ initialDoc, onSave, onDirty, unitId, collaborative
       {/* Editor content with bubble toolbar, block handle, and context menu.
           data-block-handle-wrapper lets BlockHandle listen on this div so the
           handle doesn't disappear when the mouse moves from editor to handle. */}
-      <div className={`relative border border-t-0 border-zinc-200 ${editorDark ? "editor-dark bg-[#1c1c1e]" : "bg-zinc-50"} ${pageWidth === "standard" ? "mx-auto max-w-3xl" : pageWidth === "wide" ? "mx-auto max-w-5xl" : ""}`} data-block-handle-wrapper>
+      <div className={`relative border border-t-0 border-zinc-200 bg-white ${pageWidth === "standard" ? "mx-auto max-w-3xl" : pageWidth === "wide" ? "mx-auto max-w-5xl" : ""}`} data-block-handle-wrapper>
         {editor && <BubbleToolbar editor={editor} unitId={resolvedUnitId || undefined} />}
         {editor && <BlockHandle editor={editor} />}
         {editor && <ContextMenu editor={editor} />}

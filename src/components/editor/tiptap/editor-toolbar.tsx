@@ -26,8 +26,6 @@ import {
   ChevronDown,
   HelpCircle,
   Monitor,
-  Sun,
-  Moon,
 } from "lucide-react"
 import { ALL_ITEMS, type SlashMenuItem } from "./slash-menu"
 
@@ -490,10 +488,6 @@ interface EditorToolbarProps {
   presentationMode?: boolean
   /** Toggle presentation mode. */
   onTogglePresentation?: () => void
-  /** Whether editor dark mode is active (Gap 8). */
-  editorDark?: boolean
-  /** Toggle editor dark mode. */
-  onToggleDarkMode?: () => void
   /** Current page width: standard, wide, or full. */
   pageWidth?: "standard" | "wide" | "full"
   /** Set page width. */
@@ -510,8 +504,6 @@ export function EditorToolbar({
   onShowHelp,
   presentationMode,
   onTogglePresentation,
-  editorDark,
-  onToggleDarkMode,
   pageWidth = "standard",
   onSetPageWidth,
 }: EditorToolbarProps) {
@@ -703,15 +695,6 @@ export function EditorToolbar({
               </button>
             ))}
           </div>
-        )}
-        {onToggleDarkMode && (
-          <ToolbarButton
-            onClick={onToggleDarkMode}
-            active={editorDark}
-            title={editorDark ? "Light mode" : "Dark mode"}
-          >
-            {editorDark ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}
-          </ToolbarButton>
         )}
         {onTogglePresentation && (
           <ToolbarButton
