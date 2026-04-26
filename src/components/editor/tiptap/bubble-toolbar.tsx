@@ -19,6 +19,8 @@ import {
   X,
   Check,
   Unlink,
+  Loader2,
+  ChevronDown,
 } from "lucide-react"
 
 // ---------------------------------------------------------------------------
@@ -57,7 +59,7 @@ function ToolbarButton({ onClick, active, disabled, title, children }: ToolbarBu
       title={title}
       aria-label={title}
       className={
-        "flex h-7 w-7 items-center justify-center rounded text-zinc-600 transition-colors " +
+        "flex h-7 min-w-7 items-center justify-center rounded text-zinc-600 transition-colors " +
         "hover:bg-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400 " +
         "disabled:cursor-not-allowed disabled:opacity-40 " +
         (active ? "bg-zinc-200 text-zinc-900" : "")
@@ -185,16 +187,155 @@ function ColorPicker({ editor, onClose }: ColorPickerProps) {
 }
 
 // ---------------------------------------------------------------------------
+// AI transform actions
+// ---------------------------------------------------------------------------
+
+const AI_ACTIONS = [
+  { id: "rewrite", label: "Rewrite", desc: "Rephrase with different words" },
+  { id: "polish", label: "Polish", desc: "Fix grammar, improve clarity" },
+  { id: "simplify", label: "Simplify", desc: "Reduce reading level" },
+  { id: "expand", label: "Expand", desc: "Elaborate with more detail" },
+  { id: "summarize", label: "Summarize", desc: "Condense to key points" },
+] as const
+
+type AIAction = typeof AI_ACTIONS[number]["id"]
+
+async function callAITransform(
+  unitId: string,
+  action: AIAction,
+  selectedText: string,
+  context: string,
+  documentSummary: string,
+): Promise<string> {
+  const res = await fetch(`/api/units/${unitId}/ai-transform`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action, selectedText, context, documentSummary }),
+  })
+  if (!res.ok) {
+    const body = await res.json().catch(() => null)
+    throw new Error(body?.error ?? `AI transform failed: ${res.status}`)
+  }
+  const data = await res.json()
+  return data.result as string
+}
+
+/**
+ * Capture context around the current selection: 500 chars before + after,
+ * plus the first 2000 chars of the document as a summary.
+ */
+function captureSelectionContext(editor: Editor) {
+  const { from, to } = editor.state.selection
+  const docText = editor.state.doc.textContent
+  const selectedText = editor.state.doc.textBetween(from, to, " ")
+
+  // 500 chars before and after the selection
+  const beforeStart = Math.max(0, from - 500)
+  const afterEnd = Math.min(docText.length, to + 500)
+  const contextBefore = docText.slice(beforeStart, from)
+  const contextAfter = docText.slice(to, afterEnd)
+  const context = contextBefore + "[SELECTED]" + contextAfter
+
+  // First 2000 chars of the document
+  const documentSummary = docText.slice(0, 2000)
+
+  return { selectedText, context, documentSummary }
+}
+
+// ---------------------------------------------------------------------------
+// AI dropdown in the bubble toolbar
+// ---------------------------------------------------------------------------
+
+interface AIDropdownProps {
+  editor: Editor
+  unitId: string
+  onClose: () => void
+}
+
+function AIDropdown({ editor, unitId, onClose }: AIDropdownProps) {
+  const [loading, setLoading] = useState<AIAction | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        onClose()
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside)
+    return () => document.removeEventListener("mousedown", handleClickOutside)
+  }, [onClose])
+
+  const handleAction = useCallback(
+    async (action: AIAction) => {
+      setLoading(action)
+      setError(null)
+      try {
+        const { selectedText, context, documentSummary } = captureSelectionContext(editor)
+        if (!selectedText.trim()) {
+          setError("No text selected")
+          setLoading(null)
+          return
+        }
+        const result = await callAITransform(unitId, action, selectedText, context, documentSummary)
+        // Replace the selection with the AI result
+        const { from, to } = editor.state.selection
+        editor.chain().focus().deleteRange({ from, to }).insertContentAt(from, result).run()
+        onClose()
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "AI transform failed")
+        setLoading(null)
+      }
+    },
+    [editor, unitId, onClose],
+  )
+
+  return (
+    <div
+      ref={ref}
+      className="absolute left-0 top-full z-50 mt-1 w-48 rounded-lg border border-zinc-200 bg-white py-1 shadow-lg"
+    >
+      {AI_ACTIONS.map((action) => (
+        <button
+          key={action.id}
+          type="button"
+          disabled={loading !== null}
+          className={
+            "flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm " +
+            "text-zinc-700 transition-colors hover:bg-zinc-100 " +
+            "disabled:cursor-not-allowed disabled:opacity-50"
+          }
+          onClick={() => handleAction(action.id)}
+        >
+          {loading === action.id ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin text-zinc-400" />
+          ) : (
+            <Sparkles className="h-3.5 w-3.5 text-zinc-400" />
+          )}
+          <span className="flex-1">{action.label}</span>
+        </button>
+      ))}
+      {error && (
+        <p className="px-3 py-1 text-xs text-red-600">{error}</p>
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Bubble toolbar
 // ---------------------------------------------------------------------------
 
 interface BubbleToolbarProps {
   editor: Editor
+  unitId?: string
 }
 
-export function BubbleToolbar({ editor }: BubbleToolbarProps) {
+export function BubbleToolbar({ editor, unitId }: BubbleToolbarProps) {
   const [showLinkInput, setShowLinkInput] = useState(false)
   const [showColorPicker, setShowColorPicker] = useState(false)
+  const [showAIDropdown, setShowAIDropdown] = useState(false)
 
   // Close sub-panels whenever selection changes
   useEffect(() => {
@@ -215,6 +356,7 @@ export function BubbleToolbar({ editor }: BubbleToolbarProps) {
         onHide: () => {
           setShowLinkInput(false)
           setShowColorPicker(false)
+          setShowAIDropdown(false)
         },
       }}
       className="flex items-center gap-0.5 rounded-lg border border-zinc-200 bg-white px-1 py-1 shadow-md"
@@ -321,10 +463,25 @@ export function BubbleToolbar({ editor }: BubbleToolbarProps) {
           {/* Divider */}
           <div className="mx-0.5 h-5 w-px bg-zinc-200" aria-hidden="true" />
 
-          {/* AI placeholder (disabled, Phase 5 enables) */}
-          <ToolbarButton onClick={() => {}} disabled title="AI actions (coming soon)">
-            <Sparkles className="h-3.5 w-3.5" />
-          </ToolbarButton>
+          {/* AI actions */}
+          <div className="relative">
+            <ToolbarButton
+              onClick={() => setShowAIDropdown(!showAIDropdown)}
+              active={showAIDropdown}
+              disabled={!unitId}
+              title={unitId ? "AI actions" : "AI actions (save unit first)"}
+            >
+              <Sparkles className="h-3.5 w-3.5" />
+              <ChevronDown className="ml-0.5 h-2.5 w-2.5" />
+            </ToolbarButton>
+            {showAIDropdown && unitId && (
+              <AIDropdown
+                editor={editor}
+                unitId={unitId}
+                onClose={() => setShowAIDropdown(false)}
+              />
+            )}
+          </div>
         </>
       )}
     </BubbleMenu>
