@@ -248,6 +248,11 @@ func main() {
 			Orgs:        stores.Orgs,
 		}
 		collectionH.Routes(r)
+
+		uploadH := &handlers.UploadHandler{
+			UploadDir: "uploads",
+		}
+		uploadH.Routes(r)
 	})
 
 	// Start server

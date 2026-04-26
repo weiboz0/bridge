@@ -608,6 +608,10 @@ export const teachingUnits = pgTable(
     subjectTags: text("subject_tags").array().notNull().default([]),
     standardsTags: text("standards_tags").array().notNull().default([]),
     estimatedMinutes: integer("estimated_minutes"),
+    materialType: varchar("material_type", { length: 16 })
+      .$type<"notes" | "slides" | "worksheet" | "reference">()
+      .notNull()
+      .default("notes"),
     status: varchar("status", { length: 24 })
       .$type<"draft" | "reviewed" | "classroom_ready" | "coach_ready" | "archived">()
       .notNull()

@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useState } from "react"
+import { useCallback, useRef, useState } from "react"
 import { nanoid } from "nanoid"
 import { Node, mergeAttributes } from "@tiptap/core"
 import {
@@ -18,6 +18,9 @@ type MediaEmbedNodeAttrs = {
   url: string
   alt: string
   mediaType: MediaType
+  width: number | null
+  height: number | null
+  caption: string
 }
 
 const MEDIA_TYPES: { value: MediaType; label: string }[] = [
@@ -27,7 +30,19 @@ const MEDIA_TYPES: { value: MediaType; label: string }[] = [
   { value: "link", label: "Link" },
 ]
 
-function MediaPreview({ url, alt, mediaType }: { url: string; alt: string; mediaType: MediaType }) {
+function MediaPreview({
+  url,
+  alt,
+  mediaType,
+  width,
+  height,
+}: {
+  url: string
+  alt: string
+  mediaType: MediaType
+  width?: number | null
+  height?: number | null
+}) {
   if (!url) {
     return (
       <div className="flex h-32 items-center justify-center rounded-md border border-dashed border-zinc-300 bg-zinc-50 text-sm text-zinc-400">
@@ -42,7 +57,11 @@ function MediaPreview({ url, alt, mediaType }: { url: string; alt: string; media
         <img
           src={url}
           alt={alt || "Embedded image"}
-          className="max-h-96 w-full rounded-md object-contain border border-zinc-200 bg-zinc-50"
+          className="max-h-96 rounded-md object-contain border border-zinc-200 bg-zinc-50"
+          style={{
+            width: width ? `${width}px` : "100%",
+            height: height ? `${height}px` : undefined,
+          }}
         />
       )
     case "video":
@@ -98,17 +117,37 @@ function MediaPreview({ url, alt, mediaType }: { url: string; alt: string; media
   }
 }
 
+/** Upload a file to the Go backend and return the URL. */
+export async function uploadFile(file: File): Promise<string> {
+  const formData = new FormData()
+  formData.append("file", file)
+  const res = await fetch("/api/uploads", { method: "POST", body: formData })
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: "Upload failed" }))
+    throw new Error(body.error || `Upload failed (${res.status})`)
+  }
+  const data = await res.json()
+  return data.url
+}
+
 function MediaEmbedNodeView({ node, updateAttributes }: NodeViewProps) {
-  const { url, alt, mediaType } = node.attrs as MediaEmbedNodeAttrs
+  const { url, alt, mediaType, width, height, caption } = node.attrs as MediaEmbedNodeAttrs
   const [editing, setEditing] = useState(false)
   const [draftUrl, setDraftUrl] = useState(url)
   const [draftAlt, setDraftAlt] = useState(alt)
   const [draftType, setDraftType] = useState<MediaType>(mediaType)
+  const [uploading, setUploading] = useState(false)
+  const [uploadError, setUploadError] = useState<string | null>(null)
+  const [resizing, setResizing] = useState(false)
+  const [showHandles, setShowHandles] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const imageContainerRef = useRef<HTMLDivElement>(null)
 
   const openEditor = useCallback(() => {
     setDraftUrl(url)
     setDraftAlt(alt)
     setDraftType(mediaType)
+    setUploadError(null)
     setEditing(true)
   }, [url, alt, mediaType])
 
@@ -120,6 +159,74 @@ function MediaEmbedNodeView({ node, updateAttributes }: NodeViewProps) {
   const handleCancel = useCallback(() => {
     setEditing(false)
   }, [])
+
+  const handleFileUpload = useCallback(async (file: File) => {
+    setUploading(true)
+    setUploadError(null)
+    try {
+      const uploadedUrl = await uploadFile(file)
+      setDraftUrl(uploadedUrl)
+      // Auto-detect media type from file MIME.
+      if (file.type.startsWith("image/")) {
+        setDraftType("image")
+      } else if (file.type === "application/pdf") {
+        setDraftType("pdf")
+      } else if (file.type.startsWith("video/")) {
+        setDraftType("video")
+      }
+      // Auto-set alt text from filename if empty.
+      if (!draftAlt.trim()) {
+        setDraftAlt(file.name.replace(/\.[^.]+$/, ""))
+      }
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : "Upload failed")
+    } finally {
+      setUploading(false)
+    }
+  }, [draftAlt])
+
+  // Resize handler (Gap 6)
+  const handleResizeStart = useCallback(
+    (e: React.MouseEvent, corner: string) => {
+      e.preventDefault()
+      e.stopPropagation()
+      setResizing(true)
+
+      const startX = e.clientX
+      const startY = e.clientY
+      const container = imageContainerRef.current
+      if (!container) return
+
+      const img = container.querySelector("img")
+      if (!img) return
+      const startWidth = img.offsetWidth
+      const startHeight = img.offsetHeight
+      const aspectRatio = startWidth / startHeight
+
+      const handleMouseMove = (moveEvent: MouseEvent) => {
+        let dx = moveEvent.clientX - startX
+        let dy = moveEvent.clientY - startY
+
+        // For left-side handles, invert dx
+        if (corner === "nw" || corner === "sw") dx = -dx
+
+        // Determine new width maintaining aspect ratio
+        const newWidth = Math.max(100, startWidth + dx)
+        const newHeight = Math.round(newWidth / aspectRatio)
+        updateAttributes({ width: newWidth, height: newHeight })
+      }
+
+      const handleMouseUp = () => {
+        setResizing(false)
+        document.removeEventListener("mousemove", handleMouseMove)
+        document.removeEventListener("mouseup", handleMouseUp)
+      }
+
+      document.addEventListener("mousemove", handleMouseMove)
+      document.addEventListener("mouseup", handleMouseUp)
+    },
+    [updateAttributes],
+  )
 
   return (
     <NodeViewWrapper className="media-embed-node my-3" contentEditable={false}>
@@ -139,8 +246,33 @@ function MediaEmbedNodeView({ node, updateAttributes }: NodeViewProps) {
           </Button>
         </div>
 
-        {/* Media preview */}
-        <MediaPreview url={url} alt={alt} mediaType={mediaType} />
+        {/* Media preview with resize handles */}
+        <div
+          ref={imageContainerRef}
+          className="relative inline-block"
+          style={{ width: width ? `${width}px` : undefined }}
+          onMouseEnter={() => setShowHandles(true)}
+          onMouseLeave={() => { if (!resizing) setShowHandles(false) }}
+        >
+          <MediaPreview url={url} alt={alt} mediaType={mediaType} width={width} height={height} />
+          {/* Resize handles — only show on images */}
+          {mediaType === "image" && url && showHandles && (
+            <>
+              <div className="media-resize-handle nw" onMouseDown={(e) => handleResizeStart(e, "nw")} />
+              <div className="media-resize-handle ne" onMouseDown={(e) => handleResizeStart(e, "ne")} />
+              <div className="media-resize-handle sw" onMouseDown={(e) => handleResizeStart(e, "sw")} />
+              <div className="media-resize-handle se" onMouseDown={(e) => handleResizeStart(e, "se")} />
+            </>
+          )}
+        </div>
+        {/* Caption (Gap 6) */}
+        <input
+          type="text"
+          value={caption ?? ""}
+          onChange={(e) => updateAttributes({ caption: e.target.value })}
+          placeholder="Add a caption..."
+          className="mt-1 w-full border-none bg-transparent text-center text-xs text-zinc-400 outline-none placeholder:text-zinc-300 focus:text-zinc-600"
+        />
 
         {/* Inline editor */}
         {editing && (
@@ -160,14 +292,40 @@ function MediaEmbedNodeView({ node, updateAttributes }: NodeViewProps) {
               </select>
             </div>
             <div className="space-y-1">
-              <label className="text-xs font-medium text-zinc-600">URL</label>
-              <Input
-                type="url"
-                value={draftUrl}
-                onChange={(e) => setDraftUrl(e.target.value)}
-                placeholder="https://..."
-                className="text-sm"
-              />
+              <label className="text-xs font-medium text-zinc-600">URL or Upload</label>
+              <div className="flex gap-2">
+                <Input
+                  type="url"
+                  value={draftUrl}
+                  onChange={(e) => setDraftUrl(e.target.value)}
+                  placeholder="https://..."
+                  className="flex-1 text-sm"
+                />
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml,application/pdf"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0]
+                    if (file) handleFileUpload(file)
+                    // Reset so the same file can be re-selected.
+                    e.target.value = ""
+                  }}
+                />
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-9 text-xs whitespace-nowrap"
+                  disabled={uploading}
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  {uploading ? "Uploading..." : "Upload"}
+                </Button>
+              </div>
+              {uploadError && (
+                <p className="text-xs text-red-600">{uploadError}</p>
+              )}
             </div>
             <div className="space-y-1">
               <label className="text-xs font-medium text-zinc-600">Alt text / label</label>
@@ -222,6 +380,24 @@ export const MediaEmbedNode = Node.create({
           return "image"
         },
       },
+      width: {
+        default: null,
+        parseHTML: (element: Element) => {
+          const w = element.getAttribute("data-media-embed-width")
+          return w ? parseInt(w, 10) : null
+        },
+      },
+      height: {
+        default: null,
+        parseHTML: (element: Element) => {
+          const h = element.getAttribute("data-media-embed-height")
+          return h ? parseInt(h, 10) : null
+        },
+      },
+      caption: {
+        default: "",
+        parseHTML: (element: Element) => element.getAttribute("data-media-embed-caption") ?? "",
+      },
     }
   },
   parseHTML() {
@@ -240,6 +416,9 @@ export const MediaEmbedNode = Node.create({
         "data-media-embed-url": node.attrs.url,
         "data-media-embed-alt": node.attrs.alt,
         "data-media-embed-type": node.attrs.mediaType,
+      "data-media-embed-width": node.attrs.width ?? undefined,
+      "data-media-embed-height": node.attrs.height ?? undefined,
+      "data-media-embed-caption": node.attrs.caption ?? undefined,
       }),
     ]
   },

@@ -55,7 +55,10 @@ export async function searchUnits(params: SearchParams): Promise<SearchResult> {
 
   try {
     const res = await fetch(`/api/units/search?${query}`)
-    if (!res.ok) return { items: [], nextCursor: null }
+    if (!res.ok) {
+      console.error("[unit-search] API error:", res.status, await res.text().catch(() => ""))
+      return { items: [], nextCursor: null }
+    }
     return res.json() as Promise<SearchResult>
   } catch {
     return { items: [], nextCursor: null }

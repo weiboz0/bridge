@@ -38,6 +38,31 @@ export interface SlashMenuItem {
 
 const TEXT_ITEMS: SlashMenuItem[] = [
   {
+    id: "table",
+    label: "Table",
+    description: "Insert a 3×3 table",
+    badge: "TB",
+    category: "text",
+    command: ({ editor, range }) => {
+      editor
+        .chain()
+        .focus()
+        .deleteRange(range)
+        .insertTable({ rows: 3, cols: 3, withHeaderRow: true })
+        .run()
+    },
+  },
+  {
+    id: "taskList",
+    label: "To-do List",
+    description: "Interactive checklist with checkboxes",
+    badge: "☑",
+    category: "text",
+    command: ({ editor, range }) => {
+      editor.chain().focus().deleteRange(range).toggleTaskList().run()
+    },
+  },
+  {
     id: "heading1",
     label: "Heading 1",
     description: "Large section heading",
@@ -257,22 +282,183 @@ const TEACHING_ITEMS: SlashMenuItem[] = [
   },
 ]
 
-const AI_ITEMS: SlashMenuItem[] = [
+const MATH_ITEMS: SlashMenuItem[] = [
   {
-    id: "aiWriter",
-    label: "AI Writer",
-    description: "Generate content with AI inline",
-    badge: "AI",
-    category: "ai",
+    id: "math",
+    label: "Math Block",
+    description: "Display math equation (LaTeX / KaTeX)",
+    badge: "∑",
+    category: "text",
     command: ({ editor, range }) => {
-      editor.chain().focus().deleteRange(range).run()
-      // Signal the editor to show the inline AI prompt at the current cursor position
-      window.dispatchEvent(new CustomEvent("tiptap:ai-write-inline"))
+      editor
+        .chain()
+        .focus()
+        .deleteRange(range)
+        .insertContent({
+          type: "math-block",
+          attrs: { id: nanoid(), latex: "" },
+        })
+        .run()
+    },
+  },
+  {
+    id: "mathInline",
+    label: "Inline Math",
+    description: "Inline math expression (LaTeX / KaTeX)",
+    badge: "x²",
+    category: "text",
+    command: ({ editor, range }) => {
+      editor
+        .chain()
+        .focus()
+        .deleteRange(range)
+        .insertContent({
+          type: "math-inline",
+          attrs: { id: nanoid(), latex: "" },
+        })
+        .run()
     },
   },
 ]
 
-const ALL_ITEMS: SlashMenuItem[] = [...AI_ITEMS, ...TEXT_ITEMS, ...TEACHING_ITEMS]
+const BLOCK_ITEMS: SlashMenuItem[] = [
+  {
+    id: "callout",
+    label: "Callout",
+    description: "Info, warning, tip, or danger callout box",
+    badge: "CL",
+    category: "teaching",
+    command: ({ editor, range }) => {
+      editor
+        .chain()
+        .focus()
+        .deleteRange(range)
+        .insertContent({
+          type: "callout",
+          attrs: { id: nanoid(), variant: "info" },
+          content: [{ type: "paragraph" }],
+        })
+        .run()
+    },
+  },
+  {
+    id: "toggle",
+    label: "Toggle",
+    description: "Collapsible block with editable summary",
+    badge: "▶",
+    category: "teaching",
+    command: ({ editor, range }) => {
+      editor
+        .chain()
+        .focus()
+        .deleteRange(range)
+        .insertContent({
+          type: "toggle-block",
+          attrs: { id: nanoid(), summary: "" },
+          content: [{ type: "paragraph" }],
+        })
+        .run()
+    },
+  },
+  {
+    id: "bookmark",
+    label: "Bookmark",
+    description: "Link preview card with title and description",
+    badge: "BM",
+    category: "teaching",
+    command: ({ editor, range }) => {
+      editor
+        .chain()
+        .focus()
+        .deleteRange(range)
+        .insertContent({
+          type: "bookmark",
+          attrs: { id: nanoid(), url: "", title: null, description: null, image: null },
+        })
+        .run()
+    },
+  },
+  {
+    id: "toc",
+    label: "Table of Contents",
+    description: "Auto-generated list of document headings",
+    badge: "TC",
+    category: "teaching",
+    command: ({ editor, range }) => {
+      editor
+        .chain()
+        .focus()
+        .deleteRange(range)
+        .insertContent({
+          type: "toc",
+          attrs: { id: nanoid() },
+        })
+        .run()
+    },
+  },
+  {
+    id: "columns",
+    label: "Columns",
+    description: "Two-column side-by-side layout",
+    badge: "||",
+    category: "teaching",
+    command: ({ editor, range }) => {
+      editor
+        .chain()
+        .focus()
+        .deleteRange(range)
+        .insertContent({
+          type: "columns",
+          attrs: { id: nanoid() },
+          content: [
+            { type: "column", content: [{ type: "paragraph" }] },
+            { type: "column", content: [{ type: "paragraph" }] },
+          ],
+        })
+        .run()
+    },
+  },
+]
+
+const AI_ITEMS: SlashMenuItem[] = [
+  {
+    id: "aiWriter",
+    label: "AI Writer",
+    description: "Type your prompt, then Cmd+J to generate",
+    badge: "AI",
+    category: "ai",
+    command: ({ editor, range }) => {
+      // Clear the slash command text — the user types their prompt
+      // directly in the current paragraph, then presses Cmd+J to generate.
+      editor.chain().focus().deleteRange(range).run()
+      // Mark this paragraph as an AI prompt by dispatching an event
+      // The editor component listens and enables AI-prompt mode
+      window.dispatchEvent(new CustomEvent("tiptap:ai-prompt-mode"))
+    },
+  },
+  {
+    id: "aiContinue",
+    label: "Continue Writing",
+    description: "Let AI continue from where you left off",
+    badge: "AI",
+    category: "ai",
+    command: ({ editor, range }) => {
+      editor.chain().focus().deleteRange(range).run()
+      // Capture last 500 chars before cursor as context
+      const { from } = editor.state.selection
+      // Map the ProseMirror pos to roughly a text offset
+      const textBefore = editor.state.doc.textBetween(0, from, " ")
+      const context = textBefore.slice(-500)
+      const intent = `Continue writing from: ${context}`
+      // Signal the editor with the pre-filled prompt
+      window.dispatchEvent(
+        new CustomEvent("tiptap:ai-continue", { detail: { intent } }),
+      )
+    },
+  },
+]
+
+export const ALL_ITEMS: SlashMenuItem[] = [...AI_ITEMS, ...TEXT_ITEMS, ...MATH_ITEMS, ...TEACHING_ITEMS, ...BLOCK_ITEMS]
 
 // ---------------------------------------------------------------------------
 // Filter logic

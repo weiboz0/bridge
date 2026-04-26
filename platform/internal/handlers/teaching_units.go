@@ -67,6 +67,24 @@ var knownBlockTypes = map[string]bool{
 	"test-case-ref":      true,
 	"live-cue":           true,
 	"assignment-variant": true,
+	// Table (StarterKit-adjacent, no custom ID needed)
+	"table":       true,
+	"tableRow":    true,
+	"tableCell":   true,
+	"tableHeader": true,
+	// Task list (StarterKit-adjacent, no custom ID needed)
+	"taskList": true,
+	"taskItem": true,
+	// Phase 3 custom block types
+	"callout":      true,
+	"toggle-block": true,
+	"bookmark":     true,
+	"toc":          true,
+	"columns":      true,
+	"column":       true,
+	// Math / KaTeX nodes
+	"math-block":  true,
+	"math-inline": true,
 }
 
 const maxUnitTitleLen = 255
@@ -75,34 +93,35 @@ func (h *TeachingUnitHandler) Routes(r chi.Router) {
 	r.Route("/api/units", func(r chi.Router) {
 		r.Get("/", h.ListUnits)
 		r.Post("/", h.CreateUnit)
+
+		// Static sub-paths MUST be registered before the {id} wildcard
 		r.Get("/search", h.SearchUnits)
-	})
-	// by-topic lookup must be registered BEFORE the /{id} wildcard route so Chi
-	// does not attempt to parse "by-topic" as a UUID parameter.
-	r.Route("/api/units/by-topic/{topicId}", func(r chi.Router) {
-		r.Use(ValidateUUIDParam("topicId"))
-		r.Get("/", h.GetUnitByTopic)
-	})
-	r.Route("/api/units/{id}", func(r chi.Router) {
-		r.Use(ValidateUUIDParam("id"))
-		r.Get("/", h.GetUnit)
-		r.Patch("/", h.UpdateUnit)
-		r.Delete("/", h.DeleteUnit)
-		r.Get("/document", h.GetDocument)
-		r.Put("/document", h.SaveDocument)
-		r.Get("/projected", h.GetProjectedDocument)
-		r.Post("/transition", h.TransitionUnit)
-		r.Get("/revisions", h.ListRevisions)
-		r.Route("/revisions/{revisionId}", func(r chi.Router) {
-			r.Use(ValidateUUIDParam("revisionId"))
-			r.Get("/", h.GetRevision)
+
+		r.Route("/by-topic/{topicId}", func(r chi.Router) {
+			r.Use(ValidateUUIDParam("topicId"))
+			r.Get("/", h.GetUnitByTopic)
 		})
-		// Overlay / fork endpoints (plan 034).
-		r.Post("/fork", h.ForkUnit)
-		r.Get("/overlay", h.GetOverlay)
-		r.Patch("/overlay", h.PatchOverlay)
-		r.Get("/composed", h.GetComposedDocument)
-		r.Get("/lineage", h.GetLineage)
+
+		r.Route("/{id}", func(r chi.Router) {
+			r.Use(ValidateUUIDParam("id"))
+			r.Get("/", h.GetUnit)
+			r.Patch("/", h.UpdateUnit)
+			r.Delete("/", h.DeleteUnit)
+			r.Get("/document", h.GetDocument)
+			r.Put("/document", h.SaveDocument)
+			r.Get("/projected", h.GetProjectedDocument)
+			r.Post("/transition", h.TransitionUnit)
+			r.Get("/revisions", h.ListRevisions)
+			r.Route("/revisions/{revisionId}", func(r chi.Router) {
+				r.Use(ValidateUUIDParam("revisionId"))
+				r.Get("/", h.GetRevision)
+			})
+			r.Post("/fork", h.ForkUnit)
+			r.Get("/overlay", h.GetOverlay)
+			r.Patch("/overlay", h.PatchOverlay)
+			r.Get("/composed", h.GetComposedDocument)
+			r.Get("/lineage", h.GetLineage)
+		})
 	})
 }
 
@@ -193,7 +212,8 @@ func validateBlockDocument(raw json.RawMessage) error {
 
 	// Block types that carry attrs.id (custom teaching-unit blocks).
 	// Standard StarterKit structural blocks (paragraph, heading, etc.)
-	// don't need IDs — they're just rich text.
+	// don't need IDs — they're just rich text. Table/taskList extensions
+	// are StarterKit-adjacent and also don't use custom IDs.
 	blockTypesRequiringID := map[string]bool{
 		"prose":              true,
 		"problem-ref":        true,
@@ -204,6 +224,15 @@ func validateBlockDocument(raw json.RawMessage) error {
 		"test-case-ref":      true,
 		"live-cue":           true,
 		"assignment-variant": true,
+		// Phase 3 custom block types
+		"callout":      true,
+		"toggle-block": true,
+		"bookmark":     true,
+		"toc":          true,
+		"columns":      true,
+		// Math / KaTeX blocks
+		"math-block":  true,
+		"math-inline": true,
 	}
 
 	// Walk top-level blocks.
@@ -380,6 +409,7 @@ func (h *TeachingUnitHandler) CreateUnit(w http.ResponseWriter, r *http.Request)
 		SubjectTags      []string `json:"subjectTags"`
 		StandardsTags    []string `json:"standardsTags"`
 		EstimatedMinutes *int     `json:"estimatedMinutes"`
+		MaterialType     string   `json:"materialType"`
 		Status           string   `json:"status"`
 	}
 	if !decodeJSON(w, r, &body) {
@@ -424,6 +454,7 @@ func (h *TeachingUnitHandler) CreateUnit(w http.ResponseWriter, r *http.Request)
 		SubjectTags:      body.SubjectTags,
 		StandardsTags:    body.StandardsTags,
 		EstimatedMinutes: body.EstimatedMinutes,
+		MaterialType:     body.MaterialType,
 		Status:           body.Status,
 		CreatedBy:        claims.UserID,
 	})

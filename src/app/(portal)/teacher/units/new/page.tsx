@@ -31,6 +31,7 @@ export default function CreateUnitPage() {
   const [gradeLevel, setGradeLevel] = useState("")
   const [subjectTags, setSubjectTags] = useState("")
   const [estimatedMinutes, setEstimatedMinutes] = useState("")
+  const [materialType, setMaterialType] = useState("notes")
 
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -100,6 +101,7 @@ export default function CreateUnitPage() {
         gradeLevel: gradeLevel || undefined,
         subjectTags: tags.length > 0 ? tags : undefined,
         estimatedMinutes: mins && !isNaN(mins) ? mins : undefined,
+        materialType: materialType || undefined,
       })
       router.push(`/teacher/units/${unit.id}/edit`)
     } catch (err) {
@@ -204,6 +206,22 @@ export default function CreateUnitPage() {
             onChange={(e) => setSubjectTags(e.target.value)}
             placeholder="e.g. loops, variables, functions (comma-separated)"
           />
+        </div>
+
+        {/* Material Type */}
+        <div className="space-y-1.5">
+          <Label htmlFor="materialType">Material Type</Label>
+          <select
+            id="materialType"
+            value={materialType}
+            onChange={(e) => setMaterialType(e.target.value)}
+            className="w-full rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm"
+          >
+            <option value="notes">Notes (detailed explanations)</option>
+            <option value="slides">Slides (concise bullets)</option>
+            <option value="worksheet">Worksheet (practice-focused)</option>
+            <option value="reference">Reference (cheat sheet)</option>
+          </select>
         </div>
 
         {/* Estimated Minutes */}

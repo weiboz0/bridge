@@ -17,7 +17,7 @@ interface OrgMembership {
   orgStatus: string
 }
 
-type TabId = "personal" | "org" | "platform"
+type TabId = "all" | "personal" | "org" | "platform"
 
 const GRADE_LEVELS = ["", "K-5", "6-8", "9-12"] as const
 const GRADE_LABELS: Record<string, string> = {
@@ -110,7 +110,7 @@ function UnitCard({ unit }: { unit: SearchResultItem }) {
 export default function UnitLibraryPage() {
   const { data: session } = useSession()
 
-  const [activeTab, setActiveTab] = useState<TabId>("personal")
+  const [activeTab, setActiveTab] = useState<TabId>("all")
   const [orgs, setOrgs] = useState<OrgMembership[]>([])
   const [selectedOrgId, setSelectedOrgId] = useState<string>("")
   const [orgsLoading, setOrgsLoading] = useState(true)
@@ -173,10 +173,14 @@ export default function UnitLibraryPage() {
         .map((t) => t.trim())
         .filter(Boolean)
 
-      let scope: string
+      let scope: string | undefined
       let scopeId: string | undefined
 
       switch (activeTab) {
+        case "all":
+          scope = undefined
+          scopeId = undefined
+          break
         case "personal":
           scope = "personal"
           scopeId = userId ?? undefined
@@ -237,6 +241,7 @@ export default function UnitLibraryPage() {
   }
 
   const tabs: { id: TabId; label: string }[] = [
+    { id: "all", label: "All" },
     { id: "personal", label: "My Units" },
     { id: "org", label: "Org Library" },
     { id: "platform", label: "Platform" },

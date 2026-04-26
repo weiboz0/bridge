@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -28,6 +29,10 @@ func (h *UnitAIHandler) Routes(r chi.Router) {
 		r.Use(ValidateUUIDParam("id"))
 		r.Post("/", h.DraftWithAI)
 	})
+	r.Route("/api/units/{id}/ai-transform", func(r chi.Router) {
+		r.Use(ValidateUUIDParam("id"))
+		r.Post("/", h.AITransform)
+	})
 }
 
 const maxIntentLen = 2000
@@ -35,6 +40,37 @@ const maxIntentLen = 2000
 // draftSystemPrompt is the system prompt sent to the LLM for unit drafting.
 // It describes the available block types and their JSON shapes so the LLM
 // can use the provided tools to generate a structured teaching unit.
+// materialTypeGuidelines maps material_type to AI writing style guidance.
+var materialTypeGuidelines = map[string]string{
+	"notes": `Writing style: DETAILED NOTES
+- Write full paragraphs with thorough explanations.
+- Include examples, analogies, and context.
+- Explain concepts step by step.
+- Target reading level appropriate for the grade.
+- Use teacher notes liberally for pedagogy tips.`,
+
+	"slides": `Writing style: CONCISE SLIDES
+- Use short, punchy bullet points — one idea per line.
+- Maximum 3-5 bullet points per prose block.
+- Headlines should be clear and scannable.
+- Minimize paragraphs — prefer lists and key phrases.
+- Teacher notes should contain the detailed explanation the teacher will say aloud.`,
+
+	"worksheet": `Writing style: PRACTICE WORKSHEET
+- Brief introductions only — focus on exercises and problems.
+- Reference problems heavily — this is practice material.
+- Include worked examples before independent practice.
+- Group problems by difficulty (easy → medium → hard).
+- Teacher notes should contain answer keys and common mistakes.`,
+
+	"reference": `Writing style: REFERENCE / CHEAT SHEET
+- Dense, lookup-friendly format.
+- Use tables, lists, and code snippets extensively.
+- No narrative flow — organize by topic/concept.
+- Include syntax summaries, common patterns, and quick examples.
+- Minimize prose — every word should earn its place.`,
+}
+
 const draftSystemPrompt = `You are a curriculum designer. Given a teacher's intent, generate a teaching unit composed of structured blocks.
 
 Use the provided tools to build the unit. Call them in sequence to compose the lesson.
@@ -281,9 +317,16 @@ func (h *UnitAIHandler) DraftWithAI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Enrich the system prompt with material type guidance + document context.
+	enrichedSystemPrompt := draftSystemPrompt
+	if guide, ok := materialTypeGuidelines[unit.MaterialType]; ok {
+		enrichedSystemPrompt += "\n\n" + guide
+	}
+	enrichedSystemPrompt += h.buildDraftContext(r.Context(), unitID, unit)
+
 	// Build messages.
 	messages := []llm.Message{
-		{Role: llm.RoleSystem, Content: draftSystemPrompt},
+		{Role: llm.RoleSystem, Content: enrichedSystemPrompt},
 		{Role: llm.RoleUser, Content: body.Intent},
 	}
 
@@ -348,6 +391,190 @@ Return ONLY the JSON array, no other text.`
 	writeJSON(w, http.StatusOK, map[string]any{
 		"blocks": blocks,
 	})
+}
+
+// ---------------------------------------------------------------------------
+// AI Transform endpoint — selection-based text transformation
+// ---------------------------------------------------------------------------
+
+// Maximum lengths for AI transform request fields.
+const (
+	maxSelectedTextLen = 10000
+	maxContextLen      = 12000
+	maxDocSummaryLen   = 5000
+)
+
+// aiTransformPrompts maps action names to system prompts that instruct the LLM
+// how to transform the selected text.
+var aiTransformPrompts = map[string]string{
+	"rewrite": `You are a writing assistant for a K-12 teaching unit editor.
+The user has selected text in their document and wants it rewritten — same meaning, different words.
+Rephrase the selected text while maintaining the original meaning, tone, and level of detail.
+Do NOT add new information or change the intent.
+Return ONLY the rewritten text, no explanations or preamble.`,
+
+	"polish": `You are a writing assistant for a K-12 teaching unit editor.
+The user has selected text in their document and wants it polished — fix grammar, improve clarity, maintain tone.
+Correct any grammatical errors, improve sentence flow, and enhance clarity without changing the meaning.
+Keep the same level of formality and writing style.
+Return ONLY the polished text, no explanations or preamble.`,
+
+	"simplify": `You are a writing assistant for a K-12 teaching unit editor.
+The user has selected text in their document and wants it simplified — reduce reading level for younger students.
+Rewrite the text using simpler vocabulary, shorter sentences, and clearer structure.
+Target a reading level appropriate for grades K-5.
+Maintain the core meaning and key information.
+Return ONLY the simplified text, no explanations or preamble.`,
+
+	"expand": `You are a writing assistant for a K-12 teaching unit editor.
+The user has selected text in their document and wants it expanded — elaborate with more detail.
+Add supporting details, examples, or explanations to make the text more comprehensive.
+Maintain the same writing style and level of formality.
+Do not introduce information that contradicts the original text.
+Return ONLY the expanded text, no explanations or preamble.`,
+
+	"summarize": `You are a writing assistant for a K-12 teaching unit editor.
+The user has selected text in their document and wants it summarized — condense to key points.
+Distill the text down to its most essential points.
+Maintain accuracy and preserve the most important information.
+Return ONLY the summarized text, no explanations or preamble.`,
+}
+
+// AITransform handles POST /api/units/{id}/ai-transform.
+// Accepts a selected text passage, surrounding context, and an action to
+// perform (rewrite, polish, simplify, expand, summarize). Returns the
+// transformed text.
+func (h *UnitAIHandler) AITransform(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	if h.Backend == nil {
+		writeError(w, http.StatusServiceUnavailable, "AI not configured")
+		return
+	}
+
+	unitID := chi.URLParam(r, "id")
+
+	// Load unit and check edit access.
+	unit, err := h.Units.GetUnit(r.Context(), unitID)
+	if err != nil {
+		slog.Error("AI transform: failed to fetch unit", "error", err, "unitId", unitID)
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if unit == nil {
+		writeError(w, http.StatusNotFound, "Unit not found")
+		return
+	}
+	if !h.canEditUnit(r.Context(), claims, unit.Scope, unit.ScopeID) {
+		writeError(w, http.StatusForbidden, "Not authorized to edit this unit")
+		return
+	}
+
+	// Parse and validate request body.
+	var body struct {
+		Action          string `json:"action"`
+		SelectedText    string `json:"selectedText"`
+		Context         string `json:"context"`
+		DocumentSummary string `json:"documentSummary"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+
+	systemPrompt, validAction := aiTransformPrompts[body.Action]
+	if !validAction {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid action %q — must be one of: rewrite, polish, simplify, expand, summarize", body.Action))
+		return
+	}
+
+	if body.SelectedText == "" {
+		writeError(w, http.StatusBadRequest, "selectedText is required")
+		return
+	}
+	if len(body.SelectedText) > maxSelectedTextLen {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("selectedText is too long (max %d characters)", maxSelectedTextLen))
+		return
+	}
+	if len(body.Context) > maxContextLen {
+		body.Context = body.Context[:maxContextLen]
+	}
+	if len(body.DocumentSummary) > maxDocSummaryLen {
+		body.DocumentSummary = body.DocumentSummary[:maxDocSummaryLen]
+	}
+
+	// Build the user message with context
+	userMessage := fmt.Sprintf("Selected text to %s:\n\n%s", body.Action, body.SelectedText)
+	if body.Context != "" {
+		userMessage += fmt.Sprintf("\n\nSurrounding context:\n%s", body.Context)
+	}
+	if body.DocumentSummary != "" {
+		userMessage += fmt.Sprintf("\n\nDocument summary (for tone/topic awareness):\n%s", body.DocumentSummary)
+	}
+
+	messages := []llm.Message{
+		{Role: llm.RoleSystem, Content: systemPrompt},
+		{Role: llm.RoleUser, Content: userMessage},
+	}
+
+	resp, err := h.Backend.Chat(r.Context(), messages, llm.WithMaxTokens(4000))
+	if err != nil {
+		slog.Error("AI transform LLM call failed", "error", err, "unitId", unitID, "action", body.Action)
+		writeError(w, http.StatusBadGateway, "AI backend error")
+		return
+	}
+
+	result := resp.Content
+	if result == "" {
+		slog.Warn("AI transform returned empty content", "unitId", unitID, "action", body.Action)
+		writeError(w, http.StatusBadGateway, "AI returned empty result — try again")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"result": result,
+	})
+}
+
+// buildDraftContext fetches the unit's current document and metadata to enrich
+// the AI drafting system prompt with document-aware context.
+func (h *UnitAIHandler) buildDraftContext(ctx context.Context, unitID string, unit *store.TeachingUnit) string {
+	var parts []string
+
+	// Unit metadata
+	meta := fmt.Sprintf("\n\nUnit metadata:\n- Title: %s", unit.Title)
+	if unit.GradeLevel != nil && *unit.GradeLevel != "" {
+		meta += fmt.Sprintf("\n- Grade level: %s", *unit.GradeLevel)
+	}
+	if len(unit.SubjectTags) > 0 {
+		meta += fmt.Sprintf("\n- Subject tags: %s", strings.Join(unit.SubjectTags, ", "))
+	}
+	if unit.Summary != "" {
+		meta += fmt.Sprintf("\n- Summary: %s", unit.Summary)
+	}
+	parts = append(parts, meta)
+
+	// Current document content (first 3000 chars)
+	doc, err := h.Units.GetDocument(ctx, unitID)
+	if err != nil {
+		slog.Warn("buildDraftContext: failed to fetch document", "error", err, "unitId", unitID)
+	} else if doc != nil && len(doc.Blocks) > 0 {
+		// Extract text content from the block JSON for context.
+		// Use the raw JSON truncated to 3000 chars as a rough summary.
+		docStr := string(doc.Blocks)
+		if len(docStr) > 3000 {
+			docStr = docStr[:3000] + "..."
+		}
+		parts = append(parts, fmt.Sprintf("\n\nExisting document content (for context — generate content that fits with the existing material):\n%s", docStr))
+	}
+
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, "")
 }
 
 // canEditUnit delegates to the same access logic as TeachingUnitHandler.

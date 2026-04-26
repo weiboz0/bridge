@@ -2140,3 +2140,198 @@ func TestTeachingUnitHandler_Lineage_NoAuth_401(t *testing.T) {
 		nil)
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
 }
+
+// ==================== Phase 3 block type validation (plan 037) ====================
+
+func TestValidateBlockDocument_Phase3_Callout_Valid(t *testing.T) {
+	doc := mustMarshal(t, map[string]any{
+		"type": "doc",
+		"content": []any{
+			map[string]any{
+				"type":  "callout",
+				"attrs": map[string]any{"id": "blk-callout-1", "variant": "info"},
+				"content": []any{
+					map[string]any{"type": "paragraph"},
+				},
+			},
+		},
+	})
+	assert.NoError(t, validateBlockDocument(doc))
+}
+
+func TestValidateBlockDocument_Phase3_Callout_MissingID_Error(t *testing.T) {
+	doc := mustMarshal(t, map[string]any{
+		"type": "doc",
+		"content": []any{
+			map[string]any{
+				"type":  "callout",
+				"attrs": map[string]any{"id": "", "variant": "warning"},
+			},
+		},
+	})
+	err := validateBlockDocument(doc)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "callout")
+}
+
+func TestValidateBlockDocument_Phase3_ToggleBlock_Valid(t *testing.T) {
+	doc := mustMarshal(t, map[string]any{
+		"type": "doc",
+		"content": []any{
+			map[string]any{
+				"type":  "toggle-block",
+				"attrs": map[string]any{"id": "blk-toggle-1", "summary": "Details"},
+				"content": []any{
+					map[string]any{"type": "paragraph"},
+				},
+			},
+		},
+	})
+	assert.NoError(t, validateBlockDocument(doc))
+}
+
+func TestValidateBlockDocument_Phase3_ToggleBlock_MissingID_Error(t *testing.T) {
+	doc := mustMarshal(t, map[string]any{
+		"type": "doc",
+		"content": []any{
+			map[string]any{
+				"type":  "toggle-block",
+				"attrs": map[string]any{"id": "", "summary": "x"},
+			},
+		},
+	})
+	err := validateBlockDocument(doc)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "toggle-block")
+}
+
+func TestValidateBlockDocument_Phase3_Bookmark_Valid(t *testing.T) {
+	doc := mustMarshal(t, map[string]any{
+		"type": "doc",
+		"content": []any{
+			map[string]any{
+				"type":  "bookmark",
+				"attrs": map[string]any{"id": "blk-bm-1", "url": "https://example.com"},
+			},
+		},
+	})
+	assert.NoError(t, validateBlockDocument(doc))
+}
+
+func TestValidateBlockDocument_Phase3_Bookmark_MissingID_Error(t *testing.T) {
+	doc := mustMarshal(t, map[string]any{
+		"type": "doc",
+		"content": []any{
+			map[string]any{
+				"type":  "bookmark",
+				"attrs": map[string]any{"id": "", "url": "https://example.com"},
+			},
+		},
+	})
+	err := validateBlockDocument(doc)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "bookmark")
+}
+
+func TestValidateBlockDocument_Phase3_TOC_Valid(t *testing.T) {
+	doc := mustMarshal(t, map[string]any{
+		"type": "doc",
+		"content": []any{
+			map[string]any{
+				"type":  "toc",
+				"attrs": map[string]any{"id": "blk-toc-1"},
+			},
+		},
+	})
+	assert.NoError(t, validateBlockDocument(doc))
+}
+
+func TestValidateBlockDocument_Phase3_TOC_MissingID_Error(t *testing.T) {
+	doc := mustMarshal(t, map[string]any{
+		"type": "doc",
+		"content": []any{
+			map[string]any{
+				"type":  "toc",
+				"attrs": map[string]any{"id": ""},
+			},
+		},
+	})
+	err := validateBlockDocument(doc)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "toc")
+}
+
+func TestValidateBlockDocument_Phase3_Columns_Valid(t *testing.T) {
+	doc := mustMarshal(t, map[string]any{
+		"type": "doc",
+		"content": []any{
+			map[string]any{
+				"type":  "columns",
+				"attrs": map[string]any{"id": "blk-cols-1"},
+				"content": []any{
+					map[string]any{
+						"type": "column",
+						"content": []any{
+							map[string]any{"type": "paragraph"},
+						},
+					},
+					map[string]any{
+						"type": "column",
+						"content": []any{
+							map[string]any{"type": "paragraph"},
+						},
+					},
+				},
+			},
+		},
+	})
+	assert.NoError(t, validateBlockDocument(doc))
+}
+
+func TestValidateBlockDocument_Phase3_Columns_MissingID_Error(t *testing.T) {
+	doc := mustMarshal(t, map[string]any{
+		"type": "doc",
+		"content": []any{
+			map[string]any{
+				"type":  "columns",
+				"attrs": map[string]any{"id": ""},
+			},
+		},
+	})
+	err := validateBlockDocument(doc)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "columns")
+}
+
+func TestValidateBlockDocument_Phase3_Table_Valid(t *testing.T) {
+	// table, tableRow, tableCell, tableHeader are in knownBlockTypes but do NOT require IDs.
+	doc := mustMarshal(t, map[string]any{
+		"type": "doc",
+		"content": []any{
+			map[string]any{
+				"type": "table",
+			},
+		},
+	})
+	assert.NoError(t, validateBlockDocument(doc))
+}
+
+func TestValidateBlockDocument_Phase3_TaskList_Valid(t *testing.T) {
+	doc := mustMarshal(t, map[string]any{
+		"type": "doc",
+		"content": []any{
+			map[string]any{
+				"type": "taskList",
+			},
+		},
+	})
+	assert.NoError(t, validateBlockDocument(doc))
+}
+
+// mustMarshal is a test helper that marshals v to JSON and fails the test on error.
+func mustMarshal(t *testing.T, v any) json.RawMessage {
+	t.Helper()
+	b, err := json.Marshal(v)
+	require.NoError(t, err)
+	return b
+}
