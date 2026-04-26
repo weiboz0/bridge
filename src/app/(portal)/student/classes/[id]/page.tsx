@@ -69,7 +69,7 @@ export default async function StudentClassDetailPage({
     logAndDefault(api<SessionItem[]>(`/api/sessions/by-class/${id}`), [], "sessions"),
   ]);
 
-  const activeSession = sessions.find((s) => s.status === "live" || s.status === "active");
+  const activeSession = sessions.find((s) => s.status === "live");
 
   const problemsByTopic = new Map<string, ProblemItem[]>();
   await Promise.all(

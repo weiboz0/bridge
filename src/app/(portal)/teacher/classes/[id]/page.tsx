@@ -52,7 +52,7 @@ export default async function TeacherClassDetailPage({
 
   const students = members.filter((m) => m.role === "student");
   const instructors = members.filter((m) => m.role === "instructor" || m.role === "ta");
-  const activeSession = sessions.find((s) => s.status === "active");
+  const activeSession = sessions.find((s) => s.status === "live");
   const pastSessions = sessions.filter((s) => s.status === "ended");
 
   function formatDuration(start: string, end: string | null) {

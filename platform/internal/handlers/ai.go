@@ -63,7 +63,7 @@ func (h *AIHandler) Chat(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
 	}
-	if liveSession == nil || liveSession.Status != "active" {
+	if liveSession == nil || liveSession.Status != "live" {
 		writeError(w, http.StatusNotFound, "Session not found or ended")
 		return
 	}
