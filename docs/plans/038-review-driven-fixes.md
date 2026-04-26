@@ -183,8 +183,8 @@ Add responsive breakpoints: collapse side panels into tabs on viewports < 1024px
 | Phase | Tasks | Effort | Why this order |
 |-------|-------|--------|----------------|
 | 1 | Auth identity (1.1-1.4) | Medium | Root cause — fixes cascade through phases 2-4 |
-| 2 | Session semantics (2.1-2.2) | Small | Quick grep + replace, unblocks session testing |
-| 3 | Route cleanup (3.1-3.2) | Small | Remove dead code that confuses debugging |
+| 2 | Session semantics (2.1-2.2) | **Medium** | Includes backend ai.go fix — not just frontend grep |
+| 3 | Route cleanup (3.1-3.2) | **Large** | ~42 overlapping route files need contract-parity checks |
 | 4 | Workflow reliability (4.1-4.5) | Medium | User-facing bugs that erode trust |
 | 5 | Navigation + UI (5.1-5.5) | Medium | Polish that makes the app feel complete |
 
@@ -192,9 +192,24 @@ Each phase ships independently. Phase 1 should land first because it affects the
 
 ---
 
-## Code Review
+## Codex Review of This Plan
 
-Reviewers append findings here.
+- **Date:** 2026-04-26
+- **Reviewer:** Codex
+
+### Corrections applied:
+
+1. **Critical miss:** `platform/internal/handlers/ai.go:66` checks `status != "active"` — will reject all valid `"live"` sessions after the enum migration. Added to Task 2.1 scope.
+
+2. **Task 2.1 effort:** Upgraded from Small → Medium. Three files across two layers (2 frontend + 1 backend handler).
+
+3. **Task 3.1 effort:** Upgraded from Small → Large. ~42 Next.js API route files overlap with `GO_PROXY_ROUTES`. Each needs individual contract-parity verification before deletion. Added verification gate requirement.
+
+4. **Cookie fix detail:** `api-client.ts` and Go middleware both have scheme-unaware static preference lists. Additionally `jwt.go` decrypt salt order (HTTP-then-HTTPS) mismatches middleware preference (HTTPS-first). All three files must be fixed together in Task 1.1.
+
+5. **Missing from plan:** Review report file (`docs/reviews/001-...`) needs to be committed to the repo.
+
+6. **Verification gate for Task 3.1:** Before deleting any Next.js handler, must verify the Go handler is fully implemented and tested. The proxy uses both `beforeFiles` and `fallback` rewrites — a deleted Next handler without a working Go replacement goes dark with 404.
 
 ## Post-Execution Report
 
