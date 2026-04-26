@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import { api, ApiError } from "@/lib/api-client";
+import { isValidUUID } from "@/lib/utils";
 import { Card, CardContent } from "@/components/ui/card";
 import Link from "next/link";
 import { buttonVariants } from "@/components/ui/button";
@@ -35,6 +36,7 @@ export default async function TeacherCourseDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
+  if (!isValidUUID(id)) notFound();
 
   let course: Course;
   try {

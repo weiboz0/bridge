@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useState, useCallback, useRef } from "react"
-import { useParams } from "next/navigation"
+import { useParams, notFound } from "next/navigation"
 import { useSession } from "next-auth/react"
 import Link from "next/link"
 import type { JSONContent } from "@tiptap/react"
@@ -31,6 +31,7 @@ import {
   type UnitOverlay,
   type LineageEntry,
 } from "@/lib/teaching-units"
+import { isValidUUID } from "@/lib/utils"
 
 type LoadState =
   | { status: "loading" }
@@ -152,6 +153,7 @@ type PreviewState =
 
 export default function EditUnitPage() {
   const { id } = useParams<{ id: string }>()
+  if (!isValidUUID(id)) notFound()
   const { data: session } = useSession()
   const [state, setState] = useState<LoadState>({ status: "loading" })
   const [saveMessage, setSaveMessage] = useState<string | null>(null)

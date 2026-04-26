@@ -25,6 +25,7 @@ export default function CreateUnitPage() {
 
   // Form fields
   const [title, setTitle] = useState("")
+  // Initial scope is "personal"; updated to "org" after orgs load (if any exist).
   const [scope, setScope] = useState<"personal" | "org">("personal")
   const [orgId, setOrgId] = useState("")
   const [summary, setSummary] = useState("")
@@ -51,6 +52,8 @@ export default function CreateUnitPage() {
           setOrgs(teacherOrgs)
           if (teacherOrgs.length > 0) {
             setOrgId(teacherOrgs[0].orgId)
+            // Default to org scope when the user belongs to at least one org
+            setScope("org")
           }
         } else {
           setError("Failed to load organizations")

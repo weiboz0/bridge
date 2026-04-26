@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import { api } from "@/lib/api-client";
+import { isValidUUID } from "@/lib/utils";
 import { getClassSettings } from "@/lib/classes";
 import { db } from "@/lib/db";
 import { StudentSession } from "@/components/session/student/student-session";
@@ -54,6 +55,8 @@ export default async function StudentSessionPage({
   params: Promise<{ sessionId: string }>;
 }) {
   const { sessionId } = await params;
+  if (!isValidUUID(sessionId)) notFound();
+
   const pageData = await loadStudentSessionPageData(sessionId);
 
   return (
