@@ -36,8 +36,6 @@ export const portalConfigs: Record<string, PortalConfig> = {
       { label: "Sessions", href: "/teacher/sessions", icon: "video" },
       { label: "Courses", href: "/teacher/courses", icon: "book-open" },
       { label: "Classes", href: "/teacher/classes", icon: "school" },
-      { label: "Schedule", href: "/teacher/schedule", icon: "calendar" },
-      { label: "Reports", href: "/teacher/reports", icon: "bar-chart-3" },
     ],
   },
   student: {
@@ -58,7 +56,6 @@ export const portalConfigs: Record<string, PortalConfig> = {
     navItems: [
       { label: "Dashboard", href: "/parent", icon: "layout-dashboard" },
       { label: "My Children", href: "/parent/children", icon: "users" },
-      { label: "Reports", href: "/parent/reports", icon: "file-text" },
     ],
   },
 };
