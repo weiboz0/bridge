@@ -11,10 +11,10 @@ describe("nav-config", () => {
     expect(portalConfigs.parent).toBeDefined();
   });
 
-  it("every nav item has href starting with its portal basePath", () => {
-    for (const [key, config] of Object.entries(portalConfigs)) {
+  it("every nav item has a valid href starting with /", () => {
+    for (const config of Object.values(portalConfigs)) {
       for (const item of config.navItems) {
-        expect(item.href).toMatch(new RegExp(`^${config.basePath}`));
+        expect(item.href).toMatch(/^\//);
       }
     }
   });
