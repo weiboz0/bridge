@@ -25,7 +25,7 @@ function extractDomain(url: string): string {
 // Node view
 // ---------------------------------------------------------------------------
 
-function BookmarkNodeView({ node, updateAttributes }: NodeViewProps) {
+function BookmarkNodeView({ node, updateAttributes, deleteNode, selected }: NodeViewProps) {
   const { url, title, description } = node.attrs as {
     id: string
     url: string
@@ -38,6 +38,7 @@ function BookmarkNodeView({ node, updateAttributes }: NodeViewProps) {
   const [editingMeta, setEditingMeta] = useState(false)
   const [localTitle, setLocalTitle] = useState(title ?? "")
   const [localDesc, setLocalDesc] = useState(description ?? "")
+  const [localUrl, setLocalUrl] = useState(url ?? "")
 
   // If no URL set yet, show the URL input form.
   if (!url) {
@@ -79,12 +80,16 @@ function BookmarkNodeView({ node, updateAttributes }: NodeViewProps) {
     <NodeViewWrapper className="bookmark-node my-3">
       <div contentEditable={false}>
         {editingMeta ? (
-          // Inline meta editor
+          // Inline meta editor — includes URL editing
           <div className="rounded-md border border-zinc-300 bg-white px-4 py-3 space-y-2">
-            <div className="flex items-center gap-2 text-xs text-zinc-500 font-mono mb-1">
-              <span>🔗</span>
-              <span className="truncate">{url}</span>
-            </div>
+            <input
+              type="url"
+              value={localUrl}
+              placeholder="URL"
+              aria-label="Bookmark URL"
+              onChange={(e) => setLocalUrl(e.target.value)}
+              className="w-full rounded border border-zinc-200 px-2 py-1 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-zinc-400"
+            />
             <input
               type="text"
               value={localTitle}
@@ -104,6 +109,13 @@ function BookmarkNodeView({ node, updateAttributes }: NodeViewProps) {
             <div className="flex gap-2 justify-end">
               <button
                 type="button"
+                onClick={() => { deleteNode() }}
+                className="mr-auto text-xs text-red-500 hover:text-red-700"
+              >
+                Delete
+              </button>
+              <button
+                type="button"
                 onClick={() => setEditingMeta(false)}
                 className="text-xs text-zinc-500 hover:text-zinc-700"
               >
@@ -112,7 +124,8 @@ function BookmarkNodeView({ node, updateAttributes }: NodeViewProps) {
               <button
                 type="button"
                 onClick={() => {
-                  updateAttributes({ title: localTitle, description: localDesc })
+                  updateAttributes({ url: localUrl.trim(), title: localTitle, description: localDesc })
+                  setInputValue(localUrl.trim())
                   setEditingMeta(false)
                 }}
                 className="rounded bg-zinc-900 px-2 py-1 text-xs text-white hover:bg-zinc-700"
@@ -122,12 +135,13 @@ function BookmarkNodeView({ node, updateAttributes }: NodeViewProps) {
             </div>
           </div>
         ) : (
-          // Preview card
-          <a
-            href={url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="group flex flex-col gap-1 rounded-md border border-zinc-200 bg-white px-4 py-3 no-underline hover:border-zinc-400 transition-colors"
+          // Preview card — use div instead of <a> to prevent browser drag creating duplicates
+          <div
+            className={`group flex flex-col gap-1 rounded-md border bg-white px-4 py-3 cursor-pointer transition-colors ${selected ? "border-blue-400 ring-1 ring-blue-200" : "border-zinc-200 hover:border-zinc-400"}`}
+            onClick={() => window.open(url, "_blank", "noopener,noreferrer")}
+            onDragStart={(e) => e.preventDefault()}
+            role="link"
+            tabIndex={0}
           >
             <div className="flex items-start justify-between gap-2">
               <div className="min-w-0">
@@ -146,13 +160,13 @@ function BookmarkNodeView({ node, updateAttributes }: NodeViewProps) {
                   setLocalDesc(description ?? "")
                   setEditingMeta(true)
                 }}
-                aria-label="Edit bookmark metadata"
+                aria-label="Edit bookmark"
                 className="shrink-0 rounded p-1 text-zinc-400 opacity-0 group-hover:opacity-100 hover:bg-zinc-100 hover:text-zinc-700 transition-opacity"
               >
                 ✎
               </button>
             </div>
-          </a>
+          </div>
         )}
       </div>
     </NodeViewWrapper>
@@ -167,6 +181,8 @@ export const BookmarkNode = Node.create({
   name: "bookmark",
   group: "block",
   atom: true,
+  selectable: true,
+  draggable: true,
 
   addAttributes() {
     return {
