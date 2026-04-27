@@ -8,6 +8,7 @@ import { getCourse } from "@/lib/courses";
 import { listTopicsByCourse } from "@/lib/topics";
 import { listClassMembers } from "@/lib/class-memberships";
 import { TeacherDashboard } from "@/components/session/teacher/teacher-dashboard";
+import { logIdentityMismatch } from "@/lib/identity-assert";
 
 type EditorMode = "python" | "javascript" | "blockly";
 
@@ -34,6 +35,9 @@ async function loadTeacherSessionPageData(
 
   if (!liveSession.classId) {
     if (liveSession.teacherId !== viewerId && !isPlatformAdmin) {
+      logIdentityMismatch("teacher session page (no class)", viewerId, liveSession.teacherId, {
+        sessionId,
+      });
       notFound();
     }
 
@@ -58,6 +62,11 @@ async function loadTeacherSessionPageData(
       (member.role === "instructor" || member.role === "ta")
   );
   if (!isInstructor && !isPlatformAdmin) {
+    logIdentityMismatch("teacher session page (class members)", viewerId, liveSession.teacherId, {
+      sessionId,
+      classId: liveSession.classId,
+      memberRoles: members.filter((m) => m.userId === viewerId).map((m) => m.role),
+    });
     notFound();
   }
 

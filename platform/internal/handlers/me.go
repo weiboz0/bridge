@@ -27,6 +27,26 @@ func (h *MeHandler) OptionalAuthRoutes(r chi.Router) {
 // Routes registers /api/me endpoints that require auth.
 func (h *MeHandler) Routes(r chi.Router) {
 	r.Get("/api/me/memberships", h.GetMemberships)
+	r.Get("/api/me/identity", h.GetIdentity)
+}
+
+// GetIdentity handles GET /api/me/identity.
+// Returns the resolved claims for the authenticated request — used by the
+// dev diagnostic endpoint to confirm Next.js and Go agree on who the user
+// is. Intentionally narrow: just identity, no aggregation.
+func (h *MeHandler) GetIdentity(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"userId":          claims.UserID,
+		"email":           claims.Email,
+		"name":            claims.Name,
+		"isPlatformAdmin": claims.IsPlatformAdmin,
+		"impersonatedBy":  claims.ImpersonatedBy,
+	})
 }
 
 type userRole struct {
