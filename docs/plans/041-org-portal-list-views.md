@@ -58,7 +58,9 @@ Existing `Dashboard` method becomes a thin caller of the helper.
 - Modify: `platform/internal/handlers/org_dashboard.go` — add two handlers:
   - `GET /api/org/teachers` → returns `[{ userId, name, email, role: "teacher", joinedAt }]` filtered from `ListOrgMembers` where `role === "teacher" && status === "active"`.
   - `GET /api/org/students` → same shape, role `"student"`.
-- Both use `authorizeOrgAdmin`. Both dedupe defensively: a user can hold the same role twice if they were added/removed/re-added, but `OrgStore.GetUserMemberships` already dedupes (plan 040 phase 6) — `ListOrgMembers` does not. Add `DISTINCT ON (om.user_id, om.role)` to the query, or dedupe in-handler. Decision (lock now): dedupe in `ListOrgMembers` query (matches plan 040's pattern, fixes any other consumer).
+- Both use `authorizeOrgAdmin`. Both dedupe defensively: a user can hold the same role twice if they were added/removed/re-added, but `OrgStore.GetUserMemberships` already dedupes (plan 040 phase 6) — `ListOrgMembers` does not. Add `DISTINCT ON (om.user_id, om.role)` to the query (matches plan 040's pattern, fixes any other consumer).
+
+**Stats consistency (per Codex pre-impl review correction #3):** `StatsStore.GetOrgDashboardStats` (`platform/internal/store/stats.go:48-49`) uses raw `COUNT(*)` on `org_memberships` to compute the dashboard's `teacherCount` / `studentCount`. After Task 1.2 dedupes `ListOrgMembers`, the row count of `/org/teachers` would diverge from the dashboard's headline number. Fix in the same task by switching the stats counts to `COUNT(DISTINCT user_id)` filtered per role. Add a regression test in `stats_test.go` that inserts a user with two `teacher` rows in the same org (different statuses) and asserts the count is 1.
 
 ### Task 1.3: List courses + classes
 
@@ -71,7 +73,14 @@ Existing `Dashboard` method becomes a thin caller of the helper.
 
 **File:** `platform/internal/store/classes.go`
 
-`ListClassesByOrg` currently returns bare `Class` rows. The org/classes view needs course title + member counts. Add a new method `ListClassesByOrgWithCounts(ctx, orgID) ([]ClassWithCounts, error)` returning the enriched rows. Single query with two LEFT JOIN COUNTs (one for instructors via `class_memberships.role='instructor'`, one for students via `role='student'`). Returns 0 counts for newly-created classes with no members.
+`ListClassesByOrg` currently returns bare `Class` rows. The org/classes view needs course title + member counts. Add a new method `ListClassesByOrgWithCounts(ctx, orgID) ([]ClassWithCounts, error)` returning the enriched rows.
+
+**Codex pre-impl review correction #4 — cardinality:** a plain double `LEFT JOIN` on `class_memberships` for instructor + student counts multiplies rows and inflates both counts. Use one of:
+1. Subquery-per-role aggregate: `LEFT JOIN (SELECT class_id, COUNT(*) AS instructor_count FROM class_memberships WHERE role='instructor' GROUP BY class_id) AS i ON i.class_id = c.id` plus a parallel student subquery.
+2. CTE that computes per-class role counts up front.
+3. `COUNT(*) FILTER (WHERE cm.role = 'instructor')` if grouping by `c.id` directly.
+
+Pick (1) or (3) at implementation time — both avoid the cardinality explosion. Returns 0 counts for newly-created classes with no members. Add a regression test in `classes_test.go` that inserts a class with two instructors and three students and asserts counts are 2 and 3 (not 6 and 6).
 
 ### Task 1.5: Settings endpoint (read-only org metadata)
 
@@ -121,14 +130,13 @@ Server component fetches `/api/org/dashboard` (reuses existing payload). Renders
 
 ### Task 2.6: Vitest smoke tests for each page
 
-**File:** `tests/unit/org-list-views.test.tsx` (new)
+**Codex pre-impl review correction #5:** there's no precedent in `tests/unit/` for testing App Router server-component pages. Don't try. Up-front pattern: each page extracts a stateless presentational subcomponent (just the table) into `src/components/org/<entity>-list.tsx`. The page-level server component just `await api(...)` and passes the data to the subcomponent. Tests render the subcomponent directly via jsdom — same shape as existing TSX tests like `tests/unit/join-class-dialog.test.tsx`.
 
-For each of the 5 pages, render with a mocked `api()` that returns:
-- Populated list → assert rows render with the right columns.
-- Empty list → assert the empty-state copy.
-- 403 / 500 → assert the defensive error card renders.
+**Files:**
+- Create: `src/components/org/teachers-list.tsx`, `students-list.tsx`, `courses-list.tsx`, `classes-list.tsx`, `org-settings-card.tsx`. Each takes its data array (or null for the error case) as props and renders the populated / empty / error UI.
+- Create: `tests/unit/org-list-views.test.tsx`. For each of the 5 components: populated array → rows render with the right columns; empty array → empty-state copy; null + error prop → defensive error card.
 
-Pages are server components, so the test renders them via `renderToString` or React's async testing utilities. If that turns out to be too painful, fall back to extracting the table rendering into a client subcomponent and testing that.
+Pages stay thin (`await api(...)` + render the subcomponent). No page-level Vitest tests.
 
 ---
 
@@ -175,9 +183,26 @@ Each list view has obvious next-step product work that intentionally does NOT sh
 - **Detail pages**: row clicks go nowhere. Org-scoped detail views (`/org/teachers/<userId>`, `/org/courses/<courseId>`, etc.) need their own design pass.
 - **Pagination + search**: defer until a real org demands it.
 - **Pending invitations**: org admin can't see pending member invites yet. This is a real gap but spans new Go schema (invitation table), email plumbing, etc. Separate plan.
+- **Member role changes** (`OrgStore.UpdateMemberRole`, `orgs.go:301`) — backend exists; UI deferred.
+- **Member status changes / suspension / reactivation** (`UpdateMemberStatus`, `orgs.go:315`) — backend exists; UI deferred.
 
 ---
 
 ## Codex Review of This Plan
 
-_To be added after the plan is dispatched to Codex via `/codex:rescue`._
+- **Date:** 2026-04-27
+- **Reviewer:** Codex (pre-implementation, via `codex:rescue`)
+- **Verdict:** Three IMPORTANT corrections applied; two MINOR notes addressed.
+
+### Corrections applied
+
+1. `[IMPORTANT]` **Stats consistency.** Deduping `ListOrgMembers` without also fixing `StatsStore.GetOrgDashboardStats` (raw `COUNT(*)` at `stats.go:48-49`) would make the dashboard headline number diverge from the `/org/teachers` row count. → Task 1.2 now scopes the stats fix in the same task with `COUNT(DISTINCT user_id) FILTER (WHERE role='X')` and a regression test.
+2. `[IMPORTANT]` **Class enrichment cardinality.** The original draft proposed "two LEFT JOIN COUNTs" — a plain double join multiplies rows. → Task 1.4 now lists three concrete patterns that avoid the explosion (subquery-per-role, CTE, `COUNT(*) FILTER`); implementation picks one. Regression test that asserts 2 instructors + 3 students don't read as 6 + 6.
+3. `[IMPORTANT]` **Server-component testing pattern.** No precedent in the suite for testing App Router server pages. → Task 2.6 locks the up-front pattern: each page extracts a stateless presentational subcomponent under `src/components/org/`; tests render the subcomponent directly via jsdom (same shape as `join-class-dialog.test.tsx`). Pages stay thin.
+4. `[MINOR]` **Out-of-scope explicitness.** Added member role changes (`UpdateMemberRole`) and member status changes / suspension (`UpdateMemberStatus`) to the deferred list — both backend APIs exist; UI is deferred.
+
+### Codex notes (no plan change)
+
+- Auth helper extraction (Task 1.1) boundary is right for the 5 read endpoints; do NOT broaden to the existing mutation handlers (`ListMembers` allows any org member, `UpdateOrg` enforces org-admin on path IDs with different semantics). Plan already scopes this correctly.
+- Settings reuse of `/api/org/dashboard` (Task 1.5) is acceptable; consider a separate `/api/org/settings` endpoint only if the dashboard handler grows or its stats query becomes slow.
+- Row-click decision (no links yet) confirmed reasonable.
