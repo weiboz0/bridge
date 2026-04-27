@@ -428,6 +428,26 @@ Default plan: one PR, eight commits, with an explicit gate after Phase 4 to conf
 ### Review 2 — Post-implementation review
 
 - **Date:** 2026-04-26
-- **Reviewer:** Codex (post-implementation, dispatch pending)
-- **Status:** To be appended after the post-impl Codex review completes.
+- **Reviewer:** Codex (post-implementation, via `codex:rescue`)
+- **Verdict:** Three `[IMPORTANT]` + one `[NOTE]` fixed in-PR; one `[MINOR]` accepted with explanation; the remaining notes were observations not requiring action.
+
+**Fixed in commit applied after Review 2:**
+
+1. `[IMPORTANT]` **Phase 5 — API auth-guard contract change.** The `authorized` callback returned `isAuthed` for `/api/orgs/*` and `/api/admin/*`. Previously the no-callback default was `true` (pass-through, handler enforces auth). The new strict 401 behavior breaks `/api/admin/impersonate/status` which is designed to return `{ impersonating: null }` for unauthenticated callers (called from the always-rendered ImpersonateBanner). → Reverted API path to pass-through (`return true`) so handlers continue to enforce their own auth contracts. Portal redirect for unauth users still works.
+2. `[IMPORTANT]` **Phase 4 — Login → Register link drops the invite code.** An unregistered visitor on `/student?invite=ABCD` gets redirected to `/login?callbackUrl=/student?invite=ABCD`, but the login page's "Sign up" link pointed at plain `/register`, losing the code. → Login page now extracts the invite from `callbackUrl` (or top-level `?invite=`) and pre-populates the register link's URL. Carry-through works for both flows: existing-account sign-in (`callbackUrl` redirect) and new-account sign-up.
+3. `[IMPORTANT]` **Phase 7 — Stale E2E expectations.** `e2e/parent.spec.ts` still asserted that `/parent/children` redirects to `/parent`; `e2e/help-queue.spec.ts` clicked a "My Children" nav link that no longer exists. → Updated `parent.spec.ts` to assert 404 (the locked-in new behavior); removed the children-list nav-click test from `help-queue.spec.ts`.
+4. `[NOTE]` **Phase 1 — `cidrCacheOnce` is unused ceremony.** Dropped the `sync.Once` from `proxy.go`; the `RWMutex` is sufficient for cache safety.
+5. `[MINOR]` **Cross-cutting — unused imports.** Removed `beforeEach` + `testDb` from `auth-register.test.ts`; removed `ACCOUNTS` import from `help-queue.spec.ts` (only the import; the Parent Portal block survives without it).
+
+**Accepted without action:**
+
+- `[MINOR]` Phase 8 timing — `theme-bootstrap.spec.ts` checks the `dark` class after `page.goto`, not strictly before first paint. True FOUC verification is hard in headless Playwright; the spec's purpose is to lock the dev-overlay sentinel and confirm the bootstrap runs at all. Manual visual validation gate remains in the post-execution report.
+- `[IMPORTANT]` Phase 3 skip when `NEXTAUTH_SECRET` is absent — the test skips with a clear actionable message. The secret is shell-environment provided (not embedded). Acceptable because (a) the alternative is failing on every default-clean E2E run, and (b) the skip message explicitly tells the operator how to enable it.
+
+**Observations (no action):**
+
+- Phase 3 JWE encoder/decoder algorithm match confirmed by Codex (no salt/info string mismatch between `e2e/helpers/jwe.ts` and `platform/internal/auth/jwt.go`).
+- Phase 4 schema migration `0021_user_intended_role.sql` matches `src/lib/db/schema.ts`.
+- Phase 5 portal redirect preserves query strings via `pathname + (search || "")`.
+- Deferral integrity verified: no diff content pulls forward org placeholder pages or editor responsive — those remain plan 041 / 042 scope.
 

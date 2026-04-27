@@ -52,30 +52,34 @@ export const authConfig = {
   ],
   callbacks: {
     // Middleware authorization. Runs ONLY for paths matched by
-    // src/middleware.ts. Two distinct branches preserve the existing
-    // contract while adding portal deep-link preservation:
+    // src/middleware.ts. Two distinct branches:
     //
-    //   - /api/orgs/*, /api/admin/*: require an authenticated session;
-    //     Auth.js returns 401 when this returns false. Same effective
-    //     behavior as the previous `auth as middleware` re-export.
+    //   - /api/orgs/*, /api/admin/*: pass through. The previous
+    //     `auth as middleware` re-export had no callback, which
+    //     defaults to `authorized = true` — the route handler does
+    //     its own session check and returns 401 / handles the unauth
+    //     case (e.g. /api/admin/impersonate/status returns
+    //     `{ impersonating: null }` instead of 401 by design).
+    //     Returning `isAuthed` here would break that contract by
+    //     having Auth.js redirect to /login before the handler runs.
     //   - portal trees (/teacher/*, /student/*, /parent/*, /org/*,
-    //     /admin/* — but NOT the API paths above): require auth too,
-    //     but on failure redirect to /login with callbackUrl set to
-    //     the original path so the user lands back where they wanted
-    //     after sign-in (review-002 P2 #7 fix).
+    //     /admin/* — but NOT the API paths above): redirect to
+    //     /login?callbackUrl=<original> when unauthenticated so deep
+    //     links survive the sign-out → sign-in round-trip
+    //     (review-002 P2 #7 fix).
     authorized({ request, auth: sessionAuth }) {
       const { pathname, search } = request.nextUrl;
       const isApiPath =
         pathname.startsWith("/api/orgs") || pathname.startsWith("/api/admin");
-      const isAuthed = !!sessionAuth?.user;
-
       if (isApiPath) {
-        // Preserve existing API auth-guard contract.
-        return isAuthed;
+        // Preserve the legacy pass-through contract — handlers enforce auth.
+        return true;
       }
 
-      // Portal tree — redirect with callbackUrl baked in.
+      const isAuthed = !!sessionAuth?.user;
       if (isAuthed) return true;
+
+      // Portal tree, unauthenticated — redirect with callbackUrl baked in.
       const callback = encodeURIComponent(pathname + (search || ""));
       const loginUrl = new URL(
         `/login?callbackUrl=${callback}`,

@@ -22,6 +22,25 @@ function LoginForm() {
   // Sanitize callbackUrl to prevent open redirects — only allow relative paths
   const rawCallback = searchParams.get("callbackUrl") || "/";
   const callbackUrl = rawCallback.startsWith("/") && !rawCallback.startsWith("//") ? rawCallback : "/";
+  // If the unauth'd user landed here from an invite link
+  // (`/student?invite=ABCD` → middleware → `/login?callbackUrl=...`),
+  // extract the invite code so the "Sign up" link below carries it
+  // through to the register page. Without this, an unregistered
+  // visitor on an invite link loses the code at the login → register
+  // hop. Carries from either the callback path or a top-level ?invite=.
+  let inviteCode = searchParams.get("invite") || "";
+  if (!inviteCode && callbackUrl.includes("invite=")) {
+    try {
+      const inner = new URL(callbackUrl, "http://localhost");
+      inviteCode = inner.searchParams.get("invite") || "";
+    } catch {
+      // Malformed callback — drop silently, the registration page
+      // works fine without an invite hint.
+    }
+  }
+  const registerHref = inviteCode
+    ? `/register?invite=${encodeURIComponent(inviteCode)}`
+    : "/register";
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -106,7 +125,7 @@ function LoginForm() {
       <CardFooter className="justify-center">
         <p className="text-sm text-muted-foreground">
           Don&apos;t have an account?{" "}
-          <Link href="/register" className="underline">
+          <Link href={registerHref} className="underline">
             Sign up
           </Link>
         </p>

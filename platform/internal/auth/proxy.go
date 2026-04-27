@@ -41,17 +41,15 @@ func IsTrustedProxy(remoteAddr string) bool {
 }
 
 var (
-	cidrCacheOnce  sync.Once
 	cidrCacheValue []*net.IPNet
 	cidrCacheRaw   string
 	cidrCacheMu    sync.RWMutex
 )
 
-// loadTrustedCIDRs parses TRUSTED_PROXY_CIDRS once per process, with a
-// cheap re-parse only when the env var actually changes (so tests can
-// flip it via t.Setenv without restart). Bad CIDR entries are silently
-// dropped — they're operator-supplied and a typo should fail closed
-// rather than panic the process.
+// loadTrustedCIDRs parses TRUSTED_PROXY_CIDRS, re-parsing only when the
+// env var actually changes (so tests can flip it via t.Setenv without
+// restart). Bad CIDR entries are silently dropped — they're operator-
+// supplied and a typo should fail closed rather than panic the process.
 func loadTrustedCIDRs() []*net.IPNet {
 	raw := os.Getenv("TRUSTED_PROXY_CIDRS")
 
@@ -68,7 +66,6 @@ func loadTrustedCIDRs() []*net.IPNet {
 	cidrCacheMu.Lock()
 	cidrCacheRaw = raw
 	cidrCacheValue = parsed
-	cidrCacheOnce.Do(func() {})
 	cidrCacheMu.Unlock()
 	return parsed
 }

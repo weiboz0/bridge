@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach } from "vitest";
-import { testDb, createTestUser } from "../helpers";
+import { describe, it, expect } from "vitest";
+import { createTestUser } from "../helpers";
 import { createRequest, parseResponse } from "../api-helpers";
 import { POST } from "@/app/api/auth/register/route";
 
