@@ -64,7 +64,7 @@ func (m *Middleware) RequireAuth(next http.Handler) http.Handler {
 			// Match Auth.js cookie selection: prefer non-secure on HTTP,
 			// prefer secure on HTTPS. This prevents identity mismatch when
 			// both cookies exist in the browser jar.
-			isSecure := r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
+			isSecure := r.TLS != nil || strings.HasPrefix(strings.ToLower(r.Header.Get("X-Forwarded-Proto")), "https")
 			cookieOrder := []string{CookieNameHTTP, CookieNameHTTPS}
 			if isSecure {
 				cookieOrder = []string{CookieNameHTTPS, CookieNameHTTP}
@@ -118,7 +118,7 @@ func (m *Middleware) OptionalAuth(next http.Handler) http.Handler {
 		if authHeader := r.Header.Get("Authorization"); strings.HasPrefix(authHeader, "Bearer ") {
 			tokenStr = strings.TrimPrefix(authHeader, "Bearer ")
 		} else {
-			isSecure := r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
+			isSecure := r.TLS != nil || strings.HasPrefix(strings.ToLower(r.Header.Get("X-Forwarded-Proto")), "https")
 			cookieOrder := []string{CookieNameHTTP, CookieNameHTTPS}
 			if isSecure {
 				cookieOrder = []string{CookieNameHTTPS, CookieNameHTTP}
