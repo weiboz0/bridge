@@ -19,6 +19,8 @@ type SessionHandler struct {
 	Sessions    *store.SessionStore
 	Schedules   *store.ScheduleStore
 	Classes     *store.ClassStore
+	Courses     *store.CourseStore
+	Topics      *store.TopicStore
 	Orgs        *store.OrgStore
 	Broadcaster *events.Broadcaster
 }
@@ -56,6 +58,8 @@ func (h *SessionHandler) Routes(r chi.Router) {
 			})
 			r.Post("/rotate-invite", h.RotateInviteToken)
 			r.Delete("/invite", h.RevokeInviteToken)
+			r.Get("/teacher-page", h.GetTeacherPage)
+			r.Get("/student-page", h.GetStudentPage)
 		})
 	})
 
@@ -949,6 +953,226 @@ func (h *SessionHandler) RevokeInviteToken(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// teacherPagePayload is the response shape for GET /api/sessions/{id}/teacher-page.
+// Includes everything the teacher's session render needs in one trip — eliminates
+// the previous Next.js multi-fetch + local ID comparison pattern that drifted
+// when the auth identity boundary slipped (review 002 P0).
+type teacherPagePayload struct {
+	Session      *store.LiveSession    `json:"session"`
+	ClassID      *string               `json:"classId"`
+	ReturnPath   string                `json:"returnPath"`
+	EditorMode   string                `json:"editorMode"`
+	CourseTopics []teacherPageTopicRef `json:"courseTopics"`
+}
+
+type teacherPageTopicRef struct {
+	TopicID       string `json:"topicId"`
+	Title         string `json:"title"`
+	LessonContent string `json:"lessonContent"`
+}
+
+// canActAsAdmin returns true when the caller is a platform admin or an admin
+// who is currently impersonating another user. The middleware rewrites claims
+// during impersonation and clears IsPlatformAdmin, so we have to check
+// ImpersonatedBy explicitly to preserve admin-equivalent access.
+func canActAsAdmin(claims *auth.Claims) bool {
+	return claims.IsPlatformAdmin || claims.ImpersonatedBy != ""
+}
+
+// GetTeacherPage handles GET /api/sessions/{id}/teacher-page.
+//
+// Single source of truth for "is this user allowed to see the teacher
+// dashboard for this session, and what should the page render?" Replaces
+// the multi-fetch + Next-side ID comparison that the old teacher session
+// page used.
+//
+// Authorization: claims must be the session teacher, a class instructor/ta
+// (when the session is class-bound), an org admin for the class's org, OR a
+// platform admin (including admin-while-impersonating).
+func (h *SessionHandler) GetTeacherPage(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	sessionID := chi.URLParam(r, "id")
+	session, err := h.Sessions.GetSession(r.Context(), sessionID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if session == nil {
+		writeError(w, http.StatusNotFound, "Not found")
+		return
+	}
+
+	authorized := canActAsAdmin(claims) || session.TeacherID == claims.UserID
+	if !authorized && session.ClassID != nil && h.Classes != nil {
+		members, err := h.Classes.ListClassMembers(r.Context(), *session.ClassID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "Database error")
+			return
+		}
+		for _, m := range members {
+			if m.UserID == claims.UserID && (m.Role == "instructor" || m.Role == "ta") {
+				authorized = true
+				break
+			}
+		}
+		if !authorized && h.Orgs != nil {
+			class, err := h.Classes.GetClass(r.Context(), *session.ClassID)
+			if err == nil && class != nil {
+				roles, err := h.Orgs.GetUserRolesInOrg(r.Context(), class.OrgID, claims.UserID)
+				if err == nil {
+					for _, role := range roles {
+						if role.Role == "org_admin" {
+							authorized = true
+							break
+						}
+					}
+				}
+			}
+		}
+	}
+	if !authorized {
+		writeError(w, http.StatusForbidden, "Not authorized to view this session as teacher")
+		return
+	}
+
+	payload := teacherPagePayload{
+		Session:      session,
+		ClassID:      session.ClassID,
+		EditorMode:   "python",
+		CourseTopics: []teacherPageTopicRef{},
+	}
+
+	if session.ClassID == nil {
+		payload.ReturnPath = "/teacher"
+	} else {
+		payload.ReturnPath = "/teacher/classes/" + *session.ClassID
+
+		if h.Classes != nil {
+			settings, err := h.Classes.GetClassSettings(r.Context(), *session.ClassID)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "Database error")
+				return
+			}
+			if settings != nil && settings.EditorMode != "" {
+				payload.EditorMode = settings.EditorMode
+			}
+
+			class, err := h.Classes.GetClass(r.Context(), *session.ClassID)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "Database error")
+				return
+			}
+			if class != nil && h.Topics != nil {
+				topics, err := h.Topics.ListTopicsByCourse(r.Context(), class.CourseID)
+				if err != nil {
+					writeError(w, http.StatusInternalServerError, "Database error")
+					return
+				}
+				refs := make([]teacherPageTopicRef, 0, len(topics))
+				for _, t := range topics {
+					refs = append(refs, teacherPageTopicRef{
+						TopicID:       t.ID,
+						Title:         t.Title,
+						LessonContent: t.LessonContent,
+					})
+				}
+				payload.CourseTopics = refs
+			}
+		}
+	}
+
+	writeJSON(w, http.StatusOK, payload)
+}
+
+// studentPagePayload is the response shape for GET /api/sessions/{id}/student-page.
+// Same single-trip philosophy as teacher-page: one auth decision, one render payload.
+type studentPagePayload struct {
+	Session    *store.LiveSession `json:"session"`
+	ClassID    *string            `json:"classId"`
+	ReturnPath string             `json:"returnPath"`
+	EditorMode string             `json:"editorMode"`
+}
+
+// GetStudentPage handles GET /api/sessions/{id}/student-page.
+//
+// Authorization: claims must be enrolled in the session's class as a student
+// or instructor/ta, OR be the session teacher, OR be a platform admin
+// (including admin-while-impersonating). For class-less sessions, only the
+// teacher and admins may view.
+//
+// Returns 404 when the session has ended ("not live") so a stale link does
+// not render an empty workspace.
+func (h *SessionHandler) GetStudentPage(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	sessionID := chi.URLParam(r, "id")
+	session, err := h.Sessions.GetSession(r.Context(), sessionID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if session == nil {
+		writeError(w, http.StatusNotFound, "Not found")
+		return
+	}
+	if session.Status != "live" {
+		writeError(w, http.StatusNotFound, "Session has ended")
+		return
+	}
+
+	authorized := canActAsAdmin(claims) || session.TeacherID == claims.UserID
+	if !authorized && session.ClassID != nil && h.Classes != nil {
+		members, err := h.Classes.ListClassMembers(r.Context(), *session.ClassID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "Database error")
+			return
+		}
+		for _, m := range members {
+			if m.UserID == claims.UserID {
+				authorized = true
+				break
+			}
+		}
+	}
+	if !authorized {
+		writeError(w, http.StatusForbidden, "Not enrolled in this session's class")
+		return
+	}
+
+	payload := studentPagePayload{
+		Session:    session,
+		ClassID:    session.ClassID,
+		EditorMode: "python",
+	}
+
+	if session.ClassID == nil {
+		payload.ReturnPath = "/student"
+	} else {
+		payload.ReturnPath = "/student/classes/" + *session.ClassID
+		if h.Classes != nil {
+			settings, err := h.Classes.GetClassSettings(r.Context(), *session.ClassID)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "Database error")
+				return
+			}
+			if settings != nil && settings.EditorMode != "" {
+				payload.EditorMode = settings.EditorMode
+			}
+		}
+	}
+
+	writeJSON(w, http.StatusOK, payload)
 }
 
 // JoinSessionByToken handles POST /api/s/{token}/join.

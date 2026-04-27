@@ -358,7 +358,7 @@ export function TeacherDashboard({
   }
 
   return (
-    <div className="flex h-screen flex-col">
+    <div className="flex h-screen flex-col" data-testid="teacher-dashboard">
       <TeacherHeader
         sessionId={sessionId}
         studentCount={participants.length}

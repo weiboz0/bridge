@@ -205,6 +205,141 @@ func TestRequireAdmin_AllowedWhenImpersonating(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 }
 
+func TestRequireAuth_CanonicalCookie_HTTP(t *testing.T) {
+	mw := NewMiddleware(testSecret)
+	tokenStr := makeToken(t, jwt.MapClaims{
+		"id":    "user-cookie-http",
+		"email": "u@example.com",
+		"name":  "U",
+		"exp":   time.Now().Add(time.Hour).Unix(),
+	}, testSecret)
+
+	var gotClaims *Claims
+	handler := mw.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotClaims = GetClaims(r.Context())
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	// HTTP request → canonical cookie name is "authjs.session-token"
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.AddCookie(&http.Cookie{Name: CookieNameHTTP, Value: tokenStr})
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	require.NotNil(t, gotClaims)
+	assert.Equal(t, "user-cookie-http", gotClaims.UserID)
+}
+
+func TestRequireAuth_CanonicalCookie_HTTPS(t *testing.T) {
+	mw := NewMiddleware(testSecret)
+	tokenStr := makeToken(t, jwt.MapClaims{
+		"id":    "user-cookie-https",
+		"email": "u@example.com",
+		"name":  "U",
+		"exp":   time.Now().Add(time.Hour).Unix(),
+	}, testSecret)
+
+	var gotClaims *Claims
+	handler := mw.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotClaims = GetClaims(r.Context())
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	// X-Forwarded-Proto: https → canonical cookie is __Secure-authjs.session-token
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("X-Forwarded-Proto", "https")
+	req.AddCookie(&http.Cookie{Name: CookieNameHTTPS, Value: tokenStr})
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	require.NotNil(t, gotClaims)
+	assert.Equal(t, "user-cookie-https", gotClaims.UserID)
+}
+
+// Stale variant present (secure cookie on an HTTP request) must be rejected.
+// Falling back to the non-canonical cookie is what re-injected stale identity
+// in review 002 — this test guards the fix.
+func TestRequireAuth_StaleCookieVariant_HTTP_Rejected(t *testing.T) {
+	mw := NewMiddleware(testSecret)
+	tokenStr := makeToken(t, jwt.MapClaims{
+		"id":    "stale-user",
+		"email": "stale@example.com",
+		"name":  "Stale",
+		"exp":   time.Now().Add(time.Hour).Unix(),
+	}, testSecret)
+
+	handler := mw.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("handler should not be called when only stale variant is present")
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	// HTTP request, only the secure-name cookie present → stale; reject.
+	req.AddCookie(&http.Cookie{Name: CookieNameHTTPS, Value: tokenStr})
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
+func TestRequireAuth_StaleCookieVariant_HTTPS_Rejected(t *testing.T) {
+	mw := NewMiddleware(testSecret)
+	tokenStr := makeToken(t, jwt.MapClaims{
+		"id":    "stale-user",
+		"email": "stale@example.com",
+		"name":  "Stale",
+		"exp":   time.Now().Add(time.Hour).Unix(),
+	}, testSecret)
+
+	handler := mw.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("handler should not be called when only stale variant is present")
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("X-Forwarded-Proto", "https")
+	// HTTPS request, only the non-secure name present → stale; reject.
+	req.AddCookie(&http.Cookie{Name: CookieNameHTTP, Value: tokenStr})
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
+// Authorization header must beat any cookie, including a stale one.
+// Confirms the "header path and cookie path are disjoint" invariant.
+func TestRequireAuth_HeaderBeatsCookie(t *testing.T) {
+	mw := NewMiddleware(testSecret)
+	headerToken := makeToken(t, jwt.MapClaims{
+		"id":    "header-user",
+		"email": "header@example.com",
+		"name":  "Header",
+		"exp":   time.Now().Add(time.Hour).Unix(),
+	}, testSecret)
+	cookieToken := makeToken(t, jwt.MapClaims{
+		"id":    "cookie-user",
+		"email": "cookie@example.com",
+		"name":  "Cookie",
+		"exp":   time.Now().Add(time.Hour).Unix(),
+	}, testSecret)
+
+	var gotClaims *Claims
+	handler := mw.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotClaims = GetClaims(r.Context())
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Authorization", "Bearer "+headerToken)
+	req.AddCookie(&http.Cookie{Name: CookieNameHTTP, Value: cookieToken})
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	require.NotNil(t, gotClaims)
+	assert.Equal(t, "header-user", gotClaims.UserID)
+}
+
 func TestContextWithClaims_And_GetClaims(t *testing.T) {
 	claims := &Claims{UserID: "user-1", Email: "test@example.com"}
 	ctx := ContextWithClaims(context.Background(), claims)

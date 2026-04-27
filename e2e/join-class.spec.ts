@@ -110,6 +110,20 @@ test.describe("Join Class by Code", () => {
       const postEnrollment = await student2Context.request.get(`/api/classes/${classId}`);
       expect(postEnrollment.ok()).toBeTruthy();
 
+      // The review-002 regression we're guarding: the API said joined but the
+      // dashboard kept showing "no classes." After Phase 3, the join dialog
+      // verifies presence in /api/classes/mine before closing, so the class
+      // must appear on the student dashboard immediately after the join POST.
+      const minePayload = await student2Context.request.get("/api/classes/mine");
+      expect(minePayload.ok()).toBeTruthy();
+      const mine = (await minePayload.json()) as Array<{ id: string }>;
+      expect(mine.some((c) => c.id === classId)).toBeTruthy();
+
+      // And the dashboard should render that class without a manual reload.
+      await page.goto("/student");
+      const classCard = page.locator(`a[href*="/student/classes/${classId}"]`).first();
+      await expect(classCard).toBeVisible({ timeout: 5000 });
+
       await page.close();
     });
   });

@@ -9,6 +9,15 @@ interface SidebarFooterProps {
   collapsed: boolean;
 }
 
+async function handleSignOut() {
+  try {
+    await fetch("/api/auth/logout-cleanup", { method: "POST" });
+  } catch {
+    // Still proceed with signOut even if cleanup fails.
+  }
+  await signOut({ callbackUrl: "/" });
+}
+
 export function SidebarFooter({ userName, collapsed }: SidebarFooterProps) {
   return (
     <div className="border-t border-border/50 p-3 space-y-2">
@@ -22,7 +31,7 @@ export function SidebarFooter({ userName, collapsed }: SidebarFooterProps) {
         variant="ghost"
         size="sm"
         className="w-full justify-start"
-        onClick={() => signOut({ callbackUrl: "/" })}
+        onClick={handleSignOut}
       >
         {collapsed ? "↩" : "Sign Out"}
       </Button>

@@ -1,11 +1,13 @@
 package handlers
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/weiboz0/bridge/platform/internal/auth"
 	"github.com/weiboz0/bridge/platform/internal/store"
@@ -98,4 +100,52 @@ func TestGetRoles_Authenticated(t *testing.T) {
 	// Will fail on h.Orgs.GetUserMemberships since Orgs is nil
 	defer func() { recover() }()
 	h.GetRoles(w, req)
+}
+
+func TestGetIdentity_NoClaims(t *testing.T) {
+	h := &MeHandler{}
+	req := httptest.NewRequest(http.MethodGet, "/api/me/identity", nil)
+	w := httptest.NewRecorder()
+	h.GetIdentity(w, req)
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
+func TestGetIdentity_ReturnsClaims(t *testing.T) {
+	h := &MeHandler{}
+	req := httptest.NewRequest(http.MethodGet, "/api/me/identity", nil)
+	req = withClaims(req, &auth.Claims{
+		UserID:          "user-99",
+		Email:           "u@example.com",
+		Name:            "Diag User",
+		IsPlatformAdmin: true,
+	})
+	w := httptest.NewRecorder()
+	h.GetIdentity(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	assert.Equal(t, "user-99", body["userId"])
+	assert.Equal(t, "u@example.com", body["email"])
+	assert.Equal(t, "Diag User", body["name"])
+	assert.Equal(t, true, body["isPlatformAdmin"])
+}
+
+func TestGetIdentity_ImpersonatedBy(t *testing.T) {
+	h := &MeHandler{}
+	req := httptest.NewRequest(http.MethodGet, "/api/me/identity", nil)
+	req = withClaims(req, &auth.Claims{
+		UserID:         "target",
+		Email:          "t@example.com",
+		Name:           "Target",
+		ImpersonatedBy: "admin-1",
+	})
+	w := httptest.NewRecorder()
+	h.GetIdentity(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	assert.Equal(t, "target", body["userId"])
+	assert.Equal(t, "admin-1", body["impersonatedBy"])
 }

@@ -44,4 +44,32 @@ describe("nav-config", () => {
   it("getPortalConfig returns null for invalid role", () => {
     expect(getPortalConfig("invalid")).toBeNull();
   });
+
+  // Review-002 P1 #5: org-admin nav linked into /teacher/* which redirected
+  // back to /org for org admins without the teacher role. Lock the rule:
+  // each portal's nav stays inside its own basePath. The single intentional
+  // cross-portal link is org_admin → /teacher/* (allowed if a user holds
+  // both roles), which we now want to forbid by default and only re-add
+  // through an explicit allow-list when org-scoped views ship.
+  it("no nav item points outside its own portal's basePath", () => {
+    // Other-portal prefixes that any given config is forbidden from linking to.
+    const allBasePaths: Record<string, string[]> = {
+      admin: ["/org", "/teacher", "/student", "/parent"],
+      org_admin: ["/admin", "/teacher", "/student", "/parent"],
+      teacher: ["/admin", "/org", "/student", "/parent"],
+      student: ["/admin", "/org", "/teacher", "/parent"],
+      parent: ["/admin", "/org", "/teacher", "/student"],
+    };
+    for (const [role, config] of Object.entries(portalConfigs)) {
+      const forbidden = allBasePaths[role] ?? [];
+      for (const item of config.navItems) {
+        for (const pfx of forbidden) {
+          expect(
+            item.href.startsWith(pfx + "/") || item.href === pfx,
+            `${role} nav item "${item.label}" → ${item.href} crosses into ${pfx}`
+          ).toBe(false);
+        }
+      }
+    }
+  });
 });

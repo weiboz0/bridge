@@ -17,8 +17,9 @@ export const portalConfigs: Record<string, PortalConfig> = {
     basePath: "/org",
     navItems: [
       { label: "Dashboard", href: "/org", icon: "layout-dashboard" },
-      { label: "Units", href: "/teacher/units", icon: "file-text" },
-      { label: "Sessions", href: "/teacher/sessions", icon: "video" },
+      // No cross-portal links — /teacher/* requires the teacher role and
+      // redirects org admins back to /org. Org-scoped Units/Sessions views
+      // are tracked in plan 040.
       { label: "Teachers", href: "/org/teachers", icon: "graduation-cap" },
       { label: "Students", href: "/org/students", icon: "users" },
       { label: "Courses", href: "/org/courses", icon: "book-open" },
