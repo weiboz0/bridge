@@ -28,10 +28,36 @@ export function CodeEditor({
   provider,
 }: CodeEditorProps) {
   const editorRef = useRef<monacoTypes.editor.IStandaloneCodeEditor | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
   const bindingRef = useRef<any>(null);
   const [editorReady, setEditorReady] = useState(false);
   const { theme } = useTheme();
   const instanceId = useId();
+
+  // Monaco's `automaticLayout` polls its own size, but it caches a zero
+  // measurement when the container mounts inside `display: none` (e.g.
+  // Phase 042 narrow layout where a non-active tab pane is hidden) and
+  // doesn't always recover after the container becomes visible. The
+  // ResizeObserver here triggers an explicit layout() call on the
+  // 0→non-zero transition, which is the case Monaco's polling misses.
+  useEffect(() => {
+    const editor = editorRef.current;
+    const container = containerRef.current;
+    if (!editorReady || !editor || !container) return;
+
+    let prevHasSize = container.clientWidth > 0 && container.clientHeight > 0;
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (!entry) return;
+      const hasSize = entry.contentRect.width > 0 && entry.contentRect.height > 0;
+      if (!prevHasSize && hasSize) {
+        editor.layout();
+      }
+      prevHasSize = hasSize;
+    });
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [editorReady]);
 
   // Create/recreate Yjs binding when editor, yText, or provider become available
   useEffect(() => {
@@ -77,7 +103,7 @@ export function CodeEditor({
   const modelUri = `inmemory://editor/${instanceId}`;
 
   return (
-    <div className="border rounded-lg overflow-hidden h-full">
+    <div ref={containerRef} className="border rounded-lg overflow-hidden h-full">
       <Editor
         defaultValue={yText ? undefined : initialCode}
         language={language}
