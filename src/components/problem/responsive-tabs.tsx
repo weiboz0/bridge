@@ -25,8 +25,9 @@ interface ResponsiveTabsProps {
  *     so the whole bar is one Tab stop and ArrowLeft/ArrowRight move
  *     within it (per WAI-ARIA Authoring Practices).
  *
- * Visible only at narrow widths via the parent's `lg:hidden`. Pane
- * visibility itself is owned by the parent (Tailwind `lg:flex` rules).
+ * Visible only at narrow widths via the parent's `@3xl/shell:hidden`.
+ * Pane visibility itself is owned by the parent (Tailwind container-query
+ * rules — plan 043 phase 4).
  *
  * Extracted as its own component so the Vitest contract test and the
  * real shell exercise the exact same markup — Codex post-impl review
@@ -69,7 +70,7 @@ export function ResponsiveTabs({ active, onChange }: ResponsiveTabsProps) {
     <div
       role="tablist"
       aria-label="Problem editor sections"
-      className="flex border-b border-zinc-200 bg-white lg:hidden"
+      className="flex border-b border-zinc-200 bg-white @3xl/shell:hidden"
     >
       {TABS.map((tab, i) => {
         const isActive = active === tab.id;
