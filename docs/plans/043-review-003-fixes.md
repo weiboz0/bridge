@@ -9,7 +9,7 @@
 
 **Branch:** `feat/043-review-003-fixes`
 
-**Status:** Draft — awaiting approval
+**Status:** Complete (pending PR review)
 
 ---
 
@@ -315,3 +315,89 @@ Per the three reviews + consequential follow-ups:
 - `searchParams: Promise<{ orgId?: string }>` is the correct Next.js 16 App Router pattern.
 - Role-switcher composite key `${role}:${orgId}` is safe — schema guarantees `orgId` is non-null for org-scoped roles.
 - Tailwind v4 native `@container` queries confirmed available in this project.
+
+## Post-Execution Report
+
+**Status:** Complete. All 6 phases shipped on `feat/043-review-003-fixes`.
+
+**Phase 1 — P0 security gates** (commit `bb5d8c8`)
+- `ClassHandler.CanAccessClass`: helper resolving class + verifying admin / class-membership / org-admin. Returns 404 for both not-found and not-authorized — no class-existence leak.
+- `SessionHandler.canJoinSession`: same shape for session joins. Pre-invited rows with `invited|present` status grant access; `left` does NOT (kicked/left students must be re-invited).
+- `GetStudentPage` (Task 1.2b): same pre-invitation gate so a teacher-invited non-class-member can load `/student-page` before the join POST.
+- `SessionHandler.canAccessClass`: gate for the 3 class-adjacent endpoints (`ListByClass`, `GetActiveByClass`, `GetSessionTopics`) — Codex pre-impl correction #1 caught these were unprotected.
+- New `GetSessionParticipant` store helper for the single-row lookup.
+- 18 new Go integration tests covering happy/admin/impersonating/outsider/non-existent paths plus the `left` re-entry rejection and pre-invited `GetStudentPage` access.
+
+**Phase 5 — Google OAuth intent carry** (commit `8831eb8`)
+- `POST /api/auth/signup-intent`: writes a short-lived (5 min, HttpOnly, SameSite=Lax) `bridge-signup-intent` cookie with `{ role, inviteCode? }`. Zod-validated.
+- `signIn` callback in `src/lib/auth.ts`: reads + clears the cookie when creating a brand-new OAuth user. Existing users re-signing in are not touched.
+- `register/page.tsx`: Google button now POSTs the intent BEFORE redirecting to Google, and carries invite into `callbackUrl`.
+- 5 new Vitest cases for the signup-intent route.
+
+**Phase 6 — P2 cleanup** (commit `687f2d8`)
+- Hold submit on `/teacher/units/new` until orgs load (kills the scope=personal → scope=org flicker).
+- UUID validation on `/teacher/courses/[id]/create-class`, `/student/.../problems/[problemId]`, and the deeper `attempts/[attemptId]` route.
+- Drop platform-admin Settings entry from nav + delete the placeholder page.
+- Extend nav-page parity test to cover both `org_admin` and `admin` portals.
+
+**Phase 2 — Ended sessions** (commit `7e34eb2`)
+- `<SessionRow>` extracted from `/teacher/sessions/page.tsx`. Live → `<Link>` to workspace. Ended → plain `<div>` with the same metadata + status badge.
+- `/teacher/sessions/[sessionId]/page.tsx`: server-side status check; non-live renders a "Session ended" notice with a back link.
+- 2 new Vitest cases on the SessionRow.
+
+**Phase 3 — Multi-org context** (commit `79538eb`)
+- `src/lib/portal/org-context.ts`: `parseOrgIdFromSearchParams` + `appendOrgId` (UUID-validated).
+- `src/components/portal/org-switcher.tsx`: native `<select>` reading `?orgId=` directly. Hidden when fewer than 2 options.
+- `src/app/(portal)/org/layout.tsx`: server-side fetches active org_admin memberships, renders the switcher above content.
+- All 6 org pages thread `orgId` through to the API call via `appendOrgId`.
+- `RoleSwitcher` (Task 3.4): composite key `role:orgId` (no React-key dup), `destinationFor()` carries `?orgId=<id>` for org-scoped roles, visual disambiguation when multiple roles of the same type.
+- 15 new Vitest cases across org-context, org-switcher, role-switcher.
+
+**Phase 4 — Container-aware editor breakpoint** (commit `26b5d0b`)
+- `problem-shell.tsx` outer container is now `@container/shell`. All viewport-`lg:` rules became `@3xl/shell:` (768px container width). The breakpoint reacts to actual pane width — sidebar-squeeze bug from review 005 is closed.
+- `responsive-tabs.tsx`: `lg:hidden` → `@3xl/shell:hidden` to follow the same breakpoint.
+- E2E spec rewritten: 1440px wide / 1280×800 desktop / 1024×768 squeezed / 800px narrow. Asserts code-pane bounding box ≥ 360px in wide cases (catches the pre-043 ~120px squeeze that visibility-only checks missed).
+
+**Verification**
+- Vitest: 449 passed / 11 skipped (was 426 — 23 new across phases 2/3/5/6).
+- Go tests: all 14 packages green against `bridge_test`. New tests: 18 in `security_phase1_integration_test.go` covering all touched endpoints + status-transition assertions.
+- TypeScript: clean for new/modified files.
+- E2E: spec rewritten; runtime requires the local stack.
+
+**Plan compliance**
+- Pre-impl Codex review's 2 CRITICAL + 4 IMPORTANT corrections all applied.
+- Post-impl Codex review found 1 CRITICAL + 1 IMPORTANT additional issues, both fixed in-PR (see Code Review section below).
+
+**Out-of-scope (deferred to future plans)**
+- Plan 044: Topic → Syllabus Area taxonomy refactor.
+- Plan 045: My Work navigability redesign.
+- Real platform-admin Settings UI.
+- Multi-tenant cross-org leak audit.
+
+## Code Review
+
+### Review 1 — Pre-implementation plan review (commit `c940c40`)
+
+- **Date:** 2026-04-27
+- **Reviewer:** Codex (via `codex:rescue`)
+- **Verdict:** 2 CRITICAL + 4 IMPORTANT corrections applied — see "Codex Review of This Plan" section above.
+
+### Review 2 — Post-implementation review
+
+- **Date:** 2026-04-27
+- **Reviewer:** Codex (post-implementation, via `codex:rescue`)
+- **Verdict:** 1 CRITICAL + 1 IMPORTANT both fixed in-PR. Several NOTE items confirmed correct without action.
+
+**Fixed in commit applied after Review 2:**
+
+1. `[CRITICAL]` **Pre-invited participants stuck at `invited` status after JoinSession.** `JoinSession` SQL used `ON CONFLICT DO NOTHING RETURNING`, so pre-invited rows (status=`invited`, joined_at=NULL) were never updated when the user actually joined. The teacher's roster never reflected the join. → SQL changed to `ON CONFLICT (session_id, user_id) DO UPDATE SET status='present', joined_at=COALESCE(...) WHERE status='invited' RETURNING ...`. Strengthened `TestJoinSession_PreInvited_Allowed` to assert status flip + joined_at population.
+2. `[IMPORTANT]` **Signup-intent cookie not cleared after read.** `readSignupIntentRole` in `src/lib/auth.ts` parsed the cookie but never deleted it. A stale cookie could corrupt the next signup. → Now calls `cookieStore.delete(SIGNUP_INTENT_COOKIE)` before the parse, wrapped in try/catch since `cookies().delete()` can throw in render-only contexts where setting cookies isn't allowed.
+
+**Codex notes (no action):**
+
+- All Phase 1 P0 gates verified correct: outsider 404 from `CanAccessClass`/`canAccessClass`, `left` rows rejected by the join gate, `AddParticipant` correctly re-invites `left` rows in the store.
+- `GetStudentPage` duplicates rather than reuses `canJoinSession` — logic matches but the helper extraction was rejected because `GetStudentPage` doesn't actually need the session-status check that `canJoinSession` runs first.
+- P2 UUID validation parity confirmed: parent course detail validates, parent class detail validates, no inbound `/admin/settings` links remain.
+- Card primitives all export correctly.
+- `OrgSwitcher` server/client boundary works; `useSearchParams` is fine in client components rendered from server layout.
+- Container query syntax correct for Tailwind v4.

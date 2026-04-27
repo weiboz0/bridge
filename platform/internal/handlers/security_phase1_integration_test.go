@@ -142,7 +142,11 @@ func TestJoinSession_AdminImpersonatingOutsider_Allowed(t *testing.T) {
 	assert.Equal(t, http.StatusOK, code)
 }
 
-// Pre-invited via AddParticipant (status=invited) → should be allowed.
+// Pre-invited via AddParticipant (status=invited) → should be allowed AND
+// the row's status should flip from 'invited' to 'present' with joined_at
+// populated. Codex post-impl review caught that the original ON CONFLICT
+// DO NOTHING left pre-invited rows stuck at 'invited' so the teacher's
+// roster never reflected the actual join.
 func TestJoinSession_PreInvited_Allowed(t *testing.T) {
 	fx := newSessionPageFixture(t, "js-invited")
 	ctx := context.Background()
@@ -151,6 +155,13 @@ func TestJoinSession_PreInvited_Allowed(t *testing.T) {
 
 	code, _ := callJoinSession(t, fx.h, fx.sessionID, &auth.Claims{UserID: fx.outsider.ID})
 	assert.Equal(t, http.StatusOK, code)
+
+	// Status must now be 'present' and joined_at populated.
+	row, err := fx.h.Sessions.GetSessionParticipant(ctx, fx.sessionID, fx.outsider.ID)
+	require.NoError(t, err)
+	require.NotNil(t, row)
+	assert.Equal(t, "present", row.Status, "pre-invited row should flip to present after join")
+	assert.NotNil(t, row.JoinedAt, "joined_at must be set after the join transition")
 }
 
 // status='left' must NOT grant re-entry (Codex correction #2).

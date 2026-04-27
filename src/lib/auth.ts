@@ -28,6 +28,20 @@ async function readSignupIntentRole(): Promise<"teacher" | "student" | null> {
   try {
     const cookieStore = await cookies();
     const raw = cookieStore.get(SIGNUP_INTENT_COOKIE)?.value;
+    // Plan 043 Codex post-impl review: clear the cookie regardless of
+    // outcome. Leaving a stale cookie around can corrupt the next signup's
+    // role intent (a different user on the same browser, or the same user
+    // re-attempting after a failed first round-trip).
+    if (raw) {
+      try {
+        cookieStore.delete(SIGNUP_INTENT_COOKIE);
+      } catch {
+        // cookies().delete() can throw in contexts where setting cookies
+        // isn't allowed (e.g., during a render phase that won't ship a
+        // response). Falling back to a stale cookie is acceptable — the
+        // 5-minute Max-Age caps the blast radius.
+      }
+    }
     if (!raw) return null;
     const parsed = JSON.parse(raw) as { role?: string };
     if (parsed?.role === "teacher" || parsed?.role === "student") {

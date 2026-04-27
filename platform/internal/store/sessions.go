@@ -344,10 +344,20 @@ func (s *SessionStore) EndSession(ctx context.Context, id string) (*LiveSession,
 }
 
 func (s *SessionStore) JoinSession(ctx context.Context, sessionID, studentID string) (*SessionParticipant, error) {
+	// Plan 043 Codex post-impl review: a pre-invited row (status='invited',
+	// joined_at=NULL) was previously left untouched because of
+	// ON CONFLICT DO NOTHING. Now: invited → present and joined_at gets set
+	// so the teacher's roster reflects the actual join. Already-present
+	// rows are left alone (the user is just re-asserting). 'left' rows
+	// remain rejected by the handler-level canJoinSession gate before we
+	// reach this query — they need a fresh invite to come back.
 	return scanParticipant(s.db.QueryRowContext(ctx,
 		`INSERT INTO session_participants (session_id, user_id, status, joined_at)
 		 VALUES ($1, $2, 'present', $3)
-		 ON CONFLICT DO NOTHING
+		 ON CONFLICT (session_id, user_id) DO UPDATE
+		   SET status = 'present',
+		       joined_at = COALESCE(session_participants.joined_at, EXCLUDED.joined_at)
+		   WHERE session_participants.status = 'invited'
 		 RETURNING `+participantColumns,
 		sessionID, studentID, time.Now(),
 	))
