@@ -53,15 +53,21 @@ These are real bugs but each is independent of the auth root cause. Bundle them 
 
 ## Phase 1: Canonical Token Forwarding (P0)
 
-### Task 1.1: `api-client.ts` forwards the token Auth.js actually used
+### Task 1.1a: Extract a shared session-cookie name helper
+
+**Files:**
+- Create: `src/lib/auth-cookie.ts` — a single function `getSessionCookieName()` that returns `"__Secure-authjs.session-token"` when the configured Auth.js URL is HTTPS and `"authjs.session-token"` otherwise. This is the *one* place the cookie name is decided.
+- Modify: `src/lib/auth.ts` — currently calls `NextAuth({...})` inline with no exported `authConfig` and no `cookies` block (see `src/lib/auth.ts:14-124`). Refactor: extract the config object into a named `export const authConfig`, add an explicit `cookies: { sessionToken: { name: getSessionCookieName(), options: { ... } } }` block that consumes the helper. Then call `NextAuth(authConfig)`.
+
+After this task, the Auth.js cookie name is no longer implicit — it's set by our code, derived from one helper, and accessible to other modules as `authConfig.cookies?.sessionToken?.name`.
+
+### Task 1.1b: `api-client.ts` consumes the shared helper
 
 **File:** `src/lib/api-client.ts`
 
-Replace the URL-based cookie preference with a content-aware rule: read both cookie names, pick whichever Auth.js wrote. If both are present, prefer the one whose value decrypts under the current secret (Auth.js only ever writes one). If only one is present, use it.
+Replace the URL-based cookie preference (lines 35-40) with a single read using `getSessionCookieName()`. If that cookie is present, forward its value as the Bearer token. If it is missing but the *other* variant is present (stale jar from prior deployment / scheme), explicitly do NOT forward it — log a dev-mode warning instead. This forces the stale cookie to be cleaned up rather than silently used.
 
-The simplest deterministic rule that works without re-running JWT decrypt: prefer the cookie name that matches the Auth.js URL config, but fall back to the *only* cookie present when the preferred one is missing. This is the existing scheme rule plus an explicit fallback when the preferred cookie isn't there at all.
-
-**Stronger version (preferred):** consult the Auth.js cookie name from its config (`authConfig.cookies?.sessionToken?.name`) so the source of truth is one place, not two.
+Optional fallback for true scheme transitions: if `getSessionCookieName()` returns the secure name but only the non-secure cookie exists, treat it as missing (force re-auth) rather than guessing.
 
 ### Task 1.2: Go middleware trusts the Authorization header exclusively when present
 
@@ -75,15 +81,22 @@ Current behavior: header → fallback to cookie. That's correct in shape. The pr
 
 This change is small but enforces the invariant: *the proxy and direct browser hits use disjoint auth paths*.
 
-### Task 1.3: Logout clears both cookie variants
+### Task 1.3: Logout clears both cookie variants explicitly
 
 **Files:**
-- `src/app/api/auth/[...nextauth]/route.ts` (or wherever Auth.js handlers are wired)
-- New: `src/app/api/auth/logout-cleanup/route.ts` (called from logout flow)
+- Create: `src/app/api/auth/logout-cleanup/route.ts` — POST handler called from the sign-out flow.
+- Modify: `src/components/sign-out-button.tsx` and `src/components/portal/sidebar-footer.tsx` — call `/api/auth/logout-cleanup` before (or alongside) the Auth.js client `signOut()`.
 
-After Auth.js completes signOut, expire both `authjs.session-token` and `__Secure-authjs.session-token` with `Max-Age=0`, `Path=/`, and the `Secure` attribute on the secure variant. Without this, a cookie left over from a previous deployment or scheme persists across sessions and re-injects a stale identity on the next login.
+The cleanup route emits explicit `Set-Cookie` headers for *each* variant matching the original attribute set:
 
-Verify by inspecting `document.cookie` and the network tab after sign out — both names should be gone.
+```
+Set-Cookie: authjs.session-token=; Path=/; Max-Age=0; SameSite=Lax; HttpOnly
+Set-Cookie: __Secure-authjs.session-token=; Path=/; Max-Age=0; SameSite=Lax; HttpOnly; Secure
+```
+
+Codex flagged that `Max-Age=0` only deletes when `Path` and `Domain` match the original. Auth.js v5 sets cookies on `Path=/` with no `Domain` attribute (host-only) — match exactly. Do *not* rely on a single broad `signOut()` call to clear both names; the client signOut only knows about the cookie Auth.js currently uses.
+
+Verify in DevTools after sign out: both names absent from Application → Cookies.
 
 ### Task 1.4: Dev-only auth diagnostic endpoint
 
@@ -124,17 +137,23 @@ The teacher and student session pages combine NextAuth viewer identity with Go s
 
 ### Task 2.1: `GET /api/sessions/:id/teacher-page` Go handler
 
-**File:** `platform/internal/handlers/sessions.go`
+**Files:**
+- Modify: `platform/internal/handlers/sessions.go` — add handler.
+- Modify: `platform/internal/handlers/sessions_test.go` — add tests covering: happy path (teacher), platform admin direct access, platform admin impersonating teacher, platform admin impersonating non-teacher (403), non-teacher 403, missing session 404, no claims 401.
 
-Returns the full payload the teacher page needs (session, class, students, attendance) only if the authenticated claims user is the session teacher (or a platform admin / impersonating). Returns 403 otherwise. Returns 404 if the session doesn't exist.
+Returns the full payload the teacher page needs (session, class, students, attendance) only if the authenticated claims user is the session teacher OR a platform admin. Per `platform/internal/auth/middleware.go:90-105`, an admin who impersonates rewrites claims to the target user and clears `IsPlatformAdmin` — preserve current behavior by treating `claims.ImpersonatedBy != ""` as "the underlying actor was admin, allow."
+
+Returns 403 otherwise. Returns 404 if the session doesn't exist.
 
 The handler is the *single* authorization point. Next.js no longer needs to compare IDs.
 
 ### Task 2.2: `GET /api/sessions/:id/student-page` Go handler
 
-**File:** `platform/internal/handlers/sessions.go`
+**Files:**
+- Modify: `platform/internal/handlers/sessions.go` — add handler.
+- Modify: `platform/internal/handlers/sessions_test.go` — add tests covering: enrolled student happy path, non-enrolled 403, platform admin (and impersonating admin), missing session 404, no claims 401.
 
-Same shape, authorization rule: the user is enrolled in the class associated with the session.
+Authorization rule: the user is enrolled in the class associated with the session, OR is platform admin / impersonating.
 
 ### Task 2.3: Refactor session pages to use the new endpoints
 
@@ -198,11 +217,17 @@ Update assertions about the org-admin nav set. Add a test that no org-admin nav 
 
 ## Phase 5: Regression E2E Tests
 
-### Task 5.1: Role-switch identity test
+### Task 5.1: Role-switch identity test (with explicit cookie seeding)
 
 **File:** `e2e/auth-identity.spec.ts` (new)
 
-Sign in as teacher, verify `/api/me/memberships` returns teacher data. Sign out. Sign in as student, verify `/api/me/memberships` returns student data and contains *no* teacher fields. Sign out. Sign in as admin, verify `/api/auth/session.isPlatformAdmin === true` AND `/api/admin/stats` returns 200.
+Two scenarios, both required:
+
+**5.1a: Sequential sign-in/sign-out.** Sign in as teacher, hit `/api/me/memberships`, sign out (using the new logout-cleanup flow), assert both cookie variants are gone in the browser context. Sign in as student, verify `/api/me/memberships` returns student data and contains no teacher membership rows. Sign out. Sign in as admin, verify `/api/auth/session.isPlatformAdmin === true` AND `/api/admin/stats` returns 200.
+
+**5.1b: Stale cookie seeding (the actual review-002 bug).** Sequential sign-in alone may not reproduce; the original bug requires the stale `__Secure-` cookie to outlive sign-out. Use `browserContext.addCookies([...])` to plant a stale `__Secure-authjs.session-token` from a different user before signing in as the new user. Then verify `/api/me/memberships` returns the *new* user's data, not the planted one. This locks in Task 1.1b's "ignore stale variant when the canonical name has no value" behavior.
+
+The diagnostic endpoint (`/api/auth/debug`) should be polled in the test and asserted `match: true` after each sign-in.
 
 ### Task 5.2: Live session entry test
 
@@ -261,4 +286,24 @@ Plan 040 will pick these up after 039 lands.
 
 ## Codex Review of This Plan
 
-_To be added after the plan is dispatched to Codex via `/codex:rescue`._
+- **Date:** 2026-04-26
+- **Reviewer:** Codex (pre-implementation)
+- **Verdict:** Corrections applied (see below).
+
+### Corrections applied
+
+1. `[CRITICAL]` **Task 1.1 stronger version is not drop-in.** `src/lib/auth.ts:14-124` calls `NextAuth({...})` inline with no exported `authConfig` and no `cookies` block, so `authConfig.cookies?.sessionToken?.name` does not exist today. → Split Task 1.1 into 1.1a (refactor `auth.ts` to extract `authConfig`, add explicit `cookies.sessionToken.name` derived from a new `getSessionCookieName()` helper in `src/lib/auth-cookie.ts`) and 1.1b (api-client consumes the helper).
+
+2. `[IMPORTANT]` **Env-inferred scheme can still pick the stale cookie.** Even with scheme-aware preference, if Auth.js issues `authjs.session-token` on HTTP but a stale `__Secure-` cookie persists, the URL-based selector can return the wrong one. → Task 1.1b now requires picking the cookie name from the shared helper (single source of truth) and explicitly *ignoring* the stale variant rather than falling back to it. A dev-mode warning logs the situation.
+
+3. `[IMPORTANT]` **Logout cleanup must emit explicit `Set-Cookie` per variant.** `Max-Age=0` only deletes when `Path` and `Domain` match the original. Auth.js client `signOut()` only knows about its current cookie. → Task 1.3 expanded with the exact `Set-Cookie` headers per variant (`Path=/`, `HttpOnly`, `SameSite=Lax`, `Secure` on the secure variant) and explicit list of files to wire (`sign-out-button.tsx`, `sidebar-footer.tsx`).
+
+4. `[IMPORTANT]` **Impersonation edge case.** `platform/internal/auth/middleware.go:90-105` clears `IsPlatformAdmin` when impersonation is active and sets `ImpersonatedBy`. New consolidated session endpoints must treat `claims.ImpersonatedBy != ""` as admin-equivalent to preserve current teacher-page access for an admin impersonating. → Task 2.1 / 2.2 now spell this out.
+
+5. `[IMPORTANT]` **Phase 5 sequential sign-in alone may not catch the bug.** The review-002 symptom requires the stale `__Secure-` cookie to outlive sign-out. → Task 5.1 split into 5.1a (sequential sign-in/sign-out) and 5.1b (explicit `addCookies` stale-variant seeding) plus assertions on the new diagnostic endpoint.
+
+6. `[NOTE]` **Test file home not specified.** `platform/internal/handlers/sessions_test.go` already exists (`platform/internal/handlers/sessions_test.go:15-59`). → Tasks 2.1 and 2.2 now name it explicitly with the full test-case list.
+
+### Non-blocking notes
+
+- The review file `docs/reviews/002-comprehensive-site-review-2026-04-26.md` was missing from the branch when Codex reviewed; it has now been added so the plan's "Source" reference resolves.
