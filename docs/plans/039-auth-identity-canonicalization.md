@@ -6,7 +6,7 @@
 
 **Branch:** `feat/039-auth-identity-canonicalization`
 
-**Status:** Draft — awaiting approval
+**Status:** Complete (pending PR review)
 
 ---
 
@@ -307,3 +307,78 @@ Plan 040 will pick these up after 039 lands.
 ### Non-blocking notes
 
 - The review file `docs/reviews/002-comprehensive-site-review-2026-04-26.md` was missing from the branch when Codex reviewed; it has now been added so the plan's "Source" reference resolves.
+
+## Post-Execution Report
+
+**Status:** Complete. All five phases shipped on `feat/039-auth-identity-canonicalization`.
+
+**Phase 1 — Canonical Token Forwarding (commits `9c82b0e`, `5ebe02c`, `87cdc11`)**
+
+- Added `src/lib/auth-cookie.ts` with `getSessionCookieName()` as the single source of truth for the Auth.js session cookie name. Refactored `src/lib/auth.ts` to extract `authConfig` and configure `cookies.sessionToken.name` from the helper.
+- `src/lib/api-client.ts` now forwards only the canonical cookie. If only the stale variant is present, it logs a dev warning and refuses to forward — no silent fallback.
+- `platform/internal/auth/middleware.go` enforces disjoint header/cookie auth paths. Cookie fallback selects exactly one canonical cookie name per scheme; the stale variant is never accepted. Adds 5 new tests covering canonical cookie acceptance per scheme, stale-variant rejection on both schemes, and Authorization-header-beats-cookie precedence.
+- `src/app/api/auth/logout-cleanup/route.ts` emits explicit `Set-Cookie` `Max-Age=0` for both cookie variants with attributes matching Auth.js v5 (`Path=/`, `HttpOnly`, `SameSite=Lax`, `Secure` on the prefixed variant). Wired into `sign-out-button.tsx` and `sidebar-footer.tsx`.
+- `src/app/api/auth/debug/route.ts` reports `nextAuthUserId` / `goClaimsUserId` / cookie names present / canonical name used / stale variant present / scheme / match. Returns 404 in production.
+- `platform/internal/handlers/me.go` adds `GET /api/me/identity` returning the resolved claims (used by the diagnostic).
+- `src/lib/identity-assert.ts` provides `logIdentityMismatch()`; wired into `teacher/sessions/[sessionId]/page.tsx` (since removed by Phase 2's refactor — see below).
+
+**Phase 2 — Consolidate Session-Page Authorization in Go (commit `817cff1`)**
+
+- `GET /api/sessions/{id}/teacher-page` and `/student-page` are the new single authorization points. Both authorize and return the full render payload. `canActAsAdmin()` centralizes the `IsPlatformAdmin || ImpersonatedBy != ""` predicate (preserves admin-while-impersonating equivalence per Codex correction #4).
+- `SessionHandler` now also holds `Topics` and `Courses`. Wiring updated in `platform/cmd/api/main.go`.
+- 13 DB-backed integration tests in `sessions_page_integration_test.go` cover teacher / admin / admin-impersonating / student / outsider / missing / ended / no-claims paths for both endpoints.
+- Next pages rewritten: `teacher/sessions/[sessionId]/page.tsx` and `student/sessions/[sessionId]/page.tsx` now make a single `api()` call, trust Go's 403/404, and removed the local `viewerId` comparison entirely. `identity-assert` is no longer needed in the teacher page because the comparison surface is gone.
+- `admin/page.tsx` renders a defensive error card with status code, retry link, and a hint pointing at `/api/auth/debug` when the failure is 403.
+
+**Phase 3 — Verified Student Join (commit `d236d96`)**
+
+- `join-class-dialog.tsx` now waits for `/api/classes/mine` to confirm the joined class is present before closing. Errors split into 5 actionable messages (server unreachable, join rejected, no class id returned, /mine errored, /mine missing the class).
+- 5 unit tests cover happy path + the explicit "joined but not in /mine" review-002 scenario + 3 failure modes.
+- E2E `e2e/join-class.spec.ts` extended to assert the joined class appears in `/api/classes/mine` AND on the `/student` dashboard without a manual reload.
+
+**Phase 4 — Org-Admin Nav Honesty (commit `05cff6e`)**
+
+- Removed `/teacher/units` and `/teacher/sessions` from `org_admin` nav.
+- `tests/unit/nav-config.test.ts` adds a regression test asserting no portal's nav item links into another portal's basePath. Locks the rule in CI.
+
+**Phase 5 — Regression E2E (commit `fd62e2d`)**
+
+- `e2e/auth-identity.spec.ts` — sequential sign-in/sign-out scenario (5.1a) plus the explicit stale-cookie seeding scenario (5.1b) that reproduces the review-002 root bug.
+- `e2e/teacher-session-entry.spec.ts` — dashboard live-session link must open without 404.
+- `e2e/admin-dashboard.spec.ts` — `/admin` renders the stats grid OR the defensive error card; never blank.
+
+**Verification**
+
+- Vitest: 392 passed / 11 skipped (was 386 / 11 — 6 new tests across logout-cleanup, identity-assert, join-class-dialog, nav-config).
+- Go tests: all 14 packages green against `bridge_test`. Handler integration tests: 28 new (5 cookie tests in middleware + 3 GetIdentity + 2 smoke + 13 DB-backed teacher/student page + 5 ad-hoc).
+- TypeScript: clean for new/modified files. Pre-existing errors in unrelated areas unchanged.
+- E2E: not run in this loop (requires the full local stack); specs added for follow-up validation.
+
+**Out-of-scope (deferred to plan 040)**
+
+Per the original scope statement and the Codex pre-impl review:
+- P1 #6 — registration role intent ignored.
+- P2 #7 — deep-link `callbackUrl` preservation via Next middleware.
+- P2 #8 — org placeholder pages (`/org/teachers`, `/org/students`, `/org/courses`, `/org/classes`, `/org/settings`).
+- P2 #9 — duplicate org membership keys in `/api/orgs` consumers.
+- P2 #10 — parent `/parent/children` redirect.
+- P2 #11 — problem editor responsive fallback.
+- P2 #12 — root layout `<script>` triggers React dev overlay.
+
+**Known issue (not a regression)**
+
+`platform/internal/store/sessions_test.go::TestSessionStore_ListSessions_Filters` queries `Status: "ended"` globally and assumes a clean DB. It fails when run against the dev `bridge` database because of accumulated session rows but passes against the dedicated `bridge_test` DB. Not caused by this plan; flag for separate cleanup.
+
+## Code Review
+
+### Review 1 — Pre-implementation plan review (commit `c180b31`)
+
+- **Date:** 2026-04-26
+- **Reviewer:** Codex (via `codex:rescue`)
+- **Verdict:** Corrections applied (see `## Codex Review of This Plan` section above).
+
+### Review 2 — Post-implementation review
+
+- **Date:** 2026-04-26
+- **Reviewer:** Codex (post-implementation, dispatch pending)
+- **Status:** To be appended after the post-impl Codex review completes.
