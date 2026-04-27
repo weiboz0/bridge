@@ -2,6 +2,7 @@
 
 ## CRITICAL RULES (never skip)
 
+- **Use Claude Opus 4.7 for all coding work.** All implementation — writing code, editing files, refactors, bug fixes, tests — runs on Opus 4.7 (`claude-opus-4-7`, 1M context). Do not delegate code generation to Codex or any other model.
 - **Always create a feature branch** before implementation. Never commit directly to main. Use `git checkout -b feat/NNN-description`.
 - **Always code review** before merging a PR. Write findings to the plan file's `## Code Review` section.
 - **Always write a post-execution report** in the plan file before shipping.
@@ -103,7 +104,7 @@ Follow `docs/code-review.md` for the review process. Key points:
 - Reviews go in the plan file's `## Code Review` section
 - Reviewers: append findings with `[OPEN]` status and file:line references
 - Authors: respond inline with `→ Response:` and `[FIXED]`/`[WONTFIX]`
-- **Use Codex for code review** when available. Dispatch via `/codex:rescue` with a review prompt targeting the branch diff. Codex provides an independent second opinion with access to the full repo context. The Codex review gate (enabled in this project) also triggers automatically at session stop.
+- **Codex is for code review only — never for writing code.** Dispatch via `/codex:rescue` with a review prompt targeting the branch diff to get an independent second opinion. The Codex review gate (enabled in this project) also triggers automatically at session stop. All implementation work stays on Opus 4.7.
 
 ## Multi-Agent Coordination
 
