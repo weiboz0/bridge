@@ -1,12 +1,13 @@
 "use client"
 
 import { useEffect, useState, useCallback } from "react"
-import { useParams, useRouter } from "next/navigation"
+import { useParams, useRouter, notFound } from "next/navigation"
 import Link from "next/link"
 import type { JSONContent } from "@tiptap/react"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { TeachingUnitViewer } from "@/components/editor/tiptap/teaching-unit-viewer"
 import { fetchUnit, fetchUnitDocument, forkUnit, type TeachingUnit } from "@/lib/teaching-units"
+import { isValidUUID } from "@/lib/utils"
 
 type LoadState =
   | { status: "loading" }
@@ -15,6 +16,7 @@ type LoadState =
 
 export default function ViewUnitPage() {
   const { id } = useParams<{ id: string }>()
+  if (!isValidUUID(id)) notFound()
   const router = useRouter()
   const [state, setState] = useState<LoadState>({ status: "loading" })
   const [forking, setForking] = useState(false)

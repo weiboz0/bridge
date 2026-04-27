@@ -47,13 +47,13 @@ export async function getSession(db: Database, sessionId: string) {
   return session || null;
 }
 
-export async function getActiveSession(db: Database, classroomId: string) {
+export async function getActiveSession(db: Database, classId: string) {
   const [session] = await db
     .select()
     .from(sessions)
     .where(
       and(
-        eq(sessions.classId, classroomId),
+        eq(sessions.classId, classId),
         eq(sessions.status, "live")
       )
     );

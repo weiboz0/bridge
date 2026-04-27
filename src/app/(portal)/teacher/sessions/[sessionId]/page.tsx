@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { auth } from "@/lib/auth";
 import { api } from "@/lib/api-client";
+import { isValidUUID } from "@/lib/utils";
 import { db } from "@/lib/db";
 import { getClass, getClassSettings } from "@/lib/classes";
 import { getCourse } from "@/lib/courses";
@@ -89,6 +90,8 @@ export default async function TeacherSessionPage({
   }
 
   const { sessionId } = await params;
+  if (!isValidUUID(sessionId)) notFound();
+
   const pageData = await loadTeacherSessionPageData(
     sessionId,
     session.user.id,

@@ -3,7 +3,7 @@ import { db } from "@/lib/db";
 import { getLinkedChildren } from "@/lib/parent-links";
 import { getActiveSessionForStudent } from "@/lib/attendance";
 import { LiveNowBadge } from "@/components/parent/live-now-badge";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import Link from "next/link";
 import { buttonVariants } from "@/components/ui/button";
 
@@ -35,30 +35,33 @@ export default async function ParentDashboard() {
       ) : (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
           {childrenWithStatus.map((child) => (
-            <Link key={child.userId} href={`/parent/children/${child.userId}`}>
-              <Card className="hover:border-primary transition-colors cursor-pointer">
-                <CardHeader>
-                  <div className="flex items-center justify-between">
-                    <CardTitle className="text-lg">{child.name}</CardTitle>
-                    {child.isLive && <LiveNowBadge />}
-                  </div>
-                  <CardDescription>
-                    {child.classCount} class{child.classCount !== 1 ? "es" : ""}
-                  </CardDescription>
-                </CardHeader>
+            <Card key={child.userId} className="hover:border-primary transition-colors">
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-lg">{child.name}</CardTitle>
+                  {child.isLive && <LiveNowBadge />}
+                </div>
+                <CardDescription>
+                  {child.classCount} class{child.classCount !== 1 ? "es" : ""}
+                </CardDescription>
+              </CardHeader>
+              <CardFooter className="flex gap-2">
+                <Link
+                  href={`/parent/children/${child.userId}`}
+                  className={buttonVariants({ size: "sm", variant: "outline" })}
+                >
+                  View Profile
+                </Link>
                 {child.isLive && (
-                  <CardContent>
-                    <Link
-                      href={`/parent/children/${child.userId}/live`}
-                      className={buttonVariants({ size: "sm", variant: "outline" })}
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      Watch Live
-                    </Link>
-                  </CardContent>
+                  <Link
+                    href={`/parent/children/${child.userId}/live`}
+                    className={buttonVariants({ size: "sm" })}
+                  >
+                    Watch Live
+                  </Link>
                 )}
-              </Card>
-            </Link>
+              </CardFooter>
+            </Card>
           ))}
         </div>
       )}

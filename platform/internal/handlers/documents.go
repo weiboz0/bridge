@@ -24,7 +24,7 @@ func (h *DocumentHandler) Routes(r chi.Router) {
 	})
 }
 
-// ListDocuments handles GET /api/documents?classroomId=&studentId=&sessionId=
+// ListDocuments handles GET /api/documents?classId=&studentId=&sessionId=
 func (h *DocumentHandler) ListDocuments(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {

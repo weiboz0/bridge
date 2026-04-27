@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import { api } from "@/lib/api-client";
+import { isValidUUID } from "@/lib/utils";
 import { parseLessonContent } from "@/lib/lesson-content";
 import { LessonRenderer } from "@/components/lesson/lesson-renderer";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -43,6 +44,7 @@ export default async function StudentClassDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
+  if (!isValidUUID(id)) notFound();
 
   let cls: ClassDetail;
   try {
@@ -69,7 +71,7 @@ export default async function StudentClassDetailPage({
     logAndDefault(api<SessionItem[]>(`/api/sessions/by-class/${id}`), [], "sessions"),
   ]);
 
-  const activeSession = sessions.find((s) => s.status === "live" || s.status === "active");
+  const activeSession = sessions.find((s) => s.status === "live");
 
   const problemsByTopic = new Map<string, ProblemItem[]>();
   await Promise.all(

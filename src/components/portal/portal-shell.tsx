@@ -2,6 +2,7 @@ import { api, ApiError } from "@/lib/api-client";
 import { getPortalConfig } from "@/lib/portal/nav-config";
 import { Sidebar } from "./sidebar";
 import { redirect } from "next/navigation";
+import { headers } from "next/headers";
 import type { PortalRole, UserRole } from "@/lib/portal/types";
 
 interface PortalAccessResponse {
@@ -16,18 +17,29 @@ interface PortalShellProps {
 }
 
 export async function PortalShell({ portalRole, children }: PortalShellProps) {
+  // Capture the current path so we can redirect back after login
+  const hdrs = await headers();
+  const currentPath = hdrs.get("x-invoke-path") || hdrs.get("x-url") || "";
+
+  function loginRedirect(): never {
+    const loginUrl = currentPath
+      ? `/login?callbackUrl=${encodeURIComponent(currentPath)}`
+      : "/login";
+    redirect(loginUrl);
+  }
+
   let data: PortalAccessResponse;
   try {
     data = await api<PortalAccessResponse>("/api/me/portal-access");
   } catch (e) {
     if (e instanceof ApiError && e.status === 401) {
-      redirect("/login");
+      loginRedirect();
     }
     throw e; // surface infrastructure errors
   }
 
   if (!data.authorized) {
-    redirect("/login");
+    loginRedirect();
   }
 
   // Check if user has the required role for this portal

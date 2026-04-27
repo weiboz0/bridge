@@ -30,12 +30,14 @@ export async function api<T = unknown>(
   } = {}
 ): Promise<T> {
   const cookieStore = await cookies();
-  // Auth.js v5 cookie names (try HTTPS first, then HTTP, then v4 fallbacks)
-  const sessionToken =
-    cookieStore.get("__Secure-authjs.session-token")?.value ||
-    cookieStore.get("authjs.session-token")?.value ||
-    cookieStore.get("__Secure-next-auth.session-token")?.value ||
-    cookieStore.get("next-auth.session-token")?.value;
+  // Auth.js v5 picks cookie name based on whether the site is HTTPS.
+  // Match its logic so we always forward the same token Auth.js uses.
+  const isSecure = (process.env.NEXTAUTH_URL || process.env.AUTH_URL || "").startsWith("https");
+  const sessionToken = isSecure
+    ? (cookieStore.get("__Secure-authjs.session-token")?.value ||
+       cookieStore.get("authjs.session-token")?.value)
+    : (cookieStore.get("authjs.session-token")?.value ||
+       cookieStore.get("__Secure-authjs.session-token")?.value);
 
   const impersonateCookie = cookieStore.get("bridge-impersonate")?.value;
 

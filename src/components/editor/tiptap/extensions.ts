@@ -81,8 +81,12 @@ export function teachingUnitExtensions(): AnyExtension[] {
   return [
     StarterKit.configure({
       heading: { levels: [1, 2, 3] },
+      // Disable extensions we register separately with custom config below
+      // to avoid "duplicate extension" warnings
+      link: false,
+      underline: false,
     }),
-    // Inline formatting
+    // Inline formatting (registered explicitly for custom config)
     Underline,
     Link.configure({
       openOnClick: false,

@@ -1,5 +1,8 @@
 import type { NextConfig } from "next";
 
+// TODO(plan-038): ~42 Next.js API route files in src/app/api/ overlap with
+// GO_PROXY_ROUTES below. Each needs contract-parity verification before
+// deletion. This cleanup needs its own migration plan — see docs/plans/038.
 const GO_API_URL = process.env.GO_API_URL || "http://localhost:8002";
 
 // Routes that have been migrated to Go and should be proxied.

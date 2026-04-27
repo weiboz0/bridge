@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import { api } from "@/lib/api-client";
+import { isValidUUID } from "@/lib/utils";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { StartSessionButton } from "@/components/teacher/start-session-button";
 import Link from "next/link";
@@ -37,6 +38,7 @@ export default async function TeacherClassDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
+  if (!isValidUUID(id)) notFound();
 
   let cls: ClassDetail;
   try {
@@ -52,7 +54,7 @@ export default async function TeacherClassDetailPage({
 
   const students = members.filter((m) => m.role === "student");
   const instructors = members.filter((m) => m.role === "instructor" || m.role === "ta");
-  const activeSession = sessions.find((s) => s.status === "active");
+  const activeSession = sessions.find((s) => s.status === "live");
   const pastSessions = sessions.filter((s) => s.status === "ended");
 
   function formatDuration(start: string, end: string | null) {

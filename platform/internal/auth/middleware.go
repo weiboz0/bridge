@@ -60,8 +60,16 @@ func (m *Middleware) RequireAuth(next http.Handler) http.Handler {
 		if authHeader := r.Header.Get("Authorization"); strings.HasPrefix(authHeader, "Bearer ") {
 			tokenStr = strings.TrimPrefix(authHeader, "Bearer ")
 		} else {
-			// Read Auth.js session token from cookies (for proxied requests)
-			for _, name := range []string{CookieNameHTTPS, CookieNameHTTP} {
+			// Read Auth.js session token from cookies (for proxied requests).
+			// Match Auth.js cookie selection: prefer non-secure on HTTP,
+			// prefer secure on HTTPS. This prevents identity mismatch when
+			// both cookies exist in the browser jar.
+			isSecure := r.TLS != nil || strings.HasPrefix(strings.ToLower(r.Header.Get("X-Forwarded-Proto")), "https")
+			cookieOrder := []string{CookieNameHTTP, CookieNameHTTPS}
+			if isSecure {
+				cookieOrder = []string{CookieNameHTTPS, CookieNameHTTP}
+			}
+			for _, name := range cookieOrder {
 				if cookie, err := r.Cookie(name); err == nil && cookie.Value != "" {
 					tokenStr = cookie.Value
 					break
@@ -110,7 +118,12 @@ func (m *Middleware) OptionalAuth(next http.Handler) http.Handler {
 		if authHeader := r.Header.Get("Authorization"); strings.HasPrefix(authHeader, "Bearer ") {
 			tokenStr = strings.TrimPrefix(authHeader, "Bearer ")
 		} else {
-			for _, name := range []string{CookieNameHTTPS, CookieNameHTTP} {
+			isSecure := r.TLS != nil || strings.HasPrefix(strings.ToLower(r.Header.Get("X-Forwarded-Proto")), "https")
+			cookieOrder := []string{CookieNameHTTP, CookieNameHTTPS}
+			if isSecure {
+				cookieOrder = []string{CookieNameHTTPS, CookieNameHTTP}
+			}
+			for _, name := range cookieOrder {
 				if cookie, err := r.Cookie(name); err == nil && cookie.Value != "" {
 					tokenStr = cookie.Value
 					break
