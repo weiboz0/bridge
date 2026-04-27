@@ -388,7 +388,7 @@ Added by Codex post-impl review of 039:
 - **Reviewer:** Codex (post-implementation, via `codex:rescue`)
 - **Verdict:** Three in-PR fixes applied, three follow-ups deferred to plan 040.
 
-**In-PR fixes (committed in `39c9d77`):**
+**In-PR fixes (committed in `c537841`):**
 
 1. `[FIXED]` `[IMPORTANT]` Org-admin teacher-page authorization branch had no integration test coverage. → `sessions_page_integration_test.go` now creates an `org_admin` member of the test org and asserts `TestGetTeacherPage_OrgAdmin` returns 200 with the expected payload.
 2. `[FIXED]` `[IMPORTANT]` Join verification was a single fetch — vulnerable to a stale-replica false-failure. → `join-class-dialog.tsx` now retries `/api/classes/mine` once with a 400ms delay; tests updated to cover both retry-rescue and retry-still-fails paths (6 cases total).
