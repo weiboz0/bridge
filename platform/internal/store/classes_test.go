@@ -89,6 +89,108 @@ func TestClassStore_ListClassesByOrg(t *testing.T) {
 	assert.GreaterOrEqual(t, len(list), 1)
 }
 
+// Plan 041 phase 1.4: ListClassesByOrgWithCounts uses COUNT(*) FILTER
+// per role; a plain double LEFT JOIN would multiply rows and inflate
+// both counts. With 2 instructors and 3 students, a wrong query would
+// surface as 6 + 6. This test locks the per-role aggregation.
+func TestClassStore_ListClassesByOrgWithCounts(t *testing.T) {
+	db := testDB(t)
+	classes := NewClassStore(db)
+	courses := NewCourseStore(db)
+	orgs := NewOrgStore(db)
+	users := NewUserStore(db)
+	ctx := context.Background()
+
+	org := createTestOrg(t, db, orgs, t.Name())
+	creator := createTestUser(t, db, users, t.Name()+"-creator")
+	course, err := courses.CreateCourse(ctx, CreateCourseInput{
+		OrgID: org.ID, CreatedBy: creator.ID, Title: "Counts Course", GradeLevel: "K-5",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { db.ExecContext(ctx, "DELETE FROM courses WHERE id = $1", course.ID) })
+
+	class, err := classes.CreateClass(ctx, CreateClassInput{
+		CourseID: course.ID, OrgID: org.ID, Title: "Counts Class", CreatedBy: creator.ID,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		db.ExecContext(ctx, "DELETE FROM class_memberships WHERE class_id = $1", class.ID)
+		db.ExecContext(ctx, "DELETE FROM class_settings WHERE class_id = $1", class.ID)
+		db.ExecContext(ctx, "DELETE FROM classes WHERE id = $1", class.ID)
+	})
+
+	// CreateClass already added the creator as instructor (+1 instructor).
+	// Add 1 more instructor and 3 students.
+	extraInstructor := createTestUser(t, db, users, t.Name()+"-instr")
+	_, err = classes.AddClassMember(ctx, AddClassMemberInput{
+		ClassID: class.ID, UserID: extraInstructor.ID, Role: "instructor",
+	})
+	require.NoError(t, err)
+	for i := 0; i < 3; i++ {
+		student := createTestUser(t, db, users, t.Name()+"-stu-"+string(rune('a'+i)))
+		_, err = classes.AddClassMember(ctx, AddClassMemberInput{
+			ClassID: class.ID, UserID: student.ID, Role: "student",
+		})
+		require.NoError(t, err)
+	}
+
+	rows, err := classes.ListClassesByOrgWithCounts(ctx, org.ID)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(rows), 1)
+	var got *ClassWithCounts
+	for i := range rows {
+		if rows[i].ID == class.ID {
+			got = &rows[i]
+			break
+		}
+	}
+	require.NotNil(t, got, "test class should appear in the list")
+	assert.Equal(t, 2, got.InstructorCount)
+	assert.Equal(t, 3, got.StudentCount)
+	assert.Equal(t, "Counts Course", got.CourseTitle)
+}
+
+func TestClassStore_ListClassesByOrgWithCounts_EmptyMembership(t *testing.T) {
+	db := testDB(t)
+	classes := NewClassStore(db)
+	courses := NewCourseStore(db)
+	orgs := NewOrgStore(db)
+	users := NewUserStore(db)
+	ctx := context.Background()
+
+	org := createTestOrg(t, db, orgs, t.Name())
+	creator := createTestUser(t, db, users, t.Name()+"-creator")
+	course, err := courses.CreateCourse(ctx, CreateCourseInput{
+		OrgID: org.ID, CreatedBy: creator.ID, Title: "Empty Course", GradeLevel: "K-5",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { db.ExecContext(ctx, "DELETE FROM courses WHERE id = $1", course.ID) })
+
+	class, err := classes.CreateClass(ctx, CreateClassInput{
+		CourseID: course.ID, OrgID: org.ID, Title: "Empty Class", CreatedBy: creator.ID,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		db.ExecContext(ctx, "DELETE FROM class_memberships WHERE class_id = $1", class.ID)
+		db.ExecContext(ctx, "DELETE FROM class_settings WHERE class_id = $1", class.ID)
+		db.ExecContext(ctx, "DELETE FROM classes WHERE id = $1", class.ID)
+	})
+
+	rows, err := classes.ListClassesByOrgWithCounts(ctx, org.ID)
+	require.NoError(t, err)
+	var got *ClassWithCounts
+	for i := range rows {
+		if rows[i].ID == class.ID {
+			got = &rows[i]
+			break
+		}
+	}
+	require.NotNil(t, got)
+	// Creator is added as instructor in CreateClass — no students.
+	assert.Equal(t, 1, got.InstructorCount)
+	assert.Equal(t, 0, got.StudentCount)
+}
+
 func TestClassStore_ArchiveClass(t *testing.T) {
 	db := testDB(t)
 	classes := NewClassStore(db)

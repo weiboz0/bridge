@@ -42,11 +42,16 @@ type OrgDashboardStats struct {
 }
 
 func (s *StatsStore) GetOrgDashboardStats(ctx context.Context, orgID string) (*OrgDashboardStats, error) {
+	// Count distinct users per role so the headline number matches the
+	// row count the /org/teachers and /org/students list pages render.
+	// Plain count(*) inflates the headline whenever a single user has
+	// duplicate (user_id, role, status='active') rows in the same org —
+	// rare but possible after an add/remove/re-add cycle.
 	var stats OrgDashboardStats
 	err := s.db.QueryRowContext(ctx,
 		`SELECT
-			COALESCE((SELECT count(*) FROM org_memberships WHERE org_id = $1 AND role = 'teacher' AND status = 'active'), 0),
-			COALESCE((SELECT count(*) FROM org_memberships WHERE org_id = $1 AND role = 'student' AND status = 'active'), 0),
+			COALESCE((SELECT count(DISTINCT user_id) FROM org_memberships WHERE org_id = $1 AND role = 'teacher' AND status = 'active'), 0),
+			COALESCE((SELECT count(DISTINCT user_id) FROM org_memberships WHERE org_id = $1 AND role = 'student' AND status = 'active'), 0),
 			COALESCE((SELECT count(*) FROM courses WHERE org_id = $1), 0),
 			COALESCE((SELECT count(*) FROM classes WHERE org_id = $1 AND status = 'active'), 0)`,
 		orgID,

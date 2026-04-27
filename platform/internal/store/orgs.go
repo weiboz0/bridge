@@ -302,12 +302,25 @@ func (s *OrgStore) AddOrgMember(ctx context.Context, input AddMemberInput) (*Org
 
 // ListOrgMembers lists all members of an org with user details.
 func (s *OrgStore) ListOrgMembers(ctx context.Context, orgID string) ([]OrgMemberWithUser, error) {
+	// DISTINCT ON keeps one row per (user_id, role) pair — defensive
+	// guard against future schema relaxation (the unique constraint on
+	// (org_id, user_id, role) prevents this today). Plan 041 Codex
+	// post-impl review #9: the ORDER BY MUST prefer active rows so a
+	// stale 'inactive' duplicate doesn't shadow an 'active' one. If
+	// that happened, the list page would omit the user while
+	// StatsStore.GetOrgDashboardStats (which filters status='active'
+	// in the WHERE) would still count them — visible discrepancy
+	// between the dashboard headline and the list rows.
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT om.id, om.org_id, om.user_id, om.role, om.status, om.created_at, u.name, u.email
+		`SELECT DISTINCT ON (om.user_id, om.role)
+		        om.id, om.org_id, om.user_id, om.role, om.status, om.created_at,
+		        u.name, u.email
 		 FROM org_memberships om
 		 INNER JOIN users u ON om.user_id = u.id
 		 WHERE om.org_id = $1
-		 ORDER BY om.created_at`,
+		 ORDER BY om.user_id, om.role,
+		          (om.status = 'active') DESC,
+		          om.created_at`,
 		orgID,
 	)
 	if err != nil {

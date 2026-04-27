@@ -380,6 +380,44 @@ func TestOrgStore_GetUserMemberships(t *testing.T) {
 // DISTINCT ON ensures one row per (orgId, role) — but a user with TWO
 // distinct roles in the same org should still get TWO rows because the
 // pair is unique. Lock both behaviors in tests.
+// Plan 041 phase 1.2: ListOrgMembers DISTINCT ON (user_id, role) is a
+// defensive guard. The schema's unique constraint
+// org_memberships_org_user_role_idx physically prevents duplicate
+// (org_id, user_id, role) rows, so the dedup is currently a no-op —
+// but it documents intent and survives any future schema relaxation.
+// What we CAN test: distinct roles for the same user surface as
+// distinct rows (the pair is unique, no collapse).
+func TestOrgStore_ListOrgMembers_DistinctRolesPreserved(t *testing.T) {
+	db := testDB(t)
+	orgStore := NewOrgStore(db)
+	userStore := NewUserStore(db)
+	ctx := context.Background()
+
+	org := createTestOrg(t, db, orgStore, t.Name())
+	user := createTestUser(t, db, userStore, t.Name())
+
+	_, err := orgStore.AddOrgMember(ctx, AddMemberInput{
+		OrgID: org.ID, UserID: user.ID, Role: "teacher", Status: "active",
+	})
+	require.NoError(t, err)
+	_, err = orgStore.AddOrgMember(ctx, AddMemberInput{
+		OrgID: org.ID, UserID: user.ID, Role: "org_admin", Status: "active",
+	})
+	require.NoError(t, err)
+
+	members, err := orgStore.ListOrgMembers(ctx, org.ID)
+	require.NoError(t, err)
+	roles := map[string]int{}
+	for _, m := range members {
+		if m.UserID == user.ID {
+			roles[m.Role]++
+		}
+	}
+	// Distinct roles → distinct rows.
+	assert.Equal(t, 1, roles["teacher"])
+	assert.Equal(t, 1, roles["org_admin"])
+}
+
 func TestOrgStore_GetUserMemberships_DistinctRolesPreserved(t *testing.T) {
 	db := testDB(t)
 	orgStore := NewOrgStore(db)
