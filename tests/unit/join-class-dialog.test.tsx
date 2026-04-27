@@ -60,13 +60,18 @@ describe("JoinClassDialog", () => {
 
   // The review-002 bug: join "succeeds" but the class isn't visible to the
   // student (auth identity drift). Dialog must stay open with a clear error.
+  // Verification retries once before giving up — both /mine fetches must miss.
   it("keeps dialog open and shows an error when class is not in /mine after join", async () => {
     fetchMock
       .mockResolvedValueOnce(
         new Response(JSON.stringify({ class: JOINED_CLASS }), { status: 200 })
       )
       .mockResolvedValueOnce(
-        // The student's class list does NOT include the joined class.
+        // First /mine fetch: empty.
+        new Response(JSON.stringify([]), { status: 200 })
+      )
+      .mockResolvedValueOnce(
+        // Retried /mine fetch: still empty.
         new Response(JSON.stringify([]), { status: 200 })
       );
 
@@ -79,6 +84,30 @@ describe("JoinClassDialog", () => {
       expect(screen.getByText(/isn't showing up/i)).toBeInTheDocument();
     });
     expect(screen.getByLabelText(/Enter join code/i)).toBeInTheDocument();
+    // Three fetches total: join, /mine, retried /mine.
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  // The retry should rescue a transient race: first /mine misses, second hits.
+  it("retries once and succeeds when first /mine misses but second hits", async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ class: JOINED_CLASS }), { status: 200 })
+      )
+      .mockResolvedValueOnce(new Response(JSON.stringify([]), { status: 200 }))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify([JOINED_CLASS]), { status: 200 })
+      );
+
+    render(<JoinClassDialog />);
+    openDialog();
+    typeCode("ABCD1234");
+    submit();
+
+    await waitFor(() => {
+      expect(screen.queryByLabelText(/Enter join code/i)).not.toBeInTheDocument();
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
   it("surfaces the server error when join itself fails", async () => {
@@ -117,14 +146,13 @@ describe("JoinClassDialog", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("handles a verification fetch that errors", async () => {
+  it("handles a verification fetch that errors on both attempts", async () => {
     fetchMock
       .mockResolvedValueOnce(
         new Response(JSON.stringify({ class: JOINED_CLASS }), { status: 200 })
       )
-      .mockResolvedValueOnce(
-        new Response("server error", { status: 500 })
-      );
+      .mockResolvedValueOnce(new Response("server error", { status: 500 }))
+      .mockResolvedValueOnce(new Response("server error", { status: 500 }));
 
     render(<JoinClassDialog />);
     openDialog();

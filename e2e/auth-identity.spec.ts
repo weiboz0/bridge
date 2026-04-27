@@ -71,9 +71,19 @@ test.describe("Auth identity drift (review 002 regression)", () => {
     const context = await browser.newContext();
 
     // Plant a stale __Secure-authjs.session-token before any sign-in.
-    // The value is opaque garbage — Go middleware would reject it on
-    // decryption, AND the canonical-name policy in api-client should
-    // never forward it because the URL scheme is HTTP on localhost.
+    //
+    // Scope note: the planted value is opaque garbage, not a valid signed
+    // token from a real different user (crafting one requires the dev
+    // AUTH_SECRET and Auth.js's JWE encoder, which the E2E setup doesn't
+    // have wired). The architectural property we lock in here is "the api
+    // client never *forwards* the stale variant when canonical is missing"
+    // — Phase 1's getSessionCookieName + Go's canonical cookie selection
+    // both refuse the planted cookie regardless of its content.
+    //
+    // Stronger version (TODO plan 040): obtain a valid stale token at
+    // setup time, plant that, and assert Go returns the *new* user's
+    // identity rather than the stale-token user. Today's test still
+    // catches the "any leak path" regression.
     await context.addCookies([
       {
         name: "__Secure-authjs.session-token",

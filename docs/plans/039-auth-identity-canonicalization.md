@@ -326,7 +326,7 @@ Plan 040 will pick these up after 039 lands.
 
 - `GET /api/sessions/{id}/teacher-page` and `/student-page` are the new single authorization points. Both authorize and return the full render payload. `canActAsAdmin()` centralizes the `IsPlatformAdmin || ImpersonatedBy != ""` predicate (preserves admin-while-impersonating equivalence per Codex correction #4).
 - `SessionHandler` now also holds `Topics` and `Courses`. Wiring updated in `platform/cmd/api/main.go`.
-- 13 DB-backed integration tests in `sessions_page_integration_test.go` cover teacher / admin / admin-impersonating / student / outsider / missing / ended / no-claims paths for both endpoints.
+- 14 DB-backed integration tests in `sessions_page_integration_test.go` cover teacher / org-admin / platform-admin / admin-impersonating / student / outsider / missing-session / ended-session paths for both endpoints. (No-claims smoke tests live separately in `sessions_test.go::TestGetTeacherPage_NoClaims` and `TestGetStudentPage_NoClaims`.)
 - Next pages rewritten: `teacher/sessions/[sessionId]/page.tsx` and `student/sessions/[sessionId]/page.tsx` now make a single `api()` call, trust Go's 403/404, and removed the local `viewerId` comparison entirely. `identity-assert` is no longer needed in the teacher page because the comparison surface is gone.
 - `admin/page.tsx` renders a defensive error card with status code, retry link, and a hint pointing at `/api/auth/debug` when the failure is 403.
 
@@ -365,6 +365,11 @@ Per the original scope statement and the Codex pre-impl review:
 - P2 #11 — problem editor responsive fallback.
 - P2 #12 — root layout `<script>` triggers React dev overlay.
 
+Added by Codex post-impl review of 039:
+- **`X-Forwarded-Proto` trust hardening.** Go middleware accepts the `__Secure-` cookie whenever any `X-Forwarded-Proto` header starts with `https`. In a misconfigured deploy where the proxy doesn't strip client-supplied headers, an attacker could choose to send the secure-prefixed cookie. Mitigation: only honor `X-Forwarded-Proto` when the request came from a configured trusted proxy. Pre-existing concern, not a 039 regression.
+- **`src/app/(portal)/admin/users/page.tsx:41-42`** still compares `auth()` user id to a Go-loaded user id (display-only self-action gating). Same dual-source pattern 039 removed from session pages — apply consistently.
+- **Stronger stale-cookie E2E** that plants a valid signed JWE for a different user (requires wiring `AUTH_SECRET` + the JWE encoder into the E2E setup). Today's test catches the "any leak path" regression but doesn't simulate a fully valid stale token.
+
 **Known issue (not a regression)**
 
 `platform/internal/store/sessions_test.go::TestSessionStore_ListSessions_Filters` queries `Status: "ended"` globally and assumes a clean DB. It fails when run against the dev `bridge` database because of accumulated session rows but passes against the dedicated `bridge_test` DB. Not caused by this plan; flag for separate cleanup.
@@ -380,5 +385,24 @@ Per the original scope statement and the Codex pre-impl review:
 ### Review 2 — Post-implementation review
 
 - **Date:** 2026-04-26
-- **Reviewer:** Codex (post-implementation, dispatch pending)
-- **Status:** To be appended after the post-impl Codex review completes.
+- **Reviewer:** Codex (post-implementation, via `codex:rescue`)
+- **Verdict:** Three in-PR fixes applied, three follow-ups deferred to plan 040.
+
+**In-PR fixes (committed in `39c9d77`):**
+
+1. `[FIXED]` `[IMPORTANT]` Org-admin teacher-page authorization branch had no integration test coverage. → `sessions_page_integration_test.go` now creates an `org_admin` member of the test org and asserts `TestGetTeacherPage_OrgAdmin` returns 200 with the expected payload.
+2. `[FIXED]` `[IMPORTANT]` Join verification was a single fetch — vulnerable to a stale-replica false-failure. → `join-class-dialog.tsx` now retries `/api/classes/mine` once with a 400ms delay; tests updated to cover both retry-rescue and retry-still-fails paths (6 cases total).
+3. `[FIXED]` `[IMPORTANT]` Post-execution report claimed the integration test file covers no-claims paths; those actually live in the smoke-test file. → Report wording corrected, test-count updated to 14 with the new org-admin case.
+4. `[FIXED]` `[MINOR]` E2E stale-cookie test plants opaque garbage; comment now explicitly documents the test's actual scope (locks "no forwarding" property) vs the ideal (valid stale token, which needs E2E setup wiring deferred to plan 040).
+
+**Deferred to plan 040 (added to "Out-of-scope" above):**
+
+5. `[IMPORTANT]` `X-Forwarded-Proto` trust hardening — Go middleware honors any `https` value, allowing the secure cookie to be selected on a misconfigured proxy. Pre-existing, not a 039 regression. Needs trusted-proxy IP allowlist or proxy stripping of client-supplied headers.
+6. `[MINOR]` `src/app/(portal)/admin/users/page.tsx:41-42` still does NextAuth-vs-Go-loaded-user dual source for display gating. Same pattern 039 removed from session pages — apply consistently in plan 040.
+7. `[FOLLOWUP]` Wire AUTH_SECRET + JWE encoder into E2E setup so the stale-cookie test can plant a real signed token from a different user.
+
+**Codex notes (no action needed):**
+
+- Logout cleanup attributes verified correct against Auth.js v5 defaults.
+- `canActAsAdmin()` scope is narrow — used only in the two read-only page payload endpoints, no security regression.
+- No authorization gap in `GetTeacherPage` / `GetStudentPage` vs the legacy Next-side logic; impersonation semantics preserved.

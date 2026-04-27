@@ -27,6 +27,7 @@ type sessionPageFixture struct {
 	student   *store.RegisteredUser
 	outsider  *store.RegisteredUser
 	admin     *store.RegisteredUser
+	orgAdmin  *store.RegisteredUser
 	orgID     string
 	classID   string
 	sessionID string
@@ -75,6 +76,7 @@ func newSessionPageFixture(t *testing.T, suffix string) *sessionPageFixture {
 	fx.student = mkUser(suffix + "-student")
 	fx.outsider = mkUser(suffix + "-outsider")
 	fx.admin = mkUser(suffix + "-admin")
+	fx.orgAdmin = mkUser(suffix + "-orgadmin")
 
 	org, err := orgs.CreateOrg(ctx, store.CreateOrgInput{
 		Name:         "Org " + suffix,
@@ -96,6 +98,10 @@ func newSessionPageFixture(t *testing.T, suffix string) *sessionPageFixture {
 	require.NoError(t, err)
 	_, err = orgs.AddOrgMember(ctx, store.AddMemberInput{
 		OrgID: org.ID, UserID: fx.student.ID, Role: "student", Status: "active",
+	})
+	require.NoError(t, err)
+	_, err = orgs.AddOrgMember(ctx, store.AddMemberInput{
+		OrgID: org.ID, UserID: fx.orgAdmin.ID, Role: "org_admin", Status: "active",
 	})
 	require.NoError(t, err)
 
@@ -231,6 +237,19 @@ func TestGetTeacherPage_Outsider_Forbidden(t *testing.T) {
 	fx := newSessionPageFixture(t, "tp-outsider")
 	code, _ := fx.callTeacherPage(t, &auth.Claims{UserID: fx.outsider.ID, Email: fx.outsider.Email})
 	assert.Equal(t, http.StatusForbidden, code)
+}
+
+// Org admin for the class's org should see the teacher dashboard (matches
+// the legacy isSessionAuthority semantics in sessions.go). Codex review of
+// 039 flagged this branch as untested — fix.
+func TestGetTeacherPage_OrgAdmin(t *testing.T) {
+	fx := newSessionPageFixture(t, "tp-orgadmin")
+	code, payload := fx.callTeacherPage(t, &auth.Claims{
+		UserID: fx.orgAdmin.ID, Email: fx.orgAdmin.Email, Name: fx.orgAdmin.Name,
+	})
+	require.Equal(t, http.StatusOK, code)
+	require.NotNil(t, payload)
+	assert.Equal(t, fx.sessionID, payload.Session.ID)
 }
 
 func TestGetTeacherPage_MissingSession_404(t *testing.T) {

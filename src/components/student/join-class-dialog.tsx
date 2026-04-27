@@ -60,24 +60,36 @@ export function JoinClassDialog() {
     // Verify the joined class shows up in the student's canonical class list.
     // If it doesn't, the dashboard will lie and "no classes yet" persists —
     // this is the review-002 symptom we're locking out.
-    try {
-      const mineRes = await fetch("/api/classes/mine", { cache: "no-store" });
-      if (!mineRes.ok) {
-        setError("Joined, but couldn't verify your class list. Refresh the page.");
-        setLoading(false);
-        return;
+    //
+    // We retry once after a short delay because the membership write and the
+    // /mine read can race against a stale cache or read replica. A single
+    // retry keeps the UX responsive without burning the user's time on a
+    // genuinely missing membership.
+    let verified = false;
+    let verifyError: string | null = null;
+    for (let attempt = 0; attempt < 2 && !verified; attempt++) {
+      if (attempt > 0) {
+        await new Promise((r) => setTimeout(r, 400));
       }
-      const mine = (await mineRes.json()) as MyClass[];
-      const present = mine.some((c) => c.id === joinedClassId);
-      if (!present) {
-        setError(
-          "Joined, but the class isn't showing up. Sign out and back in if this persists."
-        );
-        setLoading(false);
-        return;
+      try {
+        const mineRes = await fetch("/api/classes/mine", { cache: "no-store" });
+        if (!mineRes.ok) {
+          verifyError = "Joined, but couldn't verify your class list. Refresh the page.";
+          continue;
+        }
+        const mine = (await mineRes.json()) as MyClass[];
+        if (mine.some((c) => c.id === joinedClassId)) {
+          verified = true;
+        } else {
+          verifyError =
+            "Joined, but the class isn't showing up. Sign out and back in if this persists.";
+        }
+      } catch {
+        verifyError = "Joined, but verification failed. Refresh the page.";
       }
-    } catch {
-      setError("Joined, but verification failed. Refresh the page.");
+    }
+    if (!verified) {
+      setError(verifyError ?? "Joined, but verification failed.");
       setLoading(false);
       return;
     }
