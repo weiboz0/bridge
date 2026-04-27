@@ -1,6 +1,10 @@
 import { api, ApiError } from "@/lib/api-client";
 import { OrgSettingsCard, type OrgSettingsData } from "@/components/org/org-settings-card";
 import type { OrgListError } from "@/components/org/org-list-state";
+import {
+  parseOrgIdFromSearchParams,
+  appendOrgId,
+} from "@/lib/portal/org-context";
 
 interface DashboardPayload {
   org: OrgSettingsData;
@@ -10,11 +14,18 @@ interface DashboardPayload {
 // what settings needs to render. Adding a separate /api/org/settings
 // would be a contract-clarity nicety but trivially cheap to add later
 // — the dashboard endpoint already authorizes org_admin.
-export default async function OrgSettingsPage() {
+export default async function OrgSettingsPage({
+  searchParams,
+}: {
+  searchParams?: Promise<{ orgId?: string }>;
+}) {
+  const orgId = parseOrgIdFromSearchParams(await searchParams);
   let org: OrgSettingsData | null = null;
   let error: OrgListError | null = null;
   try {
-    const payload = await api<DashboardPayload>("/api/org/dashboard");
+    const payload = await api<DashboardPayload>(
+      appendOrgId("/api/org/dashboard", orgId)
+    );
     org = payload.org;
   } catch (e) {
     if (e instanceof ApiError) {
