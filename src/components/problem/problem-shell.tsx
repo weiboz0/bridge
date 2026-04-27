@@ -173,10 +173,64 @@ export function ProblemShell({
   // Snapshot of editor code for the New attempt button — read live from Y.Text.
   const liveCode = () => yText?.toString() ?? activeAttempt?.plainText ?? "";
 
+  // Plan 042 narrow-viewport tab state. Default to "code" — user lands
+  // on the editor, the load-bearing pane.
+  const [narrowTab, setNarrowTab] = useState<"problem" | "code" | "io">("code");
+
+  // Plan 042: below the lg breakpoint, only one of the three panes is
+  // visible at a time, switched via a tab bar. Above lg, all three render
+  // side-by-side as before. The state is read only by className flags;
+  // Tailwind's `lg:flex` overrides `hidden` at wide widths so this state
+  // stays dormant on desktop while every pane stays mounted (preserving
+  // Yjs/Monaco state across narrow tab switches).
+  const paneClass = (id: "problem" | "code" | "io") =>
+    narrowTab === id ? "flex" : "hidden lg:flex";
+
   return (
-    <div className="flex h-[calc(100vh-var(--portal-header-height,56px))] overflow-hidden">
+    <div className="flex h-[calc(100vh-var(--portal-header-height,56px))] flex-col overflow-hidden lg:flex-row">
+      {/* Tab bar — narrow viewports only */}
+      <div
+        role="tablist"
+        aria-label="Problem editor sections"
+        className="flex border-b border-zinc-200 bg-white lg:hidden"
+      >
+        {([
+          { id: "problem", label: "Problem" },
+          { id: "code", label: "Code" },
+          { id: "io", label: "I/O" },
+        ] as const).map((tab) => {
+          const active = narrowTab === tab.id;
+          return (
+            <button
+              key={tab.id}
+              role="tab"
+              id={`problem-tab-${tab.id}`}
+              aria-selected={active}
+              aria-controls={`problem-pane-${tab.id}`}
+              onClick={() => setNarrowTab(tab.id)}
+              className={
+                "flex-1 px-4 py-3 text-sm font-medium transition-colors " +
+                (active
+                  ? "border-b-2 border-amber-600 text-zinc-900"
+                  : "text-zinc-500 hover:text-zinc-800")
+              }
+            >
+              {tab.label}
+            </button>
+          );
+        })}
+      </div>
+
       {/* LEFT */}
-      <aside className="flex w-[32%] min-w-[360px] flex-col border-r border-zinc-200 bg-white">
+      <aside
+        role="tabpanel"
+        id="problem-pane-problem"
+        aria-labelledby="problem-tab-problem"
+        className={
+          paneClass("problem") +
+          " w-full lg:w-[32%] lg:min-w-[360px] flex-col border-r border-zinc-200 bg-white"
+        }
+      >
         <SectionLabel action={<Tag tone="zinc">Problem</Tag>}>Problem</SectionLabel>
         <div className="flex-1 overflow-auto">
           <div className="p-5">
@@ -191,7 +245,12 @@ export function ProblemShell({
       </aside>
 
       {/* CENTER */}
-      <section className="flex min-w-0 flex-1 flex-col bg-white">
+      <section
+        role="tabpanel"
+        id="problem-pane-code"
+        aria-labelledby="problem-tab-code"
+        className={paneClass("code") + " min-w-0 flex-1 flex-col bg-white"}
+      >
         <AttemptHeader
           problemId={problem.id}
           attempts={attempts}
@@ -252,7 +311,15 @@ export function ProblemShell({
       </section>
 
       {/* RIGHT */}
-      <aside className="flex w-[28%] min-w-[320px] flex-col border-l border-zinc-200 bg-white">
+      <aside
+        role="tabpanel"
+        id="problem-pane-io"
+        aria-labelledby="problem-tab-io"
+        className={
+          paneClass("io") +
+          " w-full lg:w-[28%] lg:min-w-[320px] flex-col border-l border-zinc-200 bg-white"
+        }
+      >
         <SectionLabel>Inputs</SectionLabel>
         <InputsPanel
           testCases={testCases}

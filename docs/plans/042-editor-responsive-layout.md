@@ -8,7 +8,7 @@
 
 **Branch:** `feat/042-editor-responsive-layout`
 
-**Status:** Draft — awaiting approval
+**Status:** Complete (pending PR review)
 
 ---
 
@@ -224,3 +224,61 @@ One PR. ~4 commits.
 - Yjs provider is owned by `ProblemShell`, lives outside any pane wrapper, and `useYjsProvider` cleanup only fires on unmount/dependency change — visibility doesn't drop the Hocuspocus connection.
 - `lg` (1024px) is a defensible breakpoint; the fixed floors sum to 680px and `xl` would be a comfort upgrade, not a correctness requirement.
 - CLS mitigation already correctly identified (narrow as the static default, `lg:` rules add the wide row back).
+
+## Post-Execution Report
+
+**Status:** Complete. All 3 phases shipped on `feat/042-editor-responsive-layout`.
+
+**Phase 1 — Responsive layout** (commit applied with phase 2/3)
+- `src/components/editor/code-editor.tsx`: ResizeObserver on the editor container watches for 0→non-zero size transitions and calls `editor.layout()`. Robust to any parent visibility scheme (Tailwind, JS state, `display:none`, `visibility:hidden`) and to the hidden-at-mount case Codex pre-impl review #2 flagged. No new prop on `CodeEditor`.
+- `src/components/problem/problem-shell.tsx`:
+  - New `narrowTab` state (`"problem" | "code" | "io"`, default `"code"`).
+  - Outer container switches from row to column flex below `lg` (`flex-col lg:flex-row`).
+  - Inline tab bar with full ARIA tabs pattern (`role="tablist"` / `role="tab"` / `aria-selected` / `aria-controls`, panels with `role="tabpanel"` / `id` / `aria-labelledby`). Visible only at narrow widths (`lg:hidden`). Per Codex correction #4, kept inline rather than extracted.
+  - Each pane wrapped with `paneClass(id)` returning `"flex"` when active narrow OR `"hidden lg:flex"` when not — Tailwind's `lg:flex` overrides `hidden` at wide widths so all three panes render side-by-side on desktop. Pane widths gated to `lg:` (`w-full lg:w-[32%] lg:min-w-[360px]` etc.) so narrow widths use full column width.
+- `tests/unit/problem-shell-responsive.test.tsx`: 4 cases on a self-contained tab-state harness (initial selection, click switch, ARIA wiring, active-pane visibility classes).
+
+**Phase 2 — Visual regression E2E** (commit applied with phase 1/3)
+- `e2e/problem-editor-responsive.spec.ts`:
+  - Wide (1440×900): tab bar hidden, all 3 panes visible.
+  - Boundary (1024×768): all 3 panes visible (lg is inclusive); horizontal overflow assertion.
+  - Narrow (800×1024): tab bar visible, only active pane visible, switching swaps. Non-zero pane bounding box. Horizontal overflow assertion (catches the original review-002 failure mode).
+- Skips when no problem exists in the test data (responsive shape is what's under test, not data).
+
+**Phase 3 — Polish** (commit applied with phase 1/2)
+- ARIA pattern verified — full tabs/tabpanel wiring instead of `aria-pressed` toggles per Codex correction #2.
+- CLS mitigated by Tailwind's natural ordering — narrow is the static default, `lg:` rules add the wide row back. No layout shift on fresh narrow load.
+
+**Verification**
+- Vitest: 422 passed / 11 skipped (was 418 — 4 new responsive cases).
+- Go tests: untouched, pre-existing pass.
+- TypeScript: clean for new/modified files.
+- E2E: spec added; runtime requires the local stack (not run in this loop).
+
+**Plan compliance**
+- `[IMPORTANT]` Codex pre-impl correction #1 (state/visibility mismatch) — replaced `visible: boolean` prop with ResizeObserver inside CodeEditor. No parent contract assumption.
+- `[IMPORTANT]` Codex pre-impl correction #2 (ARIA pattern) — full `role="tablist"` / `role="tab"` / `role="tabpanel"` wiring with `aria-controls` / `aria-labelledby` / `aria-selected`.
+- `[IMPORTANT]` Codex pre-impl correction #3 (Playwright load-bearing) — kept the spec.
+- `[IMPORTANT]` Codex pre-impl correction #4 (horizontal overflow assertion) — added at 800px and 1024px.
+- `[MINOR]` Codex pre-impl correction #5 (inline tab bar) — kept inline in problem-shell.
+- `[MINOR]` Codex pre-impl correction #6 (hidden-at-mount recovery) — same fix as #1 covers it.
+
+**Out-of-scope acknowledgements (queued)**
+- Mobile-first IDE redesign.
+- Persisted tab state across visits.
+- Teacher problem-watch page (separate render path).
+- Drawer/Sheet UI primitive.
+
+## Code Review
+
+### Review 1 — Pre-implementation plan review (commit `74e0d36`)
+
+- **Date:** 2026-04-27
+- **Reviewer:** Codex (via `codex:rescue`)
+- **Verdict:** Corrections applied — see `## Codex Review of This Plan` section above.
+
+### Review 2 — Post-implementation review
+
+- **Date:** 2026-04-27
+- **Reviewer:** Codex (post-implementation, dispatch pending)
+- **Status:** To be appended after the post-impl Codex review completes.
