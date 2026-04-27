@@ -1,18 +1,11 @@
 import { notFound } from "next/navigation";
-import { auth } from "@/lib/auth";
-import { api } from "@/lib/api-client";
+import { api, ApiError } from "@/lib/api-client";
 import { isValidUUID } from "@/lib/utils";
-import { db } from "@/lib/db";
-import { getClass, getClassSettings } from "@/lib/classes";
-import { getCourse } from "@/lib/courses";
-import { listTopicsByCourse } from "@/lib/topics";
-import { listClassMembers } from "@/lib/class-memberships";
 import { TeacherDashboard } from "@/components/session/teacher/teacher-dashboard";
-import { logIdentityMismatch } from "@/lib/identity-assert";
 
 type EditorMode = "python" | "javascript" | "blockly";
 
-interface SessionDetail {
+interface SessionInfo {
   id: string;
   classId: string | null;
   teacherId: string;
@@ -21,71 +14,12 @@ interface SessionDetail {
   inviteExpiresAt?: string | null;
 }
 
-async function loadTeacherSessionPageData(
-  sessionId: string,
-  viewerId: string,
-  isPlatformAdmin: boolean
-) {
-  let liveSession: SessionDetail;
-  try {
-    liveSession = await api<SessionDetail>(`/api/sessions/${sessionId}`);
-  } catch {
-    notFound();
-  }
-
-  if (!liveSession.classId) {
-    if (liveSession.teacherId !== viewerId && !isPlatformAdmin) {
-      logIdentityMismatch("teacher session page (no class)", viewerId, liveSession.teacherId, {
-        sessionId,
-      });
-      notFound();
-    }
-
-    return {
-      liveSession,
-      classId: null,
-      returnPath: "/teacher",
-      editorMode: "python" as EditorMode,
-      courseTopics: [] as Array<{ topicId: string; title: string; lessonContent: unknown }>,
-    };
-  }
-
-  const cls = await getClass(db, liveSession.classId);
-  if (!cls) {
-    notFound();
-  }
-
-  const members = await listClassMembers(db, liveSession.classId);
-  const isInstructor = members.some(
-    (member) =>
-      member.userId === viewerId &&
-      (member.role === "instructor" || member.role === "ta")
-  );
-  if (!isInstructor && !isPlatformAdmin) {
-    logIdentityMismatch("teacher session page (class members)", viewerId, liveSession.teacherId, {
-      sessionId,
-      classId: liveSession.classId,
-      memberRoles: members.filter((m) => m.userId === viewerId).map((m) => m.role),
-    });
-    notFound();
-  }
-
-  const settings = await getClassSettings(db, liveSession.classId);
-  const course = await getCourse(db, cls.courseId);
-  const courseTopics = course ? await listTopicsByCourse(db, course.id) : [];
-
-  return {
-    liveSession,
-    classId: liveSession.classId,
-    returnPath: `/teacher/classes/${liveSession.classId}`,
-    editorMode:
-      (settings?.editorMode as EditorMode | undefined) ?? ("python" as EditorMode),
-    courseTopics: courseTopics.map((topic) => ({
-      topicId: topic.id,
-      title: topic.title,
-      lessonContent: topic.lessonContent,
-    })),
-  };
+interface TeacherPagePayload {
+  session: SessionInfo;
+  classId: string | null;
+  returnPath: string;
+  editorMode: string;
+  courseTopics: Array<{ topicId: string; title: string; lessonContent: string }>;
 }
 
 export default async function TeacherSessionPage({
@@ -93,29 +27,29 @@ export default async function TeacherSessionPage({
 }: {
   params: Promise<{ sessionId: string }>;
 }) {
-  const session = await auth();
-  if (!session?.user?.id) {
-    notFound();
-  }
-
   const { sessionId } = await params;
   if (!isValidUUID(sessionId)) notFound();
 
-  const pageData = await loadTeacherSessionPageData(
-    sessionId,
-    session.user.id,
-    session.user.isPlatformAdmin
-  );
+  let payload: TeacherPagePayload;
+  try {
+    payload = await api<TeacherPagePayload>(`/api/sessions/${sessionId}/teacher-page`);
+  } catch (err) {
+    // Go authorizes; trust its 403/404. We do not compare IDs locally.
+    if (err instanceof ApiError && (err.status === 404 || err.status === 403)) {
+      notFound();
+    }
+    throw err;
+  }
 
   return (
     <TeacherDashboard
       sessionId={sessionId}
-      classId={pageData.classId}
-      returnPath={pageData.returnPath}
-      editorMode={pageData.editorMode}
-      courseTopics={pageData.courseTopics}
-      inviteToken={pageData.liveSession.inviteToken ?? null}
-      inviteExpiresAt={pageData.liveSession.inviteExpiresAt ?? null}
+      classId={payload.classId}
+      returnPath={payload.returnPath}
+      editorMode={(payload.editorMode as EditorMode) ?? "python"}
+      courseTopics={payload.courseTopics}
+      inviteToken={payload.session.inviteToken ?? null}
+      inviteExpiresAt={payload.session.inviteExpiresAt ?? null}
     />
   );
 }

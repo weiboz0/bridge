@@ -86,3 +86,21 @@ func TestToggleBroadcast_NoClaims(t *testing.T) {
 	h.ToggleBroadcast(w, req)
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
 }
+
+func TestGetTeacherPage_NoClaims(t *testing.T) {
+	h := &SessionHandler{}
+	req := httptest.NewRequest(http.MethodGet, "/api/sessions/s1/teacher-page", nil)
+	req = withChiParams(req, map[string]string{"id": "s1"})
+	w := httptest.NewRecorder()
+	h.GetTeacherPage(w, req)
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
+func TestGetStudentPage_NoClaims(t *testing.T) {
+	h := &SessionHandler{}
+	req := httptest.NewRequest(http.MethodGet, "/api/sessions/s1/student-page", nil)
+	req = withChiParams(req, map[string]string{"id": "s1"})
+	w := httptest.NewRecorder()
+	h.GetStudentPage(w, req)
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+}
