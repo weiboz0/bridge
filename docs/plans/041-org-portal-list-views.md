@@ -8,7 +8,7 @@
 
 **Branch:** `feat/041-org-portal-list-views`
 
-**Status:** Draft — awaiting approval
+**Status:** Complete (pending PR review)
 
 ---
 
@@ -206,3 +206,55 @@ Each list view has obvious next-step product work that intentionally does NOT sh
 - Auth helper extraction (Task 1.1) boundary is right for the 5 read endpoints; do NOT broaden to the existing mutation handlers (`ListMembers` allows any org member, `UpdateOrg` enforces org-admin on path IDs with different semantics). Plan already scopes this correctly.
 - Settings reuse of `/api/org/dashboard` (Task 1.5) is acceptable; consider a separate `/api/org/settings` endpoint only if the dashboard handler grows or its stats query becomes slow.
 - Row-click decision (no links yet) confirmed reasonable.
+
+## Post-Execution Report
+
+**Status:** Complete. All 3 phases shipped on `feat/041-org-portal-list-views`.
+
+**Phase 1 — Backend** (commit `52c9a97`)
+- `OrgDashboardHandler.authorizeOrgAdmin(w, r) (orgID, ok)` — extracted helper. Resolves orgId (from query or caller's first org_admin membership) and verifies admin equivalence via `IsPlatformAdmin || ImpersonatedBy != "" || GetUserRolesInOrg has org_admin`. Reused by 4 new endpoints + the dashboard.
+- `GET /api/org/teachers`, `/students`, `/courses`, `/classes` — return projected row shapes.
+- `ClassStore.ListClassesByOrgWithCounts` — single query using `COUNT(*) FILTER (WHERE cm.role = 'X')` per role to avoid the cardinality explosion a plain double LEFT JOIN would produce.
+- `OrgStore.ListOrgMembers` — `DISTINCT ON (user_id, role)` defensive guard. Schema's unique constraint on `(org_id, user_id, role)` already prevents duplicates, but the dedup documents intent and survives schema relaxation.
+- `StatsStore.GetOrgDashboardStats` — `COUNT(DISTINCT user_id)` for teacher/student counts (same defensive reason). Locks the dashboard headline = list-page row count invariant.
+- 11 handler integration cases + 5 store-level dedup/cardinality tests.
+
+**Phase 2 — Pages** (commit applied with phase 3)
+- 5 stateless presentational components in `src/components/org/`: `teachers-list.tsx`, `students-list.tsx`, `courses-list.tsx`, `classes-list.tsx`, `org-settings-card.tsx` plus a shared `org-list-state.tsx` wrapper handling the populated/empty/error decision.
+- 5 thin server-component pages in `src/app/(portal)/org/{teachers,students,courses,classes,settings}/page.tsx`. Each does `await api(...)` and passes `{data, error}` to the subcomponent. Settings reuses `/api/org/dashboard`'s `org` field.
+- 14 Vitest cases on the subcomponents (jsdom). Pages stay thin — no page-level Vitest tests, per Codex correction #5.
+
+**Phase 3 — Polish** (commit applied with phase 2)
+- `tests/unit/nav-config.test.ts` — new test asserting every `org_admin` nav item has a backing page file via `fs.existsSync`. Catches future "added a nav link, forgot the page" mistakes.
+- Empty-state copy reviewed inline in each subcomponent.
+
+**Verification**
+- Vitest: 418 passed / 11 skipped (was 403 — 15 new: 14 component cases + 1 nav-page parity).
+- Go tests: all 14 packages green against `bridge_test`. New tests: 11 org list integration + 5 store-level (3 dedup, 2 cardinality).
+- TypeScript: clean for new/modified files.
+
+**Plan compliance**
+- `[IMPORTANT]` Codex pre-impl correction #3 (stats consistency) — `StatsStore` switched to `COUNT(DISTINCT user_id)` in the same phase that dedupes `ListOrgMembers`.
+- `[IMPORTANT]` Codex pre-impl correction #4 (cardinality) — `ListClassesByOrgWithCounts` uses `COUNT(*) FILTER` per role. Test inserts 2 instructors + 3 students; asserts counts are 2 + 3, not 6 + 6.
+- `[IMPORTANT]` Codex pre-impl correction #5 (testing pattern) — 5 stateless subcomponents extracted up-front; tests target them, not the async server pages.
+- `[MINOR]` Codex pre-impl correction #1 — additional deferrals (`UpdateMemberRole`, `UpdateMemberStatus`) explicitly noted in the out-of-scope section.
+
+**Out-of-scope (acknowledged in plan)**
+- Edit affordances (member invites, role changes, status changes, org metadata edits)
+- Detail pages (row links go nowhere)
+- Pagination + search (defer until a real org demands it)
+- Pending invitations view (needs schema + email plumbing — separate plan)
+
+## Code Review
+
+### Review 1 — Pre-implementation plan review (commit `10932da`)
+
+- **Date:** 2026-04-27
+- **Reviewer:** Codex (via `codex:rescue`)
+- **Verdict:** Corrections applied — see `## Codex Review of This Plan` section above.
+
+### Review 2 — Post-implementation review
+
+- **Date:** 2026-04-27
+- **Reviewer:** Codex (post-implementation, dispatch pending)
+- **Status:** To be appended after the post-impl Codex review completes.

@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { portalConfigs, getPortalConfig } from "@/lib/portal/nav-config";
 
 describe("nav-config", () => {
@@ -17,6 +19,20 @@ describe("nav-config", () => {
   it("parent nav has Dashboard only", () => {
     expect(portalConfigs.parent.navItems).toHaveLength(1);
     expect(portalConfigs.parent.navItems[0].href).toBe("/parent");
+  });
+
+  // Plan 041 phase 3.1: every org_admin nav entry must have a backing
+  // page file. Catches the "added a nav link, forgot the page" mistake.
+  it("every org_admin nav item has a matching page file", () => {
+    const repoRoot = path.resolve(__dirname, "..", "..");
+    for (const item of portalConfigs.org_admin.navItems) {
+      const relPath = item.href.replace(/^\//, "");
+      const pagePath = path.join(repoRoot, "src", "app", "(portal)", relPath, "page.tsx");
+      expect(
+        fs.existsSync(pagePath),
+        `org_admin nav item "${item.label}" → ${item.href} has no page file at ${pagePath}`
+      ).toBe(true);
+    }
   });
 
   it("every nav item has a valid href starting with /", () => {
