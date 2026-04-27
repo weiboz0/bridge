@@ -56,27 +56,53 @@ These two findings are pre-039 bugs that the auth identity work didn't touch. Tr
   - Reject with 404 (not 403, to avoid leaking class existence) otherwise.
 - Reuse the existing `isSessionAuthority` helper pattern from `platform/internal/handlers/sessions.go` if it can be generalized; otherwise add a `canAccessClass(ctx, classID, claims)` helper to `classes.go` that returns the same shape.
 
-### Task 1.2: `JoinSession` requires class membership OR a valid invite
+### Task 1.2: `JoinSession` requires class membership OR a valid pre-invitation
 
 **Files:**
 - Modify: `platform/internal/handlers/sessions.go::JoinSession` (lines 296-319). Before adding the participant, verify access:
   - Allow admin equivalence as above.
   - Allow if the caller has class membership for the session's owning class.
-  - Allow if the caller is already in `session_participants` (pre-invited by the teacher via `AddParticipant` or by token).
+  - Allow if the caller has a `session_participants` row with status `invited` or `present` (pre-invited by the teacher via `AddParticipant`). **Status `left` does NOT grant re-entry** — a kicked or left student must be re-invited (Codex review correction #2).
   - Reject with 403 otherwise.
 - The token-based join path (`JoinSessionByToken`) already validates the token — leave that path unchanged.
 
-### Task 1.3: Tests for both endpoints
+### Task 1.2b: `GetStudentPage` must also honor pre-invitations
+
+**File:** `platform/internal/handlers/sessions.go::GetStudentPage` (lines 1129-1149 currently).
+
+Codex review correction #2 (second part): the student session page calls `/student-page` BEFORE running `/join`. Today `GetStudentPage` only authorizes `teacher | admin | impersonating | class member`. A pre-invited non-class-member (e.g., a parent or a guest) gets a 403 from `/student-page` and never reaches the join POST. Add the same `invited|present` participant gate to `GetStudentPage` so pre-invited users can actually load the page.
+
+### Task 1.3: Class-adjacent session endpoints must also gate on membership
+
+Codex review correction #7 (CRITICAL — adjacent scope gap): `ListByClass`, `GetActiveByClass`, and `GetSessionTopics` (`platform/internal/handlers/sessions.go:189-221, 528-541`) check that claims are present but not that the caller is enrolled in the class. A direct API caller can enumerate sessions / read topic lists for any class by ID. Fix in the same phase:
 
 **Files:**
-- Modify: existing `platform/internal/handlers/classes_test.go` and `sessions_test.go` (or create integration tests if they don't exist there). Cover:
-  - Member can read class / join session (happy path).
+- Modify: `platform/internal/handlers/sessions.go::ListByClass` — verify caller is admin equivalent OR has class membership for the path's `classId`. Reject with 404 (consistent with `GetClass`).
+- Modify: `platform/internal/handlers/sessions.go::GetActiveByClass` — same gate.
+- Modify: `platform/internal/handlers/sessions.go::GetSessionTopics` — same gate, but resolve the class via `session.ClassID` first since the path is `/sessions/{id}/topics`.
+
+Reuse the helper added in Task 1.1 (`canAccessClass(ctx, classID, claims)`).
+
+### Task 1.4: Tests for all touched endpoints
+
+**Files:**
+- Modify: existing `platform/internal/handlers/classes_test.go` and `sessions_test.go` (or create integration tests if they don't exist there). Cover for each touched endpoint (GetClass, JoinSession, GetStudentPage, ListByClass, GetActiveByClass, GetSessionTopics):
+  - Member can read / join (happy path).
   - Non-member outside the org → 404 / 403 respectively.
   - Org admin → allowed.
   - Platform admin → allowed.
   - Admin impersonating a non-member → allowed (admin equivalence).
-  - Pre-invited participant → join allowed.
-  - Random user with the session ID → 403.
+  - Pre-invited participant (`invited` status) → JoinSession + GetStudentPage allowed.
+  - Participant with `left` status → JoinSession rejected (must be re-invited).
+  - Random user with the session/class ID → 403.
+
+### Task 1.5: Verify join-API response shape
+
+Codex review correction #8 (IMPORTANT): `JoinClassDialog` reads `result.class.id`. Confirm `/api/classes/join` returns `{ class: { id, ... }, ... }` after Phase 1's GetClass change doesn't accidentally alter the join handler's response. Smoke test: render the dialog with a mocked join response missing `class.id` and assert the dialog's "didn't return a class" branch fires (already covered by `tests/unit/join-class-dialog.test.tsx` per plan 040 phase 4 — re-run to confirm).
+
+### Phase 1 extraction gate
+
+If Phase 1 grows beyond `platform/internal/handlers/`, `platform/internal/store/`, and the corresponding `_test.go` files — for example, if it requires schema changes to `session_participants` to add a `pending_invitation` table, or surfaces another unprotected endpoint that needs a separate plan — extract Phase 1 to a fast-shipping plan 043a and ship the rest of 043 in a follow-up PR.
 
 ---
 
@@ -90,11 +116,13 @@ Per teacher review P1: every session in `/teacher/sessions` links to `/teacher/s
 
 For ended sessions, render a non-link row (just text + status badge) instead of a `<Link>`. Keeps the listing honest without inventing a new surface. A "View summary" affordance is queued for a future product cycle when ended-session review UI is designed.
 
-### Task 2.2: Server-side guard on the page itself
+### Task 2.2: Server-side guard on the teacher page
 
 **File:** `src/app/(portal)/teacher/sessions/[sessionId]/page.tsx`.
 
 Read the session status from the page-payload endpoint. If `status !== "live"`, render a "Session ended" notice with a back link to `/teacher/sessions` instead of the workspace. Guards against bookmarks and direct URL access, not just the listing-page link.
+
+**Note (Codex correction #3):** the student route already handles this correctly — `GetStudentPage` returns 404 for non-live sessions and the server component maps the ApiError to `notFound()` (`platform/internal/handlers/sessions.go:1129-1131`, `src/app/(portal)/student/sessions/[sessionId]/page.tsx:23-30`). Only the teacher route needs the explicit notice.
 
 ### Task 2.3: Tests
 
@@ -111,7 +139,7 @@ The fix has two parts: backend pages that pass an explicit `orgId`, and a UI sel
 
 **Files:**
 - Create: `src/lib/portal/org-context.ts` — pure helpers `parseOrgIdFromSearchParams(sp)` and `appendOrgId(path, orgId)`.
-- Create: `src/components/portal/org-switcher.tsx` — client dropdown listing the user's active `org_admin` memberships. Pushes `?orgId=<new>` to current pathname; preserves other query params; keys by `orgId`.
+- Create: `src/components/portal/org-switcher.tsx` — client component using the existing **`Select`** primitive at `src/components/ui/select.tsx` (Codex correction #4 — reuse, don't rebuild). Lists the user's active `org_admin` memberships; pushes `?orgId=<new>` to the current pathname; preserves other query params; keys options by `orgId`.
 
 ### Task 3.2: Pass orgId through every org page
 
@@ -142,9 +170,11 @@ The fix has two parts: backend pages that pass an explicit `orgId`, and a UI sel
 
 **File:** `src/components/problem/problem-shell.tsx`.
 
-Wrap the shell's outer flex in a `@container/shell`. Replace `lg:flex-row`, `lg:hidden`, `lg:flex`, `lg:w-[…]`, etc. with the container-query equivalents (`@5xl/shell:flex-row`, `@5xl/shell:hidden`, etc.). Container queries use the parent container's width, not the viewport — so the sidebar's 56-224px is automatically excluded.
+Wrap the shell's outer flex in a `@container/shell`. Replace `lg:flex-row`, `lg:hidden`, `lg:flex`, `lg:w-[…]`, etc. with the container-query equivalents.
 
-If `@container` queries don't fit the project's Tailwind setup, fall back to a `ResizeObserver` on the shell that toggles a `data-narrow="true"` attribute, with CSS keyed off that attribute.
+**Breakpoint correction (Codex review #5):** the original draft used `@5xl/shell` (1024px container width). In the sidebar-squeezed scenario the container starts at ~800px (1024 viewport − 224 sidebar) and never reaches 1024px, so wide layout would never trigger. Use **`@4xl/shell` (896px)** or **`@3xl/shell` (768px)** as the wide breakpoint instead — pick during implementation based on what produces a usable code pane. The min-w floors (360 + 320 = 680) plus a 200px editor minimum suggests `@3xl`/768px is the right floor; the editor gets ~88px above the floor at 768px container, which is tight but real.
+
+Tailwind v4's native `@container` queries are confirmed available (`package.json` has `"tailwindcss": "^4.x"`). No fallback needed.
 
 ### Task 4.2: Update the responsive E2E
 
@@ -158,29 +188,30 @@ If `@container` queries don't fit the project's Tailwind setup, fall back to a `
 
 ## Phase 5: Google OAuth Invite + Role Carry-Through (review 005 P1)
 
-Approach: pass invite + role through Google's `callbackUrl` to a new `/post-oauth` server-component route that updates the user's `intendedRole` and redirects to the right destination.
+**Approach revision (Codex correction #6):** the original draft created a `/post-oauth` redirect page. Cleaner: extend the existing Auth.js `signIn` callback (`src/lib/auth.ts:90-131`) which already creates the OAuth user. The challenge — the callback runs server-side without `searchParams` access — is solved with a short-lived signed cookie set by the register page before the OAuth redirect, then read in the callback when the user is created.
 
-### Task 5.1: Pass intent through Google `callbackUrl`
+### Task 5.1: Set a signup-intent cookie before Google redirect
 
 **File:** `src/app/(auth)/register/page.tsx`.
 
-Replace the static `signIn("google", { callbackUrl: "/" })` with a dynamic callback that includes invite + role:
+Before calling `signIn("google", ...)`, set an httpOnly cookie `bridge-signup-intent` with `{ role, inviteCode? }` JSON via a small server action (or a fetch to `POST /api/auth/signup-intent`). Sets `Max-Age=300` (5 min — long enough for the OAuth round-trip, short enough that stale state doesn't pollute the next signup). The Google `callbackUrl` is set to `/student?invite=<code>` when invite is present, else `/`.
 
-```tsx
-const oauthCallback = inviteCode
-  ? `/post-oauth?invite=${encodeURIComponent(inviteCode)}&role=${role}`
-  : `/post-oauth?role=${role}`;
-```
+**File:** `src/app/api/auth/signup-intent/route.ts` (new).
 
-### Task 5.2: `/post-oauth` route
+POST handler that accepts `{ role: "teacher" | "student", inviteCode?: string }` and writes the cookie. Reject any other shape.
 
-**File:** `src/app/post-oauth/page.tsx` (new).
+### Task 5.2: Read the cookie in the `signIn` callback
 
-Server component. Reads `searchParams`, calls `auth()`, looks up the current user via Drizzle. If `intendedRole` is null AND `searchParams.role` is `"teacher"` or `"student"`, write it. Then `redirect()` to either `/student?invite=<code>` or `/`.
+**File:** `src/lib/auth.ts` (lines 90-131 — the existing Google `signIn` callback that creates the OAuth user).
+
+When creating a new OAuth user, read `bridge-signup-intent` from `cookies()`, parse it, and pass `intendedRole` to the user insert. Clear the cookie afterward (set Max-Age=0 in the response). Existing users (re-signing in) ignore the cookie — no overwrite.
+
+The `intendedRole` column already exists in `src/lib/db/schema.ts:129-139` (added in plan 040 migration 0021).
 
 ### Task 5.3: Tests
 
-- Vitest integration test for the post-oauth route logic: pre-existing user with no intent + `role=student` query → user updated. Pre-existing user with intent already set → no-op. Invalid role → no-op.
+- Vitest integration test for `POST /api/auth/signup-intent`: valid body sets the cookie; invalid body rejected.
+- Vitest test for the signIn-callback path: mock cookie read returning `{role:"student",inviteCode:"ABC"}`, create OAuth user, assert the user row has `intendedRole=student`. Existing user (lookup hits) doesn't get overwritten.
 - Manual verification gate: actual Google OAuth flow requires real credentials and is out of automated test scope.
 
 ---
@@ -224,16 +255,16 @@ Bundled into Task 4.2.
 
 | Phase | Tasks | Why |
 |-------|-------|-----|
-| 1 | 1.1 → 1.2 → 1.3 | **Urgent security.** Ship first; if it grows, extract to 043a and split. |
+| 1 | 1.1 → 1.2 → 1.2b → 1.3 → 1.4 → 1.5 | **Urgent security.** Ship first. Extraction gate documented in Task 1.5. |
+| 5 | 5.1 → 5.2 → 5.3 | OAuth — small, independent, security-adjacent (Codex correction #7 — moved earlier). |
 | 6 | 6.1 → 6.2 → 6.3 → 6.4 | Tiny isolated fixes; pair with the Phase 1 nav-config touch. |
 | 2 | 2.1 → 2.2 → 2.3 | Ended-session split — independent. |
 | 3 | 3.1 → 3.2 → 3.3 → 3.4 → 3.5 | Multi-org context — independent. |
 | 4 | 4.1 → 4.2 | Container-query shape — pairs E2E with the layout change. |
-| 5 | 5.1 → 5.2 → 5.3 | OAuth flow — independent. |
 
-One PR. ~10-12 commits.
+One PR. ~12-14 commits.
 
-**Extraction gate after Phase 1:** if security fixes turned out non-trivial, the rest of 043 ships in a follow-up PR.
+**Extraction gate after Phase 1:** see Task 1.5 — concrete threshold defined.
 
 ---
 
@@ -262,4 +293,25 @@ Per the three reviews + consequential follow-ups:
 
 ## Codex Review of This Plan
 
-_To be added after the plan is dispatched to Codex via `/codex:rescue`._
+- **Date:** 2026-04-27
+- **Reviewer:** Codex (pre-implementation, via `codex:rescue`)
+- **Verdict:** Two `[CRITICAL]` + four `[IMPORTANT]` corrections applied.
+
+### Corrections applied
+
+1. `[CRITICAL]` **Class-adjacent endpoints unprotected.** `ListByClass`, `GetActiveByClass`, `GetSessionTopics` only check claims, not class membership — direct API callers can enumerate sessions/topics by class ID. → New Task 1.3 covers all three with the same `canAccessClass` gate as Phase 1.1.
+2. `[CRITICAL]` **`session_participants` status filter under-specified.** Original draft said "already in session_participants" — but `left` participants must NOT get re-entry. Pre-invited non-class-members also can't load `/student-page` because it doesn't honor `invited` status. → Task 1.2 tightened to `invited|present` only; new Task 1.2b extends `GetStudentPage` with the same gate.
+3. `[IMPORTANT]` **Phase 4 container breakpoint wrong.** Original `@5xl/shell` (1024px container) never triggers in the sidebar-squeezed scenario where the container starts at ~800px. → Task 4.1 now specifies `@3xl/shell` (768px) or `@4xl/shell` (896px), picked at implementation time based on usable code-pane width.
+4. `[IMPORTANT]` **Phase 5 OAuth shape.** Original `/post-oauth` redirect page was clunky — Auth.js already has a `signIn` callback that creates OAuth users. → Task 5 reshaped: set a short-lived signed cookie before Google redirect, read it in the existing `signIn` callback, write `intendedRole` directly. No new redirect page.
+5. `[IMPORTANT]` **OrgSwitcher should reuse the existing `Select` primitive** at `src/components/ui/select.tsx`. → Task 3.1 updated to use it.
+6. `[IMPORTANT]` **Implementation order: Phase 5 should come right after Phase 1.** Small, independent, security-adjacent. → Order updated.
+7. `[NOTE]` **Task 1.5 added** to verify `/api/classes/join` response shape doesn't break the dialog UX after `GetClass` changes.
+8. `[NOTE]` **Phase 1 extraction gate threshold made concrete:** split if Phase 1 grows beyond `platform/internal/handlers/`, `platform/internal/store/`, and corresponding `_test.go` files.
+
+### Codex notes (no plan change)
+
+- `GetClass` returning 404 (vs. `GetCourse`'s 403) is consistent with `GetSession`. The inconsistency with `GetCourse` is documented but not fixed in this plan — it's existing tech debt across handlers.
+- Student session route already handles ended sessions correctly (`GetStudentPage` returns 404, server component maps to `notFound()`). Phase 2.2 only needs the teacher-side fix.
+- `searchParams: Promise<{ orgId?: string }>` is the correct Next.js 16 App Router pattern.
+- Role-switcher composite key `${role}:${orgId}` is safe — schema guarantees `orgId` is non-null for org-scoped roles.
+- Tailwind v4 native `@container` queries confirmed available in this project.
