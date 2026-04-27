@@ -73,6 +73,28 @@ openssl rand -base64 32
 
 Add it to `.env` as `NEXTAUTH_SECRET`.
 
+## Trusted Reverse-Proxy Configuration
+
+The Go backend chooses between the secure (`__Secure-authjs.session-token`)
+and non-secure (`authjs.session-token`) Auth.js session cookies based on the
+request scheme. For requests that arrive over HTTPS, that scheme is taken
+from `r.TLS` (direct hits) or the `X-Forwarded-Proto` header (proxied hits).
+
+To prevent an unauthenticated client from spoofing `X-Forwarded-Proto: https`
+and steering us to read the wrong (potentially stale) cookie variant, the
+header is ONLY honored when the request's immediate peer is in the
+`TRUSTED_PROXY_CIDRS` allowlist.
+
+- **Local dev**: leave `TRUSTED_PROXY_CIDRS` empty. Direct hits to Go on
+  HTTP rely on `r.TLS == nil` and read the non-secure cookie name.
+- **Production**: set `TRUSTED_PROXY_CIDRS` to the load balancer / ingress
+  CIDR range (e.g. `10.0.0.0/8,fd00::/8`).
+
+> **Operational requirement (do not skip):** the configured ingress proxy
+> MUST strip any client-supplied `X-Forwarded-Proto` header before
+> forwarding. Allowlist + stripping are required together — without
+> stripping, an attacker behind the proxy can still inject scheme metadata.
+
 ## Running Tests
 
 Tests use a separate `bridge_test` database that is cleaned between each test.
