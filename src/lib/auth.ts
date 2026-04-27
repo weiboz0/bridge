@@ -1,6 +1,7 @@
 import NextAuth, { type NextAuthConfig } from "next-auth";
 import Google from "next-auth/providers/google";
 import Credentials from "next-auth/providers/credentials";
+import { cookies } from "next/headers";
 import { db } from "@/lib/db";
 import { users, authProviders } from "@/lib/db/schema";
 import { eq, and } from "drizzle-orm";
@@ -11,6 +12,32 @@ const loginSchema = z.object({
   email: z.string().email(),
   password: z.string().min(8),
 });
+
+const SIGNUP_INTENT_COOKIE = "bridge-signup-intent";
+
+/**
+ * Plan 043 phase 5: reads + clears the signup-intent cookie set by the
+ * register page before a Google OAuth redirect. Returns the role the
+ * user picked, or null if no valid cookie is present.
+ *
+ * Called only from the OAuth signIn callback when creating a brand-new
+ * user, so a stale cookie can't accidentally overwrite an existing
+ * user's intendedRole.
+ */
+async function readSignupIntentRole(): Promise<"teacher" | "student" | null> {
+  try {
+    const cookieStore = await cookies();
+    const raw = cookieStore.get(SIGNUP_INTENT_COOKIE)?.value;
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { role?: string };
+    if (parsed?.role === "teacher" || parsed?.role === "student") {
+      return parsed.role;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
 
 export const authConfig = {
   providers: [
@@ -99,13 +126,19 @@ export const authConfig = {
         if (existing) {
           userId = existing.id;
         } else {
-          // New user — no role assigned, just create account
+          // Plan 043 phase 5: read the signup-intent cookie set by
+          // /register before the Google round-trip, so a new OAuth user
+          // gets the same intendedRole they picked on the form.
+          // Existing users re-signing in are not touched.
+          const intendedRole = await readSignupIntentRole();
+
           const [newUser] = await db
             .insert(users)
             .values({
               name: user.name || "Unknown",
               email: user.email,
               avatarUrl: user.image,
+              intendedRole,
             })
             .returning();
           userId = newUser.id;
