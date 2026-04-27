@@ -146,6 +146,20 @@ describe("JoinClassDialog", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("surfaces a network error if fetch itself rejects", async () => {
+    fetchMock.mockRejectedValueOnce(new Error("network down"));
+
+    render(<JoinClassDialog />);
+    openDialog();
+    typeCode("ABCD1234");
+    submit();
+
+    await waitFor(() => {
+      expect(screen.getByText(/Couldn.t reach the server/i)).toBeInTheDocument();
+    });
+    expect(screen.getByLabelText(/Enter join code/i)).toBeInTheDocument();
+  });
+
   it("handles a verification fetch that errors on both attempts", async () => {
     fetchMock
       .mockResolvedValueOnce(

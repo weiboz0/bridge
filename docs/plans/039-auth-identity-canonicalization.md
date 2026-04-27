@@ -406,3 +406,25 @@ Added by Codex post-impl review of 039:
 - Logout cleanup attributes verified correct against Auth.js v5 defaults.
 - `canActAsAdmin()` scope is narrow — used only in the two read-only page payload endpoints, no security regression.
 - No authorization gap in `GetTeacherPage` / `GetStudentPage` vs the legacy Next-side logic; impersonation semantics preserved.
+
+### Review 3 — Final code review pass
+
+- **Date:** 2026-04-26
+- **Reviewer:** Codex (final pass on the post-fix state, via `codex:rescue`)
+- **Verdict:** No `[CRITICAL]` or `[IMPORTANT]` findings. Two `[MINOR]` doc/hygiene items + one `[NOTE]` test gap fixed; one `[NOTE]` (unmount guard) accepted as React 18+ no-op.
+
+**Confirmed correct:**
+
+- `TestGetTeacherPage_OrgAdmin` actually exercises the org-admin branch in `GetTeacherPage` (org-admin user has no class membership and no instructor role, so the earlier checks fail and execution reaches the org-role block).
+- Join dialog retry control flow handles null `joinedClassId`, both miss/hit retry outcomes, and join failure paths cleanly.
+- All three deferrals to plan 040 are safe: header-auth is the exclusive proxy path so XFP only affects cookie fallback (not the canonicalization boundary); admin/users dual-source is display-only gating; valid signed stale-token rejection is already covered by `middleware_test.go::TestRequireAuth_StaleCookieVariant_*`.
+
+**Fixed in commits below:**
+
+1. `[FIXED]` `[MINOR]` `e2e/auth-identity.spec.ts:83-86` comment overclaimed the test catches "any stale-token leak path." → Rewritten to scope precisely to "the stale-variant cookie is never forwarded or accepted" and cite the Go middleware tests that cover valid-token rejection.
+2. `[FIXED]` `[MINOR]` `e2e/teacher-session-entry.spec.ts:33-38` only checked absence of "404|not found" text — a blank page or unrelated error would silently pass. → Added `data-testid="teacher-dashboard"` to `TeacherDashboard` root and assert it's visible after navigation.
+3. `[FIXED]` `[NOTE]` `tests/unit/join-class-dialog.test.tsx` did not cover the network-exception path. → Added a 7th case asserting the "Couldn't reach the server" branch when `fetch` rejects.
+
+**Accepted without action:**
+
+- `[NOTE]` `src/components/student/join-class-dialog.tsx:47-94` has no AbortController/isMounted guard around the 400ms retry delay. In React 18+ this is a no-op warning, not a crash. Out of scope for this PR.

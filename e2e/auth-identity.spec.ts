@@ -75,15 +75,16 @@ test.describe("Auth identity drift (review 002 regression)", () => {
     // Scope note: the planted value is opaque garbage, not a valid signed
     // token from a real different user (crafting one requires the dev
     // AUTH_SECRET and Auth.js's JWE encoder, which the E2E setup doesn't
-    // have wired). The architectural property we lock in here is "the api
-    // client never *forwards* the stale variant when canonical is missing"
-    // — Phase 1's getSessionCookieName + Go's canonical cookie selection
-    // both refuse the planted cookie regardless of its content.
+    // have wired). What this test locks in: the stale-variant cookie is
+    // never *forwarded* by api-client and never *accepted* by Go's cookie
+    // fallback — both refuse it regardless of content. Direct rejection of
+    // a *valid signed* stale token under the canonical-name policy is
+    // covered by the Go middleware tests
+    // (`platform/internal/auth/middleware_test.go::TestRequireAuth_StaleCookieVariant_*`).
     //
-    // Stronger version (TODO plan 040): obtain a valid stale token at
-    // setup time, plant that, and assert Go returns the *new* user's
-    // identity rather than the stale-token user. Today's test still
-    // catches the "any leak path" regression.
+    // Stronger end-to-end version (deferred to plan 040): plant a valid
+    // signed token from another user and assert Go returns the *new*
+    // signed-in user's identity rather than the stale-token user.
     await context.addCookies([
       {
         name: "__Secure-authjs.session-token",

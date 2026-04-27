@@ -31,10 +31,14 @@ test.describe("Teacher session entry", () => {
     await firstLink.click();
 
     // The workspace should render — anything but a 404.
-    // We don't assert specific UI here because the dashboard varies by
-    // session shape (class-bound vs orphan); we only assert the 404 is gone.
+    // The dashboard varies by session shape (class-bound vs orphan), so we
+    // assert two things: URL navigated to the session page, AND something
+    // with `data-testid="teacher-dashboard"` rendered (set in the dashboard
+    // root). A blank page or 404 fails both checks.
     await page.waitForURL(/\/teacher\/sessions\//);
     const notFound = page.locator("text=/404|not found/i");
     await expect(notFound).toHaveCount(0);
+    const dashboardRoot = page.locator('[data-testid="teacher-dashboard"]');
+    await expect(dashboardRoot).toBeVisible({ timeout: 10000 });
   });
 });
