@@ -256,5 +256,23 @@ Each list view has obvious next-step product work that intentionally does NOT sh
 ### Review 2 — Post-implementation review
 
 - **Date:** 2026-04-27
-- **Reviewer:** Codex (post-implementation, dispatch pending)
-- **Status:** To be appended after the post-impl Codex review completes.
+- **Reviewer:** Codex (post-implementation, via `codex:rescue`)
+- **Verdict:** One `[IMPORTANT]` fixed in-PR. Two `[MINOR]` accepted with explanation.
+
+**Fixed in commit applied after Review 2:**
+
+1. `[IMPORTANT]` **Dedup ordering vs status filter discrepancy.** `ListOrgMembers` ordered by `(user_id, role, created_at)` and kept the earliest row. The handler then filtered `status == "active"`. If a hypothetical future schema allowed an inactive row to shadow an active row of the same `(user_id, role)`, the list page would omit the user while `StatsStore.GetOrgDashboardStats` (which filters `status='active'` in the WHERE clause) would still count them — visible discrepancy. → ORDER BY now prefers active rows: `ORDER BY user_id, role, (status = 'active') DESC, created_at`. Today's unique constraint makes this impossible to exercise, but the dedup is defensive against future schema changes and now matches the stats query's intent.
+
+**Accepted without action:**
+
+- `[MINOR]` **Duplicated try/catch in 5 page files.** Each page does the same 8-line ApiError normalization. Acceptable at this scale — extracting a helper costs more than the duplication does today. Revisit when the org portal grows beyond 5 list views.
+- `[MINOR]` **No page-level rendering test.** The 5 server-component pages are very thin (a single `await api(...)` call passing data to a tested subcomponent) and have only TypeScript verification. Acceptable per the Codex pre-impl correction #5 testing strategy: thin pages + tested subcomponents. Adding async-server-component test infrastructure is more value-leak than it's worth right now.
+
+**Codex notes (no action):**
+
+- `authorizeOrgAdmin` extraction preserves original semantics including the platform-admin-without-org-membership-check fast path.
+- `ListClassesByOrgWithCounts` SQL is correct (single LEFT JOIN + grouped `COUNT(*) FILTER` per role); existing indexes on `classes.org_id` and `class_memberships.class_id` cover the query.
+- `OrgListState` and `OrgSettingsCard` `data: T[] | null, error: ... | null` contract is sound — no path produces a bad render.
+- Settings reuse of `/api/org/dashboard` payload returns all fields the settings card consumes.
+- `nav-page` parity test path resolution works correctly in vitest's runtime.
+- Empty-state copy is non-technical and understandable.
