@@ -374,6 +374,39 @@ func TestOrgStore_GetUserMemberships(t *testing.T) {
 	assert.Equal(t, "student", memberships[0].Role)
 }
 
+// Plan 040 phase 6: a user with multiple roles in the same org (e.g.
+// teacher + org_admin in Bridge Demo School) used to surface as one row
+// per role pair, breaking React's `key={orgId}` rendering downstream.
+// DISTINCT ON ensures one row per (orgId, role) — but a user with TWO
+// distinct roles in the same org should still get TWO rows because the
+// pair is unique. Lock both behaviors in tests.
+func TestOrgStore_GetUserMemberships_DistinctRolesPreserved(t *testing.T) {
+	db := testDB(t)
+	orgStore := NewOrgStore(db)
+	userStore := NewUserStore(db)
+	ctx := context.Background()
+
+	org := createTestOrg(t, db, orgStore, t.Name())
+	user := createTestUser(t, db, userStore, t.Name())
+
+	_, err := orgStore.AddOrgMember(ctx, AddMemberInput{
+		OrgID: org.ID, UserID: user.ID, Role: "teacher",
+	})
+	require.NoError(t, err)
+	_, err = orgStore.AddOrgMember(ctx, AddMemberInput{
+		OrgID: org.ID, UserID: user.ID, Role: "org_admin",
+	})
+	require.NoError(t, err)
+
+	memberships, err := orgStore.GetUserMemberships(ctx, user.ID)
+	require.NoError(t, err)
+	// Two distinct (orgId, role) pairs → two rows.
+	require.Len(t, memberships, 2)
+	roles := map[string]bool{memberships[0].Role: true, memberships[1].Role: true}
+	assert.True(t, roles["teacher"])
+	assert.True(t, roles["org_admin"])
+}
+
 func TestOrgStore_GetUserMemberships_Empty(t *testing.T) {
 	db := testDB(t)
 	orgStore := NewOrgStore(db)

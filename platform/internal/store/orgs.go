@@ -330,13 +330,22 @@ func (s *OrgStore) ListOrgMembers(ctx context.Context, orgID string) ([]OrgMembe
 }
 
 // GetUserMemberships lists all org memberships for a user with org details.
+//
+// Dedupes at the query layer: a user with two memberships in the same org
+// + role pair (e.g. left a class then re-joined as the same role)
+// previously surfaced as duplicate consumer rows, breaking React's
+// `key={orgId}` rendering with one row per (orgId, role) collision and
+// inflating the user's "you belong to N orgs" count. DISTINCT ON keeps
+// one row per (org_id, role) pair deterministically — earliest joined.
 func (s *OrgStore) GetUserMemberships(ctx context.Context, userID string) ([]UserMembershipWithOrg, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT om.id, om.org_id, om.user_id, om.role, om.status, om.created_at, o.name, o.slug, o.status
+		`SELECT DISTINCT ON (om.org_id, om.role)
+		        om.id, om.org_id, om.user_id, om.role, om.status, om.created_at,
+		        o.name, o.slug, o.status
 		 FROM org_memberships om
 		 INNER JOIN organizations o ON om.org_id = o.id
 		 WHERE om.user_id = $1
-		 ORDER BY om.created_at`,
+		 ORDER BY om.org_id, om.role, om.created_at`,
 		userID,
 	)
 	if err != nil {
