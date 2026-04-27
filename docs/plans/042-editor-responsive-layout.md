@@ -61,11 +61,18 @@ Tailwind handles the breakpoint statically — no `useEffect` width listener nee
 
 The visible pane gets `flex-1`; the others get `hidden`. Above `lg` they all unconditionally `lg:flex` (or equivalent), overriding the narrow `hidden`.
 
-### Task 1.2: Tab bar component
+### Task 1.2: Tab bar (inline in problem-shell)
 
-**File:** `src/components/problem/problem-tab-bar.tsx` (new)
+Per Codex pre-impl review #4, keep the tab bar inline in `problem-shell.tsx` rather than extracting a new `<TabBar>` component. Three buttons + a wrapper is small enough that a separate file fragments the layout file rather than clarifying it.
 
-Stateless `<TabBar active={narrowTab} onChange={setNarrowTab} />`. Renders three `<button>` elements with appropriate `aria-pressed` / role. Visible only at narrow widths (`lg:hidden`). Match the existing zinc/amber visual language — minimal extra CSS.
+Per Codex pre-impl review #7, use the **standard ARIA tabs pattern**, not `aria-pressed` toggles:
+
+- Tab bar: `role="tablist"`, `aria-label="Problem editor sections"`, visible only at narrow widths (`lg:hidden`).
+- Each button: `role="tab"`, `aria-selected={active === id}`, `aria-controls="problem-pane-<id>"`.
+- Each pane wrapper: `role="tabpanel"`, `id="problem-pane-<id>"`, `aria-labelledby="problem-tab-<id>"`.
+- The role attributes work fine when both tablist and panel are visible at wide widths (the `role="tab"` element being hidden via `lg:hidden` doesn't break the panels; screen readers see the panels normally).
+
+Visual style: zinc background, amber active indicator, large enough hit targets for tablet use (~44px tall).
 
 ### Task 1.3: Wire the tab bar into `problem-shell.tsx`
 
@@ -75,17 +82,49 @@ Render the tab bar above the existing flex row, behind `lg:hidden`. Add the visi
 
 The tab bar stays out of the way at `lg+`; the panes stay mounted at narrow widths so Monaco doesn't lose state.
 
-### Task 1.4: Monaco relayout on tab switch
+### Task 1.4: Monaco relayout via ResizeObserver
 
 **File:** `src/components/editor/code-editor.tsx`
 
-Verify Monaco re-measures its container when the tab visibility flips. If it doesn't (Monaco caches dimensions when the container was `display: none` at mount), call `editor.layout()` after the tab changes to `code`. Implement with a small effect listening to a new `visible: boolean` prop — pages that don't need it pass `true` (default).
+Per Codex pre-impl review #1: a `visible: boolean` prop doesn't fit cleanly because Tailwind owns the wide-vs-narrow visibility decision. The parent's `narrowTab` state doesn't tell the truth at wide widths (where the editor is visible regardless of `narrowTab`'s value).
 
-### Task 1.5: Vitest unit test for the tab bar
+Better shape: detect dimension changes inside `CodeEditor` itself with a `ResizeObserver` on the container. When the observed `contentRect.width` or `height` transitions from 0 to non-zero, call `editor.layout()`. This is robust to any parent visibility scheme (Tailwind, JS state, `display:none`, `visibility:hidden`) and to the hidden-at-mount case Codex review #2 flagged.
 
-**File:** `tests/unit/problem-tab-bar.test.tsx` (new)
+Implementation sketch:
 
-Render the tab bar, assert each button toggles `active`, assert `aria-pressed` flips correctly. No layout assertions — the visibility logic is in the parent.
+```ts
+useEffect(() => {
+  const editor = editorRef.current;
+  const container = containerRef.current;
+  if (!editor || !container) return;
+
+  let prevSize = 0;
+  const ro = new ResizeObserver((entries) => {
+    const entry = entries[0];
+    const size = entry.contentRect.width * entry.contentRect.height;
+    if (prevSize === 0 && size > 0) {
+      editor.layout();
+    }
+    prevSize = size;
+  });
+  ro.observe(container);
+  return () => ro.disconnect();
+}, []);
+```
+
+No new prop on `CodeEditor`. The ResizeObserver is cleaned up on unmount and only triggers on the meaningful 0→non-zero transition.
+
+### Task 1.5: Vitest unit test for the inline tab semantics
+
+**File:** `tests/unit/problem-shell-responsive.test.tsx` (new)
+
+Tab bar is inline now (Task 1.2 change), so the test renders a small wrapper that exercises the active-tab state machine. Asserts:
+- Initial state: `code` tab has `aria-selected="true"`.
+- Click `problem` → `problem` selected, `code`/`io` deselected.
+- Click `io` → `io` selected, others deselected.
+- Each tab's `aria-controls` matches an existing `role="tabpanel"` element with the corresponding `id`.
+
+Layout-visibility assertions stay out of Vitest (they're in Phase 2 Playwright).
 
 ---
 
@@ -102,11 +141,15 @@ The test seeds a problem-page URL (using existing E2E fixtures or a created test
 3. **800 × 1024** (narrow tablet portrait): tab bar visible, only the active tab visible, switching tabs swaps the visible pane.
 
 For (3), explicit assertions:
-- Tab bar `[data-testid="problem-tab-bar"]` is visible.
-- Initially: `[data-testid="problem-pane-code"]` is in the viewport; the other two have `display: none` (or are hidden via the `hidden` class).
+- Tab bar `[role="tablist"]` is visible.
+- Initially: `#problem-pane-code` is in the viewport; the other two have `display: none` (or are hidden via the `hidden` class).
 - Click "Problem" tab → `problem` pane visible, `code` and `io` hidden.
 - Click "I/O" tab → similar swap.
 - Click "Code" → returns to code, Monaco still shows the placeholder (state preserved across switches).
+
+Per Codex pre-impl review #9, also assert at 800px and 1024px:
+- `document.documentElement.scrollWidth <= window.innerWidth` (no horizontal overflow).
+- The active pane's container has non-zero width AND height (catches a Monaco-rendered-at-zero failure mode that visibility-only assertions miss).
 
 ### Task 2.2: Screenshot snapshots (optional, MINOR)
 
@@ -160,4 +203,24 @@ One PR. ~4 commits.
 
 ## Codex Review of This Plan
 
-_To be added after the plan is dispatched to Codex via `/codex:rescue`._
+- **Date:** 2026-04-27
+- **Reviewer:** Codex (pre-implementation, via `codex:rescue`)
+- **Verdict:** Four `[IMPORTANT]` corrections applied; two `[MINOR]` accepted with explanation; three `[NOTE]` items confirmed no plan change needed.
+
+### Corrections applied
+
+1. `[IMPORTANT]` **State/visibility mismatch in Task 1.4.** A `visible: boolean` prop doesn't fit Tailwind-owned visibility — the parent's `narrowTab` state isn't the truth about whether the editor is visible at wide widths. → Task 1.4 now uses a `ResizeObserver` inside `CodeEditor` itself, watching the container for 0→non-zero transitions and calling `editor.layout()` on the boundary. Robust to any parent visibility scheme.
+2. `[IMPORTANT]` **ARIA pattern.** Plan said `aria-pressed` but these controls switch mutually exclusive panels — that's the standard `role="tablist"` / `role="tab"` / `role="tabpanel"` pattern, not toggles. → Task 1.2 now spells out the full ARIA wiring (tab IDs, `aria-controls`, `aria-selected`, panel `aria-labelledby`).
+3. `[IMPORTANT]` **Playwright is load-bearing.** Vitest only covers tab state machines; the actual responsive layout (Tailwind `lg:` rules, pane visibility at viewport boundaries) needs Playwright at multiple widths. → Phase 2 spec confirmed in scope.
+4. `[IMPORTANT]` **Horizontal-overflow assertion.** The original review-002 defect is fixed-min-width panes inside `overflow-hidden`. Tab/visibility assertions could pass while horizontal overflow still clips content. → Task 2.1 now asserts `document.documentElement.scrollWidth <= window.innerWidth` and the active pane has non-zero dimensions at 800px and 1024px.
+
+### Minor adjustments
+
+- `[MINOR]` **Tab bar inline, not extracted.** Codex flagged the `<TabBar>` extraction as more abstraction than three buttons need. → Task 1.2 now keeps the tab markup inline in `problem-shell.tsx`. Test moved from `problem-tab-bar.test.tsx` to `problem-shell-responsive.test.tsx`.
+- `[MINOR]` **Hidden-at-mount recovery.** Same fix as #1 (ResizeObserver) covers the deferred-tab-state edge case where the editor could mount inside a `display:none` container.
+
+### Codex notes (no plan change)
+
+- Yjs provider is owned by `ProblemShell`, lives outside any pane wrapper, and `useYjsProvider` cleanup only fires on unmount/dependency change — visibility doesn't drop the Hocuspocus connection.
+- `lg` (1024px) is a defensible breakpoint; the fixed floors sum to 680px and `xl` would be a comfort upgrade, not a correctness requirement.
+- CLS mitigation already correctly identified (narrow as the static default, `lg:` rules add the wide row back).
