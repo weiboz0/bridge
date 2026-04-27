@@ -179,6 +179,65 @@ func (s *ClassStore) ListClassesByOrg(ctx context.Context, orgID string) ([]Clas
 	return classes, rows.Err()
 }
 
+// ClassWithCounts is the row shape for the org-portal /classes list view.
+// Includes the parent course title and per-role membership counts so the
+// page can render everything the org admin needs in one round-trip.
+type ClassWithCounts struct {
+	ID              string    `json:"id"`
+	CourseID        string    `json:"courseId"`
+	CourseTitle     string    `json:"courseTitle"`
+	OrgID           string    `json:"orgId"`
+	Title           string    `json:"title"`
+	Term            string    `json:"term"`
+	Status          string    `json:"status"`
+	InstructorCount int       `json:"instructorCount"`
+	StudentCount    int       `json:"studentCount"`
+	CreatedAt       time.Time `json:"createdAt"`
+	UpdatedAt       time.Time `json:"updatedAt"`
+}
+
+// ListClassesByOrgWithCounts returns active classes for an org with their
+// course title + instructor/student counts in one query.
+//
+// Uses COUNT(*) FILTER per role to avoid the cardinality explosion that a
+// plain double LEFT JOIN on class_memberships would produce. Each class
+// row aggregates its own membership rows once; instructors and students
+// don't multiply each other.
+func (s *ClassStore) ListClassesByOrgWithCounts(ctx context.Context, orgID string) ([]ClassWithCounts, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT
+		   c.id, c.course_id, COALESCE(co.title, '') AS course_title, c.org_id,
+		   c.title, c.term, c.status,
+		   COALESCE(COUNT(cm.id) FILTER (WHERE cm.role = 'instructor'), 0) AS instructor_count,
+		   COALESCE(COUNT(cm.id) FILTER (WHERE cm.role = 'student'), 0) AS student_count,
+		   c.created_at, c.updated_at
+		 FROM classes c
+		 LEFT JOIN courses co ON co.id = c.course_id
+		 LEFT JOIN class_memberships cm ON cm.class_id = c.id
+		 WHERE c.org_id = $1 AND c.status = 'active'
+		 GROUP BY c.id, co.title
+		 ORDER BY c.created_at DESC`,
+		orgID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []ClassWithCounts{}
+	for rows.Next() {
+		var c ClassWithCounts
+		if err := rows.Scan(&c.ID, &c.CourseID, &c.CourseTitle, &c.OrgID,
+			&c.Title, &c.Term, &c.Status,
+			&c.InstructorCount, &c.StudentCount,
+			&c.CreatedAt, &c.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
 func (s *ClassStore) ListClassesByOrgIDs(ctx context.Context, orgIDs []string) ([]Class, error) {
 	if len(orgIDs) == 0 {
 		return []Class{}, nil

@@ -302,12 +302,20 @@ func (s *OrgStore) AddOrgMember(ctx context.Context, input AddMemberInput) (*Org
 
 // ListOrgMembers lists all members of an org with user details.
 func (s *OrgStore) ListOrgMembers(ctx context.Context, orgID string) ([]OrgMemberWithUser, error) {
+	// DISTINCT ON keeps one row per (user_id, role) pair — a user with
+	// duplicate same-org memberships from an add/remove/re-add cycle
+	// surfaces once. Matches the dedup strategy applied to
+	// GetUserMemberships in plan 040 phase 6 + StatsStore counts in plan
+	// 041 phase 1.2 so the dashboard headline and the list-page row count
+	// can't disagree.
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT om.id, om.org_id, om.user_id, om.role, om.status, om.created_at, u.name, u.email
+		`SELECT DISTINCT ON (om.user_id, om.role)
+		        om.id, om.org_id, om.user_id, om.role, om.status, om.created_at,
+		        u.name, u.email
 		 FROM org_memberships om
 		 INNER JOIN users u ON om.user_id = u.id
 		 WHERE om.org_id = $1
-		 ORDER BY om.created_at`,
+		 ORDER BY om.user_id, om.role, om.created_at`,
 		orgID,
 	)
 	if err != nil {
