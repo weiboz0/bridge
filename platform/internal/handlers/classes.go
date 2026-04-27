@@ -154,6 +154,59 @@ func (h *ClassHandler) ListMyClasses(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, classes)
 }
 
+// CanAccessClass reports whether the caller may read this class.
+//
+// Plan 043 P0: pre-039, GetClass returned class metadata to any authenticated
+// user. Callers now must satisfy one of:
+//
+//   - claims.IsPlatformAdmin || claims.ImpersonatedBy != "" (admin equivalent
+//     per plan 039 correction #4 — admin-while-impersonating retains read
+//     access).
+//   - Class membership (any role: instructor, ta, student).
+//   - Active org_admin membership in the class's owning org.
+//
+// Returns the resolved class on success (so callers don't double-fetch). On
+// not-found OR not-authorized, returns (nil, false). Callers should write
+// `404 Not found` for both — leaking class existence to non-members is the
+// bug we're fixing.
+func (h *ClassHandler) CanAccessClass(r *http.Request, classID string, claims *auth.Claims) (*store.Class, bool, error) {
+	class, err := h.Classes.GetClass(r.Context(), classID)
+	if err != nil {
+		return nil, false, err
+	}
+	if class == nil {
+		return nil, false, nil
+	}
+
+	if claims.IsPlatformAdmin || claims.ImpersonatedBy != "" {
+		return class, true, nil
+	}
+
+	members, err := h.Classes.ListClassMembers(r.Context(), classID)
+	if err != nil {
+		return nil, false, err
+	}
+	for _, m := range members {
+		if m.UserID == claims.UserID {
+			return class, true, nil
+		}
+	}
+
+	if h.Orgs != nil {
+		roles, err := h.Orgs.GetUserRolesInOrg(r.Context(), class.OrgID, claims.UserID)
+		if err != nil {
+			return nil, false, err
+		}
+		for _, role := range roles {
+			if role.Role == "org_admin" {
+				return class, true, nil
+			}
+		}
+	}
+
+	return nil, false, nil
+}
+
 // GetClass handles GET /api/classes/{id}
 func (h *ClassHandler) GetClass(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
@@ -162,12 +215,13 @@ func (h *ClassHandler) GetClass(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	class, err := h.Classes.GetClass(r.Context(), chi.URLParam(r, "id"))
+	class, ok, err := h.CanAccessClass(r, chi.URLParam(r, "id"), claims)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
 	}
-	if class == nil {
+	if !ok {
+		// 404 for both not-found and not-authorized — don't leak existence.
 		writeError(w, http.StatusNotFound, "Not found")
 		return
 	}

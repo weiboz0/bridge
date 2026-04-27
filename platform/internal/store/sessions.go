@@ -362,6 +362,23 @@ func (s *SessionStore) LeaveSession(ctx context.Context, sessionID, studentID st
 	))
 }
 
+// GetSessionParticipant returns the single participant row for (sessionID, userID).
+// Returns (nil, nil) when the user has no row for the session.
+//
+// Plan 043 Phase 1 P0: callers use this to check whether a non-class-member
+// is pre-invited and may join the session. Status "left" still surfaces a
+// row — callers must filter on status themselves to enforce "invited|present
+// only" semantics (a user who left should not get re-entry without a fresh
+// invite).
+func (s *SessionStore) GetSessionParticipant(ctx context.Context, sessionID, userID string) (*SessionParticipant, error) {
+	return scanParticipant(s.db.QueryRowContext(ctx,
+		`SELECT `+participantColumns+`
+		 FROM session_participants
+		 WHERE session_id = $1 AND user_id = $2`,
+		sessionID, userID,
+	))
+}
+
 func (s *SessionStore) GetSessionParticipants(ctx context.Context, sessionID string) ([]ParticipantWithUser, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT sp.session_id, sp.user_id, sp.status, sp.invited_by, sp.invited_at,
