@@ -8,7 +8,7 @@
 
 **Branch:** `feat/040-auth-hardening-workflow-gaps`
 
-**Status:** Draft — awaiting approval
+**Status:** Complete (pending PR review)
 
 ---
 
@@ -354,4 +354,80 @@ Default plan: one PR, eight commits, with an explicit gate after Phase 4 to conf
 - `r.RemoteAddr` is the right address class to trust-check for `X-Forwarded-Proto` — it's the immediate peer (proxy IP for proxied requests, client IP for direct hits).
 - No other read-sites for `X-Forwarded-Proto` in production code beyond `platform/internal/auth/middleware.go:20`.
 - Phase 8 `next/script beforeInteractive` likely works in App Router root layout for Next 16, but still needs visual validation in dev. Plan now has an explicit validation gate before the implementation commits to that pattern.
+
+## Post-Execution Report
+
+**Status:** Complete. All 8 phases shipped on `feat/040-auth-hardening-workflow-gaps` across 8 commits.
+
+**Phase 1 — Trusted-proxy XFP** (commit `34bdbee`)
+- `platform/internal/auth/proxy.go` adds `IsTrustedProxy()` + `TRUSTED_PROXY_CIDRS` env var with cached parse.
+- `platform/internal/auth/middleware.go::canonicalCookieName` only honors `X-Forwarded-Proto` when the immediate peer is in the allowlist; `r.TLS != nil` is always trusted.
+- 7 tests in `proxy_test.go` (empty allowlist, single CIDR, multiple CIDRs, IPv6, bad CIDR entries, bad RemoteAddr, host-only addresses) + 2 new cases in `middleware_test.go` covering spoofed-XFP rejection and trusted-XFP acceptance.
+- `.env.example` and `docs/setup.md` document the env var + the explicit "ingress proxy must strip client-supplied XFP" deployment requirement.
+
+**Phase 2 — admin/users single identity source** (commit `dd0ff4c`)
+- `src/app/(portal)/admin/users/page.tsx` drops `auth()` import; reads `/api/me/identity` (added in 039) in parallel with `/api/admin/users` and compares against `identity.userId`.
+
+**Phase 3 — Valid-signed-stale-token E2E** (commit `77248cc`)
+- `e2e/helpers/jwe.ts` wraps `@auth/core/jwt::encode` to mint a token decryptable by Go middleware (same HKDF + JWE algorithm).
+- `e2e/auth-identity.spec.ts` 5.1b now plants a real signed token for a fake attacker user (`stale-attacker-user-id`) and asserts the live student's identity is what `/api/me/identity` returns. Skips with a clear message when `NEXTAUTH_SECRET` isn't in the env.
+
+**Phase 4 — Registration role intent + invite carry-through** (commit `792eb73`)
+- New `signup_intent` enum + `users.intended_role` nullable column (migration `0021_user_intended_role.sql`).
+- `/api/auth/register` accepts optional `role` and persists it; returns it in the response.
+- `/onboarding` reads intent: teacher → straight to `/register-org`; student → leads with student card.
+- `/register` reads `?invite=<code>` from URL, defaults to student, and after sign-in redirects to `/student?invite=<code>`.
+- `JoinClassDialog` accepts new `initialInviteCode` prop that auto-opens with the code prefilled (uppercased).
+- 4 new register tests (persist teacher / student / null / reject unknown) + 2 new dialog tests (auto-open with prefill, closed without prop).
+
+**Phase 5 — Deep-link `callbackUrl` middleware** (commit `5378984`)
+- `src/lib/auth.ts` gains an `authorized` callback that branches on path: `/api/orgs/*`, `/api/admin/*` → return `isAuthed` (preserves the legacy 401 contract); portal trees → return `Response.redirect` to `/login?callbackUrl=<encoded>`.
+- `src/middleware.ts` matcher extended to all 5 portal trees + the original 2 API trees. Matcher list extracted to `src/lib/portal/middleware-matcher.ts` so unit tests can assert the contract without pulling Auth.js.
+- `src/components/portal/portal-shell.tsx` simplified — removed the `x-invoke-path`/`x-url` header lookup (those headers aren't actually populated by Next.js); middleware handles the redirect with `callbackUrl` baked in.
+- Regression test at `tests/unit/middleware-config.test.ts` locks both API + portal entries; new E2E `e2e/deep-link.spec.ts` covers redirect-with-callbackUrl + post-login landing.
+
+**Phase 6 — Org membership dedup** (commit `012d6cd`)
+- `platform/internal/store/orgs.go::GetUserMemberships` now uses `DISTINCT ON (om.org_id, om.role)` ordered by `created_at`. Same-pair duplicates collapse; distinct roles preserved.
+- New Go test `TestOrgStore_GetUserMemberships_DistinctRolesPreserved` covers both behaviors.
+- Frontend defensive dedup by `orgId` in `teacher/units/page.tsx` and `teacher/units/new/page.tsx` for selectors that show one option per org regardless of role.
+
+**Phase 7 — Parent /children trim** (commit `3eaec34`)
+- Deleted `src/app/(portal)/parent/children/page.tsx` (redirect-only).
+- `nav-config.ts` parent block now Dashboard only; new test asserts `parent.navItems.length === 1`.
+
+**Phase 8 — Theme script via next/script** (commit `6cc1f20`)
+- `src/app/layout.tsx` replaces `<script dangerouslySetInnerHTML>` with `<Script id="bridge-theme-bootstrap" strategy="beforeInteractive">`.
+- `e2e/theme-bootstrap.spec.ts` asserts `<html>` has the `dark` class with `bridge-theme=dark` pre-seeded AND no "Encountered a script tag" message in console.
+
+**Verification**
+- Vitest: 403 passed / 11 skipped (was 394 — 9 new tests across proxy, register intent, dialog prefill, middleware matcher, nav-config trim).
+- Go tests: all 14 packages green against `bridge_test` (proxy_test 7 cases, middleware_test 2 new cases, orgs_test 1 new case).
+- TypeScript: clean for new/modified files.
+- E2E: 4 new specs added (auth-identity strengthened, deep-link, theme-bootstrap, plus the existing identity test). Not run in this loop — require local stack.
+
+**Plan compliance**
+- `[CRITICAL]` Codex pre-impl finding (Phase 5 middleware collision) addressed: extended existing middleware via `authorized` callback rather than replacing it. Regression test locks the matcher contract.
+- `[IMPORTANT]` Phase 1 deployment requirement (proxy must strip client-supplied XFP) documented in `.env.example` and `docs/setup.md`.
+- `[IMPORTANT]` Phase 3 env var name corrected to `NEXTAUTH_SECRET`.
+- `[IMPORTANT]` Phase 4 schema uses fresh `signupIntentEnum` (not raw TEXT+CHECK).
+- `[IMPORTANT]` Phase 6 locked decision: dedup at the store query (DISTINCT ON), not at the API shape.
+- `[MINOR]` Phase 4.5 (invite-context carry-through) shipped via redirect with query param rather than coupling register API to class-join logic.
+
+**Pending manual validation**
+- Phase 8: confirm in dev that the `<script>` dev-overlay error is gone AND no theme FOUC on initial load. If `beforeInteractive` doesn't fire early enough, fall back to inline `<script>` placement.
+- Full E2E suite run (requires local stack; user-driven).
+
+## Code Review
+
+### Review 1 — Pre-implementation plan review (commit `b85f6f4`)
+
+- **Date:** 2026-04-26
+- **Reviewer:** Codex (via `codex:rescue`)
+- **Verdict:** Corrections applied (see `## Codex Review of This Plan` section above).
+
+### Review 2 — Post-implementation review
+
+- **Date:** 2026-04-26
+- **Reviewer:** Codex (post-implementation, dispatch pending)
+- **Status:** To be appended after the post-impl Codex review completes.
 
