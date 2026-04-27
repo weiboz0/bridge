@@ -4,11 +4,50 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
 	"strings"
 )
+
+// canonicalCookieName returns the single Auth.js session cookie name for the
+// request's scheme. It does NOT fall back to the other variant — falling back
+// re-injects stale identity when a previous deployment left a different
+// cookie in the browser jar. This mirrors src/lib/auth-cookie.ts on the Next
+// side so both layers agree on which cookie is canonical for a given scheme.
+func canonicalCookieName(r *http.Request) string {
+	isSecure := r.TLS != nil || strings.HasPrefix(strings.ToLower(r.Header.Get("X-Forwarded-Proto")), "https")
+	if isSecure {
+		return CookieNameHTTPS
+	}
+	return CookieNameHTTP
+}
+
+// readCanonicalCookieToken returns the token from the canonical cookie for
+// this request's scheme, or "" if absent. In dev, it logs a warning when a
+// stale variant is present without the canonical one.
+func readCanonicalCookieToken(r *http.Request) string {
+	canonical := canonicalCookieName(r)
+	if c, err := r.Cookie(canonical); err == nil && c.Value != "" {
+		return c.Value
+	}
+	// Dev diagnostic: surface the stale-variant scenario.
+	if os.Getenv("APP_ENV") != "production" {
+		other := CookieNameHTTP
+		if canonical == CookieNameHTTP {
+			other = CookieNameHTTPS
+		}
+		if c, err := r.Cookie(other); err == nil && c.Value != "" {
+			slog.Warn("stale auth cookie variant present without canonical",
+				"canonical", canonical,
+				"stalePresent", other,
+				"path", r.URL.Path,
+			)
+		}
+	}
+	return ""
+}
 
 // writeJSONError writes a JSON error response with the given status code.
 func writeJSONError(w http.ResponseWriter, status int, message string) {
@@ -55,26 +94,15 @@ func (m *Middleware) RequireAuth(next http.Handler) http.Handler {
 			return
 		}
 
-		// Try Authorization header first, then session cookies
+		// Authorization header is the canonical proxy path; cookies are only
+		// for direct browser hits (no proxy). Never combine — falling back to
+		// cookies after a header was sent would mask api-client bugs and
+		// potentially re-inject a stale identity from the browser jar.
 		tokenStr := ""
 		if authHeader := r.Header.Get("Authorization"); strings.HasPrefix(authHeader, "Bearer ") {
 			tokenStr = strings.TrimPrefix(authHeader, "Bearer ")
 		} else {
-			// Read Auth.js session token from cookies (for proxied requests).
-			// Match Auth.js cookie selection: prefer non-secure on HTTP,
-			// prefer secure on HTTPS. This prevents identity mismatch when
-			// both cookies exist in the browser jar.
-			isSecure := r.TLS != nil || strings.HasPrefix(strings.ToLower(r.Header.Get("X-Forwarded-Proto")), "https")
-			cookieOrder := []string{CookieNameHTTP, CookieNameHTTPS}
-			if isSecure {
-				cookieOrder = []string{CookieNameHTTPS, CookieNameHTTP}
-			}
-			for _, name := range cookieOrder {
-				if cookie, err := r.Cookie(name); err == nil && cookie.Value != "" {
-					tokenStr = cookie.Value
-					break
-				}
-			}
+			tokenStr = readCanonicalCookieToken(r)
 		}
 
 		if tokenStr == "" {
@@ -118,17 +146,7 @@ func (m *Middleware) OptionalAuth(next http.Handler) http.Handler {
 		if authHeader := r.Header.Get("Authorization"); strings.HasPrefix(authHeader, "Bearer ") {
 			tokenStr = strings.TrimPrefix(authHeader, "Bearer ")
 		} else {
-			isSecure := r.TLS != nil || strings.HasPrefix(strings.ToLower(r.Header.Get("X-Forwarded-Proto")), "https")
-			cookieOrder := []string{CookieNameHTTP, CookieNameHTTPS}
-			if isSecure {
-				cookieOrder = []string{CookieNameHTTPS, CookieNameHTTP}
-			}
-			for _, name := range cookieOrder {
-				if cookie, err := r.Cookie(name); err == nil && cookie.Value != "" {
-					tokenStr = cookie.Value
-					break
-				}
-			}
+			tokenStr = readCanonicalCookieToken(r)
 		}
 		if tokenStr != "" {
 			if claims, err := VerifyToken(tokenStr, m.Secret); err == nil {

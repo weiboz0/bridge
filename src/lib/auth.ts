@@ -1,17 +1,18 @@
-import NextAuth from "next-auth";
+import NextAuth, { type NextAuthConfig } from "next-auth";
 import Google from "next-auth/providers/google";
 import Credentials from "next-auth/providers/credentials";
 import { db } from "@/lib/db";
 import { users, authProviders } from "@/lib/db/schema";
 import { eq, and } from "drizzle-orm";
 import { z } from "zod";
+import { getSessionCookieName, isSecureAuthScheme } from "@/lib/auth-cookie";
 
 const loginSchema = z.object({
   email: z.string().email(),
   password: z.string().min(8),
 });
 
-export const { handlers, auth, signIn, signOut } = NextAuth({
+export const authConfig = {
   providers: [
     Google({
       clientId: process.env.GOOGLE_CLIENT_ID!,
@@ -121,4 +122,17 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   session: {
     strategy: "jwt",
   },
-});
+  cookies: {
+    sessionToken: {
+      name: getSessionCookieName(),
+      options: {
+        httpOnly: true,
+        sameSite: "lax",
+        path: "/",
+        secure: isSecureAuthScheme(),
+      },
+    },
+  },
+} satisfies NextAuthConfig;
+
+export const { handlers, auth, signIn, signOut } = NextAuth(authConfig);

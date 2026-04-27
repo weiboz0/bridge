@@ -1,4 +1,5 @@
 import { cookies } from "next/headers";
+import { getSessionCookieName, getOtherSessionCookieName } from "@/lib/auth-cookie";
 
 const GO_API_URL = process.env.GO_API_URL || "http://localhost:8002";
 
@@ -30,14 +31,20 @@ export async function api<T = unknown>(
   } = {}
 ): Promise<T> {
   const cookieStore = await cookies();
-  // Auth.js v5 picks cookie name based on whether the site is HTTPS.
-  // Match its logic so we always forward the same token Auth.js uses.
-  const isSecure = (process.env.NEXTAUTH_URL || process.env.AUTH_URL || "").startsWith("https");
-  const sessionToken = isSecure
-    ? (cookieStore.get("__Secure-authjs.session-token")?.value ||
-       cookieStore.get("authjs.session-token")?.value)
-    : (cookieStore.get("authjs.session-token")?.value ||
-       cookieStore.get("__Secure-authjs.session-token")?.value);
+  // Single source of truth: forward exactly the cookie Auth.js writes.
+  // If a stale variant from a prior deployment is still in the jar, ignore
+  // it — silently falling back to the other name re-injects stale identity.
+  const canonicalName = getSessionCookieName();
+  const sessionToken = cookieStore.get(canonicalName)?.value;
+
+  if (!sessionToken && process.env.NODE_ENV !== "production") {
+    const staleName = getOtherSessionCookieName();
+    if (cookieStore.get(staleName)?.value) {
+      console.warn(
+        `[api-client] Canonical session cookie "${canonicalName}" is missing but stale "${staleName}" is present. Forcing re-auth — call /api/auth/logout-cleanup to clear it.`
+      );
+    }
+  }
 
   const impersonateCookie = cookieStore.get("bridge-impersonate")?.value;
 
