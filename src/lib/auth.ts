@@ -51,6 +51,38 @@ export const authConfig = {
     }),
   ],
   callbacks: {
+    // Middleware authorization. Runs ONLY for paths matched by
+    // src/middleware.ts. Two distinct branches preserve the existing
+    // contract while adding portal deep-link preservation:
+    //
+    //   - /api/orgs/*, /api/admin/*: require an authenticated session;
+    //     Auth.js returns 401 when this returns false. Same effective
+    //     behavior as the previous `auth as middleware` re-export.
+    //   - portal trees (/teacher/*, /student/*, /parent/*, /org/*,
+    //     /admin/* — but NOT the API paths above): require auth too,
+    //     but on failure redirect to /login with callbackUrl set to
+    //     the original path so the user lands back where they wanted
+    //     after sign-in (review-002 P2 #7 fix).
+    authorized({ request, auth: sessionAuth }) {
+      const { pathname, search } = request.nextUrl;
+      const isApiPath =
+        pathname.startsWith("/api/orgs") || pathname.startsWith("/api/admin");
+      const isAuthed = !!sessionAuth?.user;
+
+      if (isApiPath) {
+        // Preserve existing API auth-guard contract.
+        return isAuthed;
+      }
+
+      // Portal tree — redirect with callbackUrl baked in.
+      if (isAuthed) return true;
+      const callback = encodeURIComponent(pathname + (search || ""));
+      const loginUrl = new URL(
+        `/login?callbackUrl=${callback}`,
+        request.nextUrl.origin
+      );
+      return Response.redirect(loginUrl);
+    },
     async signIn({ user, account }) {
       if (account?.provider === "google" && user.email) {
         const [existing] = await db
