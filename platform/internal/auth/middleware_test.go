@@ -232,6 +232,9 @@ func TestRequireAuth_CanonicalCookie_HTTP(t *testing.T) {
 }
 
 func TestRequireAuth_CanonicalCookie_HTTPS(t *testing.T) {
+	// httptest.NewRequest sets RemoteAddr to 192.0.2.1:1234 — trust that
+	// CIDR so X-Forwarded-Proto is honored as if from a real ingress.
+	t.Setenv("TRUSTED_PROXY_CIDRS", "192.0.2.0/24")
 	mw := NewMiddleware(testSecret)
 	tokenStr := makeToken(t, jwt.MapClaims{
 		"id":    "user-cookie-https",
@@ -284,6 +287,7 @@ func TestRequireAuth_StaleCookieVariant_HTTP_Rejected(t *testing.T) {
 }
 
 func TestRequireAuth_StaleCookieVariant_HTTPS_Rejected(t *testing.T) {
+	t.Setenv("TRUSTED_PROXY_CIDRS", "192.0.2.0/24")
 	mw := NewMiddleware(testSecret)
 	tokenStr := makeToken(t, jwt.MapClaims{
 		"id":    "stale-user",
@@ -298,7 +302,7 @@ func TestRequireAuth_StaleCookieVariant_HTTPS_Rejected(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("X-Forwarded-Proto", "https")
-	// HTTPS request, only the non-secure name present → stale; reject.
+	// HTTPS request (trusted proxy), only the non-secure name present → stale; reject.
 	req.AddCookie(&http.Cookie{Name: CookieNameHTTP, Value: tokenStr})
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
@@ -308,6 +312,64 @@ func TestRequireAuth_StaleCookieVariant_HTTPS_Rejected(t *testing.T) {
 
 // Authorization header must beat any cookie, including a stale one.
 // Confirms the "header path and cookie path are disjoint" invariant.
+// XFP from an untrusted source must NOT steer canonical-cookie selection.
+// Without this guard, an attacker who can hit Go directly (no trusted proxy)
+// could send `X-Forwarded-Proto: https` + a stale __Secure- cookie and have
+// it accepted as canonical.
+func TestRequireAuth_XForwardedProto_FromUntrustedSource_Ignored(t *testing.T) {
+	t.Setenv("TRUSTED_PROXY_CIDRS", "") // no trusted proxies
+	mw := NewMiddleware(testSecret)
+	tokenStr := makeToken(t, jwt.MapClaims{
+		"id":    "user-1",
+		"email": "u@example.com",
+		"name":  "U",
+		"exp":   time.Now().Add(time.Hour).Unix(),
+	}, testSecret)
+
+	handler := mw.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("handler should not be called — untrusted XFP must not pick the secure cookie")
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	// Untrusted source claims https; only the secure-name cookie present.
+	// Without trust, canonical name resolves to HTTP, secure cookie is stale.
+	req.RemoteAddr = "8.8.8.8:1234"
+	req.Header.Set("X-Forwarded-Proto", "https")
+	req.AddCookie(&http.Cookie{Name: CookieNameHTTPS, Value: tokenStr})
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
+func TestRequireAuth_XForwardedProto_FromTrustedProxy_Honored(t *testing.T) {
+	t.Setenv("TRUSTED_PROXY_CIDRS", "127.0.0.0/8")
+	mw := NewMiddleware(testSecret)
+	tokenStr := makeToken(t, jwt.MapClaims{
+		"id":    "user-1",
+		"email": "u@example.com",
+		"name":  "U",
+		"exp":   time.Now().Add(time.Hour).Unix(),
+	}, testSecret)
+
+	var gotClaims *Claims
+	handler := mw.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotClaims = GetClaims(r.Context())
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "127.0.0.1:1234"
+	req.Header.Set("X-Forwarded-Proto", "https")
+	req.AddCookie(&http.Cookie{Name: CookieNameHTTPS, Value: tokenStr})
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	require.NotNil(t, gotClaims)
+	assert.Equal(t, "user-1", gotClaims.UserID)
+}
+
 func TestRequireAuth_HeaderBeatsCookie(t *testing.T) {
 	mw := NewMiddleware(testSecret)
 	headerToken := makeToken(t, jwt.MapClaims{

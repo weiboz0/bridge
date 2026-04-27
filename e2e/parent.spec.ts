@@ -69,10 +69,13 @@ test.describe("Parent Portal", () => {
     await expect(page.locator("text=coming soon")).toBeVisible();
   });
 
-  test("parent children page redirects to dashboard", async ({ page }) => {
-    // The /parent/children route redirects to /parent
-    await page.goto("/parent/children");
-    await page.waitForURL(/\/parent$/);
-    await expect(page.getByRole("heading", { name: "Parent Dashboard" })).toBeVisible();
+  test("parent children route 404s (page removed in plan 040 phase 7)", async ({ page }) => {
+    // /parent/children was a redirect-only phantom; plan 040 deleted it
+    // pending a real children-list view design. The route now resolves to
+    // a Next.js 404 (the parent portal still authorizes, then the missing
+    // page falls through). Lock that behavior so a future re-introduction
+    // is intentional.
+    const response = await page.goto("/parent/children");
+    expect(response?.status()).toBe(404);
   });
 });

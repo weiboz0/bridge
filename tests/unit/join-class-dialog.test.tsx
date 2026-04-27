@@ -35,6 +35,19 @@ describe("JoinClassDialog", () => {
     vi.restoreAllMocks();
   });
 
+  it("auto-opens with initialInviteCode prefilled (post-register from invite link)", () => {
+    render(<JoinClassDialog initialInviteCode="abcd1234" />);
+    const input = screen.getByLabelText(/Enter join code/i) as HTMLInputElement;
+    expect(input).toBeInTheDocument();
+    expect(input.value).toBe("ABCD1234"); // uppercased on init
+  });
+
+  it("renders the closed button when initialInviteCode is absent", () => {
+    render(<JoinClassDialog />);
+    expect(screen.getByRole("button", { name: /Join a Class/i })).toBeInTheDocument();
+    expect(screen.queryByLabelText(/Enter join code/i)).not.toBeInTheDocument();
+  });
+
   it("happy path: closes dialog after join + verification", async () => {
     fetchMock
       .mockResolvedValueOnce(

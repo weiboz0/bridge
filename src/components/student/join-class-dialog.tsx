@@ -15,13 +15,20 @@ interface MyClass {
   title: string;
 }
 
-export function JoinClassDialog() {
+interface JoinClassDialogProps {
+  // When set, the dialog opens immediately with the code prefilled.
+  // Used by the post-register redirect from an `?invite=<code>` link so
+  // the student doesn't have to retype the code their teacher shared.
+  initialInviteCode?: string;
+}
+
+export function JoinClassDialog({ initialInviteCode }: JoinClassDialogProps = {}) {
   const router = useRouter();
-  const [joinCode, setJoinCode] = useState("");
+  const [joinCode, setJoinCode] = useState(initialInviteCode?.toUpperCase() ?? "");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(Boolean(initialInviteCode));
 
   async function handleJoin(e: React.FormEvent) {
     e.preventDefault();

@@ -49,9 +49,17 @@ export default function CreateUnitPage() {
               m.orgStatus === "active" &&
               (m.role === "teacher" || m.role === "org_admin")
           )
-          setOrgs(teacherOrgs)
-          if (teacherOrgs.length > 0) {
-            setOrgId(teacherOrgs[0].orgId)
+          // Dedupe by orgId — one option per org regardless of role.
+          // Backend dedupes (orgId, role) pairs; this guards against the
+          // teacher+org_admin same-org case still producing two rows.
+          const byOrg = new Map<string, OrgMembership>()
+          for (const m of teacherOrgs) {
+            if (!byOrg.has(m.orgId)) byOrg.set(m.orgId, m)
+          }
+          const uniqueOrgs = Array.from(byOrg.values())
+          setOrgs(uniqueOrgs)
+          if (uniqueOrgs.length > 0) {
+            setOrgId(uniqueOrgs[0].orgId)
             // Default to org scope when the user belongs to at least one org
             setScope("org")
           }

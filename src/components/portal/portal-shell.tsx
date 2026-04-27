@@ -2,7 +2,6 @@ import { api, ApiError } from "@/lib/api-client";
 import { getPortalConfig } from "@/lib/portal/nav-config";
 import { Sidebar } from "./sidebar";
 import { redirect } from "next/navigation";
-import { headers } from "next/headers";
 import type { PortalRole, UserRole } from "@/lib/portal/types";
 
 interface PortalAccessResponse {
@@ -17,29 +16,26 @@ interface PortalShellProps {
 }
 
 export async function PortalShell({ portalRole, children }: PortalShellProps) {
-  // Capture the current path so we can redirect back after login
-  const hdrs = await headers();
-  const currentPath = hdrs.get("x-invoke-path") || hdrs.get("x-url") || "";
-
-  function loginRedirect(): never {
-    const loginUrl = currentPath
-      ? `/login?callbackUrl=${encodeURIComponent(currentPath)}`
-      : "/login";
-    redirect(loginUrl);
-  }
+  // Plan 040 phase 5: middleware (`src/middleware.ts` + the `authorized`
+  // callback in `src/lib/auth.ts`) handles unauthenticated portal access
+  // — redirects to /login?callbackUrl=<original> before this component
+  // ever renders. The fallbacks below stay as defense-in-depth for the
+  // unlikely case middleware didn't run; they redirect to /login with no
+  // callbackUrl because by the time we're here the original URL is no
+  // longer trivially recoverable from the server-component context.
 
   let data: PortalAccessResponse;
   try {
     data = await api<PortalAccessResponse>("/api/me/portal-access");
   } catch (e) {
     if (e instanceof ApiError && e.status === 401) {
-      loginRedirect();
+      redirect("/login");
     }
     throw e; // surface infrastructure errors
   }
 
   if (!data.authorized) {
-    loginRedirect();
+    redirect("/login");
   }
 
   // Check if user has the required role for this portal

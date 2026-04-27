@@ -16,8 +16,17 @@ import (
 // re-injects stale identity when a previous deployment left a different
 // cookie in the browser jar. This mirrors src/lib/auth-cookie.ts on the Next
 // side so both layers agree on which cookie is canonical for a given scheme.
+//
+// X-Forwarded-Proto is honored ONLY when the immediate peer is in
+// TRUSTED_PROXY_CIDRS — otherwise an unauthenticated client could spoof
+// `X-Forwarded-Proto: https` and steer us to read the (potentially stale)
+// __Secure- cookie instead of the real canonical one. Direct hits with
+// r.TLS != nil are always trusted.
 func canonicalCookieName(r *http.Request) string {
-	isSecure := r.TLS != nil || strings.HasPrefix(strings.ToLower(r.Header.Get("X-Forwarded-Proto")), "https")
+	isSecure := r.TLS != nil
+	if !isSecure && IsTrustedProxy(r.RemoteAddr) {
+		isSecure = strings.HasPrefix(strings.ToLower(r.Header.Get("X-Forwarded-Proto")), "https")
+	}
 	if isSecure {
 		return CookieNameHTTPS
 	}

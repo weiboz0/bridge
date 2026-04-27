@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import { signIn } from "next-auth/react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,12 +16,19 @@ import {
   CardFooter,
 } from "@/components/ui/card";
 
-export default function RegisterPage() {
+function RegisterForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  // ?invite=<class-join-code> means the user landed here from a class
+  // invite link. Default to "student" intent and carry the code through
+  // registration so the API can enroll them in one round-trip.
+  const inviteCode = searchParams.get("invite") || "";
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [role, setRole] = useState<"teacher" | "student">("teacher");
+  const [role, setRole] = useState<"teacher" | "student">(
+    inviteCode ? "student" : "teacher"
+  );
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -53,7 +60,11 @@ export default function RegisterPage() {
       setError("Account created but sign-in failed. Please log in.");
       setLoading(false);
     } else {
-      router.push("/");
+      // Carry the invite code into the destination so the student
+      // dashboard can auto-open the join dialog with it prefilled. This
+      // avoids any server-side DB-write coupling between register and
+      // class-join while still honoring the invite-link intent.
+      router.push(inviteCode ? `/student?invite=${encodeURIComponent(inviteCode)}` : "/");
     }
   }
 
@@ -63,7 +74,9 @@ export default function RegisterPage() {
         <CardHeader>
           <CardTitle>Create an Account</CardTitle>
           <CardDescription>
-            Join Bridge to start teaching or learning
+            {inviteCode
+              ? `Join your class with code ${inviteCode}`
+              : "Join Bridge to start teaching or learning"}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -156,5 +169,13 @@ export default function RegisterPage() {
         </CardFooter>
       </Card>
     </main>
+  );
+}
+
+export default function RegisterPage() {
+  return (
+    <Suspense>
+      <RegisterForm />
+    </Suspense>
   );
 }

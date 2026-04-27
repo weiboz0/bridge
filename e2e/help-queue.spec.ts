@@ -1,5 +1,4 @@
 import { test, expect } from "@playwright/test";
-import { ACCOUNTS } from "./helpers";
 
 test.describe("Help Queue (API-driven)", () => {
   test.use({ storageState: "e2e/.auth/student.json" });
@@ -23,12 +22,9 @@ test.describe("Parent Portal", () => {
     await expect(page.getByRole("heading", { name: "Parent Dashboard" })).toBeVisible();
   });
 
-  test("parent can access children list", async ({ page }) => {
-    await page.goto("/parent");
-    await page.getByRole("link", { name: /My Children/ }).click();
-    // Should redirect back to dashboard (children page redirects to /parent)
-    await expect(page).toHaveURL(/\/parent/);
-  });
+  // /parent/children + the "My Children" nav entry were removed in plan
+  // 040 phase 7 pending a real children-list product design. Locked by
+  // tests/unit/nav-config.test.ts and e2e/parent.spec.ts (404 assertion).
 
   test("parent can access reports page", async ({ page }) => {
     await page.goto("/parent");

@@ -11,6 +11,14 @@ describe("nav-config", () => {
     expect(portalConfigs.parent).toBeDefined();
   });
 
+  // Plan 040 phase 7: parent nav has only Dashboard until a real
+  // children list view ships. The previous /parent/children redirect-only
+  // entry was a phantom nav item and is removed.
+  it("parent nav has Dashboard only", () => {
+    expect(portalConfigs.parent.navItems).toHaveLength(1);
+    expect(portalConfigs.parent.navItems[0].href).toBe("/parent");
+  });
+
   it("every nav item has a valid href starting with /", () => {
     for (const config of Object.values(portalConfigs)) {
       for (const item of config.navItems) {

@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { ACCOUNTS, loginWithCredentials, logout } from "./helpers";
+import { mintSessionToken, AUTH_COOKIE_NAMES } from "./helpers/jwe";
 
 /**
  * Auth identity drift regression — review 002.
@@ -67,31 +68,37 @@ test.describe("Auth identity drift (review 002 regression)", () => {
     await context.close();
   });
 
-  test("5.1b — stale __Secure- cookie from a prior user is ignored on next sign-in", async ({ browser }) => {
+  test("5.1b — valid signed stale token from a different user is ignored on next sign-in", async ({ browser }) => {
+    test.skip(
+      !process.env.NEXTAUTH_SECRET,
+      "NEXTAUTH_SECRET not in env — required to mint a valid signed JWE for the stale cookie. Source .env or export it before running this spec."
+    );
+
     const context = await browser.newContext();
 
-    // Plant a stale __Secure-authjs.session-token before any sign-in.
-    //
-    // Scope note: the planted value is opaque garbage, not a valid signed
-    // token from a real different user (crafting one requires the dev
-    // AUTH_SECRET and Auth.js's JWE encoder, which the E2E setup doesn't
-    // have wired). What this test locks in: the stale-variant cookie is
-    // never *forwarded* by api-client and never *accepted* by Go's cookie
-    // fallback — both refuse it regardless of content. Direct rejection of
-    // a *valid signed* stale token under the canonical-name policy is
-    // covered by the Go middleware tests
-    // (`platform/internal/auth/middleware_test.go::TestRequireAuth_StaleCookieVariant_*`).
-    //
-    // Stronger end-to-end version (deferred to plan 040): plant a valid
-    // signed token from another user and assert Go returns the *new*
-    // signed-in user's identity rather than the stale-token user.
+    // Mint a real, fully signed Auth.js JWE for a different (fake) user.
+    // This is the actual review-002 attack shape: a stale __Secure-
+    // cookie that decrypts cleanly to someone else's identity. The
+    // canonical-cookie selection added in plan 039 must refuse to forward
+    // (api-client) and refuse to accept (Go middleware fallback) this
+    // cookie — even though it's cryptographically valid — because it's
+    // not the canonical name for the request scheme.
+    const stalePlantedSub = "stale-attacker-user-id";
+    const staleToken = await mintSessionToken({
+      sub: stalePlantedSub,
+      email: "attacker@example.invalid",
+      name: "Stale Attacker",
+    });
+
     await context.addCookies([
       {
-        name: "__Secure-authjs.session-token",
-        value: "stale-from-different-user-aaaa-bbbb-cccc",
+        name: AUTH_COOKIE_NAMES.secure,
+        value: staleToken,
         domain: "localhost",
         path: "/",
         httpOnly: true,
+        // The cookie is named __Secure- but on HTTP localhost the browser
+        // only accepts non-Secure cookies; mirror that here.
         secure: false,
         sameSite: "Lax",
       },
@@ -100,13 +107,11 @@ test.describe("Auth identity drift (review 002 regression)", () => {
     const page = await context.newPage();
     await loginWithCredentials(page, ACCOUNTS.student.email, ACCOUNTS.student.password);
 
-    // Diagnostic must report the live student, not the planted cookie's
-    // (invalid) identity. Both layers must agree.
+    // Both layers must report the live student, NOT the planted attacker.
     await expectDiagnosticMatch(page);
-
-    // Memberships must be the student's, not somehow the planted cookie's.
     const identity = await (await page.request.get("/api/me/identity")).json();
     expect(identity.email).toBe(ACCOUNTS.student.email);
+    expect(identity.userId).not.toBe(stalePlantedSub);
 
     await context.close();
   });

@@ -141,9 +141,18 @@ export default function UnitLibraryPage() {
               m.orgStatus === "active" &&
               (m.role === "teacher" || m.role === "org_admin")
           )
-          setOrgs(activeOrgs)
-          if (activeOrgs.length > 0) {
-            setSelectedOrgId(activeOrgs[0].orgId)
+          // Dedupe by orgId for the selector (one option per org regardless
+          // of role). Backend dedupes by (orgId, role); a user with both
+          // teacher and org_admin in the same org would still produce two
+          // rows here without this guard.
+          const byOrg = new Map<string, OrgMembership>()
+          for (const m of activeOrgs) {
+            if (!byOrg.has(m.orgId)) byOrg.set(m.orgId, m)
+          }
+          const uniqueOrgs = Array.from(byOrg.values())
+          setOrgs(uniqueOrgs)
+          if (uniqueOrgs.length > 0) {
+            setSelectedOrgId(uniqueOrgs[0].orgId)
           }
         }
       } finally {
