@@ -52,11 +52,13 @@ Plan 039 closed the auth identity drift root cause but left three follow-ups in 
 
 For local dev: leave `TRUSTED_PROXY_CIDRS` empty so direct `r.TLS == nil` requests default to the HTTP cookie name. For prod: set the load balancer's CIDR.
 
-### Task 1.2: Document the env var
+`r.RemoteAddr` is the right address to trust-check because it's the immediate peer (the proxy IP for proxied requests, the client IP for direct hits). We're deciding whether the *immediate sender* is allowed to inject scheme metadata — exactly what `r.RemoteAddr` identifies.
+
+### Task 1.2: Document the env var + ingress requirement
 
 **Files:**
-- Modify: `docs/setup.md` — add `TRUSTED_PROXY_CIDRS` to the env list with the deployment guidance.
-- Modify: `.env.example` (if present) — add the var with empty default and a comment.
+- Modify: `docs/setup.md` — add `TRUSTED_PROXY_CIDRS` to the env list with deployment guidance: **the ingress proxy MUST strip client-supplied `X-Forwarded-Proto` headers before forwarding**, otherwise an attacker behind the proxy can still spoof scheme. Allowlist + stripping are required together; allowlist alone is not sufficient.
+- Modify: `.env.example` — add the var with empty default and a comment pointing at the ingress requirement.
 
 ---
 
@@ -78,11 +80,13 @@ Implementation: prepend `/api/me/identity` fetch. Compare `userList.id !== ident
 
 ## Phase 3: Valid-Signed-Stale-Token E2E
 
-### Task 3.1: Expose `AUTH_SECRET` to E2E setup
+### Task 3.1: Expose `NEXTAUTH_SECRET` to E2E setup
 
 **Files:**
-- Modify: `e2e/playwright.config.ts` — pass `AUTH_SECRET` and `AUTH_URL` from the host environment into the test fixtures.
-- Create: `e2e/helpers/jwe.ts` — small helper that wraps the same `jose` JWE encoder Auth.js uses and produces a valid `__Secure-authjs.session-token` value for a given `{ sub, email, name }`. The salt is the cookie name; HKDF derives the key from `AUTH_SECRET`. Mirrors the algorithm in `platform/internal/auth/jwt.go::DecryptAuthJSToken` so a token minted by this helper is decryptable by the Go middleware.
+- Modify: `e2e/playwright.config.ts` — pass `NEXTAUTH_SECRET` and `NEXTAUTH_URL` from the host environment into the test fixtures.
+- Create: `e2e/helpers/jwe.ts` — small helper that wraps the same `jose` JWE encoder Auth.js uses and produces a valid `__Secure-authjs.session-token` value for a given `{ sub, email, name }`. The salt is the cookie name; HKDF derives the key from `NEXTAUTH_SECRET` with the info string `Auth.js Generated Encryption Key (${salt})`. Mirrors the algorithm in `platform/internal/auth/jwt.go::DecryptAuthJSToken` so a token minted by this helper is decryptable by the Go middleware.
+
+**Env var note:** the Go backend reads `NEXTAUTH_SECRET` (`platform/internal/config/config.go:68`); the project's `.env.example` and `docs/setup.md` use that name. Auth.js v5 alias-accepts both `AUTH_SECRET` and `NEXTAUTH_SECRET` on the Next side, but Go does not. Use `NEXTAUTH_SECRET` everywhere in the E2E plumbing for consistency.
 
 ### Task 3.2: Strengthen `e2e/auth-identity.spec.ts` (5.1b)
 
@@ -96,12 +100,13 @@ Keep the original assertion (no leak path) intact.
 
 Two approaches considered. **Recommendation: persist the role** because the UI already asks the question and discarding it has no upside. The alternative — remove the selector and route everyone through `/onboarding` — gives up information that the user typed.
 
-### Task 4.1: Schema — add `intended_role` to users
+### Task 4.1: Schema — add `intended_role` enum column to users
 
 **Files:**
-- Create: `drizzle/00XX_user_intended_role.sql` — `ALTER TABLE users ADD COLUMN intended_role TEXT NULL CHECK (intended_role IN ('teacher','student'))`
-- Modify: `src/lib/db/schema.ts` — add the column.
-- Run: `bun run db:generate` and apply the migration to `bridge` + `bridge_test`.
+- Modify: `src/lib/db/schema.ts` — add a new `signupIntentEnum = pgEnum("signup_intent", ["teacher", "student"])` (consistent with the existing enum-per-domain pattern at `src/lib/db/schema.ts:19-93`; do NOT use raw `TEXT` with a CHECK constraint, which would be inconsistent with the rest of the schema). Add `intendedRole: signupIntentEnum("intended_role")` (nullable) on `users`.
+- Run: `bun run db:generate` to produce `drizzle/00XX_user_intended_role.sql`. Apply to `bridge` and `bridge_test`.
+
+**Note re-using `userRoleEnum`:** that enum is explicitly tagged as kept-only-for-migration-compatibility (`src/lib/db/schema.ts:19-24`). Do not extend it — make a fresh enum scoped to signup intent.
 
 ### Task 4.2: Persist on register
 
@@ -119,64 +124,129 @@ Extend the zod schema to accept `role: z.enum(["teacher", "student"]).optional()
 - Vitest integration in `tests/integration/auth-register.test.ts` — `role: "teacher"` and `role: "student"` are persisted; absent role still works (BC).
 - Unit test for the onboarding page if one exists; otherwise add a smoke test.
 
+### Task 4.5 (scope add per Codex): student signup from class invite carries intent
+
+Review 002 (line 179) calls out that a student signing up from a class invite/join context should carry that intent through registration.
+
+**Files:**
+- Modify: `src/app/(auth)/register/page.tsx` — read `?invite=<token>` from the URL. When present, default `role` to `student` and persist the invite token through registration (currently lost across the signup → login redirect chain).
+- Modify: `src/app/api/auth/register/route.ts` — accept an optional `inviteToken` and, on successful signup, immediately attempt to honor it (call the existing class-join code path). Failure to honor is non-fatal — the user lands on the dashboard either way.
+- E2E follow-up: existing `e2e/join-class.spec.ts` covers logged-in join; add an unauthenticated join-via-invite-link variant.
+
 ---
 
 ## Phase 5: Deep-Link `callbackUrl` Preservation
 
-### Task 5.1: Add Next.js root middleware
+**Important correction from Codex:** `src/middleware.ts` already exists and binds `auth as middleware` to `/api/orgs/*` and `/api/admin/*`. Naively replacing it would drop those API auth guards — a security regression. Also, `x-invoke-path` is internal Next.js request metadata, not a public header we can rely on injecting. Both reasons force a different shape for this phase.
 
-**File:** Create `src/middleware.ts`
+### Task 5.1: Extend the existing middleware to handle portal redirects
 
-Captures the request URL pre-redirect by setting `x-invoke-path` (the header `portal-shell.tsx:22` already reads). Use `NextResponse.next()` and pass headers through.
+**File:** Modify `src/middleware.ts`
+
+Replace the one-line re-export with a composed middleware that:
+
+1. For paths matching `/api/orgs/*` or `/api/admin/*`: defer to `auth as middleware` (preserves the existing auth guard exactly).
+2. For paths matching the portal trees (`/teacher/*`, `/student/*`, `/parent/*`, `/org/*`, `/admin/*` — but NOT `/api/admin/*`): call `auth()` to check the session. If unauthenticated, redirect with the original path baked into `callbackUrl`. If authenticated, fall through.
+
+This pattern lets the middleware see the URL natively (no header injection needed) and pass `callbackUrl=<originalPath>` directly to `/login`.
+
+The matcher must explicitly exclude `_next/`, `favicon`, anything with a file extension, and the API auth paths handled by branch (1) so they aren't double-processed.
 
 ```ts
+// Sketch — exact form decided at implementation time after re-reading
+// auth.config and confirming Auth.js v5 export shape.
 import { NextRequest, NextResponse } from "next/server";
+import { auth } from "@/lib/auth";
 
-export function middleware(req: NextRequest) {
-  const headers = new Headers(req.headers);
-  headers.set("x-invoke-path", req.nextUrl.pathname + req.nextUrl.search);
-  return NextResponse.next({ request: { headers } });
-}
+const PORTAL_TREES = ["/teacher", "/student", "/parent", "/org", "/admin"];
+
+export default auth((req) => {
+  const { pathname } = req.nextUrl;
+
+  // Existing API auth-guard contract: continue to enforce session presence
+  // for /api/orgs/* and /api/admin/*. The auth() wrapper already does this.
+
+  // Deep-link preservation: portal trees redirect-to-login with callbackUrl
+  // when unauthenticated. Auth.js's auth() callback runs with req.auth set.
+  const isPortal = PORTAL_TREES.some(
+    (p) => pathname === p || pathname.startsWith(p + "/")
+  );
+  if (isPortal && !req.auth) {
+    const callback = encodeURIComponent(pathname + req.nextUrl.search);
+    const url = new URL(`/login?callbackUrl=${callback}`, req.nextUrl.origin);
+    return NextResponse.redirect(url);
+  }
+  return NextResponse.next();
+});
 
 export const config = {
-  matcher: ["/((?!_next/|api/|favicon|.*\\.).+)"],
+  matcher: [
+    "/api/orgs/:path*",
+    "/api/admin/:path*",
+    "/teacher/:path*",
+    "/student/:path*",
+    "/parent/:path*",
+    "/org/:path*",
+    "/admin/:path*",
+  ],
 };
 ```
 
-### Task 5.2: Verify portal-shell consumes the header
+### Task 5.2: Simplify `portal-shell.tsx`
 
-**File:** `src/components/portal/portal-shell.tsx:22`
+**File:** `src/components/portal/portal-shell.tsx`
 
-Existing code already reads `x-invoke-path`; with the middleware in place the deep-link case stops being lossy. Open redirect protection (added in plan 038's review) still applies on the receiving side.
+After Task 5.1, the unauth redirect is handled at the middleware layer with the correct `callbackUrl`. The page-level `loginRedirect()` (lines 22-29) becomes a defense-in-depth fallback for the unlikely case middleware didn't run. Keep it but drop the `x-invoke-path` / `x-url` lookup — middleware ensures the user never hits portal-shell unauthenticated.
 
 ### Task 5.3: E2E for deep-link
 
 **File:** `e2e/deep-link.spec.ts` (new)
 
-Open `/teacher/classes/<some-uuid>` while signed out. Assert redirect to `/login?callbackUrl=%2Fteacher%2Fclasses%2F<uuid>`. Sign in. Assert landing on the original deep link.
+Open `/teacher/classes/<some-uuid>` while signed out. Assert redirect to `/login?callbackUrl=%2Fteacher%2Fclasses%2F<uuid>`. Sign in via the form. Assert landing on the original deep link.
+
+### Task 5.4: Regression test for the existing API auth guard
+
+**File:** `tests/unit/middleware-config.test.ts` (new)
+
+Assert that the matcher list includes `/api/orgs/:path*` and `/api/admin/:path*` — locks in the contract that the existing auth guard hasn't been dropped by the rewrite.
 
 ---
 
 ## Phase 6: Org Membership Dedup
 
-### Task 6.1: Backend dedup on the API edge
+**Locked decision (per Codex pre-impl review):** dedupe in the **store query**, not at the handler shape and not via a new endpoint. The existing response contract — array of `{orgId, role, status, orgStatus, ...}` rows — has multiple consumers (`teacher/units/new`, `teacher/units`) that filter by role; changing the shape forces parallel rewrites and is a cross-cutting contract break. Dedup in `GetUserMemberships` returns one row per `(orgId, role)` pair from the query layer, plus a frontend defensive dedup so rolling deploys don't regress the UI.
 
-**File:** `platform/internal/handlers/orgs.go`
+### Task 6.1: Dedup at the store query
 
-Find the handler that backs `/api/orgs` (likely `ListMyOrgs` or similar). Change the response shape from `[membership_row]` to `[{ orgId, name, slug, status, roles: [...] }]` — one entry per distinct org with roles attached. Or add a `/api/orgs/distinct` variant if a wholesale shape change is too invasive. Decision in the plan implementation: pick the lower-blast-radius option after grepping consumers.
+**File:** `platform/internal/store/orgs.go::GetUserMemberships` (lines 332-359)
 
-### Task 6.2: Frontend defensive dedup
+Add `DISTINCT ON (om.org_id, om.role)` to the SELECT to collapse duplicate `(orgId, role)` pairs from the same org. Order by `om.created_at` so DISTINCT ON keeps the oldest row deterministically.
+
+```sql
+SELECT DISTINCT ON (om.org_id, om.role)
+  om.id, om.org_id, om.user_id, om.role, om.status, om.created_at,
+  o.name, o.slug, o.status
+FROM org_memberships om
+INNER JOIN organizations o ON om.org_id = o.id
+WHERE om.user_id = $1
+ORDER BY om.org_id, om.role, om.created_at
+```
+
+The response shape stays identical — consumers see one row per `(orgId, role)` instead of one per (orgId, role, duplicate insertion).
+
+### Task 6.2: Frontend defensive dedup by `orgId`
+
+For UI selectors that show one option per org regardless of role, the React `key={org.orgId}` warning still fires if the user has multiple roles in the same org (`teacher` + `org_admin`). Dedup at the consumer:
 
 **Files:**
-- Modify: `src/app/(portal)/teacher/units/new/page.tsx:40-69` — dedupe `data` by `orgId` before `setOrgs`.
+- Modify: `src/app/(portal)/teacher/units/new/page.tsx:40-69` — `Array.from(new Map(filtered.map(o => [o.orgId, o])).values())` before `setOrgs`.
 - Modify: `src/app/(portal)/teacher/units/page.tsx` (the same `loadOrgs` pattern around line 135).
 - Any other consumer surfaced by `grep -rn "/api/orgs" src/`.
 
-Defensive even after the backend fix because rolling deploys can serve old data.
+### Task 6.3: Tests
 
-### Task 6.3: Test
-
-- Vitest: render the units/new page with a mock that returns duplicate rows; assert no duplicate option keys (no React warning).
+- Go: integration test in `platform/internal/store/orgs_test.go` that inserts a user with two memberships in the same org with different roles and asserts `GetUserMemberships` still returns each `(orgId, role)` pair once.
+- Vitest: render `units/new` with a mock returning two duplicate `(orgId, teacher)` rows; assert the rendered `<option>` count is 1 per org.
 
 ---
 
@@ -201,26 +271,26 @@ Defensive even after the backend fix because rolling deploys can serve old data.
 
 **File:** `src/app/layout.tsx:23-46`
 
-Replace the raw `<script dangerouslySetInnerHTML>` with `next/script` using `strategy="beforeInteractive"`. The strategy guarantees the script runs before any client React tree renders, preserving the no-FOUC behavior.
+Replace the raw `<script dangerouslySetInnerHTML>` (which triggers the dev-overlay "Encountered a script tag while rendering React component" error on every route) with `next/script` using `strategy="beforeInteractive"`. App Router supports this strategy in the root layout since Next 13; project is on Next 16.
 
 ```tsx
 import Script from "next/script";
 
 const themeScript = `(function(){var t=localStorage.getItem('bridge-theme')||'light';if(t==='dark')document.documentElement.classList.add('dark');else document.documentElement.classList.remove('dark');})()`;
 
-// In the body, before SessionProvider:
+// Inside <html>, before <body>:
 <Script id="bridge-theme-bootstrap" strategy="beforeInteractive">
   {themeScript}
 </Script>
 ```
 
-The dev-overlay error ("Encountered a script tag while rendering React component…") goes away because `next/script` is the supported pattern.
+**Validation gate before merging:** confirm visually in dev that (a) the dev-overlay error is gone and (b) there is no theme FOUC on initial page load (preserve the existing behavior). If `beforeInteractive` doesn't actually run early enough in App Router for our case, fall back to keeping the inline `<script>` but suppress the warning via the documented `<head>` placement pattern. The plan's expected outcome is "no dev-overlay error AND no FOUC"; the implementation chooses whichever pattern delivers both.
 
 ### Task 8.2: Manual verification + smoke E2E
 
 **File:** `e2e/theme-bootstrap.spec.ts` (new)
 
-Open `/` with `localStorage.setItem('bridge-theme','dark')` pre-seeded; assert `<html class>` includes `dark` on initial paint without a flash. (Hard to assert "no flash" reliably in headless; minimum assertion: dark class present after load.)
+Open `/` with `localStorage.setItem('bridge-theme','dark')` pre-seeded; assert `<html class>` includes `dark` on initial paint without a flash. (Hard to assert "no flash" reliably in headless; minimum assertion: dark class present after load.) Add a console-error sentinel that fails the test if any "Encountered a script tag while rendering React component" message appears.
 
 ---
 
@@ -231,13 +301,15 @@ Open `/` with `localStorage.setItem('bridge-theme','dark')` pre-seeded; assert `
 | 1 | Trusted proxy XFP | Smallest auth hardening; pure backend, isolated |
 | 2 | Admin users dual-source | Tiny one-page change; uses /api/me/identity from 039 |
 | 3 | Stronger E2E | Builds on phases 1-2; finishes the auth hardening track |
-| 4 | Registration intent | Schema + API + onboarding; standalone |
-| 5 | Deep-link middleware | One new file (`middleware.ts`); standalone |
-| 6 | Org membership dedup | Touches multiple consumers; do after the simpler items |
+| 4 | Registration intent | Schema + API + onboarding + invite-token carry-through; **largest phase, watch for scope creep** |
+| 5 | Deep-link middleware | Edits existing `src/middleware.ts` — composes with the existing API auth guard; do after Phase 4 to confirm onboarding flow still works through the new middleware |
+| 6 | Org membership dedup | Touches DB query + multiple consumers; do after the simpler items |
 | 7 | Parent /children trim | Trivial deletion + nav update |
 | 8 | Theme script | Layout-touching but isolated |
 
-Phases are independent; could be split into multiple PRs if any individual phase grows. Default plan: one PR, eight commits.
+Phases are independent; **Phase 4 is the most likely to need its own PR** (schema migration + onboarding behavior change has product blast radius). If Phase 4 grows during implementation — new tests fail, schema migration is non-trivial, onboarding logic ramifies — extract it to plan 040b and ship the rest of 040 first.
+
+Default plan: one PR, eight commits, with an explicit gate after Phase 4 to confirm scope hasn't blown up.
 
 ---
 
@@ -257,4 +329,29 @@ Phases are independent; could be split into multiple PRs if any individual phase
 
 ## Codex Review of This Plan
 
-_To be added after the plan is dispatched to Codex via `/codex:rescue`._
+- **Date:** 2026-04-26
+- **Reviewer:** Codex (pre-implementation, via `codex:rescue`)
+- **Verdict:** Corrections applied (see below). Plan is now ready for implementation.
+
+### Corrections applied
+
+1. `[CRITICAL]` **Phase 5 middleware collision.** `src/middleware.ts` already exists and binds `auth as middleware` to `/api/orgs/*` and `/api/admin/*`. The original draft would have replaced it and dropped the existing auth guard — a security regression. → Phase 5 rewritten to **extend** the existing middleware with both branches: preserve API auth-guard semantics for `/api/orgs/*` and `/api/admin/*`, and add portal-tree redirect-with-callbackUrl for unauthenticated users hitting `/teacher/*`, `/student/*`, etc. New regression test (Task 5.4) asserts the API matcher contract isn't dropped. Also dropped the `x-invoke-path` injection approach because that header is internal Next.js metadata, not a public surface — middleware sees the URL natively.
+
+2. `[IMPORTANT]` **Phase 1 deployment requirement.** Allowlist alone is insufficient if the proxy passes through client-supplied `X-Forwarded-Proto`. → Task 1.2 now explicitly requires the ingress proxy to strip client-supplied XFP headers before forwarding; allowlist + stripping are required together.
+
+3. `[IMPORTANT]` **Phase 3 env var name.** Plan said `AUTH_SECRET` but Go reads `NEXTAUTH_SECRET` (`platform/internal/config/config.go:68`); project's `.env.example` and `docs/setup.md` use that name. → Task 3.1 now uses `NEXTAUTH_SECRET` consistently with a note about the Auth.js v5 alias situation. JWE algorithm confirmed (`alg=dir`, `enc=A256CBC-HS512`, HKDF SHA-256 with info `Auth.js Generated Encryption Key (${salt})`) so a token minted by the helper IS decryptable by Go middleware.
+
+4. `[IMPORTANT]` **Phase 4 schema choice.** Original plan proposed `intended_role TEXT NULL CHECK (...)`. Schema precedent is enums-per-domain (`src/lib/db/schema.ts:19-93`); raw TEXT+CHECK is inconsistent. → Task 4.1 now creates a fresh `signupIntentEnum` rather than extending the legacy `userRoleEnum` (which is explicitly tagged for migration compatibility only).
+
+5. `[IMPORTANT]` **Phase 6 API shape decision deferred to impl time.** Codex flagged that leaving the choice open invites a contract break. → Phase 6 now locks the decision: dedup at the **store query** with `DISTINCT ON (org_id, role)`. Response shape unchanged; existing consumers keep working. Frontend defensive dedup added by `orgId` for selectors that show one option per org regardless of role.
+
+6. `[IMPORTANT]` **Phase 4 size flag.** Codex noted Phase 4 has product/data blast radius beyond the other phases. → Implementation Order updated with a note that Phase 4 is the most likely to need its own PR; if it grows, extract to 040b and ship the rest of 040 first.
+
+7. `[MINOR]` **Phase 4 invite-context scope gap.** Review 002 (line 179) mentioned that students signing up from a class invite should carry that intent. → Task 4.5 added covering invite-token plumbing through registration.
+
+### Codex notes (no plan change required)
+
+- `r.RemoteAddr` is the right address class to trust-check for `X-Forwarded-Proto` — it's the immediate peer (proxy IP for proxied requests, client IP for direct hits).
+- No other read-sites for `X-Forwarded-Proto` in production code beyond `platform/internal/auth/middleware.go:20`.
+- Phase 8 `next/script beforeInteractive` likely works in App Router root layout for Next 16, but still needs visual validation in dev. Plan now has an explicit validation gate before the implementation commits to that pattern.
+
