@@ -54,9 +54,11 @@ export const portalConfigs: Record<string, PortalConfig> = {
     role: "parent",
     label: "Parent",
     basePath: "/parent",
+    // /parent/children was a redirect-only entry; removed in plan 040
+    // phase 7. A real children list view is product work that needs its
+    // own design pass (deferred).
     navItems: [
       { label: "Dashboard", href: "/parent", icon: "layout-dashboard" },
-      { label: "My Children", href: "/parent/children", icon: "users" },
     ],
   },
 };
