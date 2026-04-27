@@ -22,6 +22,7 @@ import { useYjsProvider } from "@/lib/yjs/use-yjs-provider";
 import { usePyodide } from "@/lib/pyodide/use-pyodide";
 import { Button } from "@/components/ui/button";
 import { TestResultsCard, type TestRunSummary } from "@/components/problem/test-results-card";
+import { ResponsiveTabs, type NarrowTabId } from "@/components/problem/responsive-tabs";
 
 interface Props {
   classId: string;
@@ -175,7 +176,7 @@ export function ProblemShell({
 
   // Plan 042 narrow-viewport tab state. Default to "code" — user lands
   // on the editor, the load-bearing pane.
-  const [narrowTab, setNarrowTab] = useState<"problem" | "code" | "io">("code");
+  const [narrowTab, setNarrowTab] = useState<NarrowTabId>("code");
 
   // Plan 042: below the lg breakpoint, only one of the three panes is
   // visible at a time, switched via a tab bar. Above lg, all three render
@@ -183,43 +184,17 @@ export function ProblemShell({
   // Tailwind's `lg:flex` overrides `hidden` at wide widths so this state
   // stays dormant on desktop while every pane stays mounted (preserving
   // Yjs/Monaco state across narrow tab switches).
-  const paneClass = (id: "problem" | "code" | "io") =>
-    narrowTab === id ? "flex" : "hidden lg:flex";
+  //
+  // `flex-1` on the active narrow pane is load-bearing: without it, the
+  // pane content-sizes inside the column-flex outer container and Monaco
+  // (or the I/O panel) collapses to its content height. At lg widths,
+  // `lg:flex-initial` resets to the existing wide-screen sizing.
+  const paneClass = (id: NarrowTabId) =>
+    narrowTab === id ? "flex flex-1 lg:flex-initial" : "hidden lg:flex";
 
   return (
     <div className="flex h-[calc(100vh-var(--portal-header-height,56px))] flex-col overflow-hidden lg:flex-row">
-      {/* Tab bar — narrow viewports only */}
-      <div
-        role="tablist"
-        aria-label="Problem editor sections"
-        className="flex border-b border-zinc-200 bg-white lg:hidden"
-      >
-        {([
-          { id: "problem", label: "Problem" },
-          { id: "code", label: "Code" },
-          { id: "io", label: "I/O" },
-        ] as const).map((tab) => {
-          const active = narrowTab === tab.id;
-          return (
-            <button
-              key={tab.id}
-              role="tab"
-              id={`problem-tab-${tab.id}`}
-              aria-selected={active}
-              aria-controls={`problem-pane-${tab.id}`}
-              onClick={() => setNarrowTab(tab.id)}
-              className={
-                "flex-1 px-4 py-3 text-sm font-medium transition-colors " +
-                (active
-                  ? "border-b-2 border-amber-600 text-zinc-900"
-                  : "text-zinc-500 hover:text-zinc-800")
-              }
-            >
-              {tab.label}
-            </button>
-          );
-        })}
-      </div>
+      <ResponsiveTabs active={narrowTab} onChange={setNarrowTab} />
 
       {/* LEFT */}
       <aside

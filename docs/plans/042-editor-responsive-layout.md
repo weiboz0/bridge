@@ -280,5 +280,20 @@ One PR. ~4 commits.
 ### Review 2 — Post-implementation review
 
 - **Date:** 2026-04-27
-- **Reviewer:** Codex (post-implementation, dispatch pending)
-- **Status:** To be appended after the post-impl Codex review completes.
+- **Reviewer:** Codex (post-implementation, via `codex:rescue`)
+- **Verdict:** Two `[IMPORTANT]` + one `[MINOR]` fixed in-PR. Five `[NOTE]` items confirmed correct without action.
+
+**Fixed in commit applied after Review 2:**
+
+1. `[IMPORTANT]` **Pane height collapse at narrow widths.** `paneClass` returned only `"flex"` for the active pane. In the column-flex outer container the active left/right panes content-sized rather than filling the column; Monaco was fine because of inner `flex-1`, but the Problem and I/O panes could collapse. → `paneClass` now returns `"flex flex-1 lg:flex-initial"`, locking the active narrow pane to fill the column while resetting at lg widths so the existing wide-screen sizing rules win.
+2. `[IMPORTANT]` **Vitest harness duplicated the contract.** The test reimplemented the tab markup + state machine instead of importing the real component, letting the implementation drift silently. → Extracted `<ResponsiveTabs>` into `src/components/problem/responsive-tabs.tsx`. Both `problem-shell.tsx` and the Vitest test now import the same component. Test renamed to focus on the `ResponsiveTabs` contract.
+3. `[MINOR]` **Missing arrow-key navigation.** Standard ARIA tabs pattern requires roving tabindex (only the active tab in the doc tab order, others `tabindex="-1"`) plus ArrowLeft/ArrowRight/Home/End handling. → `ResponsiveTabs` now wires both, including focus management via a `useRef`-tracked button array. Two new test cases cover ArrowRight wrap-around and Home/End jumps.
+
+**Codex notes (no action):**
+
+- ResizeObserver only triggers on the 0→non-zero transition by design; `automaticLayout` covers the steady-state polling. No missed hidden-at-mount path because the default tab is `code`.
+- ARIA wiring (tablist/tab/tabpanel + aria-controls/aria-labelledby/aria-selected) is correctly cross-linked.
+- `hidden lg:flex` ordering in JSX doesn't matter — Tailwind's responsive override is media-query-based, not specificity-based.
+- Tab bar `lg:hidden` is `display:none` at wide widths; doesn't consume height.
+- Wide-viewport behavior is unchanged when the user is on a non-code narrow tab — `lg:flex` overrides `hidden` so all three panes appear.
+- Playwright test correctly exercises the real student portal (sidebar visible) so the 1024px overflow assertion isn't a false pass.

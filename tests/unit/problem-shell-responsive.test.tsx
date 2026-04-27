@@ -1,89 +1,48 @@
 // @vitest-environment jsdom
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { useState } from "react";
 import { render, screen, fireEvent } from "@testing-library/react";
+import { ResponsiveTabs, type NarrowTabId } from "@/components/problem/responsive-tabs";
 
 /**
- * The inline tab semantics from problem-shell.tsx — a self-contained
- * test of the active-tab state machine + the ARIA wiring. Re-renders
- * the same JSX shape the shell uses but without Monaco/Yjs/Pyodide
- * (which would each need a heavy mock just to assert tab behavior).
+ * Tests the actual ResponsiveTabs component used by problem-shell.tsx
+ * — Codex post-impl review #7 flagged that an in-test reimplementation
+ * would let the real component drift silently. By importing the real
+ * component, this test locks the contract.
  *
- * Plan 042 phase 1.5: Vitest covers the state machine + ARIA contract;
- * Playwright covers actual viewport-driven layout.
+ * The wrapper provides the active-tab state (which lives in
+ * problem-shell.tsx in production); the component itself owns the
+ * tab markup, ARIA attributes, and keyboard interaction.
  */
-function ResponsiveTabHarness() {
-  type Tab = "problem" | "code" | "io";
-  const [narrowTab, setNarrowTab] = useState<Tab>("code");
-
-  const paneClass = (id: Tab) =>
-    narrowTab === id ? "flex" : "hidden lg:flex";
-
+function TabsHarness({ initial = "code" as NarrowTabId }: { initial?: NarrowTabId }) {
+  const [active, setActive] = useState<NarrowTabId>(initial);
   return (
-    <div>
-      <div role="tablist" aria-label="Problem editor sections" className="lg:hidden">
-        {(["problem", "code", "io"] as const).map((id) => (
-          <button
-            key={id}
-            role="tab"
-            id={`problem-tab-${id}`}
-            aria-selected={narrowTab === id}
-            aria-controls={`problem-pane-${id}`}
-            onClick={() => setNarrowTab(id)}
-          >
-            {id}
-          </button>
-        ))}
-      </div>
-      <div
-        role="tabpanel"
-        id="problem-pane-problem"
-        aria-labelledby="problem-tab-problem"
-        className={paneClass("problem")}
-      >
-        problem-content
-      </div>
-      <div
-        role="tabpanel"
-        id="problem-pane-code"
-        aria-labelledby="problem-tab-code"
-        className={paneClass("code")}
-      >
-        code-content
-      </div>
-      <div
-        role="tabpanel"
-        id="problem-pane-io"
-        aria-labelledby="problem-tab-io"
-        className={paneClass("io")}
-      >
-        io-content
-      </div>
-    </div>
+    <>
+      <ResponsiveTabs active={active} onChange={setActive} />
+      <div role="tabpanel" id="problem-pane-problem" aria-labelledby="problem-tab-problem" />
+      <div role="tabpanel" id="problem-pane-code" aria-labelledby="problem-tab-code" />
+      <div role="tabpanel" id="problem-pane-io" aria-labelledby="problem-tab-io" />
+    </>
   );
 }
 
-describe("ProblemShell narrow-tab semantics", () => {
-  it("starts on code (the editor is the load-bearing pane)", () => {
-    render(<ResponsiveTabHarness />);
-    expect(screen.getByRole("tab", { name: "code" })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByRole("tab", { name: "problem" })).toHaveAttribute("aria-selected", "false");
-    expect(screen.getByRole("tab", { name: "io" })).toHaveAttribute("aria-selected", "false");
+describe("ResponsiveTabs", () => {
+  it("starts with the initial active tab selected", () => {
+    render(<TabsHarness initial="code" />);
+    expect(screen.getByRole("tab", { name: "Code" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Problem" })).toHaveAttribute("aria-selected", "false");
+    expect(screen.getByRole("tab", { name: "I/O" })).toHaveAttribute("aria-selected", "false");
   });
 
   it("clicking a tab switches the active selection", () => {
-    render(<ResponsiveTabHarness />);
-    fireEvent.click(screen.getByRole("tab", { name: "problem" }));
-    expect(screen.getByRole("tab", { name: "problem" })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByRole("tab", { name: "code" })).toHaveAttribute("aria-selected", "false");
-
-    fireEvent.click(screen.getByRole("tab", { name: "io" }));
-    expect(screen.getByRole("tab", { name: "io" })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByRole("tab", { name: "problem" })).toHaveAttribute("aria-selected", "false");
+    render(<TabsHarness />);
+    fireEvent.click(screen.getByRole("tab", { name: "Problem" }));
+    expect(screen.getByRole("tab", { name: "Problem" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Code" })).toHaveAttribute("aria-selected", "false");
   });
 
   it("each tab's aria-controls points at a tabpanel with the matching id", () => {
-    render(<ResponsiveTabHarness />);
+    render(<TabsHarness />);
     const tabs = screen.getAllByRole("tab");
     for (const tab of tabs) {
       const controlsId = tab.getAttribute("aria-controls");
@@ -95,19 +54,51 @@ describe("ProblemShell narrow-tab semantics", () => {
     }
   });
 
-  it("active pane gets `flex`; inactive panes get `hidden lg:flex` so they stay mounted at wide widths", () => {
-    render(<ResponsiveTabHarness />);
-    const codePane = document.getElementById("problem-pane-code")!;
-    const problemPane = document.getElementById("problem-pane-problem")!;
-    expect(codePane.className).toContain("flex");
-    expect(codePane.className).not.toContain("hidden");
-    expect(problemPane.className).toContain("hidden");
-    expect(problemPane.className).toContain("lg:flex");
+  it("only the active tab is in the document tab order (roving tabindex)", () => {
+    render(<TabsHarness initial="code" />);
+    expect(screen.getByRole("tab", { name: "Code" })).toHaveAttribute("tabindex", "0");
+    expect(screen.getByRole("tab", { name: "Problem" })).toHaveAttribute("tabindex", "-1");
+    expect(screen.getByRole("tab", { name: "I/O" })).toHaveAttribute("tabindex", "-1");
+  });
 
-    fireEvent.click(screen.getByRole("tab", { name: "problem" }));
-    expect(problemPane.className).toContain("flex");
-    expect(problemPane.className).not.toContain("hidden");
-    expect(codePane.className).toContain("hidden");
-    expect(codePane.className).toContain("lg:flex");
+  it("ArrowRight moves focus and selection to the next tab; wraps at end", () => {
+    render(<TabsHarness initial="code" />);
+    const codeTab = screen.getByRole("tab", { name: "Code" });
+    codeTab.focus();
+    fireEvent.keyDown(codeTab, { key: "ArrowRight" });
+    expect(screen.getByRole("tab", { name: "I/O" })).toHaveAttribute("aria-selected", "true");
+
+    const ioTab = screen.getByRole("tab", { name: "I/O" });
+    fireEvent.keyDown(ioTab, { key: "ArrowRight" });
+    // Wraps from I/O → Problem
+    expect(screen.getByRole("tab", { name: "Problem" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("ArrowLeft moves focus and selection to the previous tab; wraps at start", () => {
+    render(<TabsHarness initial="problem" />);
+    const problemTab = screen.getByRole("tab", { name: "Problem" });
+    problemTab.focus();
+    fireEvent.keyDown(problemTab, { key: "ArrowLeft" });
+    // Wraps from Problem → I/O
+    expect(screen.getByRole("tab", { name: "I/O" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("Home and End jump to the first/last tab", () => {
+    render(<TabsHarness initial="code" />);
+    const codeTab = screen.getByRole("tab", { name: "Code" });
+    codeTab.focus();
+    fireEvent.keyDown(codeTab, { key: "End" });
+    expect(screen.getByRole("tab", { name: "I/O" })).toHaveAttribute("aria-selected", "true");
+
+    const ioTab = screen.getByRole("tab", { name: "I/O" });
+    fireEvent.keyDown(ioTab, { key: "Home" });
+    expect(screen.getByRole("tab", { name: "Problem" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("calls onChange with the new tab id on click", () => {
+    const onChange = vi.fn();
+    render(<ResponsiveTabs active="code" onChange={onChange} />);
+    fireEvent.click(screen.getByRole("tab", { name: "I/O" }));
+    expect(onChange).toHaveBeenCalledWith("io");
   });
 });
