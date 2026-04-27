@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { getClassSettings } from "@/lib/classes";
 import { api, ApiError } from "@/lib/api-client";
 import { ProblemShell } from "@/components/problem/problem-shell";
+import { isValidUUID } from "@/lib/utils";
 
 interface Problem {
   id: string;
@@ -41,6 +42,10 @@ export default async function StudentProblemPage({
   params: Promise<{ id: string; problemId: string }>;
 }) {
   const { id: classId, problemId } = await params;
+  // Plan 043 phase 6.3: malformed deep links used to surface as a generic
+  // server error ("API 400 /api/problems/<garbage>"). Map bad UUIDs to a
+  // stable not-found state up front.
+  if (!isValidUUID(classId) || !isValidUUID(problemId)) notFound();
 
   try {
     const [problem, testCases, initialAttempts, classSettings] = await Promise.all([

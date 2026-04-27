@@ -23,17 +23,21 @@ describe("nav-config", () => {
 
   // Plan 041 phase 3.1: every org_admin nav entry must have a backing
   // page file. Catches the "added a nav link, forgot the page" mistake.
-  it("every org_admin nav item has a matching page file", () => {
-    const repoRoot = path.resolve(__dirname, "..", "..");
-    for (const item of portalConfigs.org_admin.navItems) {
-      const relPath = item.href.replace(/^\//, "");
-      const pagePath = path.join(repoRoot, "src", "app", "(portal)", relPath, "page.tsx");
-      expect(
-        fs.existsSync(pagePath),
-        `org_admin nav item "${item.label}" → ${item.href} has no page file at ${pagePath}`
-      ).toBe(true);
+  // Plan 043 phase 6.4: extended to cover the admin portal too.
+  it.each(["org_admin", "admin"] as const)(
+    "every %s nav item has a matching page file",
+    (portalRole) => {
+      const repoRoot = path.resolve(__dirname, "..", "..");
+      for (const item of portalConfigs[portalRole].navItems) {
+        const relPath = item.href.replace(/^\//, "");
+        const pagePath = path.join(repoRoot, "src", "app", "(portal)", relPath, "page.tsx");
+        expect(
+          fs.existsSync(pagePath),
+          `${portalRole} nav item "${item.label}" -> ${item.href} has no page file at ${pagePath}`
+        ).toBe(true);
+      }
     }
-  });
+  );
 
   it("every nav item has a valid href starting with /", () => {
     for (const config of Object.values(portalConfigs)) {

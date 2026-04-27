@@ -5,10 +5,12 @@ export const portalConfigs: Record<string, PortalConfig> = {
     role: "admin",
     label: "Platform Admin",
     basePath: "/admin",
+    // /admin/settings was a redirect-only placeholder; plan 043 phase 6.4
+    // dropped it pending a real settings page design (matches the parent
+    // /children precedent from plan 040 phase 7).
     navItems: [
       { label: "Organizations", href: "/admin/orgs", icon: "building-2" },
       { label: "Users", href: "/admin/users", icon: "users" },
-      { label: "Settings", href: "/admin/settings", icon: "settings" },
     ],
   },
   org_admin: {

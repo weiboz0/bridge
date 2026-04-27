@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { api, ApiError } from "@/lib/api-client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { CreateClassForm } from "@/components/teacher/create-class-form";
+import { isValidUUID } from "@/lib/utils";
 
 interface Course {
   id: string;
@@ -15,6 +16,10 @@ export default async function CreateClassPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
+  // Plan 043 phase 6.2: malformed course IDs used to surface as a blank
+  // page + console "API 400" error. Mirror the parent course-detail
+  // page's UUID guard so bad URLs map to a stable not-found state.
+  if (!isValidUUID(id)) notFound();
 
   let course: Course;
   try {
