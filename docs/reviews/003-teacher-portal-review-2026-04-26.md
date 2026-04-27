@@ -7,7 +7,7 @@ Scope: Teacher portal only: dashboard, courses, classes, sessions, units, live-s
 
 The teacher portal has improved since the earlier broad review: the teacher primary navigation is now narrowed to actionable teacher surfaces, and the class detail page now recognizes `live` sessions. However, the portal is not ready for the next teacher workflow milestone until auth identity is made canonical across Next/Auth.js and the Go API. In the tested browser session, the shell showed Eve Teacher while Go-backed teacher endpoints authorized as a different user ID, which caused live sessions to be listed but not openable and caused class details to display another instructor identity.
 
-The next development cycle should prioritize identity consistency first, then stabilize the live-session workspace semantics, then clean up unit-library org handling and detail-route failure states.
+The next development cycle should prioritize identity consistency first, then stabilize the live-session workspace semantics, then align the content taxonomy around Units as the only teaching-material artifact. Topics should become lightweight syllabus/focus-area records used to organize a course or split a session into focused areas, not a second lesson-authoring surface.
 
 ## Environment
 
@@ -16,6 +16,17 @@ The next development cycle should prioritize identity consistency first, then st
 - Tested account: `eve@demo.edu`
 - Current URL at end of pass: `/teacher/sessions`
 - Repository branch during review: `main`
+
+## Recommended Taxonomy
+
+Use a single canonical teaching-material object:
+
+- **Unit**: reusable teaching material. Owns lesson blocks, code, slides/notes/worksheet/reference variants, estimated minutes, grade level, tags, lifecycle status, revisions, forks, overlays, and classroom-ready review state.
+- **Course**: long-running instructional container. Owns class creation, enrollment context, high-level sequence, and syllabus structure.
+- **Topic** or **Syllabus Area**: lightweight course/session organizer. Represents a focused area such as "loops", "debugging", "arrays", or "quiz review"; it should not own lesson material. It can reference one or more Units and can be used to group a live session, pace a course, or filter the teacher workspace.
+- **Session Segment** or **Focus Area**: optional runtime instance of a topic/syllabus area inside a live session. This is useful when a teacher runs one class session through multiple focused areas.
+
+If the product language remains "Topic", treat it as a syllabus/focus-area label. If a clearer split is desired, rename author-facing "Topic" to **Syllabus Area** in course planning and **Focus Area** in live-session controls.
 
 ## Findings
 
@@ -98,20 +109,20 @@ Recommendation:
 
 Keep the form in a loading/disabled state until scope resolution completes, or move org lookup to a server component so the initial render already knows the correct default.
 
-### [P2] Topic editor has no failure state for missing or unauthorized topics
+### [P1] Topic editor still treats topics as teaching material
 
-File: `src/app/(portal)/teacher/courses/[id]/topics/[topicId]/page.tsx:30-67`
+File: `src/app/(portal)/teacher/courses/[id]/topics/[topicId]/page.tsx:30-115`
 
-The topic editor only calls `setTopic` on `res.ok`; any 400, 403, 404, or network failure leaves the teacher on an infinite `Loading...` state. I reproduced this with an invalid topic route. The same pattern would hide auth or backend failures during authoring.
+The topic editor still provides `LessonEditor`, `LessonRenderer`, `lessonContent`, and `starterCode`, which makes Topic a second teaching-material authoring surface alongside Unit. Since Units are now the canonical teaching material, keeping lesson content on Topic will split authoring, reuse, revisions, and classroom readiness across two models. Topic should become a lightweight syllabus/focus-area record that can reference Units, not own lesson blocks itself.
 
 Evidence:
 
-- Valid topic route eventually rendered the editor.
-- Invalid topic route remained on `Loading...`.
+- Valid topic route rendered an `Edit Topic` page with `Lesson Content (0 blocks)`, Markdown/Code/Image block controls, and starter-code editing.
+- Invalid topic route still remained on `Loading...`, which should be addressed as part of deprecating this authoring route.
 
 Recommendation:
 
-Track loading, error, and not-found states separately. Invalid UUIDs should resolve to a stable not-found state, unauthorized responses should show an access/error state, and save failures should be visible to the author.
+Remove lesson-material editing from Topic. Replace this route with a syllabus/focus-area editor for title, description, order, optional outcomes, and Unit references. Migrate any existing topic `lessonContent`/`starterCode` into Units or provide a one-time conversion path. Also add proper loading, error, and not-found states while this route remains reachable during the transition.
 
 ### [P2] Create-class deep links do not validate course IDs before hitting the API
 
@@ -138,9 +149,10 @@ Mirror the UUID validation and bad-request-to-`notFound()` handling used by `src
 
 1. Fix canonical identity across Auth.js, server API client, browser-proxied Go routes, and Go middleware.
 2. Re-test teacher dashboard to live-session entry from dashboard, class detail, and sessions list.
-3. Split live and ended session UX so historical sessions cannot render active controls.
-4. Dedupe org memberships in one shared layer and apply it to unit library and create-unit.
-5. Add route-level error/not-found handling for topic editor and create-class.
+3. Consolidate teaching-material authoring around Units; demote Topic to syllabus/focus-area organization with Unit references.
+4. Split live and ended session UX so historical sessions cannot render active controls.
+5. Dedupe org memberships in one shared layer and apply it to unit library and create-unit.
+6. Add route-level error/not-found handling for transitional topic routes and create-class.
 
 ## Verification Notes
 
