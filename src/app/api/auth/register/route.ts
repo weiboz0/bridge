@@ -9,6 +9,9 @@ const registerSchema = z.object({
   name: z.string().min(1).max(255),
   email: z.string().email(),
   password: z.string().min(8).max(128),
+  // Captures "what the user said when they signed up." Optional so other
+  // callers (Google OAuth flow, future invite flows) aren't broken.
+  role: z.enum(["teacher", "student"]).optional(),
 });
 
 export async function POST(request: NextRequest) {
@@ -22,7 +25,7 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const { name, email, password } = parsed.data;
+  const { name, email, password, role } = parsed.data;
 
   const [existing] = await db
     .select()
@@ -44,11 +47,13 @@ export async function POST(request: NextRequest) {
       name,
       email,
       passwordHash,
+      intendedRole: role ?? null,
     })
     .returning({
       id: users.id,
       name: users.name,
       email: users.email,
+      intendedRole: users.intendedRole,
     });
 
   await db.insert(authProviders).values({

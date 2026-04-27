@@ -78,4 +78,66 @@ describe("POST /api/auth/register", () => {
     const { status } = await parseResponse(await POST(req));
     expect(status).toBe(400);
   });
+
+  it("persists role: 'teacher' as intendedRole", async () => {
+    const req = createRequest("/api/auth/register", {
+      method: "POST",
+      body: {
+        name: "Teacher Tina",
+        email: "tina@school.edu",
+        password: "password123",
+        role: "teacher",
+      },
+    });
+
+    const { status, body } = await parseResponse(await POST(req));
+    expect(status).toBe(201);
+    expect(body).toHaveProperty("intendedRole", "teacher");
+  });
+
+  it("persists role: 'student' as intendedRole", async () => {
+    const req = createRequest("/api/auth/register", {
+      method: "POST",
+      body: {
+        name: "Student Sam",
+        email: "sam@school.edu",
+        password: "password123",
+        role: "student",
+      },
+    });
+
+    const { status, body } = await parseResponse(await POST(req));
+    expect(status).toBe(201);
+    expect(body).toHaveProperty("intendedRole", "student");
+  });
+
+  it("treats absent role as null intendedRole (BC for OAuth signups)", async () => {
+    const req = createRequest("/api/auth/register", {
+      method: "POST",
+      body: {
+        name: "Oauth Olivia",
+        email: "olivia@school.edu",
+        password: "password123",
+      },
+    });
+
+    const { status, body } = await parseResponse(await POST(req));
+    expect(status).toBe(201);
+    expect(body.intendedRole).toBeNull();
+  });
+
+  it("rejects unknown role values", async () => {
+    const req = createRequest("/api/auth/register", {
+      method: "POST",
+      body: {
+        name: "Unknown",
+        email: "unknown@school.edu",
+        password: "password123",
+        role: "admin",
+      },
+    });
+
+    const { status } = await parseResponse(await POST(req));
+    expect(status).toBe(400);
+  });
 });

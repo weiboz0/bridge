@@ -23,6 +23,12 @@ export const userRoleEnum = pgEnum("user_role", [
   "student",
 ]);
 
+// Recorded at signup so onboarding can route the user without re-asking.
+// Distinct from any role assigned by an org (orgMemberRoleEnum) — this
+// is just "what the user said when they signed up." Nullable on users so
+// existing rows and OAuth signups with no explicit answer remain valid.
+export const signupIntentEnum = pgEnum("signup_intent", ["teacher", "student"]);
+
 export const authProviderEnum = pgEnum("auth_provider", [
   "google",
   "microsoft",
@@ -129,6 +135,7 @@ export const users = pgTable(
     avatarUrl: text("avatar_url"),
     passwordHash: text("password_hash"),
     isPlatformAdmin: boolean("is_platform_admin").notNull().default(false),
+    intendedRole: signupIntentEnum("intended_role"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
   },

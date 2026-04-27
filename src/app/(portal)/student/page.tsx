@@ -10,15 +10,25 @@ interface ClassItem {
   status: string;
 }
 
-export default async function StudentDashboard() {
+export default async function StudentDashboard({
+  searchParams,
+}: {
+  searchParams?: Promise<{ invite?: string }>;
+}) {
   const allClasses = await api<(ClassItem & { memberRole: string })[]>("/api/classes/mine");
   const myClasses = allClasses.filter((c) => c.memberRole === "student" && c.status === "active");
+  // ?invite=<code> set by the post-register redirect when the user signed
+  // up from a class invite link. Pass it to the dialog so it auto-opens
+  // with the code prefilled — one click to enroll instead of asking the
+  // student to retype it.
+  const params = await searchParams;
+  const initialInviteCode = params?.invite;
 
   return (
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">My Dashboard</h1>
-        <JoinClassDialog />
+        <JoinClassDialog initialInviteCode={initialInviteCode} />
       </div>
 
       {myClasses.length === 0 ? (
