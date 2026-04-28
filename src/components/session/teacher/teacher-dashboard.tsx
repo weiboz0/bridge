@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState, useEffect, useCallback, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
@@ -11,11 +12,9 @@ import { ModeToolbar, type DashboardMode } from "./mode-toolbar";
 import { AiAssistantPanel } from "./ai-assistant-panel";
 import { StudentGrid } from "@/components/session/student-grid";
 import { CodeEditor } from "@/components/editor/code-editor";
-import { LessonRenderer } from "@/components/lesson/lesson-renderer";
 import { AnnotationForm } from "@/components/annotations/annotation-form";
 import { AnnotationList } from "@/components/annotations/annotation-list";
 import { EditorSwitcher } from "@/components/editor/editor-switcher";
-import { parseLessonContent } from "@/lib/lesson-content";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -24,7 +23,16 @@ interface TeacherDashboardProps {
   classId: string | null;
   returnPath?: string;
   editorMode: "python" | "javascript" | "blockly";
-  courseTopics: Array<{ topicId: string; title: string; lessonContent: unknown }>;
+  // Plan 044 phase 2: presentation mode renders the linked teaching_unit
+  // per topic, not topic.lessonContent. lessonContent stays in the
+  // payload type for safety but the dashboard no longer reads it.
+  courseTopics: Array<{
+    topicId: string;
+    title: string;
+    unitId: string | null;
+    unitTitle: string | null;
+    unitMaterialType: string | null;
+  }>;
   inviteToken?: string | null;
   inviteExpiresAt?: string | null;
 }
@@ -273,13 +281,33 @@ export function TeacherDashboard({
   function renderMainArea() {
     switch (mode) {
       case "presentation": {
-        const topicContents = courseTopics.map((topic) => parseLessonContent(topic.lessonContent));
+        // Plan 044 phase 2: render linked Unit per topic (1:1). Per Codex
+        // correction #7, each topic without a Unit shows its own empty
+        // state, not just a single all-topics-empty banner.
         return (
           <div className="h-full space-y-6 overflow-auto p-4">
-            {courseTopics.map((topic, index) => (
+            {courseTopics.map((topic) => (
               <div key={topic.topicId}>
                 <h3 className="mb-2 text-lg font-semibold">{topic.title}</h3>
-                <LessonRenderer content={topicContents[index]} />
+                {topic.unitId ? (
+                  <Link
+                    href={`/teacher/units/${topic.unitId}/edit`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-2 rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm hover:border-amber-400 hover:text-amber-800"
+                  >
+                    <span className="font-medium">{topic.unitTitle}</span>
+                    {topic.unitMaterialType && (
+                      <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
+                        {topic.unitMaterialType}
+                      </span>
+                    )}
+                  </Link>
+                ) : (
+                  <p className="text-sm text-muted-foreground italic">
+                    No teaching unit linked.
+                  </p>
+                )}
               </div>
             ))}
             {courseTopics.length === 0 && (

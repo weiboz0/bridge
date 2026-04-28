@@ -124,7 +124,7 @@ func main() {
 		courseH := &handlers.CourseHandler{Courses: stores.Courses, Orgs: stores.Orgs}
 		courseH.Routes(r)
 
-		topicH := &handlers.TopicHandler{Topics: stores.Topics, Courses: stores.Courses, Orgs: stores.Orgs}
+		topicH := &handlers.TopicHandler{Topics: stores.Topics, Courses: stores.Courses, Orgs: stores.Orgs, TeachingUnits: stores.TeachingUnits}
 		topicH.Routes(r)
 
 		problemH := &handlers.ProblemHandler{
@@ -161,7 +161,7 @@ func main() {
 		classH := &handlers.ClassHandler{Classes: stores.Classes, Orgs: stores.Orgs, Users: stores.Users}
 		classH.Routes(r)
 
-		sessionH := &handlers.SessionHandler{Sessions: stores.Sessions, Schedules: stores.Schedules, Classes: stores.Classes, Courses: stores.Courses, Topics: stores.Topics, Orgs: stores.Orgs, Broadcaster: broadcaster}
+		sessionH := &handlers.SessionHandler{Sessions: stores.Sessions, Schedules: stores.Schedules, Classes: stores.Classes, Courses: stores.Courses, Topics: stores.Topics, TeachingUnits: stores.TeachingUnits, Orgs: stores.Orgs, Broadcaster: broadcaster}
 		sessionH.Routes(r)
 
 		scheduleH := &handlers.ScheduleHandler{

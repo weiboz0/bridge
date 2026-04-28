@@ -16,13 +16,14 @@ import (
 )
 
 type SessionHandler struct {
-	Sessions    *store.SessionStore
-	Schedules   *store.ScheduleStore
-	Classes     *store.ClassStore
-	Courses     *store.CourseStore
-	Topics      *store.TopicStore
-	Orgs        *store.OrgStore
-	Broadcaster *events.Broadcaster
+	Sessions      *store.SessionStore
+	Schedules     *store.ScheduleStore
+	Classes       *store.ClassStore
+	Courses       *store.CourseStore
+	Topics        *store.TopicStore
+	TeachingUnits *store.TeachingUnitStore // Plan 044: per-topic Unit refs.
+	Orgs          *store.OrgStore
+	Broadcaster   *events.Broadcaster
 }
 
 type sessionListResponse struct {
@@ -1098,9 +1099,15 @@ type teacherPagePayload struct {
 }
 
 type teacherPageTopicRef struct {
-	TopicID       string `json:"topicId"`
-	Title         string `json:"title"`
-	LessonContent string `json:"lessonContent"`
+	TopicID string `json:"topicId"`
+	Title   string `json:"title"`
+	// Plan 044 phase 2: linked teaching_unit identity replaces inline
+	// LessonContent. The legacy field stays in the response one release
+	// for any unmigrated consumer; plan 046 drops it.
+	LessonContent    string  `json:"lessonContent"`
+	UnitID           *string `json:"unitId"`
+	UnitTitle        *string `json:"unitTitle"`
+	UnitMaterialType *string `json:"unitMaterialType"`
 }
 
 // canActAsAdmin returns true when the caller is a platform admin or an admin
@@ -1205,13 +1212,40 @@ func (h *SessionHandler) GetTeacherPage(w http.ResponseWriter, r *http.Request) 
 					writeError(w, http.StatusInternalServerError, "Database error")
 					return
 				}
+
+				// Plan 044 phase 2: bulk-fetch the linked teaching_unit per
+				// topic. The cross-org leak guard is in
+				// ListUnitsByTopicIDs itself (scope='platform' OR
+				// scope_id = course.org_id).
+				var unitsByTopic map[string]*store.TeachingUnit
+				if h.TeachingUnits != nil && len(topics) > 0 {
+					ids := make([]string, len(topics))
+					for i, t := range topics {
+						ids[i] = t.ID
+					}
+					unitsByTopic, err = h.TeachingUnits.ListUnitsByTopicIDs(r.Context(), ids)
+					if err != nil {
+						writeError(w, http.StatusInternalServerError, "Database error")
+						return
+					}
+				}
+
 				refs := make([]teacherPageTopicRef, 0, len(topics))
 				for _, t := range topics {
-					refs = append(refs, teacherPageTopicRef{
+					ref := teacherPageTopicRef{
 						TopicID:       t.ID,
 						Title:         t.Title,
 						LessonContent: t.LessonContent,
-					})
+					}
+					if u, ok := unitsByTopic[t.ID]; ok && u != nil {
+						uid := u.ID
+						title := u.Title
+						mt := u.MaterialType
+						ref.UnitID = &uid
+						ref.UnitTitle = &title
+						ref.UnitMaterialType = &mt
+					}
+					refs = append(refs, ref)
 				}
 				payload.CourseTopics = refs
 			}
