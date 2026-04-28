@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -199,10 +200,13 @@ func TestCourseStore_CloneCourse(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { db.ExecContext(ctx, "DELETE FROM courses WHERE id = $1", orig.ID) })
 
-	// Add a topic to the original
+	// Add a topic to the original WITH lesson_content + starter_code set
+	// (the deprecated Plan 044 columns). Plan 044 phase 4 explicitly
+	// stops the clone from carrying these forward; this test guards
+	// against accidental regression.
 	_, err = db.ExecContext(ctx,
-		`INSERT INTO topics (id, course_id, title, sort_order, created_at, updated_at)
-		 VALUES (gen_random_uuid(), $1, 'Topic 1', 0, now(), now())`, orig.ID)
+		`INSERT INTO topics (id, course_id, title, sort_order, lesson_content, starter_code, created_at, updated_at)
+		 VALUES (gen_random_uuid(), $1, 'Topic 1', 0, '{"blocks":[{"type":"p","value":"x"}]}'::jsonb, 'print(1)', now(), now())`, orig.ID)
 	require.NoError(t, err)
 
 	cloned, err := courses.CloneCourse(ctx, orig.ID, user.ID)
@@ -224,6 +228,19 @@ func TestCourseStore_CloneCourse(t *testing.T) {
 	err = db.QueryRow("SELECT count(*) FROM topics WHERE course_id = $1", cloned.ID).Scan(&topicCount)
 	require.NoError(t, err)
 	assert.Equal(t, 1, topicCount)
+
+	// Plan 044 phase 4 regression: the cloned topic must NOT carry
+	// lesson_content or starter_code forward. lesson_content defaults
+	// to '{}' (empty jsonb object) and starter_code to NULL on insert.
+	var lessonJSON []byte
+	var starter sql.NullString
+	err = db.QueryRow(
+		`SELECT lesson_content, starter_code FROM topics WHERE course_id = $1`,
+		cloned.ID,
+	).Scan(&lessonJSON, &starter)
+	require.NoError(t, err)
+	assert.JSONEq(t, "{}", string(lessonJSON), "lesson_content should not be cloned")
+	assert.False(t, starter.Valid, "starter_code should not be cloned (NULL)")
 }
 
 func TestCourseStore_CloneCourse_NotFound(t *testing.T) {

@@ -229,3 +229,77 @@ func TestLinkUnit_MissingUnitId(t *testing.T) {
 		&auth.Claims{UserID: fx.teacher.ID}, "")
 	assert.Equal(t, http.StatusBadRequest, code)
 }
+
+// A unit scoped to a DIFFERENT org must not be linkable, even if the
+// caller is the course creator AND owns the unit. The cross-org
+// reachability gate matches the read-side join guard
+// (scope='platform' OR scope_id = course.org_id).
+func TestLinkUnit_WrongOrgUnit_Forbidden(t *testing.T) {
+	fx := newLinkUnitFixture(t, "wrongorg")
+	ctx := context.Background()
+	db := integrationDB(t)
+
+	// Build a SECOND org and a unit scoped there, both owned by the
+	// same teacher (so the unit-edit gate would otherwise pass — only
+	// the cross-org guard should reject).
+	orgs := store.NewOrgStore(db)
+	otherOrg, err := orgs.CreateOrg(ctx, store.CreateOrgInput{
+		Name: "OrgL wrongorg-other", Slug: "orgl-wrongorg-other",
+		Type: "school", ContactEmail: "wrongorg-other@e.com", ContactName: "Admin",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		db.ExecContext(ctx, "DELETE FROM org_memberships WHERE org_id = $1", otherOrg.ID)
+		db.ExecContext(ctx, "DELETE FROM organizations WHERE id = $1", otherOrg.ID)
+	})
+	_, err = orgs.UpdateOrgStatus(ctx, otherOrg.ID, "active")
+	require.NoError(t, err)
+	_, err = orgs.AddOrgMember(ctx, store.AddMemberInput{
+		OrgID: otherOrg.ID, UserID: fx.teacher.ID, Role: "teacher", Status: "active",
+	})
+	require.NoError(t, err)
+
+	var foreignUnitID string
+	err = db.QueryRowContext(ctx,
+		`INSERT INTO teaching_units
+		 (id, scope, scope_id, title, summary, material_type, status, created_by, created_at, updated_at)
+		 VALUES (gen_random_uuid(), 'org', $1, 'Foreign', '', 'notes', 'draft', $2, now(), now())
+		 RETURNING id`,
+		otherOrg.ID, fx.teacher.ID,
+	).Scan(&foreignUnitID)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		db.ExecContext(ctx, "DELETE FROM teaching_units WHERE id = $1", foreignUnitID)
+	})
+
+	code, _ := fx.callLinkUnit(t,
+		&auth.Claims{UserID: fx.teacher.ID}, foreignUnitID)
+	assert.Equal(t, http.StatusForbidden, code)
+}
+
+// A personal-scope unit owned by someone else should be rejected by
+// the cross-org reachability guard before the unit-edit check runs.
+// Personal-scope units never satisfy `scope='platform' OR scope_id =
+// course.org_id`, so they cannot be linked to any course's topic.
+func TestLinkUnit_WrongOwnerPersonalUnit_Forbidden(t *testing.T) {
+	fx := newLinkUnitFixture(t, "wrongowner")
+	ctx := context.Background()
+	db := integrationDB(t)
+
+	var personalUnitID string
+	err := db.QueryRowContext(ctx,
+		`INSERT INTO teaching_units
+		 (id, scope, scope_id, title, summary, material_type, status, created_by, created_at, updated_at)
+		 VALUES (gen_random_uuid(), 'personal', $1, 'Mine', '', 'notes', 'draft', $1, now(), now())
+		 RETURNING id`,
+		fx.outsider.ID,
+	).Scan(&personalUnitID)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		db.ExecContext(ctx, "DELETE FROM teaching_units WHERE id = $1", personalUnitID)
+	})
+
+	code, _ := fx.callLinkUnit(t,
+		&auth.Claims{UserID: fx.teacher.ID}, personalUnitID)
+	assert.Equal(t, http.StatusForbidden, code)
+}

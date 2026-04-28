@@ -371,6 +371,18 @@ func (h *TopicHandler) LinkUnit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Cross-org reachability gate. Mirrors the read-side join guard
+	// (`scope='platform' OR scope_id = course.org_id`): if we let a
+	// personal-scope or wrong-org unit be linked, students would see
+	// nothing because the join filters it out — silent broken state.
+	// Reject at link time instead.
+	if unit.Scope != "platform" {
+		if unit.Scope != "org" || unit.ScopeID == nil || *unit.ScopeID != course.OrgID {
+			writeError(w, http.StatusForbidden, "Unit is not available to this course's org")
+			return
+		}
+	}
+
 	// Unit-edit gate: same shape as canEditUnit. Personal scope owners
 	// are recognized by createdBy; org scope by teacher/org_admin
 	// membership in the unit's org.

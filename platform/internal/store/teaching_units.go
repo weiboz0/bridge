@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/lib/pq"
 	overlayPkg "github.com/weiboz0/bridge/platform/internal/overlay"
 )
@@ -257,6 +258,13 @@ func (s *TeachingUnitStore) LinkUnitToTopic(ctx context.Context, unitID, topicID
 		topicID, unitID,
 	)
 	if err != nil {
+		// The pre-check above is best-effort — a concurrent linker can win
+		// the race between GetUnitByTopicID and UPDATE. Catch the unique
+		// index violation (teaching_units_topic_id_uniq) and surface the
+		// same clean ErrTopicAlreadyLinked rather than an opaque 500.
+		if isUniqueViolationOn(err, "teaching_units_topic_id_uniq") {
+			return nil, ErrTopicAlreadyLinked
+		}
 		return nil, err
 	}
 	rows, err := res.RowsAffected()
@@ -267,6 +275,26 @@ func (s *TeachingUnitStore) LinkUnitToTopic(ctx context.Context, unitID, topicID
 		return nil, ErrUnitNotFound
 	}
 	return s.GetUnit(ctx, unitID)
+}
+
+// isUniqueViolationOn reports whether err is a Postgres 23505 unique-violation
+// against the named constraint, across both the lib/pq and pgx/pgconn driver
+// shapes (we use pgx for the pool but lib/pq error types still appear in some
+// paths).
+func isUniqueViolationOn(err error, constraint string) bool {
+	var pqErr *pq.Error
+	if errors.As(err, &pqErr) {
+		if pqErr.Code == "23505" && pqErr.Constraint == constraint {
+			return true
+		}
+	}
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		if pgErr.Code == "23505" && pgErr.ConstraintName == constraint {
+			return true
+		}
+	}
+	return false
 }
 
 // GetUnitByTopicID returns the unit linked to the given topic, or (nil, nil) if
