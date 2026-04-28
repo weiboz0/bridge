@@ -5,13 +5,70 @@ import { useSession } from "next-auth/react"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
 
-interface SessionItem {
+export interface SessionItem {
   id: string
   title: string
   classId: string | null
   status: string
   startedAt: string
   endedAt: string | null
+}
+
+/**
+ * Plan 043 phase 2: ended sessions used to link to /teacher/sessions/{id}
+ * which renders the live TeacherDashboard regardless of status. The
+ * dashboard isn't designed for read-only review (Yjs / broadcast / end
+ * action are heavily wired to live state). Until a dedicated review
+ * surface exists, ended sessions render as plain text rows — no link.
+ */
+export function SessionRow({ session: s }: { session: SessionItem }) {
+  const meta = (
+    <div className="min-w-0">
+      <p className="text-sm font-medium text-zinc-900 truncate">
+        {s.title || "Untitled session"}
+      </p>
+      <p className="text-xs text-zinc-500">
+        {new Date(s.startedAt).toLocaleDateString(undefined, {
+          weekday: "short",
+          month: "short",
+          day: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+        })}
+        {s.classId && " · class-linked"}
+        {!s.classId && " · orphan session"}
+      </p>
+    </div>
+  );
+  const badge = (
+    <span
+      className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ${
+        s.status === "live"
+          ? "bg-green-100 text-green-700"
+          : "bg-zinc-100 text-zinc-500"
+      }`}
+    >
+      {s.status}
+    </span>
+  );
+
+  if (s.status === "live") {
+    return (
+      <Link
+        href={`/teacher/sessions/${s.id}`}
+        className="flex items-center justify-between rounded-lg border border-zinc-200 bg-white px-4 py-3 transition-colors hover:border-zinc-300"
+      >
+        {meta}
+        {badge}
+      </Link>
+    );
+  }
+  return (
+    <div className="flex items-center justify-between rounded-lg border border-zinc-200 bg-white px-4 py-3">
+      {meta}
+      {badge}
+    </div>
+  );
 }
 
 interface SessionsResponse {
@@ -80,37 +137,7 @@ export default function TeacherSessionsPage() {
       ) : (
         <div className="space-y-2">
           {sessions.map((s) => (
-            <Link
-              key={s.id}
-              href={`/teacher/sessions/${s.id}`}
-              className="flex items-center justify-between rounded-lg border border-zinc-200 bg-white px-4 py-3 transition-colors hover:border-zinc-300"
-            >
-              <div className="min-w-0">
-                <p className="text-sm font-medium text-zinc-900 truncate">
-                  {s.title || "Untitled session"}
-                </p>
-                <p className="text-xs text-zinc-500">
-                  {new Date(s.startedAt).toLocaleDateString(undefined, {
-                    weekday: "short",
-                    month: "short",
-                    day: "numeric",
-                    hour: "2-digit",
-                    minute: "2-digit",
-                  })}
-                  {s.classId && " · class-linked"}
-                  {!s.classId && " · orphan session"}
-                </p>
-              </div>
-              <span
-                className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ${
-                  s.status === "live"
-                    ? "bg-green-100 text-green-700"
-                    : "bg-zinc-100 text-zinc-500"
-                }`}
-              >
-                {s.status}
-              </span>
-            </Link>
+            <SessionRow key={s.id} session={s} />
           ))}
         </div>
       )}

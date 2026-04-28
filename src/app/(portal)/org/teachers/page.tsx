@@ -1,12 +1,21 @@
 import { api, ApiError } from "@/lib/api-client";
 import { TeachersList, type OrgMemberRow } from "@/components/org/teachers-list";
 import type { OrgListError } from "@/components/org/org-list-state";
+import {
+  parseOrgIdFromSearchParams,
+  appendOrgId,
+} from "@/lib/portal/org-context";
 
-export default async function OrgTeachersPage() {
+export default async function OrgTeachersPage({
+  searchParams,
+}: {
+  searchParams?: Promise<{ orgId?: string }>;
+}) {
+  const orgId = parseOrgIdFromSearchParams(await searchParams);
   let data: OrgMemberRow[] | null = null;
   let error: OrgListError | null = null;
   try {
-    data = await api<OrgMemberRow[]>("/api/org/teachers");
+    data = await api<OrgMemberRow[]>(appendOrgId("/api/org/teachers", orgId));
   } catch (e) {
     if (e instanceof ApiError) {
       error = { status: e.status, message: e.message };

@@ -178,22 +178,31 @@ export function ProblemShell({
   // on the editor, the load-bearing pane.
   const [narrowTab, setNarrowTab] = useState<NarrowTabId>("code");
 
-  // Plan 042: below the lg breakpoint, only one of the three panes is
-  // visible at a time, switched via a tab bar. Above lg, all three render
+  // Plan 042 + 043 phase 4: below the @3xl/shell container breakpoint
+  // (768px container width), only one of the three panes is visible at
+  // a time, switched via a tab bar. Above @3xl/shell, all three render
   // side-by-side as before. The state is read only by className flags;
-  // Tailwind's `lg:flex` overrides `hidden` at wide widths so this state
-  // stays dormant on desktop while every pane stays mounted (preserving
-  // Yjs/Monaco state across narrow tab switches).
+  // `@3xl/shell:flex` overrides `hidden` at wide widths so this state
+  // stays dormant when there's enough room while every pane stays
+  // mounted (preserving Yjs/Monaco state across narrow tab switches).
   //
   // `flex-1` on the active narrow pane is load-bearing: without it, the
   // pane content-sizes inside the column-flex outer container and Monaco
-  // (or the I/O panel) collapses to its content height. At lg widths,
-  // `lg:flex-initial` resets to the existing wide-screen sizing.
+  // (or the I/O panel) collapses to its content height. At wide widths,
+  // `@3xl/shell:flex-initial` resets to the existing wide-screen sizing.
+  //
+  // Plan 043 phase 4 (Codex review #5): switched from viewport `lg:` to
+  // `@container/shell` queries so the breakpoint reacts to the actual
+  // pane width, not the window width. With the portal sidebar consuming
+  // ~224px on desktop, a 1024px viewport leaves ~800px of content area
+  // — which is `@3xl` (768px) territory, not `@5xl` (1024px). The wide
+  // layout's min-w floors sum to 680px, leaving ~88px for editor at the
+  // floor — tight but real.
   const paneClass = (id: NarrowTabId) =>
-    narrowTab === id ? "flex flex-1 lg:flex-initial" : "hidden lg:flex";
+    narrowTab === id ? "flex flex-1 @3xl/shell:flex-initial" : "hidden @3xl/shell:flex";
 
   return (
-    <div className="flex h-[calc(100vh-var(--portal-header-height,56px))] flex-col overflow-hidden lg:flex-row">
+    <div className="@container/shell flex h-[calc(100vh-var(--portal-header-height,56px))] flex-col overflow-hidden @3xl/shell:flex-row">
       <ResponsiveTabs active={narrowTab} onChange={setNarrowTab} />
 
       {/* LEFT */}
@@ -203,7 +212,7 @@ export function ProblemShell({
         aria-labelledby="problem-tab-problem"
         className={
           paneClass("problem") +
-          " w-full lg:w-[32%] lg:min-w-[360px] flex-col border-r border-zinc-200 bg-white"
+          " w-full @3xl/shell:w-[32%] @3xl/shell:min-w-[360px] flex-col border-r border-zinc-200 bg-white"
         }
       >
         <SectionLabel action={<Tag tone="zinc">Problem</Tag>}>Problem</SectionLabel>
@@ -292,7 +301,7 @@ export function ProblemShell({
         aria-labelledby="problem-tab-io"
         className={
           paneClass("io") +
-          " w-full lg:w-[28%] lg:min-w-[320px] flex-col border-l border-zinc-200 bg-white"
+          " w-full @3xl/shell:w-[28%] @3xl/shell:min-w-[320px] flex-col border-l border-zinc-200 bg-white"
         }
       >
         <SectionLabel>Inputs</SectionLabel>

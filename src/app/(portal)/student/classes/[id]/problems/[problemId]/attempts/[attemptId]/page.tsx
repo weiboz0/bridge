@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { getClassSettings } from "@/lib/classes";
 import { api, ApiError } from "@/lib/api-client";
 import { ProblemShell } from "@/components/problem/problem-shell";
+import { isValidUUID } from "@/lib/utils";
 import type {
   Problem,
   TestCase,
@@ -15,6 +16,10 @@ export default async function StudentProblemAttemptPage({
   params: Promise<{ id: string; problemId: string; attemptId: string }>;
 }) {
   const { id: classId, problemId, attemptId } = await params;
+  // Plan 043 phase 6.3: same UUID guard as the parent problem page.
+  if (!isValidUUID(classId) || !isValidUUID(problemId) || !isValidUUID(attemptId)) {
+    notFound();
+  }
 
   try {
     const [problem, testCases, attempts, attempt, classSettings] = await Promise.all([

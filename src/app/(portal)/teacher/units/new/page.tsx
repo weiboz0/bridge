@@ -253,8 +253,11 @@ export default function CreateUnitPage() {
         )}
 
         <div className="flex gap-3 pt-1">
-          <Button type="submit" disabled={submitting}>
-            {submitting ? "Creating..." : "Create Unit"}
+          {/* Plan 043 phase 6.1: hold submit until orgs resolve so a fast
+              click can't create a Personal unit before the form has a
+              chance to flip to Org scope. */}
+          <Button type="submit" disabled={submitting || orgsLoading}>
+            {submitting ? "Creating..." : orgsLoading ? "Loading..." : "Create Unit"}
           </Button>
           <Button
             type="button"

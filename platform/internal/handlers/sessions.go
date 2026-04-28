@@ -186,6 +186,51 @@ func (h *SessionHandler) ListSessions(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// canAccessClass reports whether the caller may read class-scoped session
+// data. Admin equivalence, class membership, or org_admin in the class's
+// owning org. Returns 404 (not 403) when not authorized so callers don't
+// leak class existence — same shape as ClassHandler.CanAccessClass.
+//
+// Plan 043 Phase 1 P0 (Codex correction #1): pre-043, ListByClass /
+// GetActiveByClass / GetSessionTopics let any authenticated user
+// enumerate sessions/topics by class ID. This helper backs the gate.
+func (h *SessionHandler) canAccessClass(r *http.Request, classID string, claims *auth.Claims) (int, string) {
+	if claims.IsPlatformAdmin || claims.ImpersonatedBy != "" {
+		return 0, ""
+	}
+	if h.Classes == nil {
+		return http.StatusInternalServerError, "Class store unavailable"
+	}
+	class, err := h.Classes.GetClass(r.Context(), classID)
+	if err != nil {
+		return http.StatusInternalServerError, "Database error"
+	}
+	if class == nil {
+		return http.StatusNotFound, "Not found"
+	}
+	members, err := h.Classes.ListClassMembers(r.Context(), classID)
+	if err != nil {
+		return http.StatusInternalServerError, "Database error"
+	}
+	for _, m := range members {
+		if m.UserID == claims.UserID {
+			return 0, ""
+		}
+	}
+	if h.Orgs != nil {
+		roles, err := h.Orgs.GetUserRolesInOrg(r.Context(), class.OrgID, claims.UserID)
+		if err != nil {
+			return http.StatusInternalServerError, "Database error"
+		}
+		for _, role := range roles {
+			if role.Role == "org_admin" {
+				return 0, ""
+			}
+		}
+	}
+	return http.StatusNotFound, "Not found"
+}
+
 // ListByClass handles GET /api/sessions/by-class/{classId}
 func (h *SessionHandler) ListByClass(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
@@ -195,6 +240,10 @@ func (h *SessionHandler) ListByClass(w http.ResponseWriter, r *http.Request) {
 	}
 
 	classID := chi.URLParam(r, "classId")
+	if status, msg := h.canAccessClass(r, classID, claims); status != 0 {
+		writeError(w, status, msg)
+		return
+	}
 	sessions, err := h.Sessions.ListSessionsWithCounts(r.Context(), classID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
@@ -212,6 +261,10 @@ func (h *SessionHandler) GetActiveByClass(w http.ResponseWriter, r *http.Request
 	}
 
 	classID := chi.URLParam(r, "classId")
+	if status, msg := h.canAccessClass(r, classID, claims); status != 0 {
+		writeError(w, status, msg)
+		return
+	}
 	session, err := h.Sessions.GetActiveSession(r.Context(), classID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
@@ -297,6 +350,54 @@ func (h *SessionHandler) EndSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, ended)
 }
 
+// canJoinSession reports whether the caller may join this session.
+//
+// Plan 043 Phase 1 P0: pre-043, JoinSession added any authenticated caller
+// as a participant. Now access requires one of:
+//
+//   - admin equivalence (IsPlatformAdmin || ImpersonatedBy != "")
+//   - Class membership in the session's owning class
+//   - A pre-existing session_participants row with status `invited` or
+//     `present` (pre-invited via AddParticipant or token). Status `left`
+//     does NOT grant re-entry — a kicked or left student must be re-invited
+//   - For class-less sessions, only the session teacher (or admin) may join
+//
+// Returns (0, "") if authorized, or an http status + message to write
+// otherwise. The same logic is reused by GetStudentPage so the page can
+// load before the join POST runs.
+func (h *SessionHandler) canJoinSession(r *http.Request, session *store.LiveSession, claims *auth.Claims) (int, string) {
+	if claims.IsPlatformAdmin || claims.ImpersonatedBy != "" {
+		return 0, ""
+	}
+
+	if session.ClassID == nil {
+		if session.TeacherID == claims.UserID {
+			return 0, ""
+		}
+		return http.StatusForbidden, "Not authorized"
+	}
+
+	if h.Classes != nil {
+		members, err := h.Classes.ListClassMembers(r.Context(), *session.ClassID)
+		if err != nil {
+			return http.StatusInternalServerError, "Database error"
+		}
+		for _, m := range members {
+			if m.UserID == claims.UserID {
+				return 0, ""
+			}
+		}
+	}
+
+	if existing, err := h.Sessions.GetSessionParticipant(r.Context(), session.ID, claims.UserID); err != nil {
+		return http.StatusInternalServerError, "Database error"
+	} else if existing != nil && (existing.Status == "invited" || existing.Status == "present") {
+		return 0, ""
+	}
+
+	return http.StatusForbidden, "Not authorized"
+}
+
 // JoinSession handles POST /api/sessions/{id}/join
 func (h *SessionHandler) JoinSession(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
@@ -317,6 +418,11 @@ func (h *SessionHandler) JoinSession(w http.ResponseWriter, r *http.Request) {
 	}
 	if session.Status != "live" {
 		writeError(w, http.StatusBadRequest, "Session has ended")
+		return
+	}
+
+	if status, msg := h.canJoinSession(r, session, claims); status != 0 {
+		writeError(w, status, msg)
 		return
 	}
 
@@ -533,7 +639,31 @@ func (h *SessionHandler) GetSessionTopics(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	topics, err := h.Sessions.GetSessionTopics(r.Context(), chi.URLParam(r, "id"))
+	sessionID := chi.URLParam(r, "id")
+
+	// Plan 043 Phase 1 P0: gate by class membership. Resolve the class
+	// via the session, then defer to canAccessClass. Class-less sessions
+	// (rare) only the teacher or admin may inspect.
+	session, err := h.Sessions.GetSession(r.Context(), sessionID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if session == nil {
+		writeError(w, http.StatusNotFound, "Not found")
+		return
+	}
+	if session.ClassID != nil {
+		if status, msg := h.canAccessClass(r, *session.ClassID, claims); status != 0 {
+			writeError(w, status, msg)
+			return
+		}
+	} else if !claims.IsPlatformAdmin && claims.ImpersonatedBy == "" && session.TeacherID != claims.UserID {
+		writeError(w, http.StatusNotFound, "Not found")
+		return
+	}
+
+	topics, err := h.Sessions.GetSessionTopics(r.Context(), sessionID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
@@ -1143,6 +1273,18 @@ func (h *SessionHandler) GetStudentPage(w http.ResponseWriter, r *http.Request) 
 				authorized = true
 				break
 			}
+		}
+	}
+	// Plan 043 Codex correction #2: pre-invited non-class-members must be
+	// able to load the page before POSTing /join. Without this gate, a
+	// teacher-invited guest gets 403 from /student-page and can't even
+	// reach the join button.
+	if !authorized {
+		if existing, err := h.Sessions.GetSessionParticipant(r.Context(), session.ID, claims.UserID); err != nil {
+			writeError(w, http.StatusInternalServerError, "Database error")
+			return
+		} else if existing != nil && (existing.Status == "invited" || existing.Status == "present") {
+			authorized = true
 		}
 	}
 	if !authorized {

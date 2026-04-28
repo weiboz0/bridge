@@ -83,7 +83,30 @@ function RegisterForm() {
           <Button
             variant="outline"
             className="w-full"
-            onClick={() => signIn("google", { callbackUrl: "/" })}
+            onClick={async () => {
+              // Plan 043 phase 5: persist the user's chosen role + invite
+              // code before redirecting to Google, so the Auth.js signIn
+              // callback can read them back when the OAuth round-trip
+              // creates the user. Best-effort — if the cookie write
+              // fails, fall through to the OAuth flow without intent
+              // (matches pre-043 behavior).
+              try {
+                await fetch("/api/auth/signup-intent", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    role,
+                    ...(inviteCode ? { inviteCode } : {}),
+                  }),
+                });
+              } catch {
+                // ignore — proceed with sign-in anyway
+              }
+              const callbackUrl = inviteCode
+                ? `/student?invite=${encodeURIComponent(inviteCode)}`
+                : "/";
+              await signIn("google", { callbackUrl });
+            }}
           >
             Sign up with Google
           </Button>

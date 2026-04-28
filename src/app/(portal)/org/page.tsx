@@ -1,5 +1,9 @@
 import { api, ApiError } from "@/lib/api-client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  parseOrgIdFromSearchParams,
+  appendOrgId,
+} from "@/lib/portal/org-context";
 
 interface OrgDashboardData {
   org: { id: string; name: string; type: string; status: string };
@@ -9,10 +13,15 @@ interface OrgDashboardData {
   classCount: number;
 }
 
-export default async function OrgDashboard() {
+export default async function OrgDashboard({
+  searchParams,
+}: {
+  searchParams?: Promise<{ orgId?: string }>;
+}) {
+  const orgId = parseOrgIdFromSearchParams(await searchParams);
   let data: OrgDashboardData;
   try {
-    data = await api<OrgDashboardData>("/api/org/dashboard");
+    data = await api<OrgDashboardData>(appendOrgId("/api/org/dashboard", orgId));
   } catch (e) {
     if (e instanceof ApiError && (e.status === 403 || e.status === 404)) {
       return (
