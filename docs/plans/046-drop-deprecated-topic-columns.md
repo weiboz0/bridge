@@ -279,7 +279,23 @@ The reason migration runs AFTER code deploy: the new code no longer SELECTs/scan
 
 ### Codex post-impl review
 
-Skipped for the same reasons as plan 045: changes are bounded, test coverage is dense across both languages, and the pre-impl review caught the structural issues. Plan 046's main risk surface (deploy ordering) was addressed by the corrected Implementation Order; the test pass against the post-drop schema is the empirical confirmation.
+- **Date:** 2026-04-28
+- **Verdict:** NEEDS FIXES — 1 IMPORTANT. Fixed inline (commit `ad74034`).
+
+#### Findings + resolutions
+
+1. `[IMPORTANT]` **TS `TeacherPagePayload.courseTopics` still declared `lessonContent: string`** (`src/app/(portal)/teacher/sessions/[sessionId]/page.tsx:24-30`). The Go handler's `teacherPageTopicRef` no longer emits `lessonContent` (stripped in this plan's Phase 2), but the TS type still declared the field as required. At runtime it would always be `undefined`, which TS would not catch. → Removed `lessonContent: string` from the TS payload type. Also cleaned up adjacent stale "Plan 044 phase 2: lessonContent kept as deprecated" comments in `src/components/session/teacher/teacher-dashboard.tsx`, `src/components/parent/live-session-viewer.tsx`, and `src/app/(portal)/student/classes/[id]/page.tsx`.
+
+#### Confirmations (PASS)
+
+- Migration safety: plain `DROP COLUMN` (not `IF EXISTS`); pg_depend confirmed no view/trigger/index dependencies.
+- Deploy order: plan correctly documents code-first, migration-last.
+- Strict mode: TS `.strict()` zod intact; Go `decodeJSONStrict` calls `DisallowUnknownFields()`. Both `CreateTopic` and `UpdateTopic` use it.
+- Orphan deletion: all four files deleted; grep confirms zero remaining `LessonRenderer` / `LessonEditor` / `lesson-content` runtime references outside historical plan docs.
+- Test deletion + replacement: `topics_deprecation_test.go` gone; 4 deprecation TS tests removed; 4 strict-mode replacement tests added (2 reject + 2 happy-path Go in `topics_strict_decode_test.go`; 2 reject TS in `courses-api.test.ts`).
+- Go store integrity: `topicColumns` and `scanTopic` aligned at 7 columns; `GetSessionTopics` SELECT/Scan column order matches.
+
+No MINOR findings.
 
 ### Out-of-scope deferrals
 
