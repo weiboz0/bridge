@@ -4,12 +4,15 @@ import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { createTopic, listTopicsByCourse } from "@/lib/topics";
 
+// Plan 044 phase 3: lessonContent and starterCode are no longer accepted
+// on topic create. Teaching material lives in the linked teaching_unit
+// (1:1 via teaching_units.topic_id). Use POST /api/courses/{cid}/topics/
+// {tid}/link-unit to attach material to a topic. Strict mode rejects
+// any request that still includes the deprecated fields.
 const createSchema = z.object({
   title: z.string().min(1).max(255),
   description: z.string().max(2000).optional(),
-  lessonContent: z.record(z.string(), z.unknown()).optional(),
-  starterCode: z.string().optional(),
-});
+}).strict();
 
 export async function POST(
   request: NextRequest,

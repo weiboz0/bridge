@@ -5,12 +5,14 @@ import { db } from "@/lib/db";
 import { getCourse } from "@/lib/courses";
 import { getTopic, updateTopic, deleteTopic } from "@/lib/topics";
 
+// Plan 044 phase 3: lessonContent and starterCode are no longer accepted
+// on topic update. Strict mode rejects requests that still include the
+// deprecated fields. Use POST /api/courses/{cid}/topics/{tid}/link-unit
+// to attach a teaching_unit instead.
 const updateSchema = z.object({
   title: z.string().min(1).max(255).optional(),
   description: z.string().max(5000).optional(),
-  lessonContent: z.record(z.string(), z.unknown()).optional(),
-  starterCode: z.string().optional(),
-});
+}).strict();
 
 async function verifyCourseOwnership(courseId: string, userId: string, isPlatformAdmin: boolean) {
   const course = await getCourse(db, courseId);

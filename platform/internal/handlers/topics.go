@@ -60,11 +60,14 @@ func (h *TopicHandler) CreateTopic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Plan 044 phase 3: lessonContent and starterCode are no longer
+	// accepted on topic create. Use POST /api/courses/{cid}/topics/
+	// {tid}/link-unit to attach a teaching_unit instead.
 	var body struct {
 		Title         string  `json:"title"`
 		Description   string  `json:"description"`
-		LessonContent string  `json:"lessonContent"`
-		StarterCode   *string `json:"starterCode"`
+		LessonContent *string `json:"lessonContent,omitempty"`
+		StarterCode   *string `json:"starterCode,omitempty"`
 	}
 	if !decodeJSON(w, r, &body) {
 		return
@@ -74,13 +77,16 @@ func (h *TopicHandler) CreateTopic(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "title is required (max 255 chars)")
 		return
 	}
+	if body.LessonContent != nil || body.StarterCode != nil {
+		writeError(w, http.StatusBadRequest,
+			"lessonContent and starterCode are no longer accepted; link a teaching unit via POST /api/courses/{courseId}/topics/{topicId}/link-unit")
+		return
+	}
 
 	topic, err := h.Topics.CreateTopic(r.Context(), store.CreateTopicInput{
-		CourseID:      courseID,
-		Title:         body.Title,
-		Description:   body.Description,
-		LessonContent: body.LessonContent,
-		StarterCode:   body.StarterCode,
+		CourseID:    courseID,
+		Title:       body.Title,
+		Description: body.Description,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Failed to create topic")
@@ -176,8 +182,17 @@ func (h *TopicHandler) UpdateTopic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Plan 044 phase 3: lessonContent and starterCode are no longer
+	// accepted on update. The store struct still carries the fields
+	// (migration paths use them); the handler explicitly rejects them
+	// to lock the API contract before clearing the values pre-store.
 	var body store.UpdateTopicInput
 	if !decodeJSON(w, r, &body) {
+		return
+	}
+	if body.LessonContent != nil || body.StarterCode != nil {
+		writeError(w, http.StatusBadRequest,
+			"lessonContent and starterCode are no longer accepted; link a teaching unit via POST /api/courses/{courseId}/topics/{topicId}/link-unit")
 		return
 	}
 

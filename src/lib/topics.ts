@@ -2,12 +2,13 @@ import { eq, and, gt, lt, asc } from "drizzle-orm";
 import { topics } from "@/lib/db/schema";
 import type { Database } from "@/lib/db";
 
+// Plan 044 phase 3: lessonContent and starterCode are no longer accepted
+// from callers. The columns still exist (deprecated; plan 046 drops them)
+// with DB defaults, so omitting them just leaves the row at default.
 interface CreateTopicInput {
   courseId: string;
   title: string;
   description?: string;
-  lessonContent?: Record<string, unknown>;
-  starterCode?: string;
 }
 
 export async function createTopic(db: Database, input: CreateTopicInput) {
@@ -48,7 +49,7 @@ export async function listTopicsByCourse(db: Database, courseId: string) {
 export async function updateTopic(
   db: Database,
   topicId: string,
-  updates: Partial<Pick<typeof topics.$inferInsert, "title" | "description" | "lessonContent" | "starterCode">>
+  updates: Partial<Pick<typeof topics.$inferInsert, "title" | "description">>
 ) {
   const [topic] = await db
     .update(topics)
