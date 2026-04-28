@@ -470,14 +470,28 @@ func (h *TeachingUnitHandler) searchUnitsForPicker(
 		writeError(w, http.StatusNotFound, "Course not found")
 		return
 	}
-	if !claims.IsPlatformAdmin && course.CreatedBy != claims.UserID {
+	// effectivePlatformAdmin captures plain platform admins AND admins
+	// currently impersonating another user. canLinkUnitToCourse uses the
+	// same combined check (topics.go::canLinkUnitToCourse), so picker
+	// canLink + redaction must too — otherwise an impersonating admin
+	// sees canLink=false on rows the actual link handler would allow.
+	effectivePlatformAdmin := claims.IsPlatformAdmin || claims.ImpersonatedBy != ""
+
+	if !effectivePlatformAdmin && course.CreatedBy != claims.UserID {
 		writeError(w, http.StatusForbidden,
 			"Only the course creator can browse linkable units for this course")
 		return
 	}
 
+	// Filter draft platform Units out of picker results for non-admin
+	// callers, mirroring the regular SearchUnits visibility gate
+	// (only published platform-scope is visible to teachers). Without
+	// this, the picker leaks draft titles/summaries that the regular
+	// search endpoint would not surface — and they'd be canLink=false
+	// noise anyway.
 	rows, err := h.Units.SearchUnitsForPicker(
-		r.Context(), filter, course.OrgID, claims.IsPlatformAdmin,
+		r.Context(), filter, course.OrgID, effectivePlatformAdmin,
+		!effectivePlatformAdmin, // restrictPlatformToPublished
 	)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
@@ -488,10 +502,10 @@ func (h *TeachingUnitHandler) searchUnitsForPicker(
 	// the visibility scope already restricts to platform-scope OR
 	// org-scope-with-matching-org-id, the only remaining checks are:
 	//   - platform-scope: status must be in published-statuses (admin
-	//     bypasses).
+	//     bypasses; impersonating-admin uses effectivePlatformAdmin).
 	//   - org-scope: caller must be teacher/org_admin in course.OrgID
-	//     (or platform admin).
-	canLinkOrg := claims.IsPlatformAdmin
+	//     (or platform admin / impersonating-admin).
+	canLinkOrg := effectivePlatformAdmin
 	if !canLinkOrg && h.Orgs != nil {
 		// Reuse the ViewerOrgs already computed by SearchUnits caller.
 		// SearchUnits populates filter.ViewerOrgs before dispatching.
@@ -509,7 +523,7 @@ func (h *TeachingUnitHandler) searchUnitsForPicker(
 		can := false
 		switch row.Scope {
 		case "platform":
-			can = claims.IsPlatformAdmin || publishedPlatformUnitStatuses[row.Status]
+			can = effectivePlatformAdmin || publishedPlatformUnitStatuses[row.Status]
 		case "org":
 			can = canLinkOrg
 		}

@@ -215,6 +215,54 @@ func TestLinkUnit_TopicAlreadyLinked_Conflict(t *testing.T) {
 	assert.Equal(t, http.StatusConflict, code2)
 }
 
+// Codex post-impl review: a direct POST to /link-unit must NOT silently
+// move a Unit that's already attached to a different topic. The picker
+// disables those rows in the UI, but the API can still receive the
+// request — return 409 to make the conflict explicit.
+func TestLinkUnit_UnitAlreadyLinkedToDifferentTopic_Conflict(t *testing.T) {
+	fx := newLinkUnitFixture(t, "movegate")
+	ctx := context.Background()
+	db := integrationDB(t)
+
+	// Create a SECOND topic in the same course.
+	var otherTopicID string
+	err := db.QueryRowContext(ctx,
+		`INSERT INTO topics (id, course_id, title, sort_order, created_at, updated_at)
+		 VALUES (gen_random_uuid(), $1, 'Other Topic', 1, now(), now())
+		 RETURNING id`,
+		fx.courseID,
+	).Scan(&otherTopicID)
+	require.NoError(t, err)
+	t.Cleanup(func() { db.ExecContext(ctx, "DELETE FROM topics WHERE id = $1", otherTopicID) })
+
+	// Link fx.unitID to fx.topicID first.
+	code1, _ := fx.callLinkUnit(t,
+		&auth.Claims{UserID: fx.teacher.ID}, fx.unitID)
+	require.Equal(t, http.StatusOK, code1)
+
+	// Now try to link the SAME unit to the OTHER topic via a direct
+	// POST — should return 409, not silently move it.
+	body := map[string]string{"unitId": fx.unitID}
+	buf, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost,
+		"/api/courses/"+fx.courseID+"/topics/"+otherTopicID+"/link-unit",
+		bytes.NewReader(buf))
+	req = withChiParams(
+		withClaims(req, &auth.Claims{UserID: fx.teacher.ID}),
+		map[string]string{"courseId": fx.courseID, "topicId": otherTopicID})
+	w := httptest.NewRecorder()
+	fx.h.LinkUnit(w, req)
+	assert.Equal(t, http.StatusConflict, w.Code)
+
+	// Verify the unit's topic_id was NOT changed.
+	var topicIDAfter string
+	err = db.QueryRowContext(ctx,
+		"SELECT topic_id FROM teaching_units WHERE id = $1", fx.unitID,
+	).Scan(&topicIDAfter)
+	require.NoError(t, err)
+	assert.Equal(t, fx.topicID, topicIDAfter, "unit's topic_id must not have moved silently")
+}
+
 func TestLinkUnit_UnitNotFound(t *testing.T) {
 	fx := newLinkUnitFixture(t, "miss")
 	bogus := "00000000-0000-0000-0000-000000000abc"

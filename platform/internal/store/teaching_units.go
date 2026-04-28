@@ -241,15 +241,32 @@ func (s *TeachingUnitStore) GetUnit(ctx context.Context, id string) (*TeachingUn
 //   - (unit, nil)  on success
 //   - (nil, ErrUnitNotFound)  if the unit doesn't exist
 //   - (nil, ErrTopicAlreadyLinked)  if a different unit already owns
-//     this topic_id (caller should surface 409 to the user)
+//     this topic_id, OR if THIS unit is already linked to a DIFFERENT
+//     topic (silent-move guard added per Codex post-impl review).
 //   - (nil, err)  for other DB errors
 func (s *TeachingUnitStore) LinkUnitToTopic(ctx context.Context, unitID, topicID string) (*TeachingUnit, error) {
-	// Pre-check: is this topic already claimed by a DIFFERENT unit?
+	// Pre-check 1: is this topic already claimed by a DIFFERENT unit?
 	existing, err := s.GetUnitByTopicID(ctx, topicID)
 	if err != nil {
 		return nil, err
 	}
 	if existing != nil && existing.ID != unitID {
+		return nil, ErrTopicAlreadyLinked
+	}
+
+	// Pre-check 2: is THIS unit already linked to a DIFFERENT topic?
+	// Without this guard, a direct POST that bypasses the picker's
+	// disabled-row UI would silently move the Unit from its previous
+	// topic — surprising and indistinguishable from "the previous topic
+	// was unlinked first." Surface 409 instead.
+	currentUnit, err := s.GetUnit(ctx, unitID)
+	if err != nil {
+		return nil, err
+	}
+	if currentUnit == nil {
+		return nil, ErrUnitNotFound
+	}
+	if currentUnit.TopicID != nil && *currentUnit.TopicID != topicID {
 		return nil, ErrTopicAlreadyLinked
 	}
 
@@ -858,18 +875,34 @@ func (s *TeachingUnitStore) SearchUnitsForPicker(
 	f SearchUnitsFilter,
 	pickerCourseOrgID string,
 	callerIsPlatformAdmin bool,
+	restrictPlatformToPublished bool,
 ) ([]UnitWithLinkedTopic, error) {
 	where := []string{}
 	args := []any{}
 	idx := 1
 
-	// ── Picker-specific visibility scope (replaces SearchUnits's normal
-	//     scope-based gate). Only platform-scope (any status) plus
-	//     org-scope where unit's scope_id matches the course's org are
-	//     candidates. Personal-scope is excluded — the read-side join
-	//     would silently filter it out anyway.
-	where = append(where, fmt.Sprintf(
-		"(u.scope = 'platform' OR (u.scope = 'org' AND u.scope_id = $%d))", idx))
+	// ── Picker-specific visibility scope.
+	//
+	// Platform-scope: visible to non-admin callers ONLY in published
+	// statuses (matches the regular SearchUnits visibility gate at
+	// teaching_units.go::SearchUnits — without this filter the picker
+	// would leak draft titles/summaries that the regular search hides).
+	// Admins see all statuses.
+	//
+	// Org-scope: visible only when the Unit's scope_id matches the
+	// picker's course org_id (cross-org reachability gate).
+	//
+	// Personal-scope: excluded — the read-side join filters them out
+	// regardless, so showing them in the picker would only generate
+	// canLink=false noise.
+	if restrictPlatformToPublished {
+		where = append(where, fmt.Sprintf(
+			"((u.scope = 'platform' AND u.status IN ('classroom_ready','coach_ready','archived'))"+
+				" OR (u.scope = 'org' AND u.scope_id = $%d))", idx))
+	} else {
+		where = append(where, fmt.Sprintf(
+			"(u.scope = 'platform' OR (u.scope = 'org' AND u.scope_id = $%d))", idx))
+	}
 	args = append(args, pickerCourseOrgID)
 	idx++
 

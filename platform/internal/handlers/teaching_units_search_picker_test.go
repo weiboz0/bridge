@@ -118,12 +118,29 @@ func TestPickerSearch_WrongOrgScopeExcluded(t *testing.T) {
 	}
 }
 
-// Draft platform-scope Units appear in picker results but with
-// canLink=false for non-admin callers.
-func TestPickerSearch_DraftPlatformUnit_NotLinkableForTeacher(t *testing.T) {
+// Codex post-impl review: draft platform-scope Units must NOT appear
+// in picker results for non-admin callers (info leak — title and
+// summary exposed via picker that the regular search hides). Admins
+// still see all statuses.
+func TestPickerSearch_DraftPlatformUnit_HiddenFromTeacher(t *testing.T) {
 	fx := newPickerSearchFixture(t, "platdraft")
 	platDraft := fx.mkUnit(t, "platform", nil, "draft", "Platform Draft", fx.admin.ID)
 	code, body := fx.callPickerSearch(t, fx.claims(fx.teacher1, false), nil)
+	require.Equal(t, http.StatusOK, code)
+	resp := decodePickerResp(t, body)
+
+	for _, item := range resp.Items {
+		assert.NotEqual(t, platDraft.ID, item.ID,
+			"draft platform Unit must not leak title/summary to non-admin picker")
+	}
+}
+
+// Same draft Unit IS visible to platform admins (sanity-check the
+// admin bypass still works).
+func TestPickerSearch_DraftPlatformUnit_VisibleToAdmin(t *testing.T) {
+	fx := newPickerSearchFixture(t, "platdraftadm")
+	platDraft := fx.mkUnit(t, "platform", nil, "draft", "Platform Draft Adm", fx.admin.ID)
+	code, body := fx.callPickerSearch(t, fx.claims(fx.admin, true), nil)
 	require.Equal(t, http.StatusOK, code)
 	resp := decodePickerResp(t, body)
 
@@ -131,10 +148,10 @@ func TestPickerSearch_DraftPlatformUnit_NotLinkableForTeacher(t *testing.T) {
 	for _, item := range resp.Items {
 		if item.ID == platDraft.ID {
 			found = true
-			assert.False(t, item.CanLink, "draft platform Unit should be canLink=false for teacher")
+			assert.True(t, item.CanLink, "admin can link draft platform Units")
 		}
 	}
-	assert.True(t, found, "draft platform Unit should appear in results (visible) just not linkable")
+	assert.True(t, found, "admin should see draft platform Units in picker")
 }
 
 // Published platform-scope Units have canLink=true for course teachers.
