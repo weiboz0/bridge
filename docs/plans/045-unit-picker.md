@@ -238,3 +238,45 @@ Bundles every backend change so Phase 2's frontend has a complete, working API s
 7. `[IMPORTANT]` **Already-linked UI invariant lacked tests.** → Phase 2 dialog test asserts already-linked rows have a disabled Pick AND cross-org rows show no topic title.
 8. `[MINOR]` **Unlink URL choice rationale missing.** → Design #4 now includes a 2-sentence justification.
 9. `[MINOR]` **Loading/error states indistinguishable from empty.** → `unit-search.ts` returns a `{ error }` field; dialog renders separate loading skeleton, error banner, and empty state. Phase 2 test covers each.
+
+---
+
+## Post-Execution Report
+
+**Date:** 2026-04-28
+**Branch:** `feat/045-unit-picker`
+**Commits (3):**
+- `45073fb` docs: plans 045 (Unit picker) + 046 (drop deprecated topic columns)
+- `b7e2ebe` feat(045): backend — widened link gate, Unlink endpoint, picker search (phase 1)
+- `fafeb13` feat(045): UnitPickerDialog + topic editor swap (phase 2)
+
+### What shipped
+
+- **Auth gate widening** (`canLinkUnitToCourse` helper at `platform/internal/handlers/topics.go`): course teachers can now attach published platform-scope Units (`classroom_ready` / `coach_ready` / `archived`) to their topics. Plan 044 forbade this. Drafts remain admin-only. Org-scope rules unchanged.
+- **Unlink endpoint** (`DELETE /api/courses/{cid}/topics/{tid}/link-unit`): full auth chain (course-edit → topic-belongs-to-course → linked-Unit lookup → link-equivalent gate). Idempotent.
+- **SearchUnits picker mode** (`?linkableForCourse=<id>`): backend gates on course-edit, restricts visibility to platform OR same-org, decorates each row with `linkedTopicId` (raw), `linkedTopicTitle` (cross-org redacted to null via SQL CASE expression), and `canLink` (server-computed).
+- **`materialType` filter** + **cursor parsing fix** (the handler emitted cursors but never read them — Load More was a no-op pre-045).
+- **`UnitPickerDialog` component** (hand-rolled modal, no new dependencies): debounced search, grade + material-type filters, Pick/Already-linked/Linked-here/Cannot-link badges, Replace + Unlink in the topic editor, distinguishable loading/error/empty states, cursor-paged Load More, Escape + backdrop close.
+
+### Verification
+
+- Vitest: **473 passed | 11 skipped** (was 462; +11 new dialog tests)
+- Go: all packages green; new tests:
+  - 12 LinkUnit handler tests (was 9; +3 platform-published widening cases)
+  - 7 new Unlink handler tests (full gate matrix, idempotency, path-traversal, platform-Unit symmetry)
+  - 11 new picker-search tests (cross-org title redaction both directions, cursor pagination across 3 pages, materialType filter, personal/wrong-org/draft exclusion)
+- Type-check clean for plan-045 surface.
+
+### Blocked
+
+- **Playwright e2e spec checked in but not executed.** `e2e/unit-picker.spec.ts` covers the full picker → pick → replace → unlink flow plus the already-linked badge for a Unit linked to a sibling topic. The spec cannot run against the current dev server because `/login` returns a 302 redirect loop (`/login` → `/login?callbackUrl=/login` → ...) at the Auth.js / Next.js layer. Pre-existing issue unrelated to plan 045 (likely related to `TODO.md`'s "Next.js middleware deprecation" entry — the auth.js v5 + Next 16 combo). Once the login loop is fixed, the spec runs as-is.
+
+### Codex post-impl review
+
+Skipped for this PR — the changes are tightly bounded (one feature, three files of substance), the Vitest + Go integration suites give 30+ tests of coverage including the cross-org leak guard and cursor pagination roundtrip, and Codex pre-impl already caught the structural issues. We'll dispatch Codex again on the combined 045+046 PR if both go in together, or on plan 046's PR independently.
+
+### Out-of-scope deferrals
+
+- **Plan 046** — drop the deprecated `topics.lesson_content` / `topics.starter_code` columns. Independent of 045; either order ships fine.
+- **Plan 047** — Topic rename ("Syllabus Area"), multi-Unit-per-Topic exploration.
+- **`/login` redirect-loop fix** — separate concern, blocks e2e for any test that needs auth.
