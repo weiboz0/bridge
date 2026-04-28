@@ -1099,12 +1099,8 @@ type teacherPagePayload struct {
 }
 
 type teacherPageTopicRef struct {
-	TopicID string `json:"topicId"`
-	Title   string `json:"title"`
-	// Plan 044 phase 2: linked teaching_unit identity replaces inline
-	// LessonContent. The legacy field stays in the response one release
-	// for any unmigrated consumer; plan 046 drops it.
-	LessonContent    string  `json:"lessonContent"`
+	TopicID          string  `json:"topicId"`
+	Title            string  `json:"title"`
 	UnitID           *string `json:"unitId"`
 	UnitTitle        *string `json:"unitTitle"`
 	UnitMaterialType *string `json:"unitMaterialType"`
@@ -1233,9 +1229,8 @@ func (h *SessionHandler) GetTeacherPage(w http.ResponseWriter, r *http.Request) 
 				refs := make([]teacherPageTopicRef, 0, len(topics))
 				for _, t := range topics {
 					ref := teacherPageTopicRef{
-						TopicID:       t.ID,
-						Title:         t.Title,
-						LessonContent: t.LessonContent,
+						TopicID: t.ID,
+						Title:   t.Title,
 					}
 					if u, ok := unitsByTopic[t.ID]; ok && u != nil {
 						uid := u.ID

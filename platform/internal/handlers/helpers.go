@@ -43,6 +43,21 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 	return true
 }
 
+// decodeJSONStrict is decodeJSON but rejects unknown fields with 400.
+// Plan 046 added this to mirror the TS-side `.strict()` zod contract on
+// the topic create/update routes — stale clients sending the dropped
+// lessonContent / starterCode get a clean error instead of a silent
+// strip. Use this on endpoints where unknown fields signal a real bug.
+func decodeJSONStrict(w http.ResponseWriter, r *http.Request, dst any) bool {
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(dst); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
+		return false
+	}
+	return true
+}
+
 // requireUUID validates that a URL param is a valid UUID, writing a 400 error if not.
 // Returns the value and true if valid, or empty string and false if invalid.
 func requireUUID(w http.ResponseWriter, r *http.Request, param string) (string, bool) {

@@ -208,11 +208,10 @@ func (s *CourseStore) CloneCourse(ctx context.Context, courseID, newCreatedBy st
 		return nil, err
 	}
 
-	// Clone topics. Plan 044 phase 4: stopped copying lesson_content /
-	// starter_code — those columns are deprecated and dropped in plan 046.
-	// Teaching material lives in the linked teaching_unit; cloning the Unit
-	// link itself is intentionally out of scope (the cloned course's topics
-	// start unlinked and the new owner attaches Units via the topic editor).
+	// Clone topics. Teaching material lives in the linked teaching_unit;
+	// cloning the Unit link itself is intentionally out of scope (the
+	// cloned course's topics start unlinked and the new owner attaches
+	// Units via the topic editor).
 	_, err = tx.ExecContext(ctx,
 		`INSERT INTO topics (id, course_id, title, description, sort_order, created_at, updated_at)
 		 SELECT gen_random_uuid(), $1, title, description, sort_order, $2, $3

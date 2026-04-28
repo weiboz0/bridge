@@ -234,3 +234,71 @@ The reason migration runs AFTER code deploy: the new code no longer SELECTs/scan
 8. `[IMPORTANT]` **One-release safety net unverifiable.** → Status section now explicitly waives the safety-net rule on the grounds that Bridge is pre-production. The rule re-engages once Bridge enters pilot.
 9. `[MINOR]` **Grep-before-delete only mentioned for renderer/editor, not lesson-content.ts.** → All three files have explicit grep gates in Phase 1.
 10. `[MINOR]` **Hand-written SQL vs README's `bun run db:migrate` mismatch.** → Phase 4 includes a one-paragraph note explaining the choice with reference to TODO.md.
+
+---
+
+## Post-Execution Report
+
+**Date:** 2026-04-28
+**Branch:** `feat/046-drop-deprecated-topic-columns` (chained off `feat/045-unit-picker`)
+**Phase 0 discovery:** Q1, Q2, Q3 all returned 0 rows on dev — green light to drop.
+
+### What shipped
+
+- Migration `drizzle/0022_drop_topic_lesson_content_and_starter_code.sql` applied to dev + bridge_test. Plain `DROP COLUMN` (not `IF EXISTS`); `\d topics` confirms columns are gone.
+- Drizzle schema (`src/lib/db/schema.ts`): `lessonContent` + `starterCode` removed from the `topics` pgTable.
+- `src/lib/session-topics.ts::getSessionTopics` SELECT no longer projects the columns.
+- `src/lib/topics.ts`: deprecated-fields comment removed.
+- API route comments updated; `.strict()` zod stays as the unknown-field reject mechanism.
+- Orphan helpers deleted (verified by grep beforehand): `src/lib/lesson-content.ts`, `src/components/lesson/lesson-renderer.tsx`, `src/components/lesson/lesson-editor.tsx`, `tests/unit/lesson-content.test.ts`. Empty `src/components/lesson/` directory removed.
+- Go store (`platform/internal/store/topics.go`): `Topic`, `CreateTopicInput`, `UpdateTopicInput`, `topicColumns`, `scanTopic`, `CreateTopic`, `UpdateTopic`, `ListTopicsByCourse` all stripped of the column fields.
+- Go store (`platform/internal/store/sessions.go`): `SessionTopicWithDetails` lost `LessonContent` / `StarterCode`; `GetSessionTopics` SQL + scan no longer reference the columns.
+- Go store (`platform/internal/store/courses.go::CloneCourse`): comment updated.
+- Go handler (`platform/internal/handlers/sessions.go`): `teacherPageTopicRef` lost `LessonContent`; mapping at `GetTeacherPage` no longer copies it.
+- Go handler (`platform/internal/handlers/topics.go`): explicit-400 deprecation rejects removed; CreateTopic + UpdateTopic now use new `decodeJSONStrict` helper (`platform/internal/handlers/helpers.go`) which calls `dec.DisallowUnknownFields()` — symmetric with TS-side `.strict()`. Stale clients sending unknown fields get a clean 400 instead of silent strip.
+- Test cleanup: `platform/internal/store/courses_test.go` clone test rewritten (no longer references dropped columns); `platform/internal/store/teaching_units_test.go` and `platform/internal/handlers/teaching_units_integration_test.go` setup INSERT statements no longer reference `lesson_content`.
+- Replacement strict-mode tests (4 total): 2 in `platform/internal/handlers/topics_strict_decode_test.go` (CreateTopic + UpdateTopic reject unknown field), 2 in `tests/integration/courses-api.test.ts` (POST + PATCH reject unknown field). Old deprecation rejection tests (6 Go in `topics_deprecation_test.go`, deleted; 4 TS in `courses-api.test.ts`, deleted/replaced) gone.
+- TODO.md entry removed; plan 044 post-exec report annotated with "Shipped 2026-04-28."
+
+### Verification
+
+- Phase 0 discovery: all three queries 0 rows.
+- Migration: `\d topics` confirms `lesson_content` and `starter_code` no longer exist; only `id, course_id, title, description, sort_order, created_at, updated_at` remain.
+- Vitest: **460 passed | 11 skipped** (was 462 pre-046; net -2 = 4 deprecation tests deleted + 2 strict-mode replacements added; the lesson-content.test.ts had been removed in plan 045).
+- Go: all packages green post-drop. Strict-decode tests pass.
+
+### Net test delta
+
+- TS: -4 deprecation tests + 2 strict-mode tests = -2
+- Go: -6 deprecation tests + 4 strict-mode tests (2 reject + 2 happy-path sanity) = -2
+- Total: -4 net (the contract is preserved and arguably tightened — strict mode now rejects ANY unknown field, not just the two deprecated ones).
+
+### Risk realized
+
+- **None**. Phase 0 caught no stragglers, the migration was metadata-only, and the test suites pass against the post-drop schema.
+
+### Codex post-impl review
+
+- **Date:** 2026-04-28
+- **Verdict:** NEEDS FIXES — 1 IMPORTANT. Fixed inline (commit `ad74034`).
+
+#### Findings + resolutions
+
+1. `[IMPORTANT]` **TS `TeacherPagePayload.courseTopics` still declared `lessonContent: string`** (`src/app/(portal)/teacher/sessions/[sessionId]/page.tsx:24-30`). The Go handler's `teacherPageTopicRef` no longer emits `lessonContent` (stripped in this plan's Phase 2), but the TS type still declared the field as required. At runtime it would always be `undefined`, which TS would not catch. → Removed `lessonContent: string` from the TS payload type. Also cleaned up adjacent stale "Plan 044 phase 2: lessonContent kept as deprecated" comments in `src/components/session/teacher/teacher-dashboard.tsx`, `src/components/parent/live-session-viewer.tsx`, and `src/app/(portal)/student/classes/[id]/page.tsx`.
+
+#### Confirmations (PASS)
+
+- Migration safety: plain `DROP COLUMN` (not `IF EXISTS`); pg_depend confirmed no view/trigger/index dependencies.
+- Deploy order: plan correctly documents code-first, migration-last.
+- Strict mode: TS `.strict()` zod intact; Go `decodeJSONStrict` calls `DisallowUnknownFields()`. Both `CreateTopic` and `UpdateTopic` use it.
+- Orphan deletion: all four files deleted; grep confirms zero remaining `LessonRenderer` / `LessonEditor` / `lesson-content` runtime references outside historical plan docs.
+- Test deletion + replacement: `topics_deprecation_test.go` gone; 4 deprecation TS tests removed; 4 strict-mode replacement tests added (2 reject + 2 happy-path Go in `topics_strict_decode_test.go`; 2 reject TS in `courses-api.test.ts`).
+- Go store integrity: `topicColumns` and `scanTopic` aligned at 7 columns; `GetSessionTopics` SELECT/Scan column order matches.
+
+No MINOR findings.
+
+### Out-of-scope deferrals
+
+- **Plan 045** still in progress (PR #74 open). No interaction with plan 046 — they're independent surfaces.
+- **README.md vs `bun run db:migrate` mismatch** — separate cleanup, tracked in TODO.md.
+- **Plan 047** — Topic rename + multi-Unit-per-Topic exploration.

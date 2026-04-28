@@ -30,22 +30,16 @@ export async function unlinkSessionTopic(db: Database, sessionId: string, topicI
 }
 
 export async function getSessionTopics(db: Database, sessionId: string) {
-  // Plan 044 phase 1: surface the linked teaching_unit alongside the
-  // legacy lessonContent/starterCode fields. 1:1 via the unique index
-  // teaching_units_topic_id_uniq, so the LEFT JOIN produces zero or
-  // one Unit per topic.
-  //
-  // Codex correction #3 (cross-org leak guard): the Unit's scope must
-  // be platform OR its scope_id must match the topic's course org_id.
-  // A misaligned topic_id won't surface a Unit from another org.
+  // Cross-org leak guard (added with the linked-Unit join in plan 044
+  // phase 1): the Unit's scope must be platform OR its scope_id must
+  // match the topic's course org_id. A misaligned topic_id won't
+  // surface a Unit from another org.
   const links = await db
     .select({
       topicId: sessionTopics.topicId,
       title: topics.title,
       description: topics.description,
       sortOrder: topics.sortOrder,
-      lessonContent: topics.lessonContent,
-      starterCode: topics.starterCode,
       unitId: teachingUnits.id,
       unitTitle: teachingUnits.title,
       unitMaterialType: teachingUnits.materialType,

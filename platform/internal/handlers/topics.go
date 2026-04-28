@@ -63,26 +63,19 @@ func (h *TopicHandler) CreateTopic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Plan 044 phase 3: lessonContent and starterCode are no longer
-	// accepted on topic create. Use POST /api/courses/{cid}/topics/
-	// {tid}/link-unit to attach a teaching_unit instead.
+	// Strict decode: unknown fields are rejected with 400. Teaching
+	// material is attached via POST /api/courses/{cid}/topics/{tid}/link-unit,
+	// not the topic create body.
 	var body struct {
-		Title         string  `json:"title"`
-		Description   string  `json:"description"`
-		LessonContent *string `json:"lessonContent,omitempty"`
-		StarterCode   *string `json:"starterCode,omitempty"`
+		Title       string `json:"title"`
+		Description string `json:"description"`
 	}
-	if !decodeJSON(w, r, &body) {
+	if !decodeJSONStrict(w, r, &body) {
 		return
 	}
 
 	if body.Title == "" || len(body.Title) > 255 {
 		writeError(w, http.StatusBadRequest, "title is required (max 255 chars)")
-		return
-	}
-	if body.LessonContent != nil || body.StarterCode != nil {
-		writeError(w, http.StatusBadRequest,
-			"lessonContent and starterCode are no longer accepted; link a teaching unit via POST /api/courses/{courseId}/topics/{topicId}/link-unit")
 		return
 	}
 
@@ -185,17 +178,9 @@ func (h *TopicHandler) UpdateTopic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Plan 044 phase 3: lessonContent and starterCode are no longer
-	// accepted on update. The store struct still carries the fields
-	// (migration paths use them); the handler explicitly rejects them
-	// to lock the API contract before clearing the values pre-store.
+	// Strict decode: unknown fields are rejected with 400.
 	var body store.UpdateTopicInput
-	if !decodeJSON(w, r, &body) {
-		return
-	}
-	if body.LessonContent != nil || body.StarterCode != nil {
-		writeError(w, http.StatusBadRequest,
-			"lessonContent and starterCode are no longer accepted; link a teaching unit via POST /api/courses/{courseId}/topics/{topicId}/link-unit")
+	if !decodeJSONStrict(w, r, &body) {
 		return
 	}
 

@@ -851,8 +851,8 @@ func setupTopicForUnit(t *testing.T, db *sql.DB, orgID, userID, suffix string) s
 	require.NoError(t, err)
 
 	_, err = db.ExecContext(ctx, `
-		INSERT INTO topics (id, course_id, title, description, sort_order, lesson_content)
-		VALUES ($1, $2, $3, '', 0, '{}'::jsonb)
+		INSERT INTO topics (id, course_id, title, description, sort_order)
+		VALUES ($1, $2, $3, '', 0)
 		ON CONFLICT (id) DO NOTHING`,
 		topicID, courseID, "Topic-"+suffix)
 	require.NoError(t, err)

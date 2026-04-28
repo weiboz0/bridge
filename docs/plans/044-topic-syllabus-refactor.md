@@ -274,5 +274,5 @@ Recapping deferrals:
 ### Out-of-scope deferrals (carry forward unchanged)
 
 - **Plan 045** — proper Unit-attach picker UI (search by title, filter by org/grade/material type) replacing the paste-ID input.
-- **Plan 046** — drop `topic.lesson_content` and `topic.starter_code` columns + the JSON content-block code path.
+- **Plan 046** — drop `topic.lesson_content` and `topic.starter_code` columns + the JSON content-block code path. (Shipped 2026-04-28.)
 - **Plan 047** — My Work navigability (topic rename, multi-Unit-per-Topic remain explicitly out of scope).

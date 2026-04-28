@@ -140,7 +140,7 @@ export default async function StudentClassDetailPage({
                     <CardDescription>{topic.description}</CardDescription>
                   )}
                 </CardHeader>
-                {/* Plan 044 phase 2: linked Unit instead of inline lessonContent. */}
+                {/* Linked teaching_unit reference, or empty-state. */}
                 <CardContent>
                   {linkedUnit ? (
                     <Link
