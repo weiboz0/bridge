@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -22,8 +23,9 @@ import (
 // Lifecycle transitions (publish/archive) and overlay/fork routes are
 // excluded from this handler — they land in plans 033 and 034.
 type TeachingUnitHandler struct {
-	Units *store.TeachingUnitStore
-	Orgs  *store.OrgStore
+	Units   *store.TeachingUnitStore
+	Orgs    *store.OrgStore
+	Courses *store.CourseStore // Plan 045: backs the SearchUnits ?linkableForCourse= gate.
 }
 
 // validUnitScopes is the allowed set of scope values.
@@ -312,10 +314,19 @@ func (h *TeachingUnitHandler) ListUnits(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]any{"items": visible})
 }
 
-// SearchUnits — GET /api/units/search?q=&scope=&gradeLevel=&tags=&limit=&cursor=
+// SearchUnits — GET /api/units/search?q=&scope=&gradeLevel=&materialType=&tags=&limit=&cursor=&linkableForCourse=
 // Returns units matching FTS query and/or structured filters, with visibility
 // filtering. When q is non-empty, results are ranked by FTS relevance;
 // otherwise they are ordered by updated_at DESC.
+//
+// Plan 045 additions:
+//   - materialType filter (notes / slides / worksheet / reference).
+//   - cursor query param is now actually parsed (was previously emitted
+//     by the handler but never read back — Load More was a no-op).
+//   - linkableForCourse=<courseId> switches into "picker mode": loads
+//     the course, gates the caller to creator-or-platform-admin, and
+//     returns Units linkable to that course (platform-scope OR same
+//     org) decorated with linkedTopicId/linkedTopicTitle/canLink.
 func (h *TeachingUnitHandler) SearchUnits(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
@@ -329,6 +340,7 @@ func (h *TeachingUnitHandler) SearchUnits(w http.ResponseWriter, r *http.Request
 		Scope:           q.Get("scope"),
 		Status:          q.Get("status"),
 		GradeLevel:      q.Get("gradeLevel"),
+		MaterialType:    q.Get("materialType"),
 		ViewerID:        claims.UserID,
 		IsPlatformAdmin: claims.IsPlatformAdmin,
 	}
@@ -355,6 +367,17 @@ func (h *TeachingUnitHandler) SearchUnits(w http.ResponseWriter, r *http.Request
 		filter.Limit = l
 	}
 
+	if cursor := q.Get("cursor"); cursor != "" {
+		ts, id, ok := parseSearchCursor(cursor)
+		if !ok {
+			writeError(w, http.StatusBadRequest,
+				"cursor must be of form <RFC3339-timestamp>|<unitId>")
+			return
+		}
+		filter.CursorCreatedAt = &ts
+		filter.CursorID = &id
+	}
+
 	// Build viewer's org list for visibility. Only include orgs where the
 	// viewer has teacher or admin roles (students are denied org access per
 	// plan 031).
@@ -369,6 +392,14 @@ func (h *TeachingUnitHandler) SearchUnits(w http.ResponseWriter, r *http.Request
 				filter.ViewerOrgs = append(filter.ViewerOrgs, m.OrgID)
 			}
 		}
+	}
+
+	// Plan 045 picker mode: linkableForCourse=<courseId> dispatches to
+	// the dedicated SearchUnitsForPicker SQL (LEFT JOIN topics + courses
+	// for the linked-topic decoration with cross-org title redaction).
+	if linkableCourseID := q.Get("linkableForCourse"); linkableCourseID != "" {
+		h.searchUnitsForPicker(w, r, claims, filter, linkableCourseID)
+		return
 	}
 
 	units, err := h.Units.SearchUnits(r.Context(), filter)
@@ -387,6 +418,116 @@ func (h *TeachingUnitHandler) SearchUnits(w http.ResponseWriter, r *http.Request
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"items":      units,
+		"nextCursor": nextCursor,
+	})
+}
+
+// parseSearchCursor splits the SearchUnits cursor format
+// `<RFC3339-timestamp>|<unitId>` and returns the parsed timestamp + ID.
+// Returns ok=false on any malformed input — the caller should map to 400.
+func parseSearchCursor(c string) (time.Time, string, bool) {
+	parts := strings.SplitN(c, "|", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return time.Time{}, "", false
+	}
+	// The handler emits with format "2006-01-02T15:04:05.000000Z07:00"
+	// (RFC3339 with microseconds); time.RFC3339Nano accepts both.
+	ts, err := time.Parse(time.RFC3339Nano, parts[0])
+	if err != nil {
+		return time.Time{}, "", false
+	}
+	return ts, parts[1], true
+}
+
+// pickerItem is the per-row payload SearchUnits returns in picker mode.
+// Adds the linked-topic decoration plus a server-computed canLink that
+// the UI uses to disable rows the caller cannot actually attach.
+type pickerItem struct {
+	store.UnitWithLinkedTopic
+	CanLink bool `json:"canLink"`
+}
+
+// searchUnitsForPicker runs the SearchUnitsForPicker store method,
+// gates on course-edit access, computes canLink per row, and writes
+// the response. Split out from SearchUnits for clarity.
+func (h *TeachingUnitHandler) searchUnitsForPicker(
+	w http.ResponseWriter,
+	r *http.Request,
+	claims *auth.Claims,
+	filter store.SearchUnitsFilter,
+	courseID string,
+) {
+	if h.Courses == nil {
+		writeError(w, http.StatusInternalServerError, "Course store unavailable")
+		return
+	}
+	course, err := h.Courses.GetCourse(r.Context(), courseID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if course == nil {
+		writeError(w, http.StatusNotFound, "Course not found")
+		return
+	}
+	if !claims.IsPlatformAdmin && course.CreatedBy != claims.UserID {
+		writeError(w, http.StatusForbidden,
+			"Only the course creator can browse linkable units for this course")
+		return
+	}
+
+	rows, err := h.Units.SearchUnitsForPicker(
+		r.Context(), filter, course.OrgID, claims.IsPlatformAdmin,
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+
+	// canLink per row: replicate canLinkUnitToCourse's semantics. Since
+	// the visibility scope already restricts to platform-scope OR
+	// org-scope-with-matching-org-id, the only remaining checks are:
+	//   - platform-scope: status must be in published-statuses (admin
+	//     bypasses).
+	//   - org-scope: caller must be teacher/org_admin in course.OrgID
+	//     (or platform admin).
+	canLinkOrg := claims.IsPlatformAdmin
+	if !canLinkOrg && h.Orgs != nil {
+		// Reuse the ViewerOrgs already computed by SearchUnits caller.
+		// SearchUnits populates filter.ViewerOrgs before dispatching.
+		for _, oid := range filter.ViewerOrgs {
+			if oid == course.OrgID {
+				canLinkOrg = true
+				break
+			}
+		}
+	}
+
+	items := make([]pickerItem, 0, len(rows))
+	for i := range rows {
+		row := rows[i]
+		can := false
+		switch row.Scope {
+		case "platform":
+			can = claims.IsPlatformAdmin || publishedPlatformUnitStatuses[row.Status]
+		case "org":
+			can = canLinkOrg
+		}
+		items = append(items, pickerItem{
+			UnitWithLinkedTopic: row,
+			CanLink:             can,
+		})
+	}
+
+	var nextCursor *string
+	if filter.Query == "" && len(items) > 0 && filter.Limit > 0 && len(items) == filter.Limit {
+		last := items[len(items)-1]
+		cursor := last.UpdatedAt.Format("2006-01-02T15:04:05.000000Z07:00") + "|" + last.ID
+		nextCursor = &cursor
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"items":      items,
 		"nextCursor": nextCursor,
 	})
 }

@@ -42,8 +42,9 @@ func newUnitFixture(t *testing.T, suffix string) *unitFixture {
 	users := store.NewUserStore(db)
 
 	h := &TeachingUnitHandler{
-		Units: store.NewTeachingUnitStore(db),
-		Orgs:  orgs,
+		Units:   store.NewTeachingUnitStore(db),
+		Orgs:    orgs,
+		Courses: store.NewCourseStore(db),
 	}
 
 	mkOrg := func(label string) *store.Org {

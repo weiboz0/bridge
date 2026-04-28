@@ -277,6 +277,83 @@ func TestLinkUnit_WrongOrgUnit_Forbidden(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, code)
 }
 
+// Plan 045: a teacher (not platform admin) can attach a published
+// platform-scope Unit to their topic. Plan 044 forbade this — only
+// platform admins could. Plan 045 widens the gate so library Units
+// are usable.
+func TestLinkUnit_TeacherLinksPlatformPublishedUnit_Allowed(t *testing.T) {
+	fx := newLinkUnitFixture(t, "platpub")
+	ctx := context.Background()
+	db := integrationDB(t)
+
+	var platUnitID string
+	err := db.QueryRowContext(ctx,
+		`INSERT INTO teaching_units
+		 (id, scope, scope_id, title, summary, material_type, status, created_by, created_at, updated_at)
+		 VALUES (gen_random_uuid(), 'platform', NULL, 'Platform Lib', '', 'notes', 'classroom_ready', $1, now(), now())
+		 RETURNING id`,
+		fx.admin.ID, // created by the platform admin
+	).Scan(&platUnitID)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		db.ExecContext(ctx, "DELETE FROM teaching_units WHERE id = $1", platUnitID)
+	})
+
+	code, _ := fx.callLinkUnit(t,
+		&auth.Claims{UserID: fx.teacher.ID}, platUnitID)
+	assert.Equal(t, http.StatusOK, code)
+}
+
+// A draft platform-scope Unit (status not in published-statuses) is
+// still admin-only.
+func TestLinkUnit_TeacherLinksPlatformDraftUnit_Forbidden(t *testing.T) {
+	fx := newLinkUnitFixture(t, "platdraft")
+	ctx := context.Background()
+	db := integrationDB(t)
+
+	var platUnitID string
+	err := db.QueryRowContext(ctx,
+		`INSERT INTO teaching_units
+		 (id, scope, scope_id, title, summary, material_type, status, created_by, created_at, updated_at)
+		 VALUES (gen_random_uuid(), 'platform', NULL, 'Platform Draft', '', 'notes', 'draft', $1, now(), now())
+		 RETURNING id`,
+		fx.admin.ID,
+	).Scan(&platUnitID)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		db.ExecContext(ctx, "DELETE FROM teaching_units WHERE id = $1", platUnitID)
+	})
+
+	code, _ := fx.callLinkUnit(t,
+		&auth.Claims{UserID: fx.teacher.ID}, platUnitID)
+	assert.Equal(t, http.StatusForbidden, code)
+}
+
+// Platform admin can still attach a draft platform Unit (sanity check
+// the IsPlatformAdmin bypass survives the gate refactor).
+func TestLinkUnit_AdminLinksPlatformDraftUnit_Allowed(t *testing.T) {
+	fx := newLinkUnitFixture(t, "platdraftadm")
+	ctx := context.Background()
+	db := integrationDB(t)
+
+	var platUnitID string
+	err := db.QueryRowContext(ctx,
+		`INSERT INTO teaching_units
+		 (id, scope, scope_id, title, summary, material_type, status, created_by, created_at, updated_at)
+		 VALUES (gen_random_uuid(), 'platform', NULL, 'Draft', '', 'notes', 'draft', $1, now(), now())
+		 RETURNING id`,
+		fx.admin.ID,
+	).Scan(&platUnitID)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		db.ExecContext(ctx, "DELETE FROM teaching_units WHERE id = $1", platUnitID)
+	})
+
+	code, _ := fx.callLinkUnit(t,
+		&auth.Claims{UserID: fx.admin.ID, IsPlatformAdmin: true}, platUnitID)
+	assert.Equal(t, http.StatusOK, code)
+}
+
 // A personal-scope unit owned by someone else should be rejected by
 // the cross-org reachability guard before the unit-edit check runs.
 // Personal-scope units never satisfy `scope='platform' OR scope_id =
