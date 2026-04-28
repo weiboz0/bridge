@@ -68,15 +68,9 @@ type SessionTopicWithDetails struct {
 	Title       string `json:"title"`
 	Description string `json:"description"`
 	SortOrder   int    `json:"sortOrder"`
-	// Plan 044 phase 4 (deprecation): lessonContent + starterCode are
-	// kept on the response one release for any consumer we missed; the
-	// canonical material lives in the linked teaching_unit. Plan 046
-	// drops these fields entirely.
-	LessonContent string  `json:"lessonContent"`
-	StarterCode   *string `json:"starterCode"`
-	// Plan 044 phase 1: linked Unit identity surfaced alongside legacy
-	// fields. Null when no Unit is linked OR when the Unit's scope_id
-	// doesn't match the topic's course org (cross-org-leak guard).
+	// Plan 044 phase 1: linked Unit identity surfaced. Null when no
+	// Unit is linked OR when the Unit's scope_id doesn't match the
+	// topic's course org (cross-org-leak guard in the JOIN).
 	UnitID           *string `json:"unitId"`
 	UnitTitle        *string `json:"unitTitle"`
 	UnitMaterialType *string `json:"unitMaterialType"`
@@ -572,7 +566,7 @@ func (s *SessionStore) GetSessionTopics(ctx context.Context, sessionID string) (
 	// leak guard from Codex correction #3 — a teaching_unit's scope_id
 	// must match the topic's course org_id (or be platform-scope).
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT t.id, t.title, t.description, t.sort_order, t.lesson_content, t.starter_code,
+		`SELECT t.id, t.title, t.description, t.sort_order,
 		        u.id, u.title, u.material_type
 		 FROM session_topics st
 		 INNER JOIN topics t ON st.topic_id = t.id
@@ -592,7 +586,6 @@ func (s *SessionStore) GetSessionTopics(ctx context.Context, sessionID string) (
 		var t SessionTopicWithDetails
 		if err := rows.Scan(
 			&t.TopicID, &t.Title, &t.Description, &t.SortOrder,
-			&t.LessonContent, &t.StarterCode,
 			&t.UnitID, &t.UnitTitle, &t.UnitMaterialType,
 		); err != nil {
 			return nil, err

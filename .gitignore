@@ -52,3 +52,4 @@ test-results/
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+test-results/

@@ -703,8 +703,8 @@ func TestTeachingUnitStore_GetUnitByTopicID(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = db.ExecContext(ctx, `
-		INSERT INTO topics (id, course_id, title, description, sort_order, lesson_content)
-		VALUES ($1, $2, 'Test Topic', 'desc', 0, '{}'::jsonb)
+		INSERT INTO topics (id, course_id, title, description, sort_order)
+		VALUES ($1, $2, 'Test Topic', 'desc', 0)
 		ON CONFLICT (id) DO NOTHING`,
 		topicID, courseID)
 	require.NoError(t, err)

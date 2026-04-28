@@ -9,7 +9,6 @@ Outstanding tasks and technical debt. Check this file when planning new work.
 - [ ] **Hocuspocus auth** — Token format is simple `userId:role` string; should use JWT or signed tokens in production
 - [ ] **Database migrations** — Using direct SQL apply (`psql -f`); drizzle-kit migrate has issues, needs investigation
 - [ ] **/login redirect loop** — Auth.js v5 + Next 16 combo causes `/login` to 302 to `/login?callbackUrl=/login`, blocking Playwright auth.setup. Likely related to the middleware-deprecation entry above.
-- [ ] **Plan 046: Drop deprecated topic columns** — Remove `topics.lesson_content` + `topics.starter_code` and the JSON content-block code path one release after plan 044
 
 ## Frontend
 

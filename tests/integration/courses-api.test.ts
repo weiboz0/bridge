@@ -196,9 +196,11 @@ describe("Courses API", () => {
       expect(body).toHaveProperty("title", "Updated Topic");
     });
 
-    // Plan 044 phase 3: lessonContent and starterCode are no longer
-    // accepted on topic create or update. Strict zod schema rejects.
-    it("rejects POST with deprecated lessonContent", async () => {
+    // Plan 046: the lessonContent and starterCode columns are gone, but
+    // strict zod still rejects ANY unknown field on topic POST/PATCH.
+    // These tests use lessonContent as a canary so future readers
+    // grepping for the deprecated name see the contract is enforced.
+    it("rejects POST with unknown field (lessonContent)", async () => {
       setMockUser({ id: teacher.id, name: teacher.name, email: teacher.email });
       const course = await createTestCourse(org.id, teacher.id);
       const res = await CREATE_TOPIC(
@@ -212,21 +214,7 @@ describe("Courses API", () => {
       expect(status).toBe(400);
     });
 
-    it("rejects POST with deprecated starterCode", async () => {
-      setMockUser({ id: teacher.id, name: teacher.name, email: teacher.email });
-      const course = await createTestCourse(org.id, teacher.id);
-      const res = await CREATE_TOPIC(
-        createRequest(`/api/courses/${course.id}/topics`, {
-          method: "POST",
-          body: { title: "X", starterCode: "print('hi')" },
-        }),
-        { params: Promise.resolve({ id: course.id }) }
-      );
-      const { status } = await parseResponse(res);
-      expect(status).toBe(400);
-    });
-
-    it("rejects PATCH with deprecated lessonContent", async () => {
+    it("rejects PATCH with unknown field (lessonContent)", async () => {
       setMockUser({ id: teacher.id, name: teacher.name, email: teacher.email });
       const course = await createTestCourse(org.id, teacher.id);
       const topic = await createTestTopic(course.id);
@@ -234,21 +222,6 @@ describe("Courses API", () => {
         createRequest(`/api/courses/${course.id}/topics/${topic.id}`, {
           method: "PATCH",
           body: { lessonContent: { blocks: [{ type: "p" }] } },
-        }),
-        { params: Promise.resolve({ id: course.id, topicId: topic.id }) }
-      );
-      const { status } = await parseResponse(res);
-      expect(status).toBe(400);
-    });
-
-    it("rejects PATCH with deprecated starterCode", async () => {
-      setMockUser({ id: teacher.id, name: teacher.name, email: teacher.email });
-      const course = await createTestCourse(org.id, teacher.id);
-      const topic = await createTestTopic(course.id);
-      const res = await UPDATE_TOPIC(
-        createRequest(`/api/courses/${course.id}/topics/${topic.id}`, {
-          method: "PATCH",
-          body: { starterCode: "x = 1" },
         }),
         { params: Promise.resolve({ id: course.id, topicId: topic.id }) }
       );
