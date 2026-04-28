@@ -64,12 +64,22 @@ type SessionTopic struct {
 }
 
 type SessionTopicWithDetails struct {
-	TopicID       string  `json:"topicId"`
-	Title         string  `json:"title"`
-	Description   string  `json:"description"`
-	SortOrder     int     `json:"sortOrder"`
+	TopicID     string `json:"topicId"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	SortOrder   int    `json:"sortOrder"`
+	// Plan 044 phase 4 (deprecation): lessonContent + starterCode are
+	// kept on the response one release for any consumer we missed; the
+	// canonical material lives in the linked teaching_unit. Plan 046
+	// drops these fields entirely.
 	LessonContent string  `json:"lessonContent"`
 	StarterCode   *string `json:"starterCode"`
+	// Plan 044 phase 1: linked Unit identity surfaced alongside legacy
+	// fields. Null when no Unit is linked OR when the Unit's scope_id
+	// doesn't match the topic's course org (cross-org-leak guard).
+	UnitID           *string `json:"unitId"`
+	UnitTitle        *string `json:"unitTitle"`
+	UnitMaterialType *string `json:"unitMaterialType"`
 }
 
 type CreateSessionInput struct {
@@ -556,10 +566,20 @@ func (s *SessionStore) UnlinkSessionTopic(ctx context.Context, sessionID, topicI
 }
 
 func (s *SessionStore) GetSessionTopics(ctx context.Context, sessionID string) ([]SessionTopicWithDetails, error) {
+	// Plan 044 phase 1: LEFT JOIN against teaching_units to surface the
+	// linked Unit (1:1 via teaching_units.topic_id unique index). The
+	// outer JOIN on courses + the scope/scope_id check is the cross-org
+	// leak guard from Codex correction #3 — a teaching_unit's scope_id
+	// must match the topic's course org_id (or be platform-scope).
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT t.id, t.title, t.description, t.sort_order, t.lesson_content, t.starter_code
+		`SELECT t.id, t.title, t.description, t.sort_order, t.lesson_content, t.starter_code,
+		        u.id, u.title, u.material_type
 		 FROM session_topics st
 		 INNER JOIN topics t ON st.topic_id = t.id
+		 INNER JOIN courses c ON c.id = t.course_id
+		 LEFT JOIN teaching_units u
+		   ON u.topic_id = t.id
+		   AND (u.scope = 'platform' OR u.scope_id = c.org_id)
 		 WHERE st.session_id = $1
 		 ORDER BY t.sort_order ASC`, sessionID)
 	if err != nil {
@@ -570,7 +590,11 @@ func (s *SessionStore) GetSessionTopics(ctx context.Context, sessionID string) (
 	var topics []SessionTopicWithDetails
 	for rows.Next() {
 		var t SessionTopicWithDetails
-		if err := rows.Scan(&t.TopicID, &t.Title, &t.Description, &t.SortOrder, &t.LessonContent, &t.StarterCode); err != nil {
+		if err := rows.Scan(
+			&t.TopicID, &t.Title, &t.Description, &t.SortOrder,
+			&t.LessonContent, &t.StarterCode,
+			&t.UnitID, &t.UnitTitle, &t.UnitMaterialType,
+		); err != nil {
 			return nil, err
 		}
 		topics = append(topics, t)

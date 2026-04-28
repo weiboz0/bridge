@@ -21,6 +21,10 @@ export async function cleanupDatabase() {
   await testDb.delete(schema.classSettings);
   await testDb.delete(schema.classMemberships);
   await testDb.delete(schema.classes);
+  // Plan 044: clean teaching_units before topics so the topic_id FK
+  // (ON DELETE SET NULL) doesn't leave orphan unit rows.
+  await testDb.delete(schema.unitDocuments);
+  await testDb.delete(schema.teachingUnits);
   await testDb.delete(schema.topics);
   await testDb.delete(schema.courses);
   await testDb.delete(schema.orgMemberships);
@@ -111,6 +115,27 @@ export async function createTestTopic(
     })
     .returning();
   return topic;
+}
+
+// Plan 044 phase 1: minimal teaching_unit for tests of the topic↔unit
+// link. Defaults to org scope, status=draft, materialType=notes.
+export async function createTestTeachingUnit(
+  scopeId: string,
+  createdBy: string,
+  overrides: Partial<typeof schema.teachingUnits.$inferInsert> = {}
+) {
+  const [unit] = await testDb
+    .insert(schema.teachingUnits)
+    .values({
+      scope: "org",
+      scopeId,
+      title: "Test Unit",
+      summary: "",
+      createdBy,
+      ...overrides,
+    })
+    .returning();
+  return unit;
 }
 
 export async function createTestClass(

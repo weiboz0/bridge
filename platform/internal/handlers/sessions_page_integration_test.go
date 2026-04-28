@@ -29,6 +29,7 @@ type sessionPageFixture struct {
 	admin     *store.RegisteredUser
 	orgAdmin  *store.RegisteredUser
 	orgID     string
+	courseID  string
 	classID   string
 	sessionID string
 }
@@ -114,6 +115,7 @@ func newSessionPageFixture(t *testing.T, suffix string) *sessionPageFixture {
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() { db.ExecContext(ctx, "DELETE FROM courses WHERE id = $1", course.ID) })
+	fx.courseID = course.ID
 
 	_, err = topics.CreateTopic(ctx, store.CreateTopicInput{
 		CourseID: course.ID,
