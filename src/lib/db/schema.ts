@@ -315,7 +315,14 @@ export const topics = pgTable(
     title: varchar("title", { length: 255 }).notNull(),
     description: text("description").default(""),
     sortOrder: integer("sort_order").notNull().default(0),
+    /**
+     * @deprecated Plan 044: teaching material lives in the linked
+     * teaching_unit (1:1 via teaching_units.topic_id). The API rejects
+     * writes through this field; reads no longer surface it. The column
+     * is kept for one release as a safety net. Plan 046 drops it.
+     */
     lessonContent: jsonb("lesson_content").default({}),
+    /** @deprecated Same as `lessonContent` — see plan 044 / 046. */
     starterCode: text("starter_code"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
