@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -10,9 +11,10 @@ import (
 )
 
 type TopicHandler struct {
-	Topics  *store.TopicStore
-	Courses *store.CourseStore
-	Orgs    *store.OrgStore
+	Topics        *store.TopicStore
+	Courses       *store.CourseStore
+	Orgs          *store.OrgStore
+	TeachingUnits *store.TeachingUnitStore // Plan 044: backs LinkUnit.
 }
 
 // Routes registers topic routes nested under /api/courses/{courseId}/topics
@@ -27,6 +29,8 @@ func (h *TopicHandler) Routes(r chi.Router) {
 			r.Get("/", h.GetTopic)
 			r.Patch("/", h.UpdateTopic)
 			r.Delete("/", h.DeleteTopic)
+			// Plan 044 phase 2: link a teaching_unit to this topic.
+			r.Post("/link-unit", h.LinkUnit)
 		})
 	})
 }
@@ -56,11 +60,14 @@ func (h *TopicHandler) CreateTopic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Plan 044 phase 3: lessonContent and starterCode are no longer
+	// accepted on topic create. Use POST /api/courses/{cid}/topics/
+	// {tid}/link-unit to attach a teaching_unit instead.
 	var body struct {
 		Title         string  `json:"title"`
 		Description   string  `json:"description"`
-		LessonContent string  `json:"lessonContent"`
-		StarterCode   *string `json:"starterCode"`
+		LessonContent *string `json:"lessonContent,omitempty"`
+		StarterCode   *string `json:"starterCode,omitempty"`
 	}
 	if !decodeJSON(w, r, &body) {
 		return
@@ -70,13 +77,16 @@ func (h *TopicHandler) CreateTopic(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "title is required (max 255 chars)")
 		return
 	}
+	if body.LessonContent != nil || body.StarterCode != nil {
+		writeError(w, http.StatusBadRequest,
+			"lessonContent and starterCode are no longer accepted; link a teaching unit via POST /api/courses/{courseId}/topics/{topicId}/link-unit")
+		return
+	}
 
 	topic, err := h.Topics.CreateTopic(r.Context(), store.CreateTopicInput{
-		CourseID:      courseID,
-		Title:         body.Title,
-		Description:   body.Description,
-		LessonContent: body.LessonContent,
-		StarterCode:   body.StarterCode,
+		CourseID:    courseID,
+		Title:       body.Title,
+		Description: body.Description,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Failed to create topic")
@@ -172,8 +182,17 @@ func (h *TopicHandler) UpdateTopic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Plan 044 phase 3: lessonContent and starterCode are no longer
+	// accepted on update. The store struct still carries the fields
+	// (migration paths use them); the handler explicitly rejects them
+	// to lock the API contract before clearing the values pre-store.
 	var body store.UpdateTopicInput
 	if !decodeJSON(w, r, &body) {
+		return
+	}
+	if body.LessonContent != nil || body.StarterCode != nil {
+		writeError(w, http.StatusBadRequest,
+			"lessonContent and starterCode are no longer accepted; link a teaching unit via POST /api/courses/{courseId}/topics/{topicId}/link-unit")
 		return
 	}
 
@@ -275,4 +294,140 @@ func (h *TopicHandler) ReorderTopics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, topics)
+}
+
+// LinkUnit handles POST /api/courses/{courseId}/topics/{topicId}/link-unit.
+//
+// Plan 044 phase 2: backs the teacher topic-edit page's primitive Unit
+// attach UI. Sets teaching_units.topic_id = <topicId> for the given
+// unit, after verifying:
+//   - the caller can edit the parent course (creator or platform admin),
+//   - the caller can edit the target unit (canEditUnit-equivalent: same
+//     creator, or org-scope unit in an org where the caller is teacher
+//     or org_admin).
+//
+// 1:1 invariant: if a different unit already claims this topic, returns
+// 409 with a clear message rather than letting the unique-index
+// violation surface as an opaque 500.
+func (h *TopicHandler) LinkUnit(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	courseID := chi.URLParam(r, "courseId")
+	topicID := chi.URLParam(r, "topicId")
+
+	// Course-edit gate (existing pattern from CreateTopic / UpdateTopic).
+	course, err := h.Courses.GetCourse(r.Context(), courseID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if course == nil {
+		writeError(w, http.StatusNotFound, "Course not found")
+		return
+	}
+	if !claims.IsPlatformAdmin && course.CreatedBy != claims.UserID {
+		writeError(w, http.StatusForbidden, "Only the course creator can attach units to topics")
+		return
+	}
+
+	// Verify the topic actually belongs to this course (reject mismatched
+	// path traversal: /courses/A/topics/B-from-course-C/link-unit).
+	topic, err := h.Topics.GetTopic(r.Context(), topicID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if topic == nil || topic.CourseID != courseID {
+		writeError(w, http.StatusNotFound, "Topic not found in this course")
+		return
+	}
+
+	var body struct {
+		UnitID string `json:"unitId"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	if body.UnitID == "" {
+		writeError(w, http.StatusBadRequest, "unitId is required")
+		return
+	}
+
+	if h.TeachingUnits == nil {
+		writeError(w, http.StatusInternalServerError, "Teaching units store unavailable")
+		return
+	}
+	unit, err := h.TeachingUnits.GetUnit(r.Context(), body.UnitID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if unit == nil {
+		writeError(w, http.StatusNotFound, "Unit not found")
+		return
+	}
+
+	// Cross-org reachability gate. Mirrors the read-side join guard
+	// (`scope='platform' OR scope_id = course.org_id`): if we let a
+	// personal-scope or wrong-org unit be linked, students would see
+	// nothing because the join filters it out — silent broken state.
+	// Reject at link time instead.
+	if unit.Scope != "platform" {
+		if unit.Scope != "org" || unit.ScopeID == nil || *unit.ScopeID != course.OrgID {
+			writeError(w, http.StatusForbidden, "Unit is not available to this course's org")
+			return
+		}
+	}
+
+	// Unit-edit gate: same shape as canEditUnit. Personal scope owners
+	// are recognized by createdBy; org scope by teacher/org_admin
+	// membership in the unit's org.
+	if !claims.IsPlatformAdmin && claims.ImpersonatedBy == "" {
+		canEdit := false
+		switch unit.Scope {
+		case "personal":
+			canEdit = unit.ScopeID != nil && *unit.ScopeID == claims.UserID
+		case "org":
+			if unit.ScopeID != nil && h.Orgs != nil {
+				roles, err := h.Orgs.GetUserRolesInOrg(r.Context(), *unit.ScopeID, claims.UserID)
+				if err != nil {
+					writeError(w, http.StatusInternalServerError, "Database error")
+					return
+				}
+				for _, role := range roles {
+					if role.Role == "teacher" || role.Role == "org_admin" {
+						canEdit = true
+						break
+					}
+				}
+			}
+		case "platform":
+			// Only platform admins can edit platform-scope; the outer
+			// IsPlatformAdmin check would have allowed already.
+		}
+		if !canEdit {
+			writeError(w, http.StatusForbidden, "Cannot edit this unit")
+			return
+		}
+	}
+
+	updated, err := h.TeachingUnits.LinkUnitToTopic(r.Context(), body.UnitID, topicID)
+	if err != nil {
+		if errors.Is(err, store.ErrTopicAlreadyLinked) {
+			writeError(w, http.StatusConflict, "This topic is already linked to a different unit")
+			return
+		}
+		if errors.Is(err, store.ErrUnitNotFound) {
+			writeError(w, http.StatusNotFound, "Unit not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, updated)
 }

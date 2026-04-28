@@ -1,8 +1,8 @@
 import { notFound } from "next/navigation";
 import { api } from "@/lib/api-client";
 import { isValidUUID } from "@/lib/utils";
-import { parseLessonContent } from "@/lib/lesson-content";
-import { LessonRenderer } from "@/components/lesson/lesson-renderer";
+import { db } from "@/lib/db";
+import { listLinkedUnitsByTopicIds } from "@/lib/session-topics";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import Link from "next/link";
 
@@ -22,7 +22,6 @@ interface TopicItem {
   id: string;
   title: string;
   description: string;
-  lessonContent: string;
 }
 
 interface ProblemItem {
@@ -53,10 +52,6 @@ export default async function StudentClassDetailPage({
     notFound();
   }
 
-  // Log but don't swallow these fetches — silent catches were hiding 403s
-  // (e.g., if course access check denies a student who IS in the class but
-  // whose membership is in a weird state). Prefer a visible empty section
-  // over a misleading "no content".
   const logAndDefault = async <T,>(p: Promise<T>, fallback: T, label: string): Promise<T> => {
     try {
       return await p;
@@ -84,6 +79,12 @@ export default async function StudentClassDetailPage({
       problemsByTopic.set(t.id, list);
     })
   );
+
+  // Plan 044 phase 2: render the linked teaching_unit per topic instead
+  // of topic.lessonContent. Single bulk query — no N+1.
+  const linkedUnits = topics.length > 0
+    ? await listLinkedUnitsByTopicIds(db, topics.map((t) => t.id))
+    : {};
 
   return (
     <div className="p-6 space-y-6">
@@ -129,8 +130,8 @@ export default async function StudentClassDetailPage({
           </Card>
         )}
         {topics.length > 0 && topics.map((topic, i) => {
-            const content = parseLessonContent(topic.lessonContent);
             const problems = problemsByTopic.get(topic.id) ?? [];
+            const linkedUnit = linkedUnits[topic.id];
             return (
               <Card key={topic.id}>
                 <CardHeader>
@@ -139,11 +140,24 @@ export default async function StudentClassDetailPage({
                     <CardDescription>{topic.description}</CardDescription>
                   )}
                 </CardHeader>
-                {content.blocks.length > 0 && (
-                  <CardContent>
-                    <LessonRenderer content={content} />
-                  </CardContent>
-                )}
+                {/* Plan 044 phase 2: linked Unit instead of inline lessonContent. */}
+                <CardContent>
+                  {linkedUnit ? (
+                    <Link
+                      href={`/student/units/${linkedUnit.unitId}`}
+                      className="inline-flex items-center gap-2 rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm hover:border-amber-400 hover:text-amber-800"
+                    >
+                      <span className="font-medium">{linkedUnit.unitTitle}</span>
+                      <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
+                        {linkedUnit.unitMaterialType}
+                      </span>
+                    </Link>
+                  ) : (
+                    <p className="text-sm text-muted-foreground italic">
+                      No material yet for this topic.
+                    </p>
+                  )}
+                </CardContent>
                 {problems.length > 0 && (
                   <CardContent className="border-t pt-3">
                     <p className="mb-2 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">

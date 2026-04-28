@@ -1,14 +1,19 @@
 "use client";
 
+import Link from "next/link";
 import { useState, useEffect } from "react";
 import { useYjsProvider } from "@/lib/yjs/use-yjs-provider";
 import { CodeEditor } from "@/components/editor/code-editor";
-import { LessonRenderer } from "@/components/lesson/lesson-renderer";
-import { parseLessonContent } from "@/lib/lesson-content";
 
 interface SessionTopic {
+  topicId: string;
   title: string;
-  lessonContent: unknown;
+  // Plan 044 phase 2: linked teaching_unit identity replaces inline
+  // lessonContent rendering. Parent view doesn't need authoring,
+  // just visibility — clicking a Unit opens it for read.
+  unitId: string | null;
+  unitTitle: string | null;
+  unitMaterialType: string | null;
 }
 
 interface LiveSessionViewerProps {
@@ -43,13 +48,32 @@ export function LiveSessionViewer({
 
   return (
     <div className="flex h-full">
-      {/* Lesson content */}
+      {/* Plan 044 phase 2: linked teaching_unit references replace the
+          inline lessonContent rendering. */}
       {topics.length > 0 && (
         <div className="w-1/3 border-r overflow-auto p-4 space-y-4">
-          {topics.map((t, i) => (
-            <div key={i}>
+          {topics.map((t) => (
+            <div key={t.topicId}>
               <h3 className="text-base font-semibold mb-2">{t.title}</h3>
-              <LessonRenderer content={parseLessonContent(t.lessonContent)} />
+              {t.unitId ? (
+                <Link
+                  href={`/student/units/${t.unitId}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-2 rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm hover:border-amber-400 hover:text-amber-800"
+                >
+                  <span className="font-medium">{t.unitTitle}</span>
+                  {t.unitMaterialType && (
+                    <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
+                      {t.unitMaterialType}
+                    </span>
+                  )}
+                </Link>
+              ) : (
+                <p className="text-sm text-muted-foreground italic">
+                  No material yet for this topic.
+                </p>
+              )}
             </div>
           ))}
         </div>

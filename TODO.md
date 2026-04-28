@@ -8,6 +8,8 @@ Outstanding tasks and technical debt. Check this file when planning new work.
 - [ ] **Pyodide CDN dependency** — Web Worker loads Pyodide from CDN; should consider self-hosting or bundling for reliability
 - [ ] **Hocuspocus auth** — Token format is simple `userId:role` string; should use JWT or signed tokens in production
 - [ ] **Database migrations** — Using direct SQL apply (`psql -f`); drizzle-kit migrate has issues, needs investigation
+- [ ] **Plan 045: Unit-attach picker UI** — Replace the paste-Unit-ID text input on the topic editor with a real picker (search/filter by org/grade/material type)
+- [ ] **Plan 046: Drop deprecated topic columns** — Remove `topics.lesson_content` + `topics.starter_code` and the JSON content-block code path one release after plan 044
 
 ## Frontend
 

@@ -1,22 +1,26 @@
 "use client";
 
+import Link from "next/link";
 import { useState, useEffect } from "react";
 import { useSession } from "next-auth/react";
 import { useStudentLayout } from "@/lib/hooks/use-student-layout";
 import { useYjsProvider } from "@/lib/yjs/use-yjs-provider";
 import { EditorSwitcher } from "@/components/editor/editor-switcher";
-import { LessonRenderer } from "@/components/lesson/lesson-renderer";
 import { AiChatPanel } from "@/components/ai/ai-chat-panel";
 import { RaiseHandButton } from "@/components/help-queue/raise-hand-button";
 import { CodeEditor } from "@/components/editor/code-editor";
-import { parseLessonContent } from "@/lib/lesson-content";
 import { Button } from "@/components/ui/button";
 
 interface SessionTopic {
   topicId: string;
   title: string;
-  lessonContent: unknown;
-  starterCode: string | null;
+  // Plan 044 phase 2: lessonContent + starterCode kept on the response
+  // for one release as a safety net (plan 046 drops them); UI no longer
+  // reads them. The linked teaching_unit identity is the canonical
+  // source of teaching material.
+  unitId: string | null;
+  unitTitle: string | null;
+  unitMaterialType: string | null;
 }
 
 interface StudentSessionProps {
@@ -85,12 +89,33 @@ export function StudentSession({
     return () => eventSource.close();
   }, [sessionId, classId, returnPath, userId]);
 
+  // Plan 044 phase 2: render the linked teaching_unit per topic.
+  // Click-through opens the Unit's projected view at /student/units/<id>
+  // in a new tab so the editor pane isn't disturbed.
   const lessonPanel = topics.length > 0 ? (
     <div className="overflow-auto p-4 space-y-4">
       {topics.map((t) => (
         <div key={t.topicId}>
           <h3 className="text-base font-semibold mb-2">{t.title}</h3>
-          <LessonRenderer content={parseLessonContent(t.lessonContent)} />
+          {t.unitId ? (
+            <Link
+              href={`/student/units/${t.unitId}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-2 rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm hover:border-amber-400 hover:text-amber-800"
+            >
+              <span className="font-medium">{t.unitTitle}</span>
+              {t.unitMaterialType && (
+                <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
+                  {t.unitMaterialType}
+                </span>
+              )}
+            </Link>
+          ) : (
+            <p className="text-sm text-muted-foreground italic">
+              No material yet for this topic.
+            </p>
+          )}
         </div>
       ))}
     </div>

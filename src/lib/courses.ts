@@ -86,13 +86,16 @@ export async function cloneCourse(db: Database, courseId: string, newCreatedBy: 
     .where(eq(topics.courseId, courseId));
 
   for (const topic of originalTopics) {
+    // Plan 044 phase 4: stopped copying lessonContent/starterCode here.
+    // Those columns are deprecated; teaching material lives in the
+    // linked teaching_unit. Cloning Units alongside topics is a
+    // separate concern — for now, the cloned course's topics start
+    // with no linked Unit; teachers attach via the topic-edit picker.
     await db.insert(topics).values({
       courseId: cloned.id,
       title: topic.title,
       description: topic.description,
       sortOrder: topic.sortOrder,
-      lessonContent: topic.lessonContent,
-      starterCode: topic.starterCode,
     });
   }
 

@@ -21,7 +21,17 @@ interface TeacherPagePayload {
   classId: string | null;
   returnPath: string;
   editorMode: string;
-  courseTopics: Array<{ topicId: string; title: string; lessonContent: string }>;
+  // Plan 044 phase 2: lessonContent kept as a deprecated safety net;
+  // dashboard reads unitId / unitTitle / unitMaterialType for the
+  // canonical material reference.
+  courseTopics: Array<{
+    topicId: string;
+    title: string;
+    lessonContent: string;
+    unitId: string | null;
+    unitTitle: string | null;
+    unitMaterialType: string | null;
+  }>;
 }
 
 export default async function TeacherSessionPage({

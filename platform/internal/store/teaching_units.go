@@ -4,12 +4,24 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/lib/pq"
 	overlayPkg "github.com/weiboz0/bridge/platform/internal/overlay"
+)
+
+var (
+	// ErrUnitNotFound is returned when an operation targets a unit that
+	// doesn't exist.
+	ErrUnitNotFound = errors.New("unit not found")
+	// ErrTopicAlreadyLinked is returned when LinkUnitToTopic finds a
+	// different unit already claiming the requested topic_id (1:1 enforced
+	// by teaching_units_topic_id_uniq).
+	ErrTopicAlreadyLinked = errors.New("topic is already linked to a different unit")
 )
 
 // TeachingUnit is the core row from teaching_units. Scope is "platform"
@@ -215,12 +227,122 @@ func (s *TeachingUnitStore) GetUnit(ctx context.Context, id string) (*TeachingUn
 		`SELECT `+teachingUnitColumns+` FROM teaching_units WHERE id = $1`, id))
 }
 
+// LinkUnitToTopic sets `topic_id` on a unit. Idempotent for the
+// (unitId, topicId) pair: re-linking the same pair is a no-op.
+//
+// Plan 044 phase 2: backs the teacher topic-edit page's primitive
+// "paste a Unit ID to attach" UX. The unique index on
+// teaching_units.topic_id WHERE topic_id IS NOT NULL enforces 1:1
+// (one Unit per Topic). Callers should pre-check via GetUnitByTopicID
+// to surface a clean "already linked to a different unit" error
+// rather than relying on the constraint violation.
+//
+// Returns:
+//   - (unit, nil)  on success
+//   - (nil, ErrUnitNotFound)  if the unit doesn't exist
+//   - (nil, ErrTopicAlreadyLinked)  if a different unit already owns
+//     this topic_id (caller should surface 409 to the user)
+//   - (nil, err)  for other DB errors
+func (s *TeachingUnitStore) LinkUnitToTopic(ctx context.Context, unitID, topicID string) (*TeachingUnit, error) {
+	// Pre-check: is this topic already claimed by a DIFFERENT unit?
+	existing, err := s.GetUnitByTopicID(ctx, topicID)
+	if err != nil {
+		return nil, err
+	}
+	if existing != nil && existing.ID != unitID {
+		return nil, ErrTopicAlreadyLinked
+	}
+
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE teaching_units SET topic_id = $1, updated_at = now() WHERE id = $2`,
+		topicID, unitID,
+	)
+	if err != nil {
+		// The pre-check above is best-effort — a concurrent linker can win
+		// the race between GetUnitByTopicID and UPDATE. Catch the unique
+		// index violation (teaching_units_topic_id_uniq) and surface the
+		// same clean ErrTopicAlreadyLinked rather than an opaque 500.
+		if isUniqueViolationOn(err, "teaching_units_topic_id_uniq") {
+			return nil, ErrTopicAlreadyLinked
+		}
+		return nil, err
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return nil, err
+	}
+	if rows == 0 {
+		return nil, ErrUnitNotFound
+	}
+	return s.GetUnit(ctx, unitID)
+}
+
+// isUniqueViolationOn reports whether err is a Postgres 23505 unique-violation
+// against the named constraint, across both the lib/pq and pgx/pgconn driver
+// shapes (we use pgx for the pool but lib/pq error types still appear in some
+// paths).
+func isUniqueViolationOn(err error, constraint string) bool {
+	var pqErr *pq.Error
+	if errors.As(err, &pqErr) {
+		if pqErr.Code == "23505" && pqErr.Constraint == constraint {
+			return true
+		}
+	}
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		if pgErr.Code == "23505" && pgErr.ConstraintName == constraint {
+			return true
+		}
+	}
+	return false
+}
+
 // GetUnitByTopicID returns the unit linked to the given topic, or (nil, nil) if
 // no unit has that topic_id. Each topic maps to at most one unit (enforced by a
 // partial unique index on teaching_units.topic_id WHERE topic_id IS NOT NULL).
 func (s *TeachingUnitStore) GetUnitByTopicID(ctx context.Context, topicID string) (*TeachingUnit, error) {
 	return scanTeachingUnit(s.db.QueryRowContext(ctx,
 		`SELECT `+teachingUnitColumns+` FROM teaching_units WHERE topic_id = $1`, topicID))
+}
+
+// ListUnitsByTopicIDs returns a map of topic_id → linked TeachingUnit for
+// the given topic IDs, with the same cross-org leak guard as the TS-side
+// listLinkedUnitsByTopicIds (units must be platform-scope OR scope_id
+// must match the topic's course org_id). Topics without a linked unit are
+// omitted from the map.
+//
+// Plan 044 phase 2: powers the teacher session-page payload's per-topic
+// Unit refs in one query.
+func (s *TeachingUnitStore) ListUnitsByTopicIDs(ctx context.Context, topicIDs []string) (map[string]*TeachingUnit, error) {
+	out := map[string]*TeachingUnit{}
+	if len(topicIDs) == 0 {
+		return out, nil
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT u.id, u.scope, u.scope_id, u.title, u.slug, u.summary, u.grade_level,
+		        u.subject_tags, u.standards_tags, u.estimated_minutes, u.material_type,
+		        u.status, u.created_by, u.created_at, u.updated_at, u.topic_id
+		 FROM teaching_units u
+		 INNER JOIN topics t ON t.id = u.topic_id
+		 INNER JOIN courses c ON c.id = t.course_id
+		 WHERE u.topic_id = ANY($1)
+		   AND (u.scope = 'platform' OR u.scope_id = c.org_id)`,
+		pq.Array(topicIDs),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		u, err := scanTeachingUnit(rows)
+		if err != nil {
+			return nil, err
+		}
+		if u.TopicID != nil {
+			out[*u.TopicID] = u
+		}
+	}
+	return out, rows.Err()
 }
 
 // GetDocument returns the unit_documents row for unitID.
