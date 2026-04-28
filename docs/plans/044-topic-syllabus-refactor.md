@@ -236,3 +236,43 @@ Recapping deferrals:
 10. `[IMPORTANT]` **Per-topic empty state on teacher dashboard (#7).** → Added explicit Task 2.6.
 11. `[IMPORTANT]` **`/api/sessions/{id}/topics` rewire (#8).** → Added Task 1.2.
 12. `[IMPORTANT]` **One PR too risky (#9).** → Mitigated by phase-level extraction gate after Phase 1, plus the additive→remove pattern means each phase ships a working state. If any phase grows unexpectedly, it splits to 044a/044b.
+---
+
+## Post-Execution Report
+
+**Date:** 2026-04-27
+**Branch:** `feat/044-topic-syllabus-refactor`
+**Commits (5 + 1 fix):**
+- `ed1cc24` docs: plan 044 — Topic → Syllabus Area taxonomy refactor
+- `2bb7b09` feat(044): additive read paths surface linked Unit (phase 1)
+- `92b998c` feat(044): UI cutover — read linked Units instead of topic.lessonContent (phase 2)
+- `d2d59b8` feat(044): write-path lock — reject deprecated topic fields (phase 3)
+- `18e38aa` Plan 044 phase 4: deprecate lessonContent/starterCode
+- `f612b69` fix(044): post-impl review fixes — cross-org link gate, race-safe link, Go clone
+
+### Verification
+
+- Vitest: **462 passed | 11 skipped** (full suite, post-fixes)
+- Go: all packages green (`internal/handlers` 99.9s, `internal/store` 31.9s)
+- Type-check: clean for plan-044 surface (5 pre-existing unrelated TS errors in `units/new/page.tsx`, `admin/user-actions.tsx`, `lesson-content.test.ts`, `identity-assert.test.ts`, `auth-register.test.ts`, `annotations.test.ts` are documented as pre-existing in earlier reviews)
+
+### Codex post-impl review findings (all fixed in `f612b69`)
+
+- `[IMPORTANT]` `LinkUnit` did not enforce cross-org reachability — Units from any org where the caller had teacher rights would link successfully, but the read-side guard would silently filter them out for students. Fix: added `unit.Scope == "platform" || (unit.Scope == "org" && *unit.ScopeID == course.OrgID)` check in `topics.go::LinkUnit` after the unit fetch. Personal-scope and wrong-org Units now return 403.
+- `[IMPORTANT]` `LinkUnitToTopic` had a TOCTOU race — concurrent linkers would both pass `GetUnitByTopicID` and one would hit the unique-index violation as an opaque 500. Fix: added `isUniqueViolationOn` helper that detects 23505 on `teaching_units_topic_id_uniq` (across both lib/pq and pgx/pgconn driver shapes) and returns `ErrTopicAlreadyLinked`.
+- `[IMPORTANT]` Go `CloneCourse` SQL still copied `lesson_content` and `starter_code`. The TS path (`src/lib/courses.ts`) was cleaned up in phase 4 but the Go path was missed. Fix: removed both columns from the clone INSERT-SELECT in `courses.go::CloneCourse`. Existing clone test extended to assert lesson_content defaults to `{}` and starter_code is NULL.
+- `[MINOR]` link-unit handler tests were missing wrong-org and wrong-owner cases. Added `TestLinkUnit_WrongOrgUnit_Forbidden` and `TestLinkUnit_WrongOwnerPersonalUnit_Forbidden` (both pass against live DB).
+
+### What ships
+
+- Read paths everywhere read the linked teaching_unit via the 1:1 join. Cross-org leak guard in place at every JOIN site (4 sites: `src/lib/session-topics.ts` × 2 helpers, `platform/internal/store/sessions.go::GetSessionTopics`, `platform/internal/store/teaching_units.go::ListUnitsByTopicIDs`).
+- Teacher topic editor uses a primitive paste-Unit-ID picker + new `POST /api/courses/{cid}/topics/{tid}/link-unit` endpoint with full course-edit + Unit-edit + cross-org gates. Errors map cleanly: 400 (missing/invalid id), 403 (not creator OR wrong-org Unit OR cannot edit unit), 404 (unknown course/topic/unit), 409 (1:1 conflict). Idempotent for same-unit-same-topic.
+- Strict zod on TS Topic POST/PATCH + explicit-400 in Go handlers reject any body that includes `lessonContent` or `starterCode`. Old client code that still sent these will get a clean error instead of silently writing into a deprecated column.
+- Schema columns retain `@deprecated` JSDoc pointing at plan 046 (column drop). One-release safety net.
+- Course clone (TS + Go) no longer copies the deprecated columns. Cloned topics start empty; teachers attach Units via the topic editor.
+
+### Out-of-scope deferrals (carry forward unchanged)
+
+- **Plan 045** — proper Unit-attach picker UI (search by title, filter by org/grade/material type) replacing the paste-ID input.
+- **Plan 046** — drop `topic.lesson_content` and `topic.starter_code` columns + the JSON content-block code path.
+- **Plan 047** — My Work navigability (topic rename, multi-Unit-per-Topic remain explicitly out of scope).
