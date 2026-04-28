@@ -21,13 +21,11 @@ interface TeacherPagePayload {
   classId: string | null;
   returnPath: string;
   editorMode: string;
-  // Plan 044 phase 2: lessonContent kept as a deprecated safety net;
-  // dashboard reads unitId / unitTitle / unitMaterialType for the
-  // canonical material reference.
+  // Plan 044 phase 2: dashboard reads unitId / unitTitle /
+  // unitMaterialType for the linked teaching_unit reference.
   courseTopics: Array<{
     topicId: string;
     title: string;
-    lessonContent: string;
     unitId: string | null;
     unitTitle: string | null;
     unitMaterialType: string | null;

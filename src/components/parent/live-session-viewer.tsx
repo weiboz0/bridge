@@ -8,9 +8,7 @@ import { CodeEditor } from "@/components/editor/code-editor";
 interface SessionTopic {
   topicId: string;
   title: string;
-  // Plan 044 phase 2: linked teaching_unit identity replaces inline
-  // lessonContent rendering. Parent view doesn't need authoring,
-  // just visibility — clicking a Unit opens it for read.
+  // Parent view: read-only linked teaching_unit reference.
   unitId: string | null;
   unitTitle: string | null;
   unitMaterialType: string | null;
@@ -48,8 +46,6 @@ export function LiveSessionViewer({
 
   return (
     <div className="flex h-full">
-      {/* Plan 044 phase 2: linked teaching_unit references replace the
-          inline lessonContent rendering. */}
       {topics.length > 0 && (
         <div className="w-1/3 border-r overflow-auto p-4 space-y-4">
           {topics.map((t) => (

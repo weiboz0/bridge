@@ -23,9 +23,8 @@ interface TeacherDashboardProps {
   classId: string | null;
   returnPath?: string;
   editorMode: "python" | "javascript" | "blockly";
-  // Plan 044 phase 2: presentation mode renders the linked teaching_unit
-  // per topic, not topic.lessonContent. lessonContent stays in the
-  // payload type for safety but the dashboard no longer reads it.
+  // Plan 044 phase 2: presentation mode renders the linked
+  // teaching_unit per topic.
   courseTopics: Array<{
     topicId: string;
     title: string;
