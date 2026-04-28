@@ -273,7 +273,22 @@ Bundles every backend change so Phase 2's frontend has a complete, working API s
 
 ### Codex post-impl review
 
-Skipped for this PR — the changes are tightly bounded (one feature, three files of substance), the Vitest + Go integration suites give 30+ tests of coverage including the cross-org leak guard and cursor pagination roundtrip, and Codex pre-impl already caught the structural issues. We'll dispatch Codex again on the combined 045+046 PR if both go in together, or on plan 046's PR independently.
+- **Date:** 2026-04-28
+- **Verdict:** NEEDS FIXES — 3 IMPORTANT + 1 MINOR. All IMPORTANT issues fixed inline (commit `09a75de`); the MINOR can be addressed in a follow-up.
+
+#### Findings + resolutions
+
+1. `[IMPORTANT]` **Picker `canLink` ignored `claims.ImpersonatedBy`** (`platform/internal/handlers/teaching_units.go:512`). `canLinkUnitToCourse` treats `claims.ImpersonatedBy != ""` as admin-equivalent, but picker mode computed platform-admin from `claims.IsPlatformAdmin` only. An impersonating admin acting as a course creator would see `canLink=false` for draft platform Units in the picker, while `LinkUnit` would still allow the link. → Extracted `effectivePlatformAdmin := claims.IsPlatformAdmin || claims.ImpersonatedBy != ""` and used it consistently for both the canLink computation and the cross-org title redaction param passed to the SQL.
+
+2. `[IMPORTANT]` **Draft platform Unit info leak via picker** (`platform/internal/store/teaching_units.go:871`). Picker SQL surfaced ALL platform-scope Units regardless of status; regular SearchUnits filters them to published statuses for non-admins. A teacher could see draft platform Unit titles and summaries via picker that the regular search hides. → Added `restrictPlatformToPublished` flag to `SearchUnitsForPicker`; the handler passes `!effectivePlatformAdmin` so non-admins only see published platform Units. Updated test `TestPickerSearch_DraftPlatformUnit_HiddenFromTeacher` to assert drafts are HIDDEN (not just `canLink=false`); added `TestPickerSearch_DraftPlatformUnit_VisibleToAdmin` for the admin bypass sanity check.
+
+3. `[IMPORTANT]` **`LinkUnitToTopic` could silently move a Unit linked elsewhere** (`platform/internal/store/teaching_units.go:257`). The store's only conflict check was "is this topic already claimed by a DIFFERENT unit." It did not check "is THIS unit already linked to a DIFFERENT topic." A direct POST bypassing the picker's disabled-row UI would silently relocate the Unit. → Added a second pre-check that fetches the current Unit and rejects with `ErrTopicAlreadyLinked` (409) when its `topic_id` is set and != the requested `topicID`. New test `TestLinkUnit_UnitAlreadyLinkedToDifferentTopic_Conflict` verifies the unit's `topic_id` is NOT changed after the 409.
+
+4. `[MINOR]` **No Vitest coverage for the picker's loading skeleton state** (`src/components/teacher/unit-picker-dialog.tsx:211`). The skeleton has a `data-testid="picker-loading"` but no test asserts it renders during a pending search. Deferred — low risk, easy follow-up.
+
+#### Cross-language note
+
+Plan 046 dropped `topics.lesson_content` and `topics.starter_code` from `bridge_test`. This branch's Go store still SELECTs them via `topicColumns`, so re-running plan 045's integration tests required restoring the columns in `bridge_test` (one-line `ALTER TABLE … ADD COLUMN`). Once both PRs land in order (045 → 046), the columns end up dropped permanently per plan 046's migration `0022`.
 
 ### Out-of-scope deferrals
 
