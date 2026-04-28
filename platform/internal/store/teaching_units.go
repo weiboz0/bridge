@@ -241,15 +241,32 @@ func (s *TeachingUnitStore) GetUnit(ctx context.Context, id string) (*TeachingUn
 //   - (unit, nil)  on success
 //   - (nil, ErrUnitNotFound)  if the unit doesn't exist
 //   - (nil, ErrTopicAlreadyLinked)  if a different unit already owns
-//     this topic_id (caller should surface 409 to the user)
+//     this topic_id, OR if THIS unit is already linked to a DIFFERENT
+//     topic (silent-move guard added per Codex post-impl review).
 //   - (nil, err)  for other DB errors
 func (s *TeachingUnitStore) LinkUnitToTopic(ctx context.Context, unitID, topicID string) (*TeachingUnit, error) {
-	// Pre-check: is this topic already claimed by a DIFFERENT unit?
+	// Pre-check 1: is this topic already claimed by a DIFFERENT unit?
 	existing, err := s.GetUnitByTopicID(ctx, topicID)
 	if err != nil {
 		return nil, err
 	}
 	if existing != nil && existing.ID != unitID {
+		return nil, ErrTopicAlreadyLinked
+	}
+
+	// Pre-check 2: is THIS unit already linked to a DIFFERENT topic?
+	// Without this guard, a direct POST that bypasses the picker's
+	// disabled-row UI would silently move the Unit from its previous
+	// topic — surprising and indistinguishable from "the previous topic
+	// was unlinked first." Surface 409 instead.
+	currentUnit, err := s.GetUnit(ctx, unitID)
+	if err != nil {
+		return nil, err
+	}
+	if currentUnit == nil {
+		return nil, ErrUnitNotFound
+	}
+	if currentUnit.TopicID != nil && *currentUnit.TopicID != topicID {
 		return nil, ErrTopicAlreadyLinked
 	}
 
@@ -275,6 +292,19 @@ func (s *TeachingUnitStore) LinkUnitToTopic(ctx context.Context, unitID, topicID
 		return nil, ErrUnitNotFound
 	}
 	return s.GetUnit(ctx, unitID)
+}
+
+// UnlinkUnitFromTopic clears the topic_id on the given unit. Plan 045
+// powers the topic editor's "Unlink" affordance. Idempotent: if the
+// unit has no topic_id, the UPDATE affects zero rows but no error is
+// returned. Caller is responsible for ensuring the unit ID exists; if
+// you need a "did anything change" signal, call GetUnitByTopicID first.
+func (s *TeachingUnitStore) UnlinkUnitFromTopic(ctx context.Context, unitID string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE teaching_units SET topic_id = NULL, updated_at = now() WHERE id = $1`,
+		unitID,
+	)
+	return err
 }
 
 // isUniqueViolationOn reports whether err is a Postgres 23505 unique-violation
@@ -665,11 +695,12 @@ func (s *TeachingUnitStore) GetRevision(ctx context.Context, revisionID string) 
 // When Query is non-empty, results are ranked by FTS relevance; otherwise
 // they are ordered by updated_at DESC (recent-first browse).
 type SearchUnitsFilter struct {
-	Query           string     // FTS query text (plainto_tsquery)
-	Scope           string     // "" = all visible; platform | org | personal
+	Query           string // FTS query text (plainto_tsquery)
+	Scope           string // "" = all visible; platform | org | personal
 	ScopeID         *string
-	Status          string     // "" = any visible
+	Status          string // "" = any visible
 	GradeLevel      string
+	MaterialType    string     // Plan 045: "" = any; notes | slides | worksheet | reference
 	SubjectTags     []string   // AND semantics (subject_tags @> $tags)
 	ViewerID        string
 	ViewerOrgs      []string   // org IDs where viewer has teacher/admin membership
@@ -677,6 +708,18 @@ type SearchUnitsFilter struct {
 	Limit           int        // default 20, max 100
 	CursorCreatedAt *time.Time // keyset cursor for non-FTS browse
 	CursorID        *string
+}
+
+// UnitWithLinkedTopic is SearchUnitsForPicker's row shape: a regular
+// TeachingUnit decorated with the topic it's currently linked to (if
+// any). LinkedTopicTitle is null whenever the linked topic's course is
+// in a different org than the picker's course (cross-org leak guard) —
+// the topic exists but its title is redacted. LinkedTopicID is always
+// surfaced when set; the bare ID isn't sensitive.
+type UnitWithLinkedTopic struct {
+	TeachingUnit
+	LinkedTopicID    *string `json:"linkedTopicId"`
+	LinkedTopicTitle *string `json:"linkedTopicTitle"`
 }
 
 // SearchUnits returns teaching units matching the filter. When Query is
@@ -737,6 +780,11 @@ func (s *TeachingUnitStore) SearchUnits(ctx context.Context, f SearchUnitsFilter
 	if f.GradeLevel != "" {
 		where = append(where, fmt.Sprintf("grade_level = $%d", idx))
 		args = append(args, f.GradeLevel)
+		idx++
+	}
+	if f.MaterialType != "" {
+		where = append(where, fmt.Sprintf("material_type = $%d", idx))
+		args = append(args, f.MaterialType)
 		idx++
 	}
 	if len(f.SubjectTags) > 0 {
@@ -800,6 +848,169 @@ func (s *TeachingUnitStore) SearchUnits(ctx context.Context, f SearchUnitsFilter
 			return nil, err
 		}
 		out = append(out, *u)
+	}
+	return out, rows.Err()
+}
+
+// SearchUnitsForPicker is the picker-mode variant of SearchUnits used
+// by GET /api/units/search?linkableForCourse=. The caller is the
+// course's teacher (or a platform admin) — the visibility scope is
+// constrained to Units linkable to that course (platform-scope OR
+// org-scope where the unit's scope_id == pickerCourseOrgID), so the
+// SearchUnitsFilter's normal visibility/scope rules are bypassed in
+// favor of this tighter set.
+//
+// Each result is decorated with `linked_topic_id` (raw) and
+// `linked_topic_title`. The title is CASE-redacted to NULL when the
+// linked topic's course is in a different org than pickerCourseOrgID,
+// unless callerIsPlatformAdmin is true. This is the same cross-org
+// leak guard plan 044 introduced for the read-side join.
+//
+// Note: this method intentionally duplicates some of SearchUnits's
+// FTS / cursor / limit handling. Sharing more would require a much
+// larger SQL builder refactor; the picker is a single, well-bounded
+// caller, so the duplication is bounded.
+func (s *TeachingUnitStore) SearchUnitsForPicker(
+	ctx context.Context,
+	f SearchUnitsFilter,
+	pickerCourseOrgID string,
+	callerIsPlatformAdmin bool,
+	restrictPlatformToPublished bool,
+) ([]UnitWithLinkedTopic, error) {
+	where := []string{}
+	args := []any{}
+	idx := 1
+
+	// ── Picker-specific visibility scope.
+	//
+	// Platform-scope: visible to non-admin callers ONLY in published
+	// statuses (matches the regular SearchUnits visibility gate at
+	// teaching_units.go::SearchUnits — without this filter the picker
+	// would leak draft titles/summaries that the regular search hides).
+	// Admins see all statuses.
+	//
+	// Org-scope: visible only when the Unit's scope_id matches the
+	// picker's course org_id (cross-org reachability gate).
+	//
+	// Personal-scope: excluded — the read-side join filters them out
+	// regardless, so showing them in the picker would only generate
+	// canLink=false noise.
+	if restrictPlatformToPublished {
+		where = append(where, fmt.Sprintf(
+			"((u.scope = 'platform' AND u.status IN ('classroom_ready','coach_ready','archived'))"+
+				" OR (u.scope = 'org' AND u.scope_id = $%d))", idx))
+	} else {
+		where = append(where, fmt.Sprintf(
+			"(u.scope = 'platform' OR (u.scope = 'org' AND u.scope_id = $%d))", idx))
+	}
+	args = append(args, pickerCourseOrgID)
+	idx++
+
+	// ── Structured filters (status, gradeLevel, materialType, tags) ──
+	if f.Status != "" {
+		where = append(where, fmt.Sprintf("u.status = $%d", idx))
+		args = append(args, f.Status)
+		idx++
+	}
+	if f.GradeLevel != "" {
+		where = append(where, fmt.Sprintf("u.grade_level = $%d", idx))
+		args = append(args, f.GradeLevel)
+		idx++
+	}
+	if f.MaterialType != "" {
+		where = append(where, fmt.Sprintf("u.material_type = $%d", idx))
+		args = append(args, f.MaterialType)
+		idx++
+	}
+	if len(f.SubjectTags) > 0 {
+		where = append(where, fmt.Sprintf("u.subject_tags @> $%d", idx))
+		args = append(args, pq.Array(f.SubjectTags))
+		idx++
+	}
+
+	hasFTS := f.Query != ""
+	var queryParamIdx int
+	if hasFTS {
+		where = append(where, fmt.Sprintf(
+			"u.search_vector @@ plainto_tsquery('english', $%d)", idx))
+		queryParamIdx = idx
+		args = append(args, f.Query)
+		idx++
+	}
+
+	// Cursor (browse mode only).
+	if !hasFTS && f.CursorCreatedAt != nil && f.CursorID != nil {
+		where = append(where, fmt.Sprintf(
+			"(u.updated_at, u.id) < ($%d, $%d)", idx, idx+1))
+		args = append(args, *f.CursorCreatedAt, *f.CursorID)
+		idx += 2
+	}
+
+	limit := f.Limit
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
+	}
+
+	// Cross-org redaction param for the linked_topic_title CASE.
+	pickerOrgIdx := idx
+	args = append(args, pickerCourseOrgID)
+	idx++
+	platformAdminIdx := idx
+	args = append(args, callerIsPlatformAdmin)
+	idx++
+
+	q := `SELECT
+	  u.id, u.scope, u.scope_id, u.title, u.slug, u.summary,
+	  u.grade_level, u.subject_tags, u.standards_tags, u.estimated_minutes,
+	  u.material_type, u.status, u.created_by, u.created_at, u.updated_at,
+	  u.topic_id,
+	  t.id AS linked_topic_id,
+	  CASE
+	    WHEN t.id IS NULL THEN NULL
+	    WHEN $` + fmt.Sprintf("%d", platformAdminIdx) + `::bool THEN t.title
+	    WHEN linked_course.org_id = $` + fmt.Sprintf("%d", pickerOrgIdx) + ` THEN t.title
+	    ELSE NULL
+	  END AS linked_topic_title
+	FROM teaching_units u
+	LEFT JOIN topics t ON t.id = u.topic_id
+	LEFT JOIN courses linked_course ON linked_course.id = t.course_id`
+	if len(where) > 0 {
+		q += ` WHERE ` + strings.Join(where, " AND ")
+	}
+	if hasFTS {
+		q += fmt.Sprintf(
+			` ORDER BY ts_rank(u.search_vector, plainto_tsquery('english', $%d)) DESC, u.id DESC`,
+			queryParamIdx)
+	} else {
+		q += ` ORDER BY u.updated_at DESC, u.id DESC`
+	}
+	q += fmt.Sprintf(` LIMIT %d`, limit)
+
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []UnitWithLinkedTopic{}
+	for rows.Next() {
+		var u UnitWithLinkedTopic
+		var subjectTagsArr, standardsTagsArr pq.StringArray
+		if err := rows.Scan(
+			&u.ID, &u.Scope, &u.ScopeID, &u.Title, &u.Slug, &u.Summary,
+			&u.GradeLevel, &subjectTagsArr, &standardsTagsArr, &u.EstimatedMinutes,
+			&u.MaterialType, &u.Status, &u.CreatedBy, &u.CreatedAt, &u.UpdatedAt,
+			&u.TopicID,
+			&u.LinkedTopicID, &u.LinkedTopicTitle,
+		); err != nil {
+			return nil, err
+		}
+		u.SubjectTags = []string(subjectTagsArr)
+		u.StandardsTags = []string(standardsTagsArr)
+		out = append(out, u)
 	}
 	return out, rows.Err()
 }

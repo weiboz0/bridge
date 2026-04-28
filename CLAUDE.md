@@ -4,6 +4,7 @@
 
 - **Use Claude Opus 4.7 for all coding work.** All implementation — writing code, editing files, refactors, bug fixes, tests — runs on Opus 4.7 (`claude-opus-4-7`, 1M context). Do not delegate code generation to Codex or any other model.
 - **Always create a feature branch** before implementation. Never commit directly to main. Use `git checkout -b feat/NNN-description`.
+- **Always dispatch Codex plan review before any implementation.** After drafting or revising any plan in `docs/plans/`, dispatch `codex:codex-rescue` to review the plan against the codebase. **Do NOT begin implementation until Claude and Codex agree** on the plan. If Codex flags blockers, revise the plan and re-dispatch the review. Iterate until both models concur. Capture the agreed verdict in the plan's `## Codex Review of This Plan` section so the agreement is auditable. See "Plan review gate" under Plans below.
 - **Always code review** before merging a PR. Write findings to the plan file's `## Code Review` section.
 - **Always write a post-execution report** in the plan file before shipping.
 - **Always run the full test suite** before pushing. Do not push with failing tests.
@@ -88,6 +89,18 @@ For substantial code changes — new features, re-architecting, multi-file refac
 
 Before writing a new plan, review existing plans in `docs/plans/` to ensure consistency. Check for: reusable patterns and utilities already established, architectural decisions that must be respected, and existing implementations that the new work should build on rather than duplicate. Avoid introducing duplicate code — reuse existing implementations and keep logic in a single source of truth.
 
+### Plan review gate (mandatory)
+
+Every plan — new or revised — must pass a Codex review before any code is written:
+
+1. **Draft or revise the plan** in `docs/plans/`.
+2. **Dispatch `codex:codex-rescue`** with the plan path and explicit review questions (blockers, hidden assumptions, scope, ordering, missing risks). Keep the prompt focused — under 500 words, time-bounded.
+3. **Capture Codex's verdict** in the plan's `## Codex Review of This Plan` section. Include the date, the blockers, the confirmations, and the resolution for each blocker.
+4. **If Codex flags blockers, revise the plan** to address them. Re-dispatch the review on the revised plan. Iterate until Codex returns no blockers and Claude agrees with the resolution.
+5. **Only then** begin implementation. The first commit on the feature branch should be the plan file with the agreed-on Codex review summary already embedded.
+
+A plan that hasn't passed Codex review is not ready for execution, regardless of how confident Claude is in it. The two-model consensus catches blind spots no single model can see.
+
 ## Development Workflow
 
 Follow `docs/development-workflow.md` exactly for every plan (Steps 1–6: Design → Plan → Build → Verify → Review → Ship). Do not skip steps or batch them. Key points:
@@ -104,7 +117,22 @@ Follow `docs/code-review.md` for the review process. Key points:
 - Reviews go in the plan file's `## Code Review` section
 - Reviewers: append findings with `[OPEN]` status and file:line references
 - Authors: respond inline with `→ Response:` and `[FIXED]`/`[WONTFIX]`
-- **Codex is for code review only — never for writing code.** Dispatch via `/codex:rescue` with a review prompt targeting the branch diff to get an independent second opinion. The Codex review gate (enabled in this project) also triggers automatically at session stop. All implementation work stays on Opus 4.7.
+- See "Codex (Review Only)" below for how to dispatch second-opinion reviews.
+
+## Coding Agent
+
+**Claude Opus 4.7 is the primary coding agent.** All implementation, debugging, refactoring, and coding tasks run on Opus 4.7 — either directly or via subagents. Do NOT delegate coding tasks to Codex. Codex is review-only (see below).
+
+## Codex (Review Only)
+
+**Use Codex exclusively for review tasks.** Codex provides an independent second-model perspective that catches issues Claude may miss. The two-model consensus is **non-optional for plans**; it's strongly recommended for code, specs, and post-impl reviews.
+
+- **Plan review (BLOCKING — see "Plan review gate" above)** — every plan in `docs/plans/` must pass `codex:codex-rescue` review before any code is written. Implementation on a plan that hasn't been reviewed-and-agreed is a process violation.
+- **Code review** — dispatch `codex:codex-rescue` with a prompt targeting the branch diff to get a second opinion before opening or merging a PR. The Bridge Codex review gate also triggers automatically at session stop.
+- **Spec review** — dispatch `codex:codex-rescue` to validate design specs in `docs/specs/`.
+- **Post-implementation review** — dispatch `codex:codex-rescue` to verify implementations match the plan's specifications and surface any drift.
+
+Do NOT use Codex for implementation, debugging, refactoring, or any coding work. Those belong to Claude Opus 4.7.
 
 ## Multi-Agent Coordination
 

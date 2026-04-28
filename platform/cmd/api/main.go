@@ -231,8 +231,9 @@ func main() {
 		adminH.Routes(r)
 
 		unitH := &handlers.TeachingUnitHandler{
-			Units: stores.TeachingUnits,
-			Orgs:  stores.Orgs,
+			Units:   stores.TeachingUnits,
+			Orgs:    stores.Orgs,
+			Courses: stores.Courses,
 		}
 		unitH.Routes(r)
 

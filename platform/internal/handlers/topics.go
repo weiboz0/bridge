@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"errors"
 	"net/http"
 
@@ -31,6 +32,8 @@ func (h *TopicHandler) Routes(r chi.Router) {
 			r.Delete("/", h.DeleteTopic)
 			// Plan 044 phase 2: link a teaching_unit to this topic.
 			r.Post("/link-unit", h.LinkUnit)
+			// Plan 045: detach the currently-linked teaching_unit.
+			r.Delete("/link-unit", h.UnlinkUnit)
 		})
 	})
 }
@@ -296,15 +299,72 @@ func (h *TopicHandler) ReorderTopics(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, topics)
 }
 
+// publishedPlatformUnitStatuses lists the statuses at which a
+// platform-scope Unit is considered "live" library content. Plan 045
+// widens the link/unlink gate so any teacher who can edit a course can
+// attach a published platform Unit (previously only platform admins
+// could). Drafts (`draft`, `in_review`) remain admin-only because they
+// haven't passed editorial review.
+var publishedPlatformUnitStatuses = map[string]bool{
+	"classroom_ready": true,
+	"coach_ready":     true,
+	"archived":        true,
+}
+
+// canLinkUnitToCourse decides whether `claims` may attach `unit` to a
+// topic in `course`. Replaces plan 044's Unit-edit-only gate with the
+// plan 045 widened model:
+//
+//   - personal-scope: never linkable (read-side join filters them).
+//   - org-scope: scope_id MUST match course.OrgID, AND caller must be
+//     teacher/org_admin in that org (or a platform admin).
+//   - platform-scope: linkable when the Unit is published (any course
+//     teacher), or by platform admins regardless of status.
+//
+// Returns (allowed, internalErr). internalErr is non-nil only when an
+// org-membership lookup fails — the handler should map that to 500.
+func canLinkUnitToCourse(
+	ctx context.Context,
+	orgs *store.OrgStore,
+	claims *auth.Claims,
+	unit *store.TeachingUnit,
+	course *store.Course,
+) (bool, error) {
+	if claims.IsPlatformAdmin || claims.ImpersonatedBy != "" {
+		return true, nil
+	}
+	switch unit.Scope {
+	case "personal":
+		return false, nil
+	case "platform":
+		return publishedPlatformUnitStatuses[unit.Status], nil
+	case "org":
+		if unit.ScopeID == nil || *unit.ScopeID != course.OrgID {
+			return false, nil
+		}
+		if orgs == nil {
+			return false, nil
+		}
+		roles, err := orgs.GetUserRolesInOrg(ctx, *unit.ScopeID, claims.UserID)
+		if err != nil {
+			return false, err
+		}
+		for _, role := range roles {
+			if role.Role == "teacher" || role.Role == "org_admin" {
+				return true, nil
+			}
+		}
+		return false, nil
+	default:
+		return false, nil
+	}
+}
+
 // LinkUnit handles POST /api/courses/{courseId}/topics/{topicId}/link-unit.
 //
-// Plan 044 phase 2: backs the teacher topic-edit page's primitive Unit
-// attach UI. Sets teaching_units.topic_id = <topicId> for the given
-// unit, after verifying:
-//   - the caller can edit the parent course (creator or platform admin),
-//   - the caller can edit the target unit (canEditUnit-equivalent: same
-//     creator, or org-scope unit in an org where the caller is teacher
-//     or org_admin).
+// Plan 044 phase 2 introduced the endpoint with a Unit-edit-only gate;
+// plan 045 widened it (see canLinkUnitToCourse) so course teachers can
+// attach published platform-scope library Units without admin help.
 //
 // 1:1 invariant: if a different unit already claims this topic, returns
 // 409 with a clear message rather than letting the unique-index
@@ -371,48 +431,14 @@ func (h *TopicHandler) LinkUnit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Cross-org reachability gate. Mirrors the read-side join guard
-	// (`scope='platform' OR scope_id = course.org_id`): if we let a
-	// personal-scope or wrong-org unit be linked, students would see
-	// nothing because the join filters it out — silent broken state.
-	// Reject at link time instead.
-	if unit.Scope != "platform" {
-		if unit.Scope != "org" || unit.ScopeID == nil || *unit.ScopeID != course.OrgID {
-			writeError(w, http.StatusForbidden, "Unit is not available to this course's org")
-			return
-		}
+	allowed, err := canLinkUnitToCourse(r.Context(), h.Orgs, claims, unit, course)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
 	}
-
-	// Unit-edit gate: same shape as canEditUnit. Personal scope owners
-	// are recognized by createdBy; org scope by teacher/org_admin
-	// membership in the unit's org.
-	if !claims.IsPlatformAdmin && claims.ImpersonatedBy == "" {
-		canEdit := false
-		switch unit.Scope {
-		case "personal":
-			canEdit = unit.ScopeID != nil && *unit.ScopeID == claims.UserID
-		case "org":
-			if unit.ScopeID != nil && h.Orgs != nil {
-				roles, err := h.Orgs.GetUserRolesInOrg(r.Context(), *unit.ScopeID, claims.UserID)
-				if err != nil {
-					writeError(w, http.StatusInternalServerError, "Database error")
-					return
-				}
-				for _, role := range roles {
-					if role.Role == "teacher" || role.Role == "org_admin" {
-						canEdit = true
-						break
-					}
-				}
-			}
-		case "platform":
-			// Only platform admins can edit platform-scope; the outer
-			// IsPlatformAdmin check would have allowed already.
-		}
-		if !canEdit {
-			writeError(w, http.StatusForbidden, "Cannot edit this unit")
-			return
-		}
+	if !allowed {
+		writeError(w, http.StatusForbidden, "You cannot link this unit to this course")
+		return
 	}
 
 	updated, err := h.TeachingUnits.LinkUnitToTopic(r.Context(), body.UnitID, topicID)
@@ -430,4 +456,85 @@ func (h *TopicHandler) LinkUnit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, updated)
+}
+
+// UnlinkUnit handles DELETE /api/courses/{courseId}/topics/{topicId}/link-unit.
+//
+// Plan 045: detaches the teaching_unit currently linked to this topic
+// (sets teaching_units.topic_id = NULL). Idempotent: returns 200 with
+// an empty body when nothing is linked.
+//
+// Auth chain mirrors LinkUnit:
+//  1. Claims must be present (401 otherwise).
+//  2. Course must exist; caller must be creator or platform admin (403).
+//  3. Topic must belong to that course (404 on mismatch — path
+//     traversal guard).
+//  4. Look up the currently-linked Unit; if none, 200 (idempotent).
+//  5. Caller must satisfy canLinkUnitToCourse for the linked Unit
+//     (same gate that authorized the link). 403 otherwise.
+//  6. Clear topic_id; return 200.
+func (h *TopicHandler) UnlinkUnit(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	courseID := chi.URLParam(r, "courseId")
+	topicID := chi.URLParam(r, "topicId")
+
+	course, err := h.Courses.GetCourse(r.Context(), courseID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if course == nil {
+		writeError(w, http.StatusNotFound, "Course not found")
+		return
+	}
+	if !claims.IsPlatformAdmin && course.CreatedBy != claims.UserID {
+		writeError(w, http.StatusForbidden, "Only the course creator can detach units from topics")
+		return
+	}
+
+	topic, err := h.Topics.GetTopic(r.Context(), topicID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if topic == nil || topic.CourseID != courseID {
+		writeError(w, http.StatusNotFound, "Topic not found in this course")
+		return
+	}
+
+	if h.TeachingUnits == nil {
+		writeError(w, http.StatusInternalServerError, "Teaching units store unavailable")
+		return
+	}
+	current, err := h.TeachingUnits.GetUnitByTopicID(r.Context(), topicID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if current == nil {
+		// Nothing linked — idempotent success.
+		writeJSON(w, http.StatusOK, map[string]any{"unlinked": false})
+		return
+	}
+
+	allowed, err := canLinkUnitToCourse(r.Context(), h.Orgs, claims, current, course)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if !allowed {
+		writeError(w, http.StatusForbidden, "You cannot detach this unit")
+		return
+	}
+
+	if err := h.TeachingUnits.UnlinkUnitFromTopic(r.Context(), current.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"unlinked": true, "unitId": current.ID})
 }
