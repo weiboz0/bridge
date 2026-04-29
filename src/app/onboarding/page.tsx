@@ -1,7 +1,5 @@
 import { auth } from "@/lib/auth";
 import { redirect } from "next/navigation";
-import Link from "next/link";
-import { buttonVariants } from "@/components/ui/button";
 import {
   Card,
   CardContent,
@@ -29,16 +27,12 @@ export default async function OnboardingPage() {
     .where(eq(users.id, session.user.id));
   const intendedRole = user?.intendedRole ?? null;
 
-  // Teacher signups know exactly what they need next: register an org.
-  // Skip the menu and send them straight there. They can still get back
-  // here via the URL bar if needed.
-  if (intendedRole === "teacher") {
-    redirect("/register-org");
-  }
-
-  // Students: lead with their card; the others remain available below for
-  // people who told us "student" at signup but actually wanted something
-  // else.
+  // Plan 047 phase 3: pre-047 we redirected teacher signups to
+  // /register-org, but that route doesn't exist (review 006 P1 #3).
+  // Until plan 048 ships the org self-registration form we lead with
+  // the teacher card and tell them their school admin will invite
+  // them — accurate for pre-production.
+  const isTeacher = intendedRole === "teacher";
   const isStudent = intendedRole === "student";
 
   return (
@@ -53,34 +47,47 @@ export default async function OnboardingPage() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          {isStudent ? (
+          {isStudent && (
             <div className="border rounded-lg p-4 space-y-2 border-primary/40">
-              <h3 className="font-medium">You're set up as a student</h3>
+              <h3 className="font-medium">You&apos;re set up as a student</h3>
               <p className="text-sm text-muted-foreground">
-                Your teacher will add you to a class. Once they do, you'll see
+                Your teacher will add you to a class. Once they do, you&apos;ll see
                 your classes appear automatically. Have a join code? Sign in
                 and click <span className="font-medium">Join a Class</span>.
               </p>
             </div>
-          ) : (
-            <div className="border rounded-lg p-4 space-y-2">
-              <h3 className="font-medium">I&apos;m a teacher or school administrator</h3>
+          )}
+
+          {isTeacher && (
+            <div className="border rounded-lg p-4 space-y-2 border-primary/40">
+              <h3 className="font-medium">You&apos;re set up as a teacher</h3>
               <p className="text-sm text-muted-foreground">
-                Register your organization to start creating courses and classes.
+                Your school administrator will invite you to your organization
+                — once that happens you&apos;ll see your classes and courses
+                appear here. Org self-registration is coming in a future
+                release.
               </p>
-              <Link href="/register-org" className={buttonVariants({ size: "sm" })}>
-                Register Organization
-              </Link>
             </div>
           )}
 
-          {!isStudent && (
-            <div className="border rounded-lg p-4 space-y-2">
-              <h3 className="font-medium">I&apos;m a student</h3>
-              <p className="text-sm text-muted-foreground">
-                Your teacher will add you to a class. Once they do, you&apos;ll see your classes here.
-              </p>
-            </div>
+          {!isStudent && !isTeacher && (
+            <>
+              <div className="border rounded-lg p-4 space-y-2">
+                <h3 className="font-medium">I&apos;m a teacher or school administrator</h3>
+                <p className="text-sm text-muted-foreground">
+                  Your school administrator will invite you to your
+                  organization. If you ARE the school admin, contact us
+                  — org self-registration is coming in a future release.
+                </p>
+              </div>
+
+              <div className="border rounded-lg p-4 space-y-2">
+                <h3 className="font-medium">I&apos;m a student</h3>
+                <p className="text-sm text-muted-foreground">
+                  Your teacher will add you to a class. Once they do, you&apos;ll see your classes here.
+                </p>
+              </div>
+            </>
           )}
 
           <div className="border rounded-lg p-4 space-y-2">
