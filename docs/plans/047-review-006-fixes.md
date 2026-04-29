@@ -230,3 +230,58 @@ Each phase commits separately. The first commit on `feat/047-review-006-fixes` i
 - `[IMPORTANT]` **Phase 1 source-text regex under-specified.** Original revision said "a regex" without a concrete pattern; multi-line array literals are fragile to regex. → Replaced with a per-string-literal extraction that matches the prefixes Bridge actually guards (`/api/`, `/teacher/`, `/student/`, `/parent/`, `/org/`, `/admin/`). Test sketch is in the plan body; loud-fail behavior on length mismatch.
 - `[IMPORTANT]` **Phase 2 response body inconsistency.** Original revision claimed a `code` discriminator but the implementation spec only showed `{"error": ...}`. → 501 body now explicitly `{"error": "...", "code": "not_implemented"}`. UI branches on `res.status === 501` AND can read `code` for structured handling.
 - `[CONCERN]` **Phase 4 race between first 422 and override POST.** → Added an explicit risk-section bullet: the override means "I acknowledge unlinked topics, proceed regardless." A racing Unit-link is a no-op (the session starts, the new link is visible to students). Documented.
+
+---
+
+## Post-Execution Report
+
+**Date:** 2026-04-29
+**Branch:** `feat/047-review-006-fixes`
+**PR:** #76
+**Commits (8):**
+- `940a4a5` docs: plan 047 — review 006 P0+P1 fixes (draft for Codex review)
+- `bfe4fd4` docs(047): rewrite per Codex pre-impl review (CRITICAL fixes on Phase 4)
+- `941f731` docs(047): second-pass Codex re-review corrections
+- `28d70e4` feat(047): inline middleware matcher to fix Next 16 static-analysis (phase 1)
+- `55dbac0` feat(047): disable parent reports endpoints with 501 (phase 2)
+- `a680574` feat(047): Go register persists intendedRole + drop broken /register-org redirect (phase 3)
+- `3f63e8d` feat(047): pre-create session guard for unlinked focus areas (phase 4)
+- `e2557de` fix(047): post-impl review fixes — fail-loud nil stores, missing tests, dead route
+
+### Plan review gate (CLAUDE.md)
+
+Three Codex pre-impl passes: 1 = 2 CRITICAL + 4 IMPORTANT + 1 MINOR (Phase 4 contract was wrong); 2 = 2 IMPORTANT + 1 CONCERN (regex spec, body inconsistency, race documentation); 3 = "Ready to implement." All 7 pass-1 + 3 pass-2 findings folded into the plan before any code shipped.
+
+### Codex post-impl review
+
+- **Date:** 2026-04-29
+- **Verdict:** NEEDS FIXES — 3 IMPORTANT + 1 MINOR. All four fixed inline (commit `e2557de`).
+
+#### Findings + resolutions
+
+1. `[IMPORTANT]` **Phase 4 silently no-op'd on nil stores** (`platform/internal/handlers/sessions.go:123`). The guard skipped silently if `h.Topics` or `h.TeachingUnits` was nil — production wires both, but a misconfigured handler could let unguarded session creation through. → Now returns 500 with an explicit "Session handler misconfigured" message. New `TestCreateSession_NilStores_FailsLoud` locks the contract.
+
+2. `[IMPORTANT]` **Promised parent-reports 501 UI test missing.** → Added `tests/integration/parent-reports-page.test.tsx` with three cases: 501 → "coming soon" copy renders, 501 → Generate button hidden, 200 with `[]` → regular empty state with button visible.
+
+3. `[IMPORTANT]` **Promised onboarding teacher-branch test missing.** The page is an async React Server Component that touches `auth()` + db, so rendering via RTL would require server-component test infrastructure for an assertion that reduces to "redirect didn't come back." → Pragmatic source-text regression check at `tests/unit/onboarding-no-register-org.test.ts`: three assertions on `src/app/onboarding/page.tsx` source — no `redirect("/register-org")`, no `href="/register-org"`, references `isTeacher` (proves the teacher branch exists).
+
+4. `[MINOR]` **Dead TS route still in tree.** `src/app/api/parent/children/[id]/reports/route.ts` was overridden by the Go proxy but a future rewrite-config change could re-expose it. → Deleted.
+
+### What shipped
+
+- **Phase 1:** Middleware matcher inlined; `/login` returns 200 (was 302 redirect loop). 2 parity tests guard against drift.
+- **Phase 2:** Parent reports return 501 with `code: "not_implemented"` for all authenticated callers (incl. platform admin); UI renders "Reports coming soon" state. Plan 049 will build `parent_links` and re-enable.
+- **Phase 3:** Go `/api/auth/register` persists `intendedRole`; form renamed to send `intendedRole`; broken `/register-org` redirect replaced with truthful pre-prod copy. Dead TS route + Vitest deleted, coverage ported to Go.
+- **Phase 4:** Pre-create session guard returns 422 with `code: "all_topics_unlinked"` or `"some_topics_unlinked"` and `unlinkedTopicTitles: [...]` when the course has unlinked focus areas. UI shows confirmation Dialog with strong/soft copy; "Start anyway" re-POSTs with `confirmUnlinkedTopics: true`.
+
+### Verification
+
+- **Vitest:** 465 passed | 11 skipped (was 460 pre-047; net +5 = -7 deleted auth-register tests, +2 middleware-matcher parity, +6 start-session dialog, +3 parent-reports-page, +3 onboarding regression, +1 nil-store sanity)
+- **Go:** all 13 packages green; +25 new tests across 4 phases plus the post-impl `TestCreateSession_NilStores_FailsLoud`
+- **Browser smoke:** `curl http://localhost:3003/login` → 200 OK
+- **Plan review gate:** 3 pre-impl passes + 1 post-impl pass + 1 fix-all-findings commit = clean
+
+### Out-of-scope deferrals
+
+- **Plan 048:** `/register-org` form (org self-onboarding) + Topic-rename to "Focus Area" + topic-editor error states + My Work navigability.
+- **Plan 049:** Parent-child linking — `parent_links` schema, invitation flow, parent admin UI, then re-enable parent reports with proper auth.
