@@ -9,12 +9,24 @@
 //     when missing so deep links survive a sign-out → sign-in round-trip
 //     (review-002 P2 #7 fix).
 //
-// The matcher is exported from a separate module so unit tests can
-// assert the contract without pulling in Auth.js.
+// Plan 047 phase 1: the matcher MUST be a literal in this file. Next.js
+// 16 / Turbopack statically analyzes the `config` export and rejects
+// imported references — pre-047 the import broke /login compilation
+// in dev. The canonical matcher list is duplicated in
+// `src/lib/portal/middleware-matcher.ts` (kept for unit tests of the
+// `authorized` callback, which can't depend on this file because it
+// pulls in Auth.js); a parity test in `tests/unit/middleware-matcher.test.ts`
+// guards against drift.
 export { auth as middleware } from "@/lib/auth";
 
-import { middlewareMatcher } from "@/lib/portal/middleware-matcher";
-
 export const config = {
-  matcher: middlewareMatcher,
+  matcher: [
+    "/api/orgs/:path*",
+    "/api/admin/:path*",
+    "/teacher/:path*",
+    "/student/:path*",
+    "/parent/:path*",
+    "/org/:path*",
+    "/admin/:path*",
+  ],
 };
