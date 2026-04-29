@@ -58,7 +58,23 @@ export const config = {
 **Files:**
 
 - Modify: `src/middleware.ts` (above).
-- Modify: `tests/unit/middleware-matcher.test.ts` — add a parity assertion that **reads `src/middleware.ts` as text** (via `fs.readFileSync` + a regex that extracts the matcher array literal) and compares to `middlewareMatcher`. Do NOT `import` `@/middleware` in Vitest — the file pulls in Auth.js which doesn't initialize outside the Next runtime, exactly the reason the helper was extracted in the first place. Source-text parsing also proves the literal is in source form, which is what Turbopack actually needs.
+- Modify: `tests/unit/middleware-matcher.test.ts` — add a parity assertion that **reads `src/middleware.ts` as text** and extracts every quoted path-matcher string. Do NOT `import` `@/middleware` in Vitest — the file pulls in Auth.js which doesn't initialize outside the Next runtime, exactly the reason the helper was extracted in the first place. Source-text parsing also proves the literal is in source form, which is what Turbopack actually needs.
+
+  **Concrete extraction approach** (avoids fragile multi-line array regex): match every string literal whose value starts with `/api/` or `/teacher/` or `/student/` or `/parent/` or `/org/` or `/admin/` — i.e., the prefixes Bridge's middleware actually guards. Compare the resulting set to `middlewareMatcher`. Sketch:
+
+  ```ts
+  import { readFileSync } from "node:fs";
+  import { middlewareMatcher } from "@/lib/portal/middleware-matcher";
+
+  it("middleware.ts inline matcher matches middlewareMatcher", () => {
+    const source = readFileSync("src/middleware.ts", "utf8");
+    const matches = source.matchAll(/"(\/(?:api|teacher|student|parent|org|admin)\/[^"]+)"/g);
+    const inline = [...matches].map((m) => m[1]).sort();
+    expect(inline).toEqual([...middlewareMatcher].sort());
+  });
+  ```
+
+  If the regex misses an entry the test fails loudly (length mismatch). If a future matcher prefix is added that doesn't match the regex, that's caught at code review when the test is updated alongside the new matcher.
 
 **Verification:**
 
@@ -73,7 +89,7 @@ export const config = {
 
 **Files:**
 
-- Modify: `platform/internal/handlers/parent.go` — short-circuit `ListReports` and `CreateReport` to return `501 Not Implemented` with body `{"error": "Parent reports require parent-child linking, scheduled for plan 049"}`. Keep the route registered so the Next-side fetch gets a structured response (avoids 404 spam in the UI). Drop the `TODO` comments referencing the gap; reference plan 049 in code comments instead.
+- Modify: `platform/internal/handlers/parent.go` — short-circuit `ListReports` and `CreateReport` to return `501 Not Implemented` with body `{"error": "Parent reports require parent-child linking, scheduled for plan 049", "code": "not_implemented"}`. The `code` field is the discriminator the Next UI branches on (alongside `res.status === 501`) — kept explicit for future extensibility and structured logging. Keep the route registered so the Next-side fetch gets a structured response (avoids 404 spam in the UI). Drop the `TODO` comments referencing the gap; reference plan 049 in code comments instead.
 - Modify: `src/app/(portal)/parent/children/[id]/reports/page.tsx` — branch on `res.status === 501` and render an explicit "Reports coming soon — parent-child linking ships in plan 049" empty state. Hide the "Generate report" button when the endpoint is disabled. Other statuses (auth failures, network errors) fall through to a generic error.
 - Modify: `src/lib/portal/nav-config.ts` — verify the parent nav doesn't surface a "Reports" link directly (it doesn't currently). If a parent dashboard section advertises reports, replace the link with informative copy.
 
@@ -186,6 +202,7 @@ Each phase commits separately. The first commit on `feat/047-review-006-fixes` i
 - **Phase 3 — form-field rename + TS route deletion.** Both must happen in one commit; otherwise the form sends `role` while Go reads `intendedRole` and registration silently drops the value. The Vitest test that imports `POST` from the dead TS route is ported to a Go integration test in the same commit. Grep audit before delete.
 - **Phase 4 — strict guard correctness.** The new guard runs an extra topic + bulk-units query on every CreateSession. Both queries are indexed (topics by course_id, teaching_units by topic_id). Latency impact should be sub-millisecond at the seed-data scale. If a course has hundreds of topics in the future, the bulk fetch is still one query. Confirm via the existing `ListUnitsByTopicIDs` benchmark or add one.
 - **Phase 4 — over-blocking.** If a teacher legitimately wants to start a session with all topics unlinked (e.g., demo session, syllabus walk-through), they re-POST with `confirmUnlinkedTopics: true`. The dialog gates the override to an explicit click, satisfying review 006's "warn or block" recommendation while preserving teacher flexibility.
+- **Phase 4 — race between first 422 and override POST.** A teacher could see the unlinked-topics dialog, attach a Unit in another tab, then click "Start anyway" with the now-stale `confirmUnlinkedTopics: true` flag. The override path skips the topic check intentionally — semantic is "I acknowledge there might be unlinked topics; proceed regardless." Result: session starts, the newly-linked Unit shows up correctly to students. No data corruption; the dialog copy was momentarily out of date but the outcome is what the teacher wanted. Worth noting because the alternative (re-running the topic check on the override path) would race the same way and add latency.
 
 ## Out of scope (explicit deferrals)
 
@@ -207,3 +224,9 @@ Each phase commits separately. The first commit on `feat/047-review-006-fixes` i
 5. `[IMPORTANT]` **Phase 3 missed the Vitest test importing the dead TS route.** → Phase 3 now explicitly deletes `tests/integration/auth-register.test.ts` and ports its coverage to Go integration tests in the same commit.
 6. `[IMPORTANT]` **Phase 3 form field rename.** Form sends `role`, plan changed only Go to read `intendedRole` — would silently drop the value. → Form renamed to send `intendedRole` in the same commit as the Go change.
 7. `[MINOR]` **Phase 4 redundant class fetch.** `authorizeSessionCreateForClass` already returns `class`. → Reuse it instead of refetching.
+
+### Second-pass corrections (Codex re-review)
+
+- `[IMPORTANT]` **Phase 1 source-text regex under-specified.** Original revision said "a regex" without a concrete pattern; multi-line array literals are fragile to regex. → Replaced with a per-string-literal extraction that matches the prefixes Bridge actually guards (`/api/`, `/teacher/`, `/student/`, `/parent/`, `/org/`, `/admin/`). Test sketch is in the plan body; loud-fail behavior on length mismatch.
+- `[IMPORTANT]` **Phase 2 response body inconsistency.** Original revision claimed a `code` discriminator but the implementation spec only showed `{"error": ...}`. → 501 body now explicitly `{"error": "...", "code": "not_implemented"}`. UI branches on `res.status === 501` AND can read `code` for structured handling.
+- `[CONCERN]` **Phase 4 race between first 422 and override POST.** → Added an explicit risk-section bullet: the override means "I acknowledge unlinked topics, proceed regardless." A racing Unit-link is a no-op (the session starts, the new link is visible to students). Documented.
