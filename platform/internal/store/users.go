@@ -89,10 +89,15 @@ func (s *UserStore) ListUsers(ctx context.Context) ([]User, error) {
 }
 
 // RegisterInput is the input for registering a new user.
+//
+// IntendedRole is optional ("teacher" | "student"); nil leaves the
+// users.intended_role column NULL so the onboarding flow falls back
+// to the role-selector menu (review 005 / plan 040 / plan 047).
 type RegisterInput struct {
-	Name     string `json:"name"`
-	Email    string `json:"email"`
-	Password string `json:"password"`
+	Name         string  `json:"name"`
+	Email        string  `json:"email"`
+	Password     string  `json:"password"`
+	IntendedRole *string `json:"intendedRole,omitempty"`
 }
 
 // RegisteredUser is the response from registering a user (no password hash).
@@ -114,10 +119,10 @@ func (s *UserStore) RegisterUser(ctx context.Context, input RegisterInput) (*Reg
 
 	var user RegisteredUser
 	err = s.db.QueryRowContext(ctx,
-		`INSERT INTO users (id, name, email, password_hash, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6)
+		`INSERT INTO users (id, name, email, password_hash, intended_role, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)
 		 RETURNING id, name, email`,
-		id, input.Name, input.Email, string(hash), now, now,
+		id, input.Name, input.Email, string(hash), input.IntendedRole, now, now,
 	).Scan(&user.ID, &user.Name, &user.Email)
 	if err != nil {
 		return nil, err

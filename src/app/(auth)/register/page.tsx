@@ -37,10 +37,14 @@ function RegisterForm() {
     setLoading(true);
     setError("");
 
+    // Plan 047 phase 3: send `intendedRole` (matches the Go handler
+    // and the schema column name `users.intended_role`). The previous
+    // `role` field name was silently dropped by the Go register
+    // endpoint that next.config.ts proxies to.
     const res = await fetch("/api/auth/register", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, email, password, role }),
+      body: JSON.stringify({ name, email, password, intendedRole: role }),
     });
 
     if (!res.ok) {
