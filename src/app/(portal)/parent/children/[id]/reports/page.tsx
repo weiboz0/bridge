@@ -18,10 +18,19 @@ export default function ParentReportsPage() {
   const [reports, setReports] = useState<Report[]>([]);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState("");
+  // Plan 047 phase 2: parent reports endpoints return 501 until plan
+  // 049 builds parent-child linking. Track this so the UI can render
+  // a "coming soon" state instead of a generic empty state and so the
+  // Generate button is hidden (it would just 501 again).
+  const [notImplemented, setNotImplemented] = useState(false);
 
   useEffect(() => {
     async function fetchReports() {
       const res = await fetch(`/api/parent/children/${params.id}/reports`);
+      if (res.status === 501) {
+        setNotImplemented(true);
+        return;
+      }
       if (res.ok) setReports(await res.json());
     }
     fetchReports();
@@ -35,7 +44,9 @@ export default function ParentReportsPage() {
       method: "POST",
     });
 
-    if (res.ok) {
+    if (res.status === 501) {
+      setNotImplemented(true);
+    } else if (res.ok) {
       const report = await res.json();
       setReports((prev) => [report, ...prev]);
     } else {
@@ -50,17 +61,30 @@ export default function ParentReportsPage() {
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Progress Reports</h1>
-        <Button onClick={handleGenerate} disabled={generating}>
-          {generating ? "Generating..." : "Generate Weekly Report"}
-        </Button>
+        {!notImplemented && (
+          <Button onClick={handleGenerate} disabled={generating}>
+            {generating ? "Generating..." : "Generate Weekly Report"}
+          </Button>
+        )}
       </div>
 
       {error && <p className="text-sm text-destructive">{error}</p>}
 
-      {reports.length === 0 ? (
+      {notImplemented ? (
+        <Card>
+          <CardContent className="py-8 text-center text-muted-foreground space-y-2">
+            <p className="font-medium text-foreground">Reports coming soon</p>
+            <p className="text-sm">
+              We&apos;re still building parent-child account linking. Once
+              that ships you&apos;ll see weekly progress summaries for your
+              child here.
+            </p>
+          </CardContent>
+        </Card>
+      ) : reports.length === 0 ? (
         <Card>
           <CardContent className="py-8 text-center text-muted-foreground">
-            <p>No reports yet. Click "Generate Weekly Report" to create one.</p>
+            <p>No reports yet. Click &quot;Generate Weekly Report&quot; to create one.</p>
           </CardContent>
         </Card>
       ) : (

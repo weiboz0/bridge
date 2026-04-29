@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"net/http"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -22,75 +21,40 @@ func (h *ParentHandler) Routes(r chi.Router) {
 	})
 }
 
-// ListReports handles GET /api/parent/children/{childId}/reports
+// notImplementedBody is the canonical 501 payload for parent report
+// endpoints. Plan 047 disabled both endpoints because the auth model
+// requires a `parent_links` table that doesn't yet exist (review 006
+// P0: any authenticated user could read any student's reports). Plan
+// 049 will build parent-child linking, schema and all, then re-enable
+// these endpoints with the proper auth gate.
+//
+// 501 Not Implemented is the right semantic: the request is valid,
+// the feature is intentionally not implemented yet. The Next-side
+// fetch branches on `res.status === 501` AND can read the `code`
+// field for structured logging.
+var notImplementedBody = map[string]any{
+	"error": "Parent reports require parent-child linking, scheduled for plan 049",
+	"code":  "not_implemented",
+}
+
+// ListReports handles GET /api/parent/children/{childId}/reports.
+// Disabled in plan 047; re-enabled in plan 049 with parent_links auth.
 func (h *ParentHandler) ListReports(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
 		writeError(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
-
-	childID := chi.URLParam(r, "childId")
-
-	// TODO: Verify caller is parent of this child via parent_links table.
-	// Currently any authenticated user can view any student's reports.
-	// This will be addressed when parent-child linking is implemented.
-
-	reports, err := h.Reports.ListReportsByStudent(r.Context(), childID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "Database error")
-		return
-	}
-	writeJSON(w, http.StatusOK, reports)
+	writeJSON(w, http.StatusNotImplemented, notImplementedBody)
 }
 
-// CreateReport handles POST /api/parent/children/{childId}/reports
-// This generates a report using the LLM (placeholder for now — Phase C will add the skill)
+// CreateReport handles POST /api/parent/children/{childId}/reports.
+// Disabled in plan 047; re-enabled in plan 049 with parent_links auth.
 func (h *ParentHandler) CreateReport(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
 		writeError(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
-
-	childID := chi.URLParam(r, "childId")
-
-	var body struct {
-		PeriodStart string `json:"periodStart"`
-		PeriodEnd   string `json:"periodEnd"`
-	}
-	if !decodeJSON(w, r, &body) {
-		return
-	}
-	if body.PeriodStart == "" || body.PeriodEnd == "" {
-		writeError(w, http.StatusBadRequest, "periodStart and periodEnd are required")
-		return
-	}
-
-	periodStart, err := time.Parse(time.RFC3339, body.PeriodStart)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "periodStart must be ISO 8601 format")
-		return
-	}
-	periodEnd, err := time.Parse(time.RFC3339, body.PeriodEnd)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "periodEnd must be ISO 8601 format")
-		return
-	}
-
-	// TODO: Phase C will add LLM-based report generation via the report_generator skill.
-	// For now, create a placeholder report.
-	report, err := h.Reports.CreateReport(r.Context(), store.CreateReportInput{
-		StudentID:   childID,
-		GeneratedBy: claims.UserID,
-		PeriodStart: periodStart,
-		PeriodEnd:   periodEnd,
-		Content:     "Report generation will be implemented in Phase C (AI Skills).",
-		Summary:     "{}",
-	})
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "Failed to create report")
-		return
-	}
-	writeJSON(w, http.StatusCreated, report)
+	writeJSON(w, http.StatusNotImplemented, notImplementedBody)
 }
