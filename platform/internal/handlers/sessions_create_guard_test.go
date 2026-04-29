@@ -196,6 +196,28 @@ func TestCreateSession_NoClassID_NoGuard(t *testing.T) {
 	})
 }
 
+// Misconfiguration: if Topics or TeachingUnits is nil on the handler,
+// CreateSession returns 500 instead of silently bypassing the guard.
+// Codex post-impl review caught this — silent skip would let an
+// unguarded session creation through if someone forgot to wire the
+// stores. Production main.go wires both; this test is a contract
+// belt-and-suspenders.
+func TestCreateSession_NilStores_FailsLoud(t *testing.T) {
+	fx := newSessionFixture(t, "guardnilstore")
+	fx.seedTopic(t, "Topic A", false)
+
+	// Detach the topic store; the handler should now fail loud.
+	saved := fx.h.Topics
+	fx.h.Topics = nil
+	t.Cleanup(func() { fx.h.Topics = saved })
+
+	code, _ := fx.postCreateSession(t,
+		fx.claims(fx.teacher, false),
+		map[string]any{"title": "Misconfigured", "classId": fx.classID})
+	require.Equal(t, http.StatusInternalServerError, code,
+		"missing Topics store must NOT silently skip the guard")
+}
+
 // Only the unlinked titles surface in the response — never linked ones.
 func TestCreateSession_OnlyUnlinkedTitlesInResponse(t *testing.T) {
 	fx := newSessionFixture(t, "guardonlyunlink")

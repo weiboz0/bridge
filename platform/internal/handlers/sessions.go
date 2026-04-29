@@ -120,7 +120,18 @@ func (h *SessionHandler) CreateSession(w http.ResponseWriter, r *http.Request) {
 		// Plan 047 phase 4: pre-create unlinked-topic guard. Only
 		// runs when the caller hasn't already confirmed via the UI.
 		// Reuses `class` from the auth check above; no refetch.
-		if !body.ConfirmUnlinkedTopics && class != nil && h.Topics != nil && h.TeachingUnits != nil {
+		//
+		// Codex post-impl review: a nil Topics or TeachingUnits store
+		// is misconfiguration, not a "skip the guard" signal — silently
+		// no-op'ing here would let unguarded session creation through.
+		// Production main.go wires both; if a test or future caller
+		// builds a SessionHandler without them, fail loud.
+		if !body.ConfirmUnlinkedTopics && class != nil {
+			if h.Topics == nil || h.TeachingUnits == nil {
+				writeError(w, http.StatusInternalServerError,
+					"Session handler misconfigured: topic/unit stores not wired")
+				return
+			}
 			if guardWriteResp := h.checkUnlinkedTopicsGuard(w, r, class.CourseID); guardWriteResp {
 				return
 			}
