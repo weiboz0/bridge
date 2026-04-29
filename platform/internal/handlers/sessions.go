@@ -68,7 +68,16 @@ func (h *SessionHandler) Routes(r chi.Router) {
 	r.Post("/api/s/{token}/join", h.JoinSessionByToken)
 }
 
-// CreateSession handles POST /api/sessions
+// CreateSession handles POST /api/sessions.
+//
+// Plan 047 phase 4: when ClassID is set, pre-create check inspects the
+// course's topics and returns 422 (no session created) if any focus
+// area lacks a linked teaching unit, unless the caller passes
+// ConfirmUnlinkedTopics=true. Two body codes distinguish:
+//   - "all_topics_unlinked": every topic has no Unit (strong dialog)
+//   - "some_topics_unlinked": at least one is unlinked (softer dialog)
+// Both are overridable by re-POSTing with the confirm flag — the UI
+// shows a confirmation Dialog explicitly before flipping that flag.
 func (h *SessionHandler) CreateSession(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
@@ -77,9 +86,10 @@ func (h *SessionHandler) CreateSession(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var body struct {
-		Title    string  `json:"title"`
-		ClassID  *string `json:"classId"`
-		Settings string  `json:"settings"`
+		Title                 string  `json:"title"`
+		ClassID               *string `json:"classId"`
+		Settings              string  `json:"settings"`
+		ConfirmUnlinkedTopics bool    `json:"confirmUnlinkedTopics,omitempty"`
 	}
 	if !decodeJSON(w, r, &body) {
 		return
@@ -102,8 +112,18 @@ func (h *SessionHandler) CreateSession(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	} else {
-		if _, ok := h.authorizeSessionCreateForClass(w, r, *body.ClassID, claims); !ok {
+		class, ok := h.authorizeSessionCreateForClass(w, r, *body.ClassID, claims)
+		if !ok {
 			return
+		}
+
+		// Plan 047 phase 4: pre-create unlinked-topic guard. Only
+		// runs when the caller hasn't already confirmed via the UI.
+		// Reuses `class` from the auth check above; no refetch.
+		if !body.ConfirmUnlinkedTopics && class != nil && h.Topics != nil && h.TeachingUnits != nil {
+			if guardWriteResp := h.checkUnlinkedTopicsGuard(w, r, class.CourseID); guardWriteResp {
+				return
+			}
 		}
 	}
 
@@ -118,6 +138,71 @@ func (h *SessionHandler) CreateSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, session)
+}
+
+// checkUnlinkedTopicsGuard inspects the course's topics + their linked
+// teaching_units. Returns true (and writes the 422 response) when the
+// caller MUST be shown a confirmation dialog before the session is
+// created. Returns false when the create can proceed normally.
+//
+// Body shape on 422:
+//
+//	{
+//	  "error":  "...human copy...",
+//	  "code":   "all_topics_unlinked" | "some_topics_unlinked",
+//	  "unlinkedTopicTitles": ["Topic A", "Topic B", ...]
+//	}
+//
+// Empty-course case (zero topics) is NOT a guard trigger — no Units
+// are expected, so nothing to warn about.
+func (h *SessionHandler) checkUnlinkedTopicsGuard(w http.ResponseWriter, r *http.Request, courseID string) bool {
+	topics, err := h.Topics.ListTopicsByCourse(r.Context(), courseID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return true
+	}
+	if len(topics) == 0 {
+		return false
+	}
+
+	topicIDs := make([]string, len(topics))
+	for i, t := range topics {
+		topicIDs[i] = t.ID
+	}
+	linked, err := h.TeachingUnits.ListUnitsByTopicIDs(r.Context(), topicIDs)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return true
+	}
+
+	unlinkedTitles := []string{}
+	for _, t := range topics {
+		if u, ok := linked[t.ID]; !ok || u == nil {
+			unlinkedTitles = append(unlinkedTitles, t.Title)
+		}
+	}
+	linkedCount := len(topics) - len(unlinkedTitles)
+
+	if linkedCount == len(topics) {
+		// Everything's wired — no guard.
+		return false
+	}
+
+	var code, errMsg string
+	if linkedCount == 0 {
+		code = "all_topics_unlinked"
+		errMsg = "All focus areas in this course have no teaching unit linked. Students will see no material."
+	} else {
+		code = "some_topics_unlinked"
+		errMsg = "Some focus areas have no teaching unit linked. Students will see no material for those."
+	}
+
+	writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
+		"error":               errMsg,
+		"code":                code,
+		"unlinkedTopicTitles": unlinkedTitles,
+	})
+	return true
 }
 
 func parseSessionListFilterFromQuery(r *http.Request) (store.ListSessionsFilter, error) {

@@ -30,6 +30,7 @@ type sessionFixture struct {
 	student   *store.RegisteredUser
 	otherUser *store.RegisteredUser // not a participant or teacher
 	orgID     string
+	courseID  string
 	classID   string
 	sessionID string
 	session   *store.LiveSession
@@ -56,10 +57,13 @@ func newSessionFixture(t *testing.T, suffix string) *sessionFixture {
 	broadcaster := events.NewBroadcaster()
 
 	h := &SessionHandler{
-		Sessions:    sessions,
-		Classes:     classes,
-		Orgs:        orgs,
-		Broadcaster: broadcaster,
+		Sessions:      sessions,
+		Classes:       classes,
+		Courses:       courses,
+		Topics:        store.NewTopicStore(db),
+		TeachingUnits: store.NewTeachingUnitStore(db),
+		Orgs:          orgs,
+		Broadcaster:   broadcaster,
 	}
 
 	// Create org, teacher, students
@@ -141,6 +145,7 @@ func newSessionFixture(t *testing.T, suffix string) *sessionFixture {
 		student:   student,
 		otherUser: otherUser,
 		orgID:     org.ID,
+		courseID:  course.ID,
 		classID:   class.ID,
 		sessionID: session.ID,
 		session:   session,
