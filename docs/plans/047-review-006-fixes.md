@@ -53,12 +53,12 @@ export const config = {
 };
 ```
 
-`src/lib/portal/middleware-matcher.ts` stays in place because the existing unit test (`tests/unit/middleware-matcher.test.ts` — verify) still imports it. The two need to stay in sync; we add a new test that asserts the inline array in `middleware.ts` matches the exported `middlewareMatcher` to prevent drift.
+`src/lib/portal/middleware-matcher.ts` stays in place because it's the unit-testable export; we keep it in lockstep with the inline literal via a parity test.
 
 **Files:**
 
 - Modify: `src/middleware.ts` (above).
-- Test: `tests/unit/middleware-matcher.test.ts` — add a parity assertion: the inline matcher in `middleware.ts` (read via `import { config } from "@/middleware"`) must equal `middlewareMatcher`.
+- Modify: `tests/unit/middleware-matcher.test.ts` — add a parity assertion that **reads `src/middleware.ts` as text** (via `fs.readFileSync` + a regex that extracts the matcher array literal) and compares to `middlewareMatcher`. Do NOT `import` `@/middleware` in Vitest — the file pulls in Auth.js which doesn't initialize outside the Next runtime, exactly the reason the helper was extracted in the first place. Source-text parsing also proves the literal is in source form, which is what Turbopack actually needs.
 
 **Verification:**
 
@@ -69,16 +69,18 @@ export const config = {
 
 ### Phase 2: P0 — Disable parent reports until parent-child linking exists
 
+**Status code:** `501 Not Implemented` (per Codex review). 503 implies a temporary outage that retry logic might hammer; 501 cleanly signals "intentionally not implemented yet" and lets the UI branch on it.
+
 **Files:**
 
-- Modify: `platform/internal/handlers/parent.go` — short-circuit `ListReports` and `CreateReport` to return `503 Service Unavailable` with body `{"error": "Parent reports require parent-child linking, scheduled for plan 049"}`. Keep the route registered so the Next-side fetch still gets a structured response (avoids 404 spam in the UI). Drop the `TODO` comments referencing the gap; reference plan 049 in code comments instead.
-- Modify: `src/app/(portal)/parent/children/[id]/reports/page.tsx` — render an explicit "Reports coming soon" empty state when the API returns 503. Stop showing the "Generate report" button when the endpoint is disabled.
-- Modify: `src/lib/portal/nav-config.ts` — verify the parent nav doesn't surface a "Reports" link directly (it doesn't currently — confirmed in the file). If a parent dashboard section advertises reports, replace the link with informative copy.
+- Modify: `platform/internal/handlers/parent.go` — short-circuit `ListReports` and `CreateReport` to return `501 Not Implemented` with body `{"error": "Parent reports require parent-child linking, scheduled for plan 049"}`. Keep the route registered so the Next-side fetch gets a structured response (avoids 404 spam in the UI). Drop the `TODO` comments referencing the gap; reference plan 049 in code comments instead.
+- Modify: `src/app/(portal)/parent/children/[id]/reports/page.tsx` — branch on `res.status === 501` and render an explicit "Reports coming soon — parent-child linking ships in plan 049" empty state. Hide the "Generate report" button when the endpoint is disabled. Other statuses (auth failures, network errors) fall through to a generic error.
+- Modify: `src/lib/portal/nav-config.ts` — verify the parent nav doesn't surface a "Reports" link directly (it doesn't currently). If a parent dashboard section advertises reports, replace the link with informative copy.
 
 **Tests:**
 
-- `platform/internal/handlers/parent_test.go` (new) — assert `GET /api/parent/children/{any}/reports` returns 503 from any authenticated caller (including platform admin, until parent linking lands). Assert `POST` same.
-- Update / delete any existing parent-handler tests that asserted 200 on the now-disabled endpoints.
+- `platform/internal/handlers/parent_test.go` (new or extended) — assert `GET /api/parent/children/{any}/reports` returns 501 from any authenticated caller (including platform admin, until parent linking lands). Assert `POST` same. Drop / update any existing parent-handler tests that asserted 200 on the now-disabled endpoints.
+- Vitest test for the parent reports page rendering the "coming soon" state on 501.
 
 **Verification:**
 
@@ -87,60 +89,84 @@ export const config = {
 
 ### Phase 3: P1 — Go register persists `intendedRole`; drop broken `/register-org` redirect
 
+**Field name:** standardize on `intendedRole` everywhere. The form, the Go handler, the Go store, and tests all use the same name. Renaming the form field at the same time as the Go change avoids a Codex-flagged transition window where the form sends `role` and Go reads `intendedRole`.
+
 **Files:**
 
 - Modify: `platform/internal/handlers/auth.go::Register`:
-  - Add `IntendedRole *string` to the request body (optional, defaults to nil).
-  - Validate against `{"teacher", "student", nil}` (signup_intent enum values).
+  - Add `IntendedRole *string` to the request body struct.
+  - Validate against the `signupIntentEnum` values (`{"teacher", "student"}`) — empty/nil is allowed and stored as NULL. Reject other values with 400. Read the actual enum from `src/lib/db/schema.ts::signupIntentEnum` to confirm the value set.
   - Pass through to `RegisterInput`.
 - Modify: `platform/internal/store/users.go`:
   - Add `IntendedRole *string` to `RegisterInput`.
-  - Insert into `users.intended_role` column (already exists per migration 0021).
+  - Insert into the existing `users.intended_role` column (added by migration 0021). The schema is in place; only the Go store hasn't wired it.
 - Modify: `src/app/(auth)/register/page.tsx`:
-  - The form already collects role; verify it sends `intendedRole` to `/api/auth/register` (not just `role`). The Go handler will read whichever field name we standardize on — pick `intendedRole` for parity with the schema column.
+  - Rename the local `role` state to `intendedRole` (or keep the local name but send `intendedRole` in the JSON body — match whatever the Go handler reads).
+  - Change `body: JSON.stringify({ name, email, password, role })` → `body: JSON.stringify({ name, email, password, intendedRole })`.
+  - Same for the Google `signIn` callback URL hint at line 87-98 if it carries `role`.
 - Modify: `src/app/onboarding/page.tsx`:
   - Replace the `redirect("/register-org")` for `intendedRole === "teacher"` with rendering the existing "I'm a teacher or school administrator" card with copy that says: "Your school administrator will invite you to your organization. If you ARE the school admin, contact us — org self-registration ships in plan 048."
   - Drop the `<Link href="/register-org">` button (or change the href to a `mailto:` / contact form). Pre-production stopgap.
-- Modify: `src/app/api/auth/register/route.ts` — delete the now-dead TS route (Next proxies `/api/auth/register` to Go per `next.config.ts`, so this file is unreachable). Confirm with `git grep "/api/auth/register"` afterward.
+- Delete: `src/app/api/auth/register/route.ts` — `next.config.ts` proxies `/api/auth/register` to Go (line 14 of GO_PROXY_ROUTES), so the TS route is unreachable from the browser. **Before deleting**, audit: (a) `git grep "from.*api/auth/register/route"` for any internal imports, (b) `tests/integration/auth-register.test.ts` imports `POST` from this file (line 4) — DELETE or PORT this test in the same commit. Per Codex: porting to a Go integration test in `platform/internal/handlers/auth_test.go` keeps the contract coverage on the live route.
 
 **Tests:**
 
-- `platform/internal/handlers/auth_test.go` — extend with:
-  - `TestRegister_PersistsIntendedRole` (teacher + student variants).
-  - `TestRegister_RejectsInvalidIntendedRole` (e.g. `"admin"` returns 400).
-  - `TestRegister_NoIntendedRole_OK` (missing field → user created with NULL intended_role).
-- `tests/unit/onboarding.test.ts` (new or extended) — assert the teacher branch no longer redirects to `/register-org`.
+- `platform/internal/handlers/auth_test.go` — add or extend with:
+  - `TestRegister_PersistsIntendedRole_Teacher` — body `{"intendedRole": "teacher", ...}` → user row has `intended_role = 'teacher'`.
+  - `TestRegister_PersistsIntendedRole_Student` — same for student.
+  - `TestRegister_RejectsInvalidIntendedRole` — body `{"intendedRole": "admin", ...}` → 400.
+  - `TestRegister_NoIntendedRole_OK` — missing field → user created with NULL `intended_role`.
+- Delete `tests/integration/auth-register.test.ts` (the Vitest tests against the dead TS route). The Go tests above cover the live contract.
+- `tests/unit/onboarding.test.ts` (new or extended) — assert the teacher branch no longer redirects to `/register-org` and that the new copy renders.
 
 **Verification:**
 
 - Vitest + Go suite green.
-- Browser: register a new account with role=teacher via email/password, observe `/onboarding` renders the teacher card with the new copy (no redirect to `/register-org`). DB inspection: `users.intended_role = 'teacher'`.
+- Browser: register a new account with `intendedRole=teacher` via email/password, observe `/onboarding` renders the teacher card with the new copy (no redirect to `/register-org`). DB inspection: `users.intended_role = 'teacher'`.
 
-### Phase 4: P1 — Session start guard for unlinked focus areas
+### Phase 4: P1 — Pre-create session start guard for unlinked focus areas
+
+**Contract correction (per Codex CRITICAL #1):** The original plan put the warning in the `CreateSession` *response*, but `POST /api/sessions` returns 201 with the session already inserted — a post-create warning is too late. The corrected contract uses an explicit confirm-flag pattern:
+
+- `POST /api/sessions` body gains `confirmUnlinkedTopics?: boolean` (default false).
+- When `body.ClassID != nil`:
+  - Reuse the `class` object already fetched by `authorizeSessionCreateForClass` (per Codex MINOR #1 — don't refetch).
+  - List topics for `class.CourseID` + their linked Units via `ListUnitsByTopicIDs`.
+  - Compute `total := len(topics)`, `linked := len(linkedUnits)`, `unlinkedTitles := [topic.Title for topic in topics where unit is nil]`.
+  - **Block (no override) — Codex CRITICAL #2:** if `total > 0 && linked == 0` AND `body.ConfirmUnlinkedTopics == false`, return `422 Unprocessable Entity` with body `{"error": "...", "code": "all_topics_unlinked", "unlinkedTopicTitles": [...]}`. The session is NOT created. The UI surfaces a strong dialog and offers "Start anyway" which re-POSTs with `confirmUnlinkedTopics: true`.
+  - **Warn (overridable):** if `0 < linked < total` AND `body.ConfirmUnlinkedTopics == false`, return `422` with body `{"error": "...", "code": "some_topics_unlinked", "unlinkedTopicTitles": [...]}`. UI shows softer dialog, same "Start anyway" flow.
+  - **Proceed:** if `linked == total` OR `body.ConfirmUnlinkedTopics == true` OR `body.ClassID == nil` (ad-hoc session, no class context), create normally. Don't bother with the topic query in the no-class branch.
+
+422 is the right semantic here: the request was syntactically valid but cannot be processed in the current state. The `code` discriminator lets the UI distinguish "all unlinked" from "some unlinked" copy.
 
 **Files:**
 
 - Modify: `platform/internal/handlers/sessions.go::CreateSession`:
-  - When `body.ClassID != nil`, fetch the class's `course_id`, then list topics for that course AND their linked Units (reusing `ListUnitsByTopicIDs`).
-  - If any topic in the course has `unit_id IS NULL`, allow the create but include a `warnings` array in the response: `{"unlinked_topic_ids": [...], "unlinked_topic_titles": [...]}`. Do not block.
-  - Rationale for warn-not-block: a teacher may legitimately start a session with a partial syllabus and link Units mid-class. Blocking would be over-aggressive.
-- Modify: `src/app/(portal)/teacher/sessions/new/page.tsx` (or wherever Start Session lives — verify with grep):
-  - When the create response includes `warnings.unlinked_topic_titles`, render a confirmation Dialog: "These focus areas have no teaching unit linked: {list}. Students will see 'No material yet for this topic.' Start session anyway?"
-  - Two buttons: "Start anyway" (proceed to teacher dashboard) and "Cancel" (stay on the create form so the teacher can attach Units first).
-- Modify: `src/app/(portal)/teacher/courses/[id]/page.tsx` (the course-edit topics list — verify): show a small warning badge next to topics with no linked Unit, so teachers see the gap before they ever hit Start Session. Compose with plan 045's link-unit dialog.
+  - Add `ConfirmUnlinkedTopics bool` to body struct.
+  - After `authorizeSessionCreateForClass` (which returns `class`), if `class != nil` and not confirmed: query topics + bulk fetch units, compute the counts, return 422 with appropriate `code` if blocked/warned.
+  - The handler will need access to `h.Topics` (TopicStore) and `h.TeachingUnits` (TeachingUnitStore) — wire them through `cmd/api/main.go` if not already present.
+- Modify: `src/components/teacher/start-session-button.tsx` (or wherever Start Session lives — confirm with grep):
+  - On 422 response: parse `body.code` and `body.unlinkedTopicTitles`. Render a confirmation Dialog:
+    - `code === "all_topics_unlinked"`: "**All focus areas have no teaching unit.** Students will see 'No material yet' for everything. Are you sure you want to start the session anyway?" — strong copy, both buttons, no auto-confirm.
+    - `code === "some_topics_unlinked"`: "These focus areas have no teaching unit linked: {list}. Students will see 'No material yet' for those. Start session anyway?" — softer copy.
+  - "Start anyway" re-POSTs with `confirmUnlinkedTopics: true`. "Cancel" stays on the form.
+- Modify: `src/app/(portal)/teacher/courses/[id]/page.tsx` (the course-edit topics list — verify path): show a small warning badge next to topics with no linked Unit, so teachers see the gap before they ever hit Start Session. Composes naturally with plan 045's link-unit dialog.
 
 **Tests:**
 
 - `platform/internal/handlers/sessions_test.go` — extend with:
-  - `TestCreateSession_AllTopicsLinked_NoWarnings` (200 with empty `warnings`).
-  - `TestCreateSession_SomeTopicsUnlinked_ReturnsWarnings` (200 with populated `warnings.unlinked_topic_titles`).
-  - `TestCreateSession_NoClassID_NoWarnings` (ad-hoc session, no class context).
-- `tests/integration/sessions-create-warnings.test.tsx` (new) — Vitest + RTL: mock fetch returning warnings, assert the confirmation Dialog renders with the right titles, "Start anyway" proceeds, "Cancel" stays.
+  - `TestCreateSession_AllTopicsLinked_NoGuard` (200 / no-422, session created, `ConfirmUnlinkedTopics` ignored).
+  - `TestCreateSession_AllTopicsUnlinked_Blocks` (422 with `code: "all_topics_unlinked"`, session NOT created — assert by querying sessions table).
+  - `TestCreateSession_AllTopicsUnlinked_OverrideAllows` (422 first request, then 201 when `confirmUnlinkedTopics: true`).
+  - `TestCreateSession_SomeTopicsUnlinked_Warns` (422 with `code: "some_topics_unlinked"`).
+  - `TestCreateSession_SomeTopicsUnlinked_OverrideAllows` (422 first, 201 with confirm).
+  - `TestCreateSession_NoClassID_NoGuard` (ad-hoc session, no class context, never queries topics).
+- `tests/integration/sessions-create-warnings.test.tsx` (new) — Vitest + RTL: mock fetch returning each 422 shape, assert the right Dialog copy renders, "Start anyway" re-POSTs with the confirm flag, "Cancel" stays.
 
 **Verification:**
 
 - Vitest + Go suite green.
-- Browser: create a class with one topic (no linked Unit), click Start Session, observe the warning Dialog with the topic title.
+- Browser: create a class with topics that have no linked Units, click Start Session, observe the strong "all unlinked" dialog. Link a Unit to one topic via plan 045's picker, retry, observe the softer "some unlinked" dialog. Link the rest, retry, observe direct creation.
 
 ## Implementation Order
 
@@ -148,25 +174,36 @@ Strict order:
 
 1. **Phase 1 first.** Without the middleware fix, no UI testing is possible — every other phase's verification step depends on the dev server rendering portal pages. Phase 1 is also a 5-line change with the smallest blast radius.
 2. **Phase 2** next. Security gap; defensive disable is short and removes a real risk.
-3. **Phase 3** next. The Go register change is small; the onboarding copy update is just text.
+3. **Phase 3** next. The Go register change is small; the onboarding copy update is just text. Form-field rename (`role` → `intendedRole`) happens in the same commit as the Go change.
 4. **Phase 4** last. The largest of the four; depends on Phase 1's UI verification path being unblocked.
 
 Each phase commits separately. The first commit on `feat/047-review-006-fixes` is this plan file with the agreed-on Codex review summary embedded (per CLAUDE.md plan review gate).
 
 ## Risk Surface
 
-- **Phase 1 — middleware change in production.** Inlining the matcher is identical at runtime; the static-analysis fix changes Next's compile path, not the middleware behavior. Low risk; the parity test catches drift between the inline literal and the existing `middlewareMatcher` export.
-- **Phase 2 — disabling endpoints.** The Next-side fetch must handle 503 gracefully or the parent UI breaks more visibly. We render an explicit empty state and verify in the browser. The endpoint can be re-enabled by a follow-up plan without a schema change.
-- **Phase 3 — TS route deletion.** `next.config.ts` proxies `/api/auth/register` to Go, so the TS route is dead. We grep before delete to confirm no internal imports.
-- **Phase 4 — over-warning.** If too many sessions trigger the warning, teachers will dismiss it reflexively. We scope the warning to "at least one topic has no linked Unit" rather than "every topic"; if even that's noisy in practice, plan 048 can dial it back.
+- **Phase 1 — middleware change in production.** Inlining the matcher is identical at runtime; the static-analysis fix changes Next's compile path, not the middleware behavior. Low risk; the source-text parity test catches drift between the inline literal and the existing `middlewareMatcher` export.
+- **Phase 2 — disabling endpoints.** The Next-side fetch must handle 501 gracefully or the parent UI breaks more visibly. We render an explicit empty state and verify in the browser. The endpoint can be re-enabled by plan 049 without a schema change.
+- **Phase 3 — form-field rename + TS route deletion.** Both must happen in one commit; otherwise the form sends `role` while Go reads `intendedRole` and registration silently drops the value. The Vitest test that imports `POST` from the dead TS route is ported to a Go integration test in the same commit. Grep audit before delete.
+- **Phase 4 — strict guard correctness.** The new guard runs an extra topic + bulk-units query on every CreateSession. Both queries are indexed (topics by course_id, teaching_units by topic_id). Latency impact should be sub-millisecond at the seed-data scale. If a course has hundreds of topics in the future, the bulk fetch is still one query. Confirm via the existing `ListUnitsByTopicIDs` benchmark or add one.
+- **Phase 4 — over-blocking.** If a teacher legitimately wants to start a session with all topics unlinked (e.g., demo session, syllabus walk-through), they re-POST with `confirmUnlinkedTopics: true`. The dialog gates the override to an explicit click, satisfying review 006's "warn or block" recommendation while preserving teacher flexibility.
 
 ## Out of scope (explicit deferrals)
 
-- **Plan 048 — `/register-org` form + `addCreatorAsOrgAdmin` flow.** Real teacher org self-onboarding.
+- **Plan 048 — `/register-org` form + `addCreatorAsOrgAdmin` flow + Topic-rename + topic-editor error states.** Real teacher org self-onboarding plus the deferred review-006 P2s.
 - **Plan 049 — Parent-child linking.** `parent_links` table, invitation flow, parent admin UI, then re-enable parent reports endpoints with proper auth.
 - **My Work navigability redesign** (review 006 P2 #6). Originally filed; folded into plan 048 territory.
-- **Topic / focus-area editor "Edit Focus Area" rename + error states** (review 006 P2 #5). Folded into plan 048's Topic-rename phase.
 
 ## Codex Review of This Plan
 
-(Pending — dispatch `codex:codex-rescue` per CLAUDE.md plan review gate before any implementation begins.)
+- **Date:** 2026-04-28
+- **Verdict:** Plan needed substantive rewrite (Phase 4 contract was wrong; several test/migration details missed). This document IS the post-correction plan.
+
+### Corrections applied
+
+1. `[CRITICAL]` **Phase 4 post-create warning was useless.** Original plan returned warnings in the `CreateSession` 201 response, but the session is already inserted by then. → Rewrote Phase 4 as a pre-create guard: `POST /api/sessions` with no `confirmUnlinkedTopics` returns `422` (no session created) when topics are unlinked; the UI re-POSTs with the confirm flag after the teacher acknowledges.
+2. `[CRITICAL]` **Phase 4 "warn-only" failed the empty-syllabus case.** Review 006's actual failure is "all topics unlinked" — a warning a teacher dismisses doesn't prevent that. → Added a `code` discriminator: `all_topics_unlinked` shows strong copy in the dialog; `some_topics_unlinked` shows softer copy. Both are overridable by explicit click, neither auto-dismisses.
+3. `[IMPORTANT]` **Phase 1 parity test imported the file Next can't analyze.** → Test now reads `src/middleware.ts` as source text and parses the literal array, so it doesn't pull Auth.js into the Vitest runtime AND it proves the matcher is in source form (which is what Turbopack needs).
+4. `[IMPORTANT]` **Phase 2 status code semantics.** 503 implies retry; 501 cleanly signals "intentionally not implemented." → Switched to 501 with a `code` body. UI branches on `res.status === 501`.
+5. `[IMPORTANT]` **Phase 3 missed the Vitest test importing the dead TS route.** → Phase 3 now explicitly deletes `tests/integration/auth-register.test.ts` and ports its coverage to Go integration tests in the same commit.
+6. `[IMPORTANT]` **Phase 3 form field rename.** Form sends `role`, plan changed only Go to read `intendedRole` — would silently drop the value. → Form renamed to send `intendedRole` in the same commit as the Go change.
+7. `[MINOR]` **Phase 4 redundant class fetch.** `authorizeSessionCreateForClass` already returns `class`. → Reuse it instead of refetching.
