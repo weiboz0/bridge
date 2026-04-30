@@ -139,7 +139,7 @@ export default function TopicEditorPage() {
       else if (res.status === 403)
         setLinkError("You don't have permission to link that unit.");
       else if (res.status === 409)
-        setLinkError(body?.error ?? "This topic is already linked to a different unit.");
+        setLinkError(body?.error ?? "This focus area is already linked to a different unit.");
       else setLinkError(body?.error ?? "Couldn't link the unit. Try again.");
     }
   }

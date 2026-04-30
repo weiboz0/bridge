@@ -107,5 +107,13 @@ describe("Plan 048 phase 5 — Topic → Focus Area rename", () => {
       expect(source(path)).toMatch(/Focus Area Details/);
       expect(source(path)).not.toMatch(/>Topic Details</);
     });
+    it("409 link-error message says 'focus area' not 'topic'", () => {
+      expect(source(path)).toMatch(
+        /This focus area is already linked to a different unit\./
+      );
+      expect(source(path)).not.toMatch(
+        /This topic is already linked to a different unit\./
+      );
+    });
   });
 });

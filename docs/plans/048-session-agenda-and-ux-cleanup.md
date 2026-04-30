@@ -271,3 +271,78 @@ Each phase commits separately. The first commit on `feat/048-session-agenda-and-
 - `[IMPORTANT]` **Phase 7 dangling `session_id` double-null case.** `documents.session_id` has no FK constraint per `drizzle/0005_code-persistence.sql:4-19`, so a hard-deleted session row leaves a dangling reference; `LEFT JOIN sessions` returns null status AND null class_id. The original plan would construct an empty `/student/classes/` URL. → Branch ladder rewritten with `classId is null/empty` as the FIRST check, falling through to non-clickable. New test case `dangling sessionId + null classId → card NOT wrapped in <Link>`.
 - `[NIT]` Phase 5 file count was claimed 9, was actually 8. Corrected.
 - `[CONCERN D]` Phase 2 verification now references existing Playwright spec `e2e/theme-bootstrap.spec.ts:18-40` instead of ad-hoc manual browser observation; spec is the primary gate, eyeball is secondary.
+
+---
+
+## Post-Execution Report
+
+**Date:** 2026-04-30
+**Branch:** `feat/048-session-agenda-and-ux-cleanup`
+**PR:** #77
+**Commits (10):**
+- `af7777a` docs: plan 048 — session agenda single-source + UX cleanup (draft for Codex review)
+- `cb1ef7d` docs(048): rewrite per Codex pre-impl review (CRITICAL atomicity fix on Phase 1)
+- `4399611` docs(048): second-pass Codex re-review corrections
+- `c7c9582` feat(048): session agenda single source of truth (phase 1)
+- `a22c456` feat(048): theme bootstrap moves to `<head>` dangerouslySetInnerHTML (phase 2)
+- `ce76d71` feat(048): focus-area editor error states + UUID validation (phase 4)
+- `65b1763` feat(048): rename Topic → Focus Area in user-visible copy (phase 5)
+- `7fe8ab5` feat(048): ended sessions non-link from dashboard + class detail (phase 6)
+- `1accd46` feat(048): My Work navigability + LEFT JOIN nav metadata (phase 7)
+- (post-impl fix-up commit forthcoming for the Codex IMPORTANT findings below)
+
+### Plan review gate (CLAUDE.md)
+
+Three Codex pre-impl passes: pass 1 = 1 CRITICAL + 5 IMPORTANT + 2 MINOR (Phase 1 atomicity gap was real); pass 2 = 0 CRITICAL + 2 IMPORTANT + 1 partial-fix nit (atomicity test mechanism, dangling-session_id double-null); pass 3 = "Ready to implement." All findings folded into the plan before any code shipped.
+
+### Codex post-impl review
+
+- **Date:** 2026-04-30
+- **Verdict:** NEEDS FIXES — 2 IMPORTANT + 1 MINOR. All three addressed in commit (forthcoming).
+
+#### Findings + resolutions
+
+1. `[IMPORTANT]` **Phase 5 missed one rendered string.** `src/app/(portal)/teacher/courses/[id]/topics/[topicId]/page.tsx:142` still rendered "This topic is already linked to a different unit." in the 409 link-error fallback. Phase 5's regression test was surface-specific (assertions on JSX strings) but didn't cover this string-literal in a state setter. → Renamed to "This focus area is already linked to a different unit." Extended `tests/unit/focus-area-rename.test.ts` with a 14th case asserting the new copy and rejecting the old.
+
+2. `[IMPORTANT]` **e2e theme-bootstrap.spec.ts execution unverifiable from CI/repo artifacts.** Codex (correctly) noted the PR self-reports passing without independent CI evidence. Bridge has no CI configured (verified — `.github/workflows/` doesn't exist). → Recording the actual run output here as auditable evidence. Spec command + result:
+
+   ```
+   $ node_modules/.bin/playwright test --config=e2e/playwright.config.ts \
+       e2e/theme-bootstrap.spec.ts --project=tests
+   [auth-setup] authenticate teacher       PASS
+   [auth-setup] authenticate student       PASS
+   [auth-setup] authenticate org admin     PASS
+   [auth-setup] authenticate parent        PASS
+   [auth-setup] authenticate admin         PASS
+   [tests] Theme bootstrap › dark class applied without FOUC
+           + no script-tag dev overlay      PASS
+   6 passed (13.2s)
+   ```
+
+   The 5 auth-setup specs ALSO passed, which is notable: they had been blocked by the `/login` redirect loop pre-plan-047 — this is the first time `auth.setup.ts` has run cleanly since the loop appeared.
+
+3. `[MINOR]` **Plan lacked a post-execution report.** CLAUDE.md requires one before shipping; missed in the implementation pass. → This section IS the report.
+
+### What shipped
+
+- **Phase 1:** Session agenda is one source of truth. CreateSession atomically snapshots the course's focus areas into `session_topics` inside its existing transaction (FK-violation rollback contract verified by `TestSessionStore_CreateSession_AtomicTopicSnapshot`). GetTeacherPage now reads from `Sessions.GetSessionTopics` instead of the four-step `class.CourseID → ListTopicsByCourse → ListUnitsByTopicIDs → map` chain — one query instead of three, same shape.
+- **Phase 2:** Theme bootstrap moved to `<head> + dangerouslySetInnerHTML`. Dev-overlay warning gone. The 5 auth-setup specs unblocked.
+- **Phase 3:** Verification-only; no frontend code change needed (student page already reads from `session_topics` via `/api/sessions/{id}/topics`).
+- **Phase 4:** Focus-area editor renders explicit error cards (404/403/500/invalid-UUID) instead of indefinite Loading… UUID validation runs on both params.
+- **Phase 5:** Topic → Focus Area rename across 8 user-visible surfaces. DB columns / route URLs / code identifiers UNCHANGED.
+- **Phase 6:** Ended sessions stop linking from teacher dashboard + class detail. Pattern matches `SessionRow` in `/teacher/sessions/page.tsx`.
+- **Phase 7:** My Work cards are now navigable. LEFT JOIN sessions surfaces `classId` + `sessionStatus`. Branch ladder: `!classId → non-clickable` (catches dangling-session_id double-null), live → live route, otherwise → class route. Ended sessions correctly route to class (NOT to `/student/sessions/{id}` which 404s).
+
+### Verification
+
+- **Vitest:** 492 passed | 11 skipped (was 460 pre-048; net +32 across all 7 phases). Includes the new rename regression test extended with the post-impl-found case.
+- **Go:** all 13 packages green (handlers 108s, store 30s, contract 0.5s).
+- **e2e:** `theme-bootstrap.spec.ts` + 5 auth-setup specs pass (run output recorded above).
+- **Type-check:** clean for plan-048 surface.
+- **Plan review gate:** 3 Codex pre-impl passes + 1 Codex post-impl pass + 1 fix-up commit.
+
+### Out-of-scope deferrals
+
+- **Plan 049** — `/register-org` form + parent_links + re-enable parent reports.
+- **Plan 050** — Ended-session full read-only review surface (attendance, focus areas, student work).
+- **Topic table / column / route URL schema rename** — copy-only rename was the right scope; full schema rename is a separate plan if/when product commits.
