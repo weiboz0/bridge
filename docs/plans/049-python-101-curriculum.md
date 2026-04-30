@@ -332,7 +332,7 @@ Strict order. Each phase commits separately.
 - **Library reuse semantics.** The 1:1 unit↔topic invariant from plan 044 — once Bridge HQ Python 101 claims a unit, no other course can pick it. Documented as a known limitation. Plan 050+ can add fork/overlay.
 - **Bridge HQ org bootstrap.** Phase 0 ships a one-time idempotent seed using `INSERT ... ON CONFLICT (id) DO NOTHING` on BOTH the org row AND the user row, so a delete-and-recreate cycle (developer manually deletes the org row) is fully recovered by re-running the seed.
 - **Importer transaction size.** Inserting 12 units + 60 problems + 60 solutions + ~250 test cases + 1 course + 12 topics + ~60 topic_problems in one transaction is fine for Postgres (sub-second). No batching needed.
-- **CloneCourse for the demo wire-up.** The demo seed will need to call CloneCourse equivalent SQL (it's pure SQL today). The new wire-up materializes Python 101's content into the demo class's namespace once. If the demo seed is re-run, it should detect the clone exists and skip.
+- **CloneCourse for the demo wire-up.** Phase 6 commits to the Go `Courses.CloneCourse` service method (NOT a SQL equivalent — see Phase 6 rationale). The new wire-up materializes Python 101's content into the demo class's namespace once. If the demo seed is re-run, it should detect the clone exists and skip.
 - **Effort estimate.** Original 30-50h was unjustified. Phase 3 is the throughput checkpoint — actual numbers there drive Phases 4-5 scope. The plan accepts that we may re-scope.
 
 ## Plan-number conflict note (Codex dispatch-2 IMPORTANT #12)
