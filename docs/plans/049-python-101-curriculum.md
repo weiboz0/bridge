@@ -190,19 +190,22 @@ The platform's `test_cases` table only stores `expected_stdout` (string). The gr
 **Files:**
 - Create: `scripts/seed_bridge_hq.sql` — idempotent seed for the Bridge HQ org + system user. Hardcoded UUIDs so the importer can reference them as constants.
 - Create: `docs/plans/049-python-101-legacy-extract.md` — extracted legacy problem titles + descriptions for re-use as drafts.
+- Create (Phase 2 prereq, scaffolded in Phase 0): `platform/cmd/run-piston/main.go` — tiny Go CLI that wraps `sandbox.NewPistonClient(...).ExecuteWithStdin(...)`. Reads JSON request from stdin (`{language, source, stdin}`), prints JSON response (`{stdout, stderr, exitCode, time}`), exits non-zero on transport errors. Picks Piston URL from `PISTON_URL` env (defaulting to `http://localhost:2000`, matching `platform/internal/sandbox/piston.go:23`).
 
 **Actions:**
 1. User confirms the 8 decisions above.
-2. Run `scripts/seed_bridge_hq.sql` against bridge dev DB. Confirm Bridge HQ org + system user exist.
-3. **Runtime check:** confirm the Piston client is reachable from a TS importer context. Either:
-   - The Go service exposes an authenticated `POST /api/admin/run-piston` (or similar) that wraps `PistonClient.ExecuteWithStdin`. The importer hits it with platform-admin credentials.
-   - Or the importer shells out to `go run platform/cmd/run-piston ...` (a new tiny Go CLI binary).
+2. Run `scripts/seed_bridge_hq.sql` against bridge dev DB. Confirm Bridge HQ org + system user exist. ✅ DONE — both `bridge` and `bridge_test` seeded; idempotence verified (re-run yields `INSERT 0 0` on all three rows).
+3. **Runtime path decision (Phase 0 outcome):** the importer shells out to `platform/cmd/run-piston` — NOT a new admin HTTP endpoint. Reasons:
+   - No need to run the full Go API service or wire platform-admin auth just for content imports.
+   - Reuses `sandbox.PistonClient` directly — single source of truth, no duplicate logic.
+   - CLI is testable in CI with the existing Piston test stubs.
+   - The existing `/api/attempts/{id}/test` endpoint is unusable for arbitrary code — it requires a real attempt context and pulls test cases from the DB.
    
-   Pick one in Phase 0 and document. If the existing endpoints `/api/attempts/.../test` aren't usable for arbitrary code (they require an attempt context), build the new endpoint.
+   **Piston runtime requirement:** the importer's run is a precondition, not built-in. Before running `bun run content:python-101:import`, a Piston instance must be reachable at `$PISTON_URL` (default `http://localhost:2000`). Standard local setup: `docker run -d --rm --name piston -p 2000:2000 ghcr.io/engineer-man/piston` plus one-time `curl -X POST http://localhost:2000/api/v2/packages -H 'Content-Type: application/json' -d '{"language":"python","version":"3.10.0"}'` to install Python. Documented in `content/python-101/README.md` (Phase 1) and again in the importer CLI's `--help`.
 4. Audit `scripts/seed_python_101.sql` and extract the 12 problems (titles, descriptions, starter, solution, test cases) into the legacy-extract doc.
 5. Audit `scripts/seed_problem_demo.sql` — does it overlap with Python 101 content? If yes, plan whether to keep, retire, or merge.
 
-**Verification:** Decisions written into this plan under "Decisions confirmed." Bridge HQ seed runs idempotently. Piston reachable.
+**Verification:** Decisions written into this plan under "Decisions confirmed." Bridge HQ seed runs idempotently. Piston runtime path decided (Go CLI shellout). Legacy extract committed.
 
 ### Phase 1: Authoring format + Zod validator + dependencies
 
