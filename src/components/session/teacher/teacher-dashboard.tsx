@@ -311,7 +311,7 @@ export function TeacherDashboard({
             ))}
             {courseTopics.length === 0 && (
               <p className="py-8 text-center text-muted-foreground">
-                No topics linked to this session yet.
+                No focus areas linked to this session yet.
               </p>
             )}
           </div>

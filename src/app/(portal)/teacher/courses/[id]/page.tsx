@@ -70,12 +70,12 @@ export default async function TeacherCourseDetailPage({
 
       <div className="grid gap-6 md:grid-cols-2">
         <div className="space-y-4">
-          <h2 className="text-lg font-semibold">Topics ({topicList.length})</h2>
+          <h2 className="text-lg font-semibold">Focus Areas ({topicList.length})</h2>
 
           <AddTopicForm courseId={id} />
 
           {topicList.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No topics yet. Add your first topic above.</p>
+            <p className="text-sm text-muted-foreground">No focus areas yet. Add your first focus area above.</p>
           ) : (
             <div className="space-y-2">
               {topicList.map((topic, i) => (
