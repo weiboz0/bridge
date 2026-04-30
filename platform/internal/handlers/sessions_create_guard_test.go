@@ -218,6 +218,124 @@ func TestCreateSession_NilStores_FailsLoud(t *testing.T) {
 		"missing Topics store must NOT silently skip the guard")
 }
 
+// Plan 048 phase 1: CreateSession atomically snapshots the course's
+// topics into session_topics. After create, the new session's agenda
+// matches the course's topics list (NOT empty as it was pre-048).
+func TestCreateSession_SnapshotsSessionTopics(t *testing.T) {
+	fx := newSessionFixture(t, "snapshot")
+	topicA, _ := fx.seedTopic(t, "Topic A", true)
+	topicB, _ := fx.seedTopic(t, "Topic B", true)
+
+	code, body := fx.postCreateSession(t,
+		fx.claims(fx.teacher, false),
+		map[string]any{"title": "Snapshot Session", "classId": fx.classID})
+	require.Equal(t, http.StatusCreated, code)
+
+	var session map[string]any
+	require.NoError(t, json.Unmarshal(body, &session))
+	sessionID := session["id"].(string)
+
+	// Both topics ended up in session_topics.
+	rows, err := fx.db.Query(
+		"SELECT topic_id FROM session_topics WHERE session_id = $1 ORDER BY topic_id",
+		sessionID,
+	)
+	require.NoError(t, err)
+	defer rows.Close()
+
+	var got []string
+	for rows.Next() {
+		var topicID string
+		require.NoError(t, rows.Scan(&topicID))
+		got = append(got, topicID)
+	}
+	expected := []string{topicA, topicB}
+	if expected[0] > expected[1] {
+		expected[0], expected[1] = expected[1], expected[0]
+	}
+	assert.Equal(t, expected, got, "all course topics should be snapshotted")
+}
+
+// Override path also snapshots — the teacher consciously chose to
+// start with a partial syllabus, so empty-agenda is not the answer.
+func TestCreateSession_OverrideAlsoSnapshots(t *testing.T) {
+	fx := newSessionFixture(t, "overridesnap")
+	fx.seedTopic(t, "Unlinked A", false)
+
+	code, body := fx.postCreateSession(t,
+		fx.claims(fx.teacher, false),
+		map[string]any{
+			"title":                 "Override Snapshot",
+			"classId":               fx.classID,
+			"confirmUnlinkedTopics": true,
+		})
+	require.Equal(t, http.StatusCreated, code)
+
+	var session map[string]any
+	require.NoError(t, json.Unmarshal(body, &session))
+	sessionID := session["id"].(string)
+
+	var count int
+	err := fx.db.QueryRow(
+		"SELECT count(*) FROM session_topics WHERE session_id = $1",
+		sessionID,
+	).Scan(&count)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count, "override path must still snapshot the agenda")
+}
+
+// Empty course → no snapshot rows.
+func TestCreateSession_EmptyCourse_NoSnapshot(t *testing.T) {
+	fx := newSessionFixture(t, "emptynosnap")
+	// no topics seeded
+
+	code, body := fx.postCreateSession(t,
+		fx.claims(fx.teacher, false),
+		map[string]any{"title": "Empty Course Snapshot", "classId": fx.classID})
+	require.Equal(t, http.StatusCreated, code)
+
+	var session map[string]any
+	require.NoError(t, json.Unmarshal(body, &session))
+	sessionID := session["id"].(string)
+
+	var count int
+	err := fx.db.QueryRow(
+		"SELECT count(*) FROM session_topics WHERE session_id = $1",
+		sessionID,
+	).Scan(&count)
+	require.NoError(t, err)
+	assert.Equal(t, 0, count)
+}
+
+// Ad-hoc session (no classId) → no snapshot.
+func TestCreateSession_NoClassID_NoSnapshot(t *testing.T) {
+	fx := newSessionFixture(t, "adhocnosnap")
+	// Seed a topic on the fixture's course — should NOT be snapshotted
+	// because the session has no classId.
+	fx.seedTopic(t, "Ignored Topic", true)
+
+	ctx := context.Background()
+	code, body := fx.postCreateSession(t,
+		fx.claims(fx.teacher, false),
+		map[string]any{"title": "Ad-hoc"})
+	require.Equal(t, http.StatusCreated, code)
+
+	var session map[string]any
+	require.NoError(t, json.Unmarshal(body, &session))
+	sessionID := session["id"].(string)
+	t.Cleanup(func() {
+		fx.db.ExecContext(ctx, "DELETE FROM sessions WHERE id = $1", sessionID)
+	})
+
+	var count int
+	err := fx.db.QueryRowContext(ctx,
+		"SELECT count(*) FROM session_topics WHERE session_id = $1",
+		sessionID,
+	).Scan(&count)
+	require.NoError(t, err)
+	assert.Equal(t, 0, count)
+}
+
 // Only the unlinked titles surface in the response — never linked ones.
 func TestCreateSession_OnlyUnlinkedTitlesInResponse(t *testing.T) {
 	fx := newSessionFixture(t, "guardonlyunlink")

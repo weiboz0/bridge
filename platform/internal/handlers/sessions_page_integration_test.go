@@ -119,7 +119,7 @@ func newSessionPageFixture(t *testing.T, suffix string) *sessionPageFixture {
 	t.Cleanup(func() { db.ExecContext(ctx, "DELETE FROM courses WHERE id = $1", course.ID) })
 	fx.courseID = course.ID
 
-	_, err = topics.CreateTopic(ctx, store.CreateTopicInput{
+	loopsTopic, err := topics.CreateTopic(ctx, store.CreateTopicInput{
 		CourseID: course.ID,
 		Title:    "Loops",
 	})
@@ -147,10 +147,14 @@ func newSessionPageFixture(t *testing.T, suffix string) *sessionPageFixture {
 	require.NoError(t, err)
 
 	classID := class.ID
+	// Plan 048 phase 1: snapshot the course's topic into session_topics
+	// so the teacher-page payload can read the agenda from the same
+	// place the student page does.
 	session, err := sessions.CreateSession(ctx, store.CreateSessionInput{
 		ClassID:   &classID,
 		TeacherID: fx.teacher.ID,
 		Title:     "Session " + suffix,
+		TopicIDs:  []string{loopsTopic.ID},
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -254,6 +258,53 @@ func TestGetTeacherPage_OrgAdmin(t *testing.T) {
 	require.Equal(t, http.StatusOK, code)
 	require.NotNil(t, payload)
 	assert.Equal(t, fx.sessionID, payload.Session.ID)
+}
+
+// Plan 048 phase 1: GetTeacherPage reads the agenda from session_topics
+// (the same source the student page uses), not from class.course.topics.
+// This test inserts an extra course topic that is NOT in session_topics
+// and asserts the teacher payload does NOT include it. It also unlinks
+// the existing session_topics row and asserts the payload becomes empty
+// — proving the read truly comes from session_topics, not from
+// class.course.topics.
+func TestGetTeacherPage_ReadsFromSessionTopics(t *testing.T) {
+	fx := newSessionPageFixture(t, "tp-snap")
+	ctx := context.Background()
+
+	// The fixture created one topic + one session_topics row. Add a
+	// SECOND course topic but DON'T put it in session_topics — pre-048
+	// this would have shown up in the payload. Post-048 it must NOT.
+	var notSnapshottedID string
+	err := fx.db.QueryRowContext(ctx,
+		`INSERT INTO topics (id, course_id, title, sort_order, created_at, updated_at)
+		 VALUES (gen_random_uuid(), $1, 'Not Snapshotted', 1, now(), now())
+		 RETURNING id`,
+		fx.courseID,
+	).Scan(&notSnapshottedID)
+	require.NoError(t, err)
+
+	code, payload := fx.callTeacherPage(t,
+		&auth.Claims{UserID: fx.teacher.ID, Email: fx.teacher.Email, Name: fx.teacher.Name})
+	require.Equal(t, http.StatusOK, code)
+	require.NotNil(t, payload)
+	assert.Len(t, payload.CourseTopics, 1, "agenda must come from session_topics, not class.course.topics")
+	for _, topic := range payload.CourseTopics {
+		assert.NotEqual(t, notSnapshottedID, topic.TopicID,
+			"topic that's only on the course (not on the session) must not appear")
+	}
+
+	// Unlink the only session_topics row. Payload should now be empty.
+	_, err = fx.db.ExecContext(ctx,
+		"DELETE FROM session_topics WHERE session_id = $1",
+		fx.sessionID,
+	)
+	require.NoError(t, err)
+
+	code, payload = fx.callTeacherPage(t,
+		&auth.Claims{UserID: fx.teacher.ID, Email: fx.teacher.Email, Name: fx.teacher.Name})
+	require.Equal(t, http.StatusOK, code)
+	require.NotNil(t, payload)
+	assert.Empty(t, payload.CourseTopics, "session with no session_topics must return empty agenda")
 }
 
 func TestGetTeacherPage_MissingSession_404(t *testing.T) {
