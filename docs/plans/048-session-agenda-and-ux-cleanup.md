@@ -66,7 +66,7 @@ Review 007 was the first browser-driven review since plan 047 unblocked `/login`
   - `TestCreateSession_OverrideAlsoSnapshots` — all-unlinked + `confirmUnlinkedTopics: true` → 201 AND `session_topics` populated.
   - `TestCreateSession_EmptyCourse_NoSnapshot` — empty course → 201, zero `session_topics` rows.
   - `TestCreateSession_NoClassID_NoSnapshot` — ad-hoc session → 201, zero `session_topics` rows.
-  - `TestCreateSession_TopicSnapshot_TransactionRollback` — simulate a snapshot failure and assert no session row is created (proves atomicity). Practical implementation: pre-insert a `session_topics` row with a topic_id that doesn't exist in `topics` to violate the FK, OR seed a topic_id that violates a different constraint. If both prove fragile, document the atomicity invariant and lean on the bulk-insert single-statement nature (PG INSERT is atomic per-statement).
+  - **Atomicity test (Codex CONCERN — restructured as a store-level test).** The handler-level "make the snapshot fail" approach is fragile (any pre-insert that breaks the FK fires before `CreateSession` runs at all, so the test would pass for the wrong reason). Instead: `platform/internal/store/sessions_test.go::TestCreateSession_AtomicTopicSnapshot` calls the store's `CreateSession` directly with `TopicIDs: ["00000000-0000-0000-0000-000000000000"]` (a topic ID that doesn't exist in `topics`). The bulk insert hits the `session_topics_topic_id_fkey` FK constraint and errors. The test asserts (a) `CreateSession` returns an error, (b) no session row exists with the input title (rollback worked), (c) no `session_topics` row was inserted. Targets the store directly so we exercise the tx boundary, not the handler chain.
 - `platform/internal/handlers/sessions_page_integration_test.go` (or new file) — `TestGetTeacherPage_ReadsFromSessionTopics`:
   - Course has Topic A + Topic B. Both linked Units. Create session — both auto-snapshotted.
   - GetTeacherPage returns A and B with their Unit refs.
@@ -102,11 +102,12 @@ Review 007 was the first browser-driven review since plan 047 unblocked `/login`
 
 The phase ships ONE of: head-inline, static-file fallback, or revert + TODO. The browser-verification step picks which.
 
-**Test:** none — runtime browser observation.
+**Test:** existing `e2e/theme-bootstrap.spec.ts:18-40` already captures dev-console messages on portal routes (Codex CONCERN D — use the existing spec, don't ad-hoc verify). Run it as the primary gate; it asserts the "Encountered a script tag" warning is absent. Browser-eyeball is the secondary gate.
 
 **Verification (mandatory, gates the phase):**
 
-- Browser: load multiple portal routes (`/login`, `/teacher`, `/student`, `/teacher/sessions/{id}` if accessible). For each, open dev console. The "Encountered a script tag" warning must be ABSENT. Theme dark mode toggle still works without FOUC.
+- `bun run test:e2e -- e2e/theme-bootstrap.spec.ts` passes against the running stack.
+- Manual browser eyeball: load `/login`, `/teacher`, `/student`. For each, open dev console. Warning must be ABSENT. Theme dark-mode toggle still works without FOUC.
 
 ### Phase 3: Session agenda — frontend verification (no code changes expected)
 
@@ -199,11 +200,10 @@ expect(source).toMatch(/<Link[^>]*href=\{?\s*[`"]\/teacher\/sessions/);
   - `topicId`: from the document's existing `topic_id` column.
   - `classId`: resolved via `LEFT JOIN sessions s ON s.id = documents.session_id` returning `s.class_id`. **NOT** via the dropped `documents.classroom_id` column (column was removed in migration `0012_drop_legacy_classrooms.sql:47-49`). Single JOIN, no N+1.
 - Modify: `src/app/(portal)/student/code/page.tsx`:
-  - Read the new fields. Compute a target href:
-    - **If session is live** (`sessionId` set, session.status === "live"): link to `/student/sessions/{sessionId}`.
-    - **If session is ended OR sessionId set but status unknown** (Codex IMPORTANT #2 — `/student/sessions/{id}` returns 404 for ended sessions per `platform/internal/handlers/sessions.go:1365-1386`, same placeholder problem Phase 6 is fixing on the teacher side): link to `/student/classes/{classId}` instead.
-    - **If only classId** (no session): link to `/student/classes/{classId}`.
-    - **If no metadata**: render the card non-clickable.
+  - Read the new fields. Compute a target href via this branch ladder (Codex CONCERN E — explicit double-null guard):
+    1. If `classId` is null/empty: render non-clickable. This catches the "dangling `session_id`" case (where the session row was hard-deleted; `documents.session_id` has no FK constraint per `drizzle/0005_code-persistence.sql:4-19`, so `LEFT JOIN sessions` returns null status AND null class_id) AND the legacy "no session, no class" case. Same fallback either way: don't construct an empty `/student/classes/` URL.
+    2. Else if `sessionId` is null OR `sessionStatus !== "live"`: link to `/student/classes/{classId}`. Covers ended sessions (Codex IMPORTANT #2 — `/student/sessions/{id}` 404s per `platform/internal/handlers/sessions.go:1365-1386`) and class-only documents.
+    3. Else (`sessionId` set AND `sessionStatus === "live"`): link to `/student/sessions/{sessionId}`.
   - To distinguish live vs ended without re-fetching every session, ListDocuments returns the session status alongside session_id (added column to the JSON: `sessionStatus`). Single query already; just project one more field.
   - Show small context line ("Class: {className} · {sessionTitle}") under the language badge if metadata is rich enough.
 - Verify: nav config — the page heading ("My Code") should match the nav label ("My Work") if the nav uses "My Work". Either rename the heading or leave alone if they already match.
@@ -217,7 +217,8 @@ expect(source).toMatch(/<Link[^>]*href=\{?\s*[`"]\/teacher\/sessions/);
   - sessionId + status="live" → href `/student/sessions/{sessionId}`
   - sessionId + status="ended" → href `/student/classes/{classId}` (not the broken sessions route)
   - classId only → href `/student/classes/{classId}`
-  - no metadata → card not wrapped in `<Link>`
+  - **dangling sessionId + null classId** (Codex CONCERN E — session row hard-deleted, `LEFT JOIN sessions` returns null on both `status` and `class_id`) → card NOT wrapped in `<Link>`
+  - no metadata at all → card NOT wrapped in `<Link>`
 
 ## Implementation Order (revised per Codex MINOR #2)
 
@@ -258,8 +259,15 @@ Each phase commits separately. The first commit on `feat/048-session-agenda-and-
 1. `[CRITICAL]` **Phase 1 atomicity gap.** Original draft called a new `BulkLinkSessionTopics` post-`CreateSession`, but `CreateSession`'s transaction is already committed by then — separate connection, separate atomicity context, possible session-without-agenda partial state. → Snapshot now happens INSIDE `CreateSession`'s existing tx via `TopicIDs []string` on `CreateSessionInput`. Single transaction, single commit, atomic. New test `TestCreateSession_TopicSnapshot_TransactionRollback` exercises the failure path.
 2. `[IMPORTANT]` **Phase 7 dropped `classroom_id` fallback.** Column was removed in `drizzle/0012_drop_legacy_classrooms.sql`. → ClassID now resolves via `LEFT JOIN sessions s ON s.id = documents.session_id` returning `s.class_id`. Single JOIN, no N+1.
 3. `[IMPORTANT]` **Phase 7 ended-session link target was broken.** `/student/sessions/{id}` returns 404 for ended sessions (`platform/internal/handlers/sessions.go:1365-1386`). → My Work now links ended sessions to `/student/classes/{classId}` instead. Phase 6's "stop linking ended sessions to placeholder" applies symmetrically on the student side.
-4. `[IMPORTANT]` **Phase 5 missed surfaces.** Original plan list of 6 files missed three: student class detail "No material yet for this topic", parent live-session viewer (same), unit-picker-dialog tooltip "Linked to another topic". → Added all three to Phase 5 file list.
+4. `[IMPORTANT]` **Phase 5 missed surfaces.** Original plan list of 6 files missed two surfaces (parent live-session viewer + unit-picker tooltip) and one additional copy string in student class detail. → Added all to Phase 5 file list (8 files total).
 5. `[IMPORTANT]` **Phase 5 source-text regex too broad.** Blanket `not.toMatch(/Topic/)` would false-positive on identifiers, routes, type names. → Tests now match SPECIFIC rendered JSX strings (e.g., `<h2[^>]*>Topics<\/h2>`, `No material yet for this topic`), never code identifiers.
 6. `[IMPORTANT]` **Phase 2 head-inline pattern unproven.** The current `next/script` with `beforeInteractive` IS the official pattern; the warning persisting suggests a Next 16 dev oddity. → Phase 2 is now explicitly an experiment with a fallback ladder: head-inline → `<Script src=>` from a static file → TODO + revert if both still warn. Browser verification gates the phase.
 7. `[MINOR]` **Phase 6 reference component name missing.** → Plan now references `SessionRow` in `src/app/(portal)/teacher/sessions/page.tsx:17-72` as the model.
 8. `[MINOR]` **Phase 6 ordering.** Theme bootstrap was Phase 6 originally — but the dev-overlay warning masks real QA issues during browser smokes for the other phases. → Promoted to Phase 2 so subsequent browser smokes have a clean console.
+
+### Second-pass corrections (Codex re-review)
+
+- `[IMPORTANT]` **Phase 1 atomicity test was unreliable.** The original "pre-insert + observe failure" approach would fire BEFORE `CreateSession` ran, passing for the wrong reason. → Restructured as a store-level test: pass `TopicIDs: [<bogus-uuid>]`, the bulk insert hits the FK constraint, the test asserts both rollback signatures (no session row + no session_topics row).
+- `[IMPORTANT]` **Phase 7 dangling `session_id` double-null case.** `documents.session_id` has no FK constraint per `drizzle/0005_code-persistence.sql:4-19`, so a hard-deleted session row leaves a dangling reference; `LEFT JOIN sessions` returns null status AND null class_id. The original plan would construct an empty `/student/classes/` URL. → Branch ladder rewritten with `classId is null/empty` as the FIRST check, falling through to non-clickable. New test case `dangling sessionId + null classId → card NOT wrapped in <Link>`.
+- `[NIT]` Phase 5 file count was claimed 9, was actually 8. Corrected.
+- `[CONCERN D]` Phase 2 verification now references existing Playwright spec `e2e/theme-bootstrap.spec.ts:18-40` instead of ad-hoc manual browser observation; spec is the primary gate, eyeball is secondary.
