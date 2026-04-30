@@ -1218,3 +1218,45 @@ func TestSessionStore_RotateInviteToken_NonExistent(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Nil(t, result, "rotating token on non-existent session should return nil")
 }
+
+// Plan 048 phase 1: when CreateSession is called with TopicIDs that
+// don't exist in `topics`, the bulk insert into session_topics hits
+// the FK constraint and the WHOLE transaction rolls back — no session
+// row, no session_topics row. This test guards the atomicity contract
+// at the store boundary (a handler-level failure-injection test would
+// be unreliable since pre-inserts fire before CreateSession even
+// runs).
+func TestSessionStore_CreateSession_AtomicTopicSnapshot(t *testing.T) {
+	db := testDB(t)
+	sessions := NewSessionStore(db)
+	classID, teacherID := setupSessionTest(t, db, t.Name())
+	ctx := context.Background()
+
+	const bogusTopicID = "00000000-0000-0000-0000-000000000000"
+	const sentinelTitle = "Atomic Rollback Sentinel Title"
+
+	session, err := sessions.CreateSession(ctx, CreateSessionInput{
+		ClassID:   strPtr(classID),
+		TeacherID: teacherID,
+		Title:     sentinelTitle,
+		TopicIDs:  []string{bogusTopicID},
+	})
+	assert.Error(t, err, "bogus topic_id must violate the session_topics FK and fail CreateSession")
+	assert.Nil(t, session)
+
+	// Rollback signature 1: no session row with the sentinel title.
+	var sessionCount int
+	err = db.QueryRow(
+		"SELECT count(*) FROM sessions WHERE title = $1", sentinelTitle,
+	).Scan(&sessionCount)
+	require.NoError(t, err)
+	assert.Equal(t, 0, sessionCount, "session row must NOT exist after FK rollback")
+
+	// Rollback signature 2: no session_topics row referencing the bogus topic.
+	var stCount int
+	err = db.QueryRow(
+		"SELECT count(*) FROM session_topics WHERE topic_id = $1", bogusTopicID,
+	).Scan(&stCount)
+	require.NoError(t, err)
+	assert.Equal(t, 0, stCount, "session_topics row must NOT exist after FK rollback")
+}

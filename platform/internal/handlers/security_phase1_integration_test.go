@@ -275,6 +275,13 @@ func TestGetSessionTopics_LinkedUnit_AppearsInResponse(t *testing.T) {
 	fx := newSessionPageFixture(t, "gst-unit")
 	ctx := context.Background()
 
+	// Plan 048 phase 1: the fixture now pre-snapshots its own topic
+	// into session_topics. Clear it so this test fully controls the
+	// agenda for the assertion below.
+	_, err := fx.db.ExecContext(ctx,
+		"DELETE FROM session_topics WHERE session_id = $1", fx.sessionID)
+	require.NoError(t, err)
+
 	// Create a topic in fx's course (already wired by the fixture).
 	courses := store.NewCourseStore(fx.db)
 	course, err := courses.GetCourse(ctx, fx.courseID)
@@ -336,6 +343,12 @@ func TestGetSessionTopics_LinkedUnit_AppearsInResponse(t *testing.T) {
 func TestGetSessionTopics_CrossOrgUnit_NotSurfaced(t *testing.T) {
 	fx := newSessionPageFixture(t, "gst-cross")
 	ctx := context.Background()
+
+	// Plan 048 phase 1: clear the fixture's auto-snapshot so this test
+	// fully controls the session_topics state.
+	_, err := fx.db.ExecContext(ctx,
+		"DELETE FROM session_topics WHERE session_id = $1", fx.sessionID)
+	require.NoError(t, err)
 
 	topics := store.NewTopicStore(fx.db)
 	topic, err := topics.CreateTopic(ctx, store.CreateTopicInput{

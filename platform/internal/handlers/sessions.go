@@ -99,6 +99,11 @@ func (h *SessionHandler) CreateSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// topicIDs is the agenda snapshot we'll plumb into Sessions.CreateSession.
+	// Empty for ad-hoc sessions; populated for class-bound sessions from the
+	// course's topics. Plan 048 phase 1.
+	var topicIDs []string
+
 	if body.ClassID == nil {
 		if !claims.IsPlatformAdmin {
 			ok, err := h.isTeacherOrOrgAdmin(r, claims.UserID)
@@ -136,6 +141,23 @@ func (h *SessionHandler) CreateSession(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+
+		// Plan 048 phase 1: fetch topic IDs for the agenda snapshot.
+		// Runs in both the guard-passed and override paths (the guard
+		// MAY have already fetched these but doesn't return them — the
+		// extra round-trip is on an indexed column at sub-millisecond
+		// scale; plumbing the helper would couple two concerns).
+		if class != nil && h.Topics != nil {
+			topics, err := h.Topics.ListTopicsByCourse(r.Context(), class.CourseID)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "Database error")
+				return
+			}
+			topicIDs = make([]string, len(topics))
+			for i, t := range topics {
+				topicIDs[i] = t.ID
+			}
+		}
 	}
 
 	session, err := h.Sessions.CreateSession(r.Context(), store.CreateSessionInput{
@@ -143,6 +165,7 @@ func (h *SessionHandler) CreateSession(w http.ResponseWriter, r *http.Request) {
 		TeacherID: claims.UserID,
 		Title:     body.Title,
 		Settings:  body.Settings,
+		TopicIDs:  topicIDs,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Failed to create session")
@@ -1293,53 +1316,36 @@ func (h *SessionHandler) GetTeacherPage(w http.ResponseWriter, r *http.Request) 
 				payload.EditorMode = settings.EditorMode
 			}
 
-			class, err := h.Classes.GetClass(r.Context(), *session.ClassID)
+			// Plan 048 phase 1: read the agenda from session_topics
+			// (the same source the student page uses), not from the
+			// class's course topics. Pre-048 these diverged whenever a
+			// new session didn't auto-snapshot the course's topics —
+			// teacher would see all course topics with unitId: null,
+			// student would see nothing. CreateSession now atomically
+			// snapshots into session_topics; this read returns whatever
+			// the agenda currently is (post-snapshot, post-mid-session
+			// add/remove).
+			//
+			// The Sessions.GetSessionTopics helper already includes the
+			// linked teaching_unit fields with the cross-org leak guard
+			// (scope='platform' OR scope_id = course.org_id) — added
+			// in plan 044 phase 1.
+			sessionTopics, err := h.Sessions.GetSessionTopics(r.Context(), sessionID)
 			if err != nil {
 				writeError(w, http.StatusInternalServerError, "Database error")
 				return
 			}
-			if class != nil && h.Topics != nil {
-				topics, err := h.Topics.ListTopicsByCourse(r.Context(), class.CourseID)
-				if err != nil {
-					writeError(w, http.StatusInternalServerError, "Database error")
-					return
-				}
-
-				// Plan 044 phase 2: bulk-fetch the linked teaching_unit per
-				// topic. The cross-org leak guard is in
-				// ListUnitsByTopicIDs itself (scope='platform' OR
-				// scope_id = course.org_id).
-				var unitsByTopic map[string]*store.TeachingUnit
-				if h.TeachingUnits != nil && len(topics) > 0 {
-					ids := make([]string, len(topics))
-					for i, t := range topics {
-						ids[i] = t.ID
-					}
-					unitsByTopic, err = h.TeachingUnits.ListUnitsByTopicIDs(r.Context(), ids)
-					if err != nil {
-						writeError(w, http.StatusInternalServerError, "Database error")
-						return
-					}
-				}
-
-				refs := make([]teacherPageTopicRef, 0, len(topics))
-				for _, t := range topics {
-					ref := teacherPageTopicRef{
-						TopicID: t.ID,
-						Title:   t.Title,
-					}
-					if u, ok := unitsByTopic[t.ID]; ok && u != nil {
-						uid := u.ID
-						title := u.Title
-						mt := u.MaterialType
-						ref.UnitID = &uid
-						ref.UnitTitle = &title
-						ref.UnitMaterialType = &mt
-					}
-					refs = append(refs, ref)
-				}
-				payload.CourseTopics = refs
+			refs := make([]teacherPageTopicRef, 0, len(sessionTopics))
+			for _, t := range sessionTopics {
+				refs = append(refs, teacherPageTopicRef{
+					TopicID:          t.TopicID,
+					Title:            t.Title,
+					UnitID:           t.UnitID,
+					UnitTitle:        t.UnitTitle,
+					UnitMaterialType: t.UnitMaterialType,
+				})
 			}
+			payload.CourseTopics = refs
 		}
 	}
 

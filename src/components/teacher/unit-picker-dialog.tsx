@@ -282,7 +282,7 @@ export function UnitPickerDialog({
                           title={
                             item.linkedTopicTitle
                               ? `Linked to: ${item.linkedTopicTitle}`
-                              : "Linked to another topic"
+                              : "Linked to another focus area"
                           }
                         >
                           Already linked

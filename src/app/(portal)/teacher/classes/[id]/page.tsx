@@ -139,25 +139,50 @@ export default async function TeacherClassDetailPage({
         <div>
           <h2 className="text-lg font-semibold mb-3">Past Sessions ({pastSessions.length})</h2>
           <div className="space-y-2">
-            {pastSessions.map((s) => (
-              <Link
-                key={s.id}
-                href={`/teacher/classes/${id}/session/${s.id}/dashboard`}
-                className="block"
-              >
-                <div className="flex items-center justify-between py-3 px-4 border rounded-lg hover:bg-muted/50 transition-colors">
-                  <div>
-                    <p className="text-sm font-medium">
-                      {new Date(s.startedAt).toLocaleDateString()} at {new Date(s.startedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      {formatDuration(s.startedAt, s.endedAt)} · {s.participantCount} students
-                    </p>
-                  </div>
-                  <span className="text-xs text-muted-foreground">View →</span>
+            {/*
+              Plan 048 phase 6: ended sessions render as non-clickable rows.
+              Pre-048 they linked to a "Session ended" placeholder dashboard
+              that has no review content. Until a read-only review surface
+              ships, no link is better than a link to nothing useful.
+            */}
+            {pastSessions.map((s) => {
+              const isLive = s.status === "live";
+              const meta = (
+                <div>
+                  <p className="text-sm font-medium">
+                    {new Date(s.startedAt).toLocaleDateString()} at {new Date(s.startedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {formatDuration(s.startedAt, s.endedAt)} · {s.participantCount} students
+                  </p>
                 </div>
-              </Link>
-            ))}
+              );
+              if (isLive) {
+                return (
+                  <Link
+                    key={s.id}
+                    href={`/teacher/classes/${id}/session/${s.id}/dashboard`}
+                    className="block"
+                  >
+                    <div className="flex items-center justify-between py-3 px-4 border rounded-lg hover:bg-muted/50 transition-colors">
+                      {meta}
+                      <span className="text-xs text-muted-foreground">View →</span>
+                    </div>
+                  </Link>
+                );
+              }
+              return (
+                <div
+                  key={s.id}
+                  className="flex items-center justify-between py-3 px-4 border rounded-lg"
+                >
+                  {meta}
+                  <span className="rounded-full bg-zinc-100 px-2.5 py-1 text-xs font-medium text-zinc-600">
+                    Ended
+                  </span>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}

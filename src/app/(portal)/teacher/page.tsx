@@ -141,27 +141,50 @@ export default async function TeacherDashboard() {
                 const isLive = session.status === "live";
                 const sessionLabel = session.classId ? "Class session" : "Independent session";
 
-                return (
-                  <Link key={session.id} href={`/teacher/sessions/${session.id}`} className="block">
-                    <div className="flex items-center justify-between rounded-lg border border-zinc-200 bg-white px-4 py-3 transition-colors hover:bg-zinc-50">
-                      <div className="space-y-1">
-                        <p className="font-medium text-zinc-900">{session.title}</p>
-                        <p className="text-sm text-zinc-500">
-                          {sessionLabel} · Started {formatTimestamp(session.startedAt)}
-                          {session.endedAt ? ` · Ended ${formatTimestamp(session.endedAt)}` : ""}
-                        </p>
+                // Plan 048 phase 6: ended sessions render as a non-clickable row
+                // (matches SessionRow in /teacher/sessions/page.tsx). The
+                // dedicated /teacher/sessions/{id} dashboard isn't built for
+                // ended-state read-only viewing yet; linking to a "Session
+                // ended" placeholder is worse UX than no link at all.
+                const meta = (
+                  <div className="space-y-1">
+                    <p className="font-medium text-zinc-900">{session.title}</p>
+                    <p className="text-sm text-zinc-500">
+                      {sessionLabel} · Started {formatTimestamp(session.startedAt)}
+                      {session.endedAt ? ` · Ended ${formatTimestamp(session.endedAt)}` : ""}
+                    </p>
+                  </div>
+                );
+                const badge = (
+                  <span
+                    className={
+                      isLive
+                        ? "rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700"
+                        : "rounded-full bg-zinc-100 px-2.5 py-1 text-xs font-medium text-zinc-600"
+                    }
+                  >
+                    {isLive ? "Live" : "Ended"}
+                  </span>
+                );
+
+                if (isLive) {
+                  return (
+                    <Link key={session.id} href={`/teacher/sessions/${session.id}`} className="block">
+                      <div className="flex items-center justify-between rounded-lg border border-zinc-200 bg-white px-4 py-3 transition-colors hover:bg-zinc-50">
+                        {meta}
+                        {badge}
                       </div>
-                      <span
-                        className={
-                          isLive
-                            ? "rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700"
-                            : "rounded-full bg-zinc-100 px-2.5 py-1 text-xs font-medium text-zinc-600"
-                        }
-                      >
-                        {isLive ? "Live" : "Ended"}
-                      </span>
-                    </div>
-                  </Link>
+                    </Link>
+                  );
+                }
+                return (
+                  <div
+                    key={session.id}
+                    className="flex items-center justify-between rounded-lg border border-zinc-200 bg-white px-4 py-3"
+                  >
+                    {meta}
+                    {badge}
+                  </div>
                 );
               })}
             </div>

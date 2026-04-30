@@ -113,7 +113,7 @@ export function StudentSession({
             </Link>
           ) : (
             <p className="text-sm text-muted-foreground italic">
-              No material yet for this topic.
+              No material yet for this focus area.
             </p>
           )}
         </div>

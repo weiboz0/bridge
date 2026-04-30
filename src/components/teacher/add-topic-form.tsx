@@ -41,9 +41,9 @@ export function AddTopicForm({ courseId }: Props) {
   return (
     <div>
       <form onSubmit={handleSubmit} className="flex gap-2">
-        <Input name="title" placeholder="New topic title" required className="flex-1" />
+        <Input name="title" placeholder="New focus area title" required className="flex-1" />
         <Button type="submit" size="sm" disabled={submitting}>
-          {submitting ? "Adding…" : "Add Topic"}
+          {submitting ? "Adding…" : "Add Focus Area"}
         </Button>
       </form>
       {error && <p className="mt-1 text-sm text-destructive">{error}</p>}

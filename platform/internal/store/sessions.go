@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 )
 
 // Sentinel errors for token-based session join and direct-add.
@@ -81,6 +82,12 @@ type CreateSessionInput struct {
 	TeacherID string  `json:"teacherId"`
 	Title     string  `json:"title"`
 	Settings  string  `json:"settings"`
+	// Plan 048 phase 1: TopicIDs is the agenda snapshot for the new
+	// session. Empty/nil = no snapshot (ad-hoc session, or class-bound
+	// session with no course topics). Non-empty = bulk-insert into
+	// session_topics inside the same transaction as the session row,
+	// so a snapshot failure rolls back the whole CreateSession.
+	TopicIDs []string `json:"topicIds,omitempty"`
 }
 
 type ListSessionsFilter struct {
@@ -167,6 +174,24 @@ func (s *SessionStore) CreateSession(ctx context.Context, input CreateSessionInp
 		&session.InviteToken, &session.InviteExpiresAt, &session.StartedAt, &session.EndedAt)
 	if err != nil {
 		return nil, err
+	}
+
+	// Plan 048 phase 1: snapshot the class's focus areas into
+	// session_topics inside the same transaction as the session row.
+	// If the bulk insert fails (e.g., FK violation from a stale topic
+	// id), the whole CreateSession rolls back — no orphan session
+	// without an agenda. ON CONFLICT DO NOTHING guards the rare case
+	// where the same topic id appears twice in input.TopicIDs.
+	if len(input.TopicIDs) > 0 {
+		_, err = tx.ExecContext(ctx,
+			`INSERT INTO session_topics (session_id, topic_id)
+			 SELECT $1, unnest($2::uuid[])
+			 ON CONFLICT DO NOTHING`,
+			session.ID, pq.Array(input.TopicIDs),
+		)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	if err := tx.Commit(); err != nil {

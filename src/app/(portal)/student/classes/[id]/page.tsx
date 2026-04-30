@@ -121,11 +121,11 @@ export default async function StudentClassDetailPage({
       )}
 
       <div className="space-y-4">
-        <h2 className="text-lg font-semibold">Topics</h2>
+        <h2 className="text-lg font-semibold">Focus Areas</h2>
         {topics.length === 0 && (
           <Card>
             <CardContent className="py-6 text-center text-muted-foreground">
-              <p>No topics yet.</p>
+              <p>No focus areas yet.</p>
             </CardContent>
           </Card>
         )}
@@ -154,7 +154,7 @@ export default async function StudentClassDetailPage({
                     </Link>
                   ) : (
                     <p className="text-sm text-muted-foreground italic">
-                      No material yet for this topic.
+                      No material yet for this focus area.
                     </p>
                   )}
                 </CardContent>
