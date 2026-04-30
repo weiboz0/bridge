@@ -66,6 +66,10 @@ These steer everything downstream. User confirms each before authoring content.
 7. **Demo data integration.** Default: **the existing demo class** (`eve@demo.edu`'s class) gets re-pointed to clone the new Python 101 course (one CloneCourse call in the demo seed) so the demo experience walks through real curriculum. Bridge HQ's original Python 101 stays untouched as the canonical reference.
 8. **Bridge HQ org + system user identity.** Recommend creating a new org `Bridge HQ` (slug `bridge-hq`) and a system user `system@bridge.platform` with `is_platform_admin = true`. Both seeded in Phase 0 as a one-time bootstrap. Their UUIDs become well-known constants the importer references.
 
+   **System user credential policy (Codex CRITICAL):** the `system@bridge.platform` user is a service account, NOT a login account. The Phase 0 seed inserts it with `password_hash = NULL`. The auth flow at `src/lib/auth.ts` already rejects credentials login when `password_hash` is NULL (verify in Phase 0). No password is ever committed to the repo. The user's UUID is referenced for FK fields only (`created_by`, `attached_by`) — no one ever logs in as it. If a future need arises (e.g., the system user wants to do an admin action via the UI), that's a separate plan with rotated credentials in `.env`.
+
+   **Bridge HQ bootstrap idempotence (Codex IMPORTANT):** the Phase 0 seed uses `INSERT ... ON CONFLICT (id) DO NOTHING` for BOTH the org row AND the user row, keyed on hard-coded UUIDs. So a delete-recreate cycle (developer manually deletes the org row) is recovered by re-running the seed. Documented in `scripts/seed_bridge_hq.sql` itself.
+
 ## Library structure (proposed)
 
 12 platform-scope teaching units; the Bridge HQ course's 12 topics each link to one of these in this order:
@@ -91,14 +95,23 @@ Each teaching_unit follows: **Big idea → Worked examples → Try it → Common
 
 Every required DB field, with the constant value the importer uses:
 
+**Stable IDs in YAML (Codex CRITICAL slug-rename fix):** Each unit / problem / topic YAML carries an explicit `id:` field with a uuidv4 generated ONCE at file creation time. Slug-derived uuidv5 is **NOT** used — slugs can change without orphaning rows. The importer rejects YAML missing `id:` and refuses to rewrite an existing UUID. A `--allow-rename` flag detects "id stayed the same, slug changed" and updates the row's `slug` column in-place. Renaming an `id:` is forbidden; that's a fresh entity.
+
 ```
 teaching_units:
-  id           = uuidv5("python-101:units:" + slug, NS)
+  id           = YAML id (uuidv4)
+  slug         = YAML slug
   scope        = 'platform'
   scope_id     = NULL
+  title        = YAML title (NOT NULL)
+  summary      = YAML description (NOT NULL — empty string fallback)
   status       = 'classroom_ready'
-  material_type = 'notes'
-  created_by   = SYSTEM_USER_ID    # set in Phase 0
+  material_type = 'notes'  (or YAML override)
+  grade_level  = YAML gradeLevel
+  subject_tags = YAML subjectTags []
+  standards_tags = YAML standardsTags []
+  estimated_minutes = YAML estimatedMinutes (nullable)
+  created_by   = SYSTEM_USER_ID
   topic_id     = NULL initially; set later by LinkUnitToTopic
 
 unit_documents:
@@ -106,13 +119,20 @@ unit_documents:
   blocks       = JSON serialization of YAML "blocks"
 
 problems:
-  id           = uuidv5("python-101:problems:" + slug, NS)
+  id           = YAML id (uuidv4)
+  slug         = YAML slug
   scope        = 'platform'
   scope_id     = NULL
+  title        = YAML title (NOT NULL)
+  description  = YAML description (NOT NULL)
+  starter_code = YAML starterCode (jsonb map per language)
   status       = 'published'
-  difficulty   = from YAML
-  grade_level  = from YAML (or course default)
-  tags         = from YAML
+  difficulty   = YAML difficulty
+  grade_level  = YAML gradeLevel
+  tags         = YAML tags []
+  forked_from  = NULL
+  time_limit_ms = YAML timeLimitMs (nullable)
+  memory_limit_mb = YAML memoryLimitMb (nullable)
   created_by   = SYSTEM_USER_ID
 
 problem_solutions:
@@ -132,16 +152,17 @@ test_cases (table lives in drizzle/0008_problems.sql, not schema.ts):
   order           = sort within problem
 
 courses:
-  id           = uuidv5("python-101:course", NS)
+  id           = YAML id (uuidv4) from course.yaml
   org_id       = BRIDGE_HQ_ORG_ID
   created_by   = SYSTEM_USER_ID
-  title        = "Python 101 — Introduction to Programming"
-  grade_level  = '6-8'
+  title        = YAML title
+  description  = YAML description
+  grade_level  = YAML gradeLevel
   language     = 'python'
   is_published = true
 
 topics:
-  id           = uuidv5("python-101:topics:" + unitSlug, NS)
+  id           = YAML id from course.yaml topics[]
   course_id    = courses.id
   title        = unit title
   description  = unit description
@@ -191,22 +212,34 @@ The platform's `test_cases` table only stores `expected_stdout` (string). The gr
 - Create: `scripts/python-101/validate.ts` — CLI walks the tree.
 - Create: `tests/unit/python-101-schema.test.ts`.
 - Modify: `package.json`:
-  - Add direct deps: `uuid` (Codex IMPORTANT #10) and pin a YAML parser — recommend `yaml` (Codex MINOR #12). Pin both versions.
+  - Add direct deps: `uuid` (Codex IMPORTANT #10) and `yaml` (Codex MINOR #12). Pin both versions exactly (no `^` / `~`).
   - Add scripts: `content:python-101:validate`, `content:python-101:import`.
+
+**YAML parse policy (Codex MINOR — promoted from corrections to actionable Phase 1 requirement):** `scripts/python-101/schema.ts` configures the YAML parser via `parseDocument(input, { merge: false, anchors: false, schema: 'core' })`. Anchors / aliases / merge keys are forbidden; multiline strings use `|`-block scalars only. The validator rejects YAML that uses unsupported features. Documented in `content/python-101/README.md`.
 
 ### Phase 2: Importer — transactional, with sandbox-verified solution check
 
 **Files:**
 - Create: `scripts/python-101/import.ts` — CLI that:
   1. Validates the YAML tree.
-  2. For every problem: runs the reference solution through Piston with each test case's stdin; asserts the actual stdout (normalized like the grader does — see `attempt_run_test_handler.go:222-260`) matches the expected stdout. **A solution that doesn't pass its own tests fails the import.**
-  3. Computes deterministic UUIDs from slugs (uuidv5).
-  4. Inserts in **two passes inside ONE transaction**:
+  2. For every problem: runs the reference solution through Piston with each test case's stdin; asserts the actual stdout (normalized like the grader does — see `attempt_run_test_handler.go:222-260`) matches the expected stdout. **A solution that doesn't pass its own tests fails the import.** Piston runs happen BEFORE the DB transaction opens (per Codex pass-2 risk D — keeps the transaction sub-second).
+  3. Reads YAML `id:` fields (uuidv4) for stable identity. Slug renames are detected: if a row with the YAML id exists but has a different slug than the YAML, the importer requires `--allow-rename` and updates the row's slug column in-place. Renaming an `id:` is forbidden (treated as a new entity, with the old row left alone).
+  4. Inserts in **three passes inside ONE transaction**:
      - Pass 1: library content (teaching_units with topic_id=NULL, problems, problem_solutions, test_cases). UPSERT pattern: `INSERT ... ON CONFLICT (id) DO UPDATE SET ...` for canonical content rows.
      - Pass 2: course arrangement (courses, topics, topic_problems M2M). UPSERT same.
-     - Pass 3: `LinkUnitToTopic` for each. `teaching_units` UPSERTs use `ON CONFLICT (topic_id) DO NOTHING` per the existing legacy pattern (Codex CRITICAL #4).
-  5. **Post-insert verification step**: query the database and assert every Python 101 topic has a linked unit (mirrors plan 047's session-start guard). Fail loud if any topic ended up with `topic_id IS NULL` somewhere upstream.
+     - Pass 3: `LinkUnitToTopic` for each. **Pre-check (Codex dispatch-2 IMPORTANT #2):** if `teaching_units.topic_id` already equals the requested topic_id, skip the call entirely (avoid bumping `updated_at` on idempotent re-runs). Otherwise call the existing `LinkUnitToTopic` (or run the equivalent UPDATE inside the tx). On the rare race or bad state, `ON CONFLICT (topic_id) DO NOTHING` keeps the partial-unique invariant safe.
+  5. **Post-insert verification step (concrete query — Codex dispatch-3 CONCERN E):** the importer queries via the same Drizzle client the rest of the codebase uses (`@/lib/db`):
+     ```ts
+     const orphans = await db
+       .select({ topicId: topics.id })
+       .from(topics)
+       .leftJoin(teachingUnits, eq(teachingUnits.topicId, topics.id))
+       .where(and(eq(topics.courseId, BRIDGE_HQ_PYTHON_101_ID), isNull(teachingUnits.id)));
+     if (orphans.length > 0) throw new Error(`Topics without linked units: ${orphans.map(o => o.topicId).join(",")}`);
+     ```
   6. **Whole import is one transaction.** Either the entire library + course goes in, or nothing does. No partial state. No "library ok, course missing" gap.
+
+**`--library-only` flag (Codex dispatch-2 IMPORTANT #10):** the importer accepts `--stop-after=library` (alias `--library-only`) which runs Pass 1 only. The DB ends up with library content (`teaching_units` with `topic_id=NULL`, problems, solutions, test_cases) but no Python 101 course. Used by Phase 3's picker discovery test to verify a different-org teacher sees the units as `classroom_ready` AND **unclaimed** (since pass 3's `LinkUnitToTopic` hasn't run). After the smoke, run the importer fully to claim them for Bridge HQ.
 - Create: `scripts/python-101/sandbox-runner.ts` — wraps Piston calls.
 - Create: `tests/integration/python-101-import.test.ts` — happy path + failure modes (bad solution, malformed YAML, dangling problem slug, dangling unit slug).
 
@@ -225,12 +258,15 @@ The platform's `test_cases` table only stores `expected_stdout` (string). The gr
 - Create: `content/python-101/course.yaml` (initially with just topic 1)
 
 **Actions:**
-1. Author the unit + 5-7 problems by hand. **Time the authoring effort** (Codex MINOR #13 — the 30-50h estimate from the previous draft was unjustified). The actual time on this canary unit becomes the multiplier for re-estimating Phases 4-5.
-2. Run the importer. All reference solutions pass against Piston.
-3. Browser smoke A — library visibility (PRE-second-pass): comment out the second-pass `LinkUnitToTopic` calls temporarily, re-run; log in as a teacher in another org and verify the units appear in the picker as `classroom_ready` and unlinked. Restore the calls.
-4. Browser smoke B — Python 101 itself: log in as the demo teacher, see the demo class wired to Python 101, navigate as a student, attempt a problem.
+1. Author the unit + 5-7 problems by hand. **Time the authoring effort** per task (per-problem authoring, per-unit prose, per-test-case writing, per-solution writing, per-validation roundtrip, per-review). Recorded explicitly in the throughput checkpoint output (Codex MINOR #13 + dispatch-2 IMPORTANT #11).
+2. Run `bun content:python-101:import --library-only` (the new flag from Phase 2). DB now has the library rows but no Python 101 course/topics.
+3. **Browser smoke A — library visibility:** log in as a teacher in another org. Open the picker on one of their topics. Verify the unit appears as `classroom_ready` AND unclaimed (Pick button enabled). Don't actually pick — that would steal it from Python 101's eventual claim.
+4. Run `bun content:python-101:import` (full, completes pass 2 + 3). Now Python 101 owns the units.
+5. Re-open the picker as the same other-org teacher. Verify the unit now shows "Already linked" with disabled Pick. This is the documented limitation of the 1:1 invariant.
+6. **Browser smoke B — Python 101 itself:** log in as the demo teacher, see the demo class wired to Python 101, navigate as a student, attempt a problem.
+7. **Throughput artifact:** write the time breakdown to `docs/plans/049-python-101-throughput.md` — per-task minutes for each of (problem description, starter code, reference solution, example test case, hidden test case, unit prose paragraph, validation cycle, sandbox run cycle, review/edit). This becomes the basis for re-estimating Phase 4.
 
-**Phase 3 is the integration AND throughput gate.** Re-estimate Phases 4-5 from the actual Phase 3 time. If too slow, defer Phases 4-5 to a separate plan.
+**Phase 3 is the integration AND throughput gate.** Re-estimate Phases 4-5 from the actual Phase 3 time. If the multiplier projects 4-5 to >120h, split into a separate plan.
 
 ### Phase 4: Author remaining 11 units + their problems
 
@@ -250,6 +286,7 @@ The platform's `test_cases` table only stores `expected_stdout` (string). The gr
 4. **Playwright e2e** suite runs cleanly. Now that plan 048 unblocked auth.setup and the dev-overlay warning is silent, this is feasible.
 5. Pedagogical review: each lesson's flow; "Try it" exercises the concept just taught; difficulty progression within each unit.
 6. Picker discovery test: a different-org teacher sees Python 101 units as `classroom_ready` (and "Already linked"). Document the reuse caveat in the README.
+7. **Terminology audit (Codex dispatch-2 IMPORTANT #12):** grep all unit prose and problem descriptions for user-visible "topic" / "Topic" / "topics" strings. Plan 048 renamed Topic → Focus Area in user-visible UI copy; the same applies to authored content. Replace any hits with "focus area" / "Focus Area" / "focus areas" unless the context is genuinely about a different concept (e.g., a user might still say "list comprehensions are an advanced topic" — that's idiomatic English about the subject, not a UI label, and stays). Capture decisions in the QA report.
 
 **Verification artifact:** `docs/plans/049-python-101-qa-report.md` with the test outputs + sign-off.
 
@@ -264,7 +301,9 @@ The platform's `test_cases` table only stores `expected_stdout` (string). The gr
   - `docs/plans/032-teaching-unit-topic-migration.md:79`
   - `docs/specs/009-problem-bank.md:267`
   - Mark each as historical reference; add a forward note that plan 049 is the current Python 101 source of truth.
-- Modify: the existing demo seed (`scripts/seed_problem_demo.sql` or wherever `eve@demo.edu`'s class lives — Phase 0 audit identified the actual file). Re-point the demo class's `course_id` to be a clone of the Bridge HQ Python 101 course. The clone happens at seed time via the `CloneCourse` flow (or a SQL equivalent that mirrors its semantics).
+- Modify: the demo seed file identified by Phase 0's audit (likely `scripts/seed_problem_demo.sql` based on the legacy seed inventory; confirmed in Phase 0). **Concrete demo wire-up approach (Codex dispatch-3 IMPORTANT):** the importer gets a `--seed-demo-class` flag that, after a successful Python 101 import, calls `Courses.CloneCourse(bridgeHQPython101Id, eveDemoUserId)` via the Go store, sets the demo class's `course_id` to the clone's id (UPDATE on `classes` keyed by the demo class's well-known UUID), and runs the post-insert verification. Demo seed SQL no longer hard-codes a Python 101 course id. **Verification step:** importer asserts post-clone that the demo class's `course_id` resolves to the cloned course AND that the cloned course's title contains "Python 101" — fail loud if either drifted.
+
+  Why this approach instead of "SQL-equivalent of CloneCourse": (a) the Go `CloneCourse` already handles the topic-copying (no unit links per plan 044) correctly; reimplementing in SQL risks drifting from the canonical clone semantics; (b) keeps the wire-up co-located with the importer so failures fail one command, not two.
 - Modify: `docs/setup.md` — reference the new authoring format and `bun content:python-101:import`.
 - Modify: `TODO.md` — remove any Python-101-related entries.
 
@@ -291,20 +330,25 @@ Strict order. Each phase commits separately.
 - **Piston endpoint accessibility from importer.** Phase 0 confirms or builds. If we need a new admin endpoint, that's a small Go addition gated to platform-admin auth.
 - **Pyodide ↔ Piston drift.** Documented in `docs/design-gaps-problem-workflow.md`. Authoring constraints in `content/python-101/README.md` will list known divergences (float printing, available stdlib).
 - **Library reuse semantics.** The 1:1 unit↔topic invariant from plan 044 — once Bridge HQ Python 101 claims a unit, no other course can pick it. Documented as a known limitation. Plan 050+ can add fork/overlay.
-- **Bridge HQ org bootstrap.** Phase 0 ships a one-time idempotent seed. If the seed already ran but the org was deleted, re-running the import would fail unless we add a "create org if missing" branch.
+- **Bridge HQ org bootstrap.** Phase 0 ships a one-time idempotent seed using `INSERT ... ON CONFLICT (id) DO NOTHING` on BOTH the org row AND the user row, so a delete-and-recreate cycle (developer manually deletes the org row) is fully recovered by re-running the seed.
 - **Importer transaction size.** Inserting 12 units + 60 problems + 60 solutions + ~250 test cases + 1 course + 12 topics + ~60 topic_problems in one transaction is fine for Postgres (sub-second). No batching needed.
 - **CloneCourse for the demo wire-up.** The demo seed will need to call CloneCourse equivalent SQL (it's pure SQL today). The new wire-up materializes Python 101's content into the demo class's namespace once. If the demo seed is re-run, it should detect the clone exists and skip.
 - **Effort estimate.** Original 30-50h was unjustified. Phase 3 is the throughput checkpoint — actual numbers there drive Phases 4-5 scope. The plan accepts that we may re-scope.
 
+## Plan-number conflict note (Codex dispatch-2 IMPORTANT #12)
+
+Plans 047 and 048's deferral notes said **"Plan 049 = /register-org + parent_links + ended-session review surface."** The user reprioritized 2026-04-30 and reassigned plan 049 to this curriculum work. The deferred infra-and-platform items shift down by one number — they're now plan 050. The previously-merged plan files (047, 048) are not amended; the renumbering lives only in this plan's "Out of scope" section below and applies forward.
+
 ## Out of scope (explicit deferrals)
 
-- **Plan 050 — `/register-org` form + parent_links + ended-session review surface.** The platform-feature deferrals from plans 047 and 048.
-- **Plan 051 — Unit fork/overlay mechanics for true multi-course unit reuse** (the foundation isn't built yet, per Codex IMPORTANT #5).
+- **Plan 050 — `/register-org` form + parent_links + ended-session review surface.** The platform-feature deferrals from plans 047 and 048 (renumbered from "049" per the note above).
+- **Plan 051 — Unit fork/overlay mechanics for true multi-course unit reuse.** The `unit_overlays` table exists (`drizzle/0018_unit_overlays.sql`) but the workflow + UI layer isn't built. Note: `forked_from` is on `problems`, not on `teaching_units` — problem-lineage uses that column; unit-lineage uses `unit_overlays` (Codex dispatch-2 MINOR #5 wording fix).
 - **Plan 052 — `expectedStdoutPattern` / regex test matching** (schema migration + grader change).
 - **Plan 053 — Authoring AI** that drafts problem statements, solutions, tests from one-line prompts.
 - **Plan 054 — Python 201** (intermediate Python).
 - **JavaScript / Blockly variants of Python 101.**
 - **AI tutor specifically tuned for Python 101.**
+- **Phase 5 content-copy audit for Topic/Focus-Area terminology** in unit prose / problem descriptions IS in scope — added to Phase 5's QA checklist below. Problems and unit prose authored in this plan must use "Focus Area" in user-visible copy per plan 048.
 
 ## Codex Review of This Plan
 
@@ -326,3 +370,22 @@ Strict order. Each phase commits separately.
 11. `[MINOR]` **Legacy seed doc references.** → Phase 6 lists each doc to update.
 12. `[MINOR]` **YAML parser unspecified.** → Phase 1 pins `yaml` package, parse policy disallows anchors/aliases.
 13. `[MINOR]` **Effort estimate unjustified.** → Phase 3 is now an explicit throughput checkpoint that re-estimates Phases 4-5.
+
+### Second-pass + third-pass corrections (Codex re-reviews)
+
+Two follow-up Codex reviews on the substantive rewrite (commit `e22feb6`) returned a combined 1 CRITICAL + 6 IMPORTANT + 2 MINOR. All folded in:
+
+- `[CRITICAL]` **System user credential policy.** A platform-admin account in a seed without explicit password handling is a security hole. → Phase 0 decision #8 now requires `password_hash = NULL` (login disabled at the auth-flow layer); UUID is referenced for FK fields only; no password is committed.
+- `[CRITICAL]` **Slug rename detection with deterministic UUIDs.** uuidv5(slug) means a slug change creates a fresh UUID and silently orphans the old row. → YAML now carries an explicit `id:` (uuidv4) field generated once at file-creation time. Slug is mutable; id isn't. `--allow-rename` becomes a real, implementable mechanism (detect "id matches but slug differs" → UPDATE the row's slug column).
+- `[IMPORTANT]` **Bridge HQ bootstrap not idempotent for delete-recreate.** → Phase 0 seed uses `INSERT ... ON CONFLICT (id) DO NOTHING` on BOTH the org row and the user row.
+- `[IMPORTANT]` **DB-field mapping omitted required NOT NULL fields.** → Mapping now includes `teaching_units.title`, `problems.title`, `problems.description`, `courses.description`, plus the rest of the required-non-null + commonly-used columns.
+- `[IMPORTANT]` **Phase 6 demo wire-up under-specified.** → Picked one approach: importer's `--seed-demo-class` flag calls Go `Courses.CloneCourse` after the main import succeeds, then UPDATE `classes.course_id` to the cloned id. Includes a post-clone verification step.
+- `[IMPORTANT]` **Phase 3 picker library smoke contradicted itself** (was "comment out the second pass temporarily"). → Importer gains `--library-only` / `--stop-after=library` flag. Phase 3 uses it.
+- `[IMPORTANT]` **`LinkUnitToTopic` updates `updated_at` on idempotent re-run.** → Phase 2 importer pre-checks `topic_id` and skips the call when it already matches.
+- `[IMPORTANT]` **Plan-number conflict.** Plans 047/048 reserved 049 for `/register-org` / parent_links. → New "Plan-number conflict note" section above explicitly renumbers those deferrals to plan 050; plan 049 is curriculum work per user 2026-04-30.
+- `[MINOR]` **Plan 051 deferral wording.** `forked_from` is on `problems`, not `teaching_units`; unit lineage uses `unit_overlays`. → Wording corrected.
+- `[MINOR]` **YAML parse policy was a corrections note.** → Promoted to actionable Phase 1 requirement: configure `parseDocument` with `merge: false, anchors: false, schema: 'core'`; reject YAML using unsupported features.
+
+The plan retains 1 CONCERN from dispatch 3:
+
+- **Phase 5 terminology audit** is in scope; the implementation pass MUST grep authored prose for stale "Topic" copy and align with plan 048's "Focus Area" rename. Captured in Phase 5 step 7.
