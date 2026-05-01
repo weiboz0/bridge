@@ -114,9 +114,7 @@ problems:
         expectedStdout: "hell_"
         isExample: true
       - name: "Example: no guesses"
-        stdin: |-
-          python
-
+        stdin: "python\n\n"
         expectedStdout: "______"
         isExample: true
       - name: "Hidden: all guessed"

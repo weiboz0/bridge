@@ -74,7 +74,7 @@ problems:
 
       **Input:** `learning python is fun`
 
-      **Output:** `7`
+      **Output:** `6`
     difficulty: easy
     gradeLevel: 9-12
     tags:
@@ -96,7 +96,7 @@ problems:
     testCases:
       - name: Example
         stdin: "learning python is fun"
-        expectedStdout: "7"
+        expectedStdout: "6"
         isExample: true
       - name: "Hidden: empty"
         stdin: ""

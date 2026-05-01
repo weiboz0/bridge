@@ -60,6 +60,12 @@ type request struct {
 	Language string `json:"language"`
 	Source   string `json:"source"`
 	Stdin    string `json:"stdin"`
+	// Optional: override the run timeout (ms). Defaults to 2500ms,
+	// safely under vanilla Piston's 3000ms cap. Callers wanting
+	// longer-running solutions either bump this AND configure their
+	// Piston with a higher `run_timeout`, or use the production
+	// PistonClient.ExecuteWithStdin path directly.
+	RunTimeoutMs int `json:"runTimeoutMs,omitempty"`
 }
 
 type response struct {
@@ -94,13 +100,18 @@ func main() {
 	baseURL := os.Getenv("PISTON_URL")
 	client := sandbox.NewPistonClient(baseURL)
 
-	// ExecuteWithStdin already sets a 30s HTTP-level timeout on the
-	// httpClient and 10s run/compile timeouts. Add a context timeout
-	// as belt-and-braces in case the upstream PistonClient changes.
+	runTimeoutMs := req.RunTimeoutMs
+	if runTimeoutMs <= 0 {
+		runTimeoutMs = 2500
+	}
+
+	// ExecuteWithStdinTimeout has its own HTTP timeout. Add a context
+	// timeout as belt-and-braces in case the upstream PistonClient
+	// changes.
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	resp, err := client.ExecuteWithStdin(ctx, req.Language, req.Source, req.Stdin)
+	resp, err := client.ExecuteWithStdinTimeout(ctx, req.Language, req.Source, req.Stdin, runTimeoutMs, runTimeoutMs)
 	if err != nil {
 		emit(response{
 			Error:     fmt.Sprintf("piston transport error: %v", err),
@@ -113,7 +124,7 @@ func main() {
 		Stdout:    resp.Run.Stdout,
 		Stderr:    resp.Run.Stderr,
 		ExitCode:  resp.Run.Code,
-		TimeoutMs: 10000,
+		TimeoutMs: runTimeoutMs,
 	}
 	if resp.Run.Signal != nil {
 		out.Signal = *resp.Run.Signal

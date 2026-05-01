@@ -130,9 +130,9 @@ problems:
 
       **Input:** `learning python is fun`
 
-      **Output:** `4`
+      **Output:** `5`
 
-      (Vowels present: a, e, i, u — 4 distinct.)
+      (Vowels present: a, e, i, o, u — all five.)
     difficulty: easy
     gradeLevel: 9-12
     tags:
@@ -154,7 +154,7 @@ problems:
     testCases:
       - name: Example
         stdin: "learning python is fun"
-        expectedStdout: "4"
+        expectedStdout: "5"
         isExample: true
       - name: "Hidden: all five"
         stdin: "the quick brown fox jumps over a lazy dog"
