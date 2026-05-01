@@ -6,6 +6,7 @@ import { v4 as uuidv4 } from "uuid";
 import { eq, sql } from "drizzle-orm";
 import { testDb, cleanupDatabase } from "../helpers";
 import {
+  classes,
   courses,
   organizations,
   orgMemberships,
@@ -18,6 +19,11 @@ import {
   users,
 } from "@/lib/db/schema";
 import { runImporter } from "../../scripts/python-101/import";
+
+const BRIDGE_DEMO_SCHOOL_ORG_ID = "d386983b-6da4-4cb8-8057-f2aa70d27c07";
+const EVE_DEMO_USER_ID = "d0d3b031-a483-4214-97fb-48c9584f4dcb";
+const DEMO_CLASS_ID = "00000000-0000-0000-0000-000000400101";
+const DEMO_CLONE_COURSE_ID = "00000000-0000-0000-0000-de7000000001";
 
 const BRIDGE_HQ_ORG_ID = "00000000-0000-0000-0000-bbbbbbbbb002";
 const BRIDGE_HQ_SYSTEM_USER_ID = "00000000-0000-0000-0000-bbbbbbbbb001";
@@ -523,5 +529,233 @@ describe("python-101 importer", () => {
       .from(courses)
       .where(eq(courses.id, tree.courseId));
     expect(ours).toHaveLength(0);
+  });
+
+  describe("--wire-demo-class", () => {
+    async function ensureDemoFixtures() {
+      await testDb.insert(organizations).values({
+        id: BRIDGE_DEMO_SCHOOL_ORG_ID,
+        name: "Bridge Demo School",
+        slug: "bridge-demo-school",
+        type: "school",
+        status: "active",
+        contactEmail: "demo@demo.edu",
+        contactName: "Demo Admin",
+        domain: "demo.edu",
+        settings: {},
+        verifiedAt: new Date(),
+      }).onConflictDoNothing();
+      await testDb.insert(users).values({
+        id: EVE_DEMO_USER_ID,
+        name: "Eve Demo",
+        email: "eve@demo.edu",
+        passwordHash: "x",
+      }).onConflictDoNothing();
+      await testDb.insert(orgMemberships).values({
+        orgId: BRIDGE_DEMO_SCHOOL_ORG_ID,
+        userId: EVE_DEMO_USER_ID,
+        role: "teacher",
+        status: "active",
+      }).onConflictDoNothing();
+    }
+
+    async function ensureDemoClass(courseId: string) {
+      // Plan 049 demo class id is hard-coded; the wire-up looks for
+      // it by exact UUID. The class must exist before --wire-demo-class
+      // runs, so seed a minimal one here pointing at any course.
+      await testDb.insert(classes).values({
+        id: DEMO_CLASS_ID,
+        courseId,
+        orgId: BRIDGE_DEMO_SCHOOL_ORG_ID,
+        title: "Python 101 · Period 3",
+        joinCode: "P101DEMO",
+      }).onConflictDoNothing();
+    }
+
+    it("clones the course tree into Bridge Demo School org and re-points the demo class", async () => {
+      await ensureDemoFixtures();
+      const tree = await writeTree({
+        units: [
+          {
+            slug: "u1",
+            problems: [
+              {
+                slug: "p1",
+                solution: 'print("hi")',
+                cases: [{ name: "ex", stdin: "", expected: "hi", isExample: true }],
+              },
+            ],
+          },
+        ],
+      });
+      // Pre-create the demo class pointing at SOME other course so
+      // the wire-up has something to UPDATE. We'll use the imported
+      // Bridge HQ course post-import.
+      await runImporter({
+        root: tree.root,
+        apply: true,
+        libraryOnly: false,
+        skipSandbox: true,
+        allowRename: false,
+        wireDemoClass: false,
+        targetDb: TARGET_DB,
+      });
+      await ensureDemoClass(tree.courseId);
+
+      const summary = await runImporter({
+        root: tree.root,
+        apply: true,
+        libraryOnly: false,
+        skipSandbox: true,
+        allowRename: false,
+        wireDemoClass: true,
+        targetDb: TARGET_DB,
+      });
+      expect(summary.demoWire?.cloned).toBe(true);
+      expect(summary.demoWire?.cloneCourseId).toBe(DEMO_CLONE_COURSE_ID);
+      expect(summary.demoWire?.unitCount).toBe(1);
+
+      // Demo class now points at the clone.
+      const [updatedClass] = await testDb
+        .select({ courseId: classes.courseId })
+        .from(classes)
+        .where(eq(classes.id, DEMO_CLASS_ID));
+      expect(updatedClass.courseId).toBe(DEMO_CLONE_COURSE_ID);
+
+      // The clone has org=Bridge Demo School and is owned by eve.
+      const [cloneCourse] = await testDb
+        .select({ orgId: courses.orgId, createdBy: courses.createdBy })
+        .from(courses)
+        .where(eq(courses.id, DEMO_CLONE_COURSE_ID));
+      expect(cloneCourse.orgId).toBe(BRIDGE_DEMO_SCHOOL_ORG_ID);
+      expect(cloneCourse.createdBy).toBe(EVE_DEMO_USER_ID);
+
+      // The cloned units are scope='org', scope_id=Bridge Demo
+      // School, status=classroom_ready, owned by eve, linked to the
+      // cloned topics. This is the canEditUnit-friendly shape.
+      const cloneTopics = await testDb
+        .select({ id: topics.id })
+        .from(topics)
+        .where(eq(topics.courseId, DEMO_CLONE_COURSE_ID));
+      expect(cloneTopics).toHaveLength(1);
+      const cloneUnits = await testDb
+        .select()
+        .from(teachingUnits)
+        .where(eq(teachingUnits.scopeId, BRIDGE_DEMO_SCHOOL_ORG_ID));
+      const ourCloneUnits = cloneUnits.filter((u) => u.slug?.endsWith("-demo"));
+      expect(ourCloneUnits).toHaveLength(1);
+      expect(ourCloneUnits[0].scope).toBe("org");
+      expect(ourCloneUnits[0].status).toBe("classroom_ready");
+      expect(ourCloneUnits[0].createdBy).toBe(EVE_DEMO_USER_ID);
+      expect(ourCloneUnits[0].topicId).toBe(cloneTopics[0].id);
+
+      // unit_documents.blocks copied across — same shape on the clone.
+      const [cloneDoc] = await testDb
+        .select({ blocks: unitDocuments.blocks })
+        .from(unitDocuments)
+        .where(eq(unitDocuments.unitId, ourCloneUnits[0].id));
+      expect(cloneDoc).toBeTruthy();
+      expect((cloneDoc.blocks as { type: string }).type).toBe("doc");
+
+      // topic_problems carried — the cloned topic references the
+      // platform-scope problem (problems are NOT cloned).
+      const cloneTPs = await testDb
+        .select()
+        .from(topicProblems)
+        .where(eq(topicProblems.topicId, cloneTopics[0].id));
+      expect(cloneTPs).toHaveLength(1);
+      expect(cloneTPs[0].problemId).toBe(tree.problemIds[0]);
+      expect(cloneTPs[0].attachedBy).toBe(EVE_DEMO_USER_ID);
+    });
+
+    it("re-running --wire-demo-class is idempotent", async () => {
+      await ensureDemoFixtures();
+      const tree = await writeTree({
+        units: [
+          {
+            slug: "u1",
+            problems: [
+              {
+                slug: "p1",
+                solution: 'print("hi")',
+                cases: [{ name: "ex", stdin: "", expected: "hi", isExample: true }],
+              },
+            ],
+          },
+        ],
+      });
+      await runImporter({
+        root: tree.root,
+        apply: true,
+        libraryOnly: false,
+        skipSandbox: true,
+        allowRename: false,
+        wireDemoClass: false,
+        targetDb: TARGET_DB,
+      });
+      await ensureDemoClass(tree.courseId);
+
+      const baseArgs = {
+        root: tree.root,
+        apply: true,
+        libraryOnly: false,
+        skipSandbox: true,
+        allowRename: false,
+        wireDemoClass: true,
+        targetDb: TARGET_DB,
+      };
+      const first = await runImporter(baseArgs);
+      const second = await runImporter(baseArgs);
+
+      expect(first.demoWire?.cloned).toBe(true);
+      expect(second.demoWire?.cloned).toBe(false);
+      expect(second.demoWire?.cloneCourseId).toBe(DEMO_CLONE_COURSE_ID);
+
+      // Cloned units count stays at 1 — no duplicates.
+      const cloneUnits = await testDb
+        .select()
+        .from(teachingUnits)
+        .where(eq(teachingUnits.scopeId, BRIDGE_DEMO_SCHOOL_ORG_ID));
+      expect(cloneUnits.filter((u) => u.slug?.endsWith("-demo"))).toHaveLength(1);
+    });
+
+    it("fails loudly if Bridge Demo School org is missing", async () => {
+      // Don't seed Bridge Demo School. The wire-up should refuse.
+      const tree = await writeTree({
+        units: [
+          {
+            slug: "u1",
+            problems: [
+              {
+                slug: "p1",
+                solution: 'print("hi")',
+                cases: [{ name: "ex", stdin: "", expected: "hi", isExample: true }],
+              },
+            ],
+          },
+        ],
+      });
+      await runImporter({
+        root: tree.root,
+        apply: true,
+        libraryOnly: false,
+        skipSandbox: true,
+        allowRename: false,
+        wireDemoClass: false,
+        targetDb: TARGET_DB,
+      });
+
+      await expect(
+        runImporter({
+          root: tree.root,
+          apply: true,
+          libraryOnly: false,
+          skipSandbox: true,
+          allowRename: false,
+          wireDemoClass: true,
+          targetDb: TARGET_DB,
+        }),
+      ).rejects.toThrow(/Bridge Demo School/);
+    });
   });
 });

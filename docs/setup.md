@@ -67,17 +67,28 @@ curl -X POST http://localhost:2000/api/v2/packages \
   -H 'Content-Type: application/json' \
   -d '{"language":"python","version":"3.10.0"}'
 
-# 3. Import Python 101 (validates YAML, runs all reference solutions
-#    against Piston, writes to the DB in one transaction).
-bun run content:python-101:import --apply
-
-# 4. Wire the demo class to Bridge HQ Python 101 (idempotent).
-psql postgresql://work@127.0.0.1:5432/bridge -f scripts/wire_python_101_demo_class.sql
+# 3. Import Python 101 + clone the curriculum into Bridge Demo School
+#    (validates YAML, runs all reference solutions against Piston,
+#    writes to the DB in one transaction, then clones the course tree
+#    into the demo org so eve@demo.edu owns her copy and can edit).
+bun run content:python-101:import --apply --wire-demo-class
 ```
+
+The `--wire-demo-class` step is idempotent: re-runs detect the
+existing clone (well-known UUID `00000000-0000-0000-0000-de7000000001`)
+and just re-point the demo class at it. The cloned units are
+`scope='org'`, `scope_id=Bridge Demo School`, owned by eve, so
+`canEditUnit` in `platform/internal/handlers/teaching_units.go` lets
+eve edit them. Bridge HQ's canonical platform-scope library stays
+untouched as the publishing source.
 
 To skip the Piston pre-flight (e.g., on a host without Docker), pass
 `--skip-sandbox` to step 3. This is fine for trying out the workflow,
 but reference solutions won't be verified against CPython.
+
+To skip the demo wire-up (e.g., on a fresh dev DB without
+`scripts/seed_problem_demo.sql` applied), drop the `--wire-demo-class`
+flag. The library + Bridge HQ course are still imported.
 
 The Python 101 source-of-truth is `content/python-101/`. Edit the
 YAML files, run the importer, and the changes propagate. See

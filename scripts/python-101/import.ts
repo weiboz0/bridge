@@ -51,6 +51,7 @@ import { drizzle } from "drizzle-orm/postgres-js";
 import { nanoid } from "nanoid";
 import postgres, { type Sql } from "postgres";
 import {
+  classes,
   courses,
   problems,
   problemSolutions,
@@ -92,6 +93,7 @@ interface CliArgs {
   libraryOnly: boolean;
   skipSandbox: boolean;
   allowRename: boolean;
+  wireDemoClass?: boolean;
   targetDb?: string;
   pistonUrl?: string;
 }
@@ -103,6 +105,7 @@ function parseArgs(argv: string[]): CliArgs {
     libraryOnly: false,
     skipSandbox: false,
     allowRename: false,
+    wireDemoClass: false,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -111,6 +114,7 @@ function parseArgs(argv: string[]): CliArgs {
       args.libraryOnly = true;
     else if (a === "--skip-sandbox") args.skipSandbox = true;
     else if (a === "--allow-rename") args.allowRename = true;
+    else if (a === "--wire-demo-class") args.wireDemoClass = true;
     else if (a === "--root" && argv[i + 1]) args.root = argv[++i];
     else if (a.startsWith("--root=")) args.root = a.slice("--root=".length);
     else if (a === "--target-db" && argv[i + 1]) args.targetDb = argv[++i];
@@ -138,6 +142,13 @@ function printHelp(): void {
   --library-only           Stop after the library pass.
   --skip-sandbox           Skip Piston pre-flight (CI/test only).
   --allow-rename           Allow slug renames where ids match.
+  --wire-demo-class        After import, clone the Bridge HQ Python 101
+                           course into Bridge Demo School org (owned
+                           by eve@demo.edu), clone its units into the
+                           same org, and point the demo class at the
+                           cloned course. Idempotent — re-runs detect
+                           the existing clone and refresh the demo
+                           class link.
   --target-db <conn>       Override DATABASE_URL.
   --piston-url <url>       Override PISTON_URL for this run.
 
@@ -805,6 +816,240 @@ async function postInsertVerification(
 }
 
 // =========================================================
+// Demo class wire-up
+// =========================================================
+//
+// Bridge HQ owns the canonical Python 101 (platform-scope library).
+// Plain teachers can READ platform units (via canViewUnit's
+// classroom_ready rule) but CANNOT edit them — canEditUnit requires
+// platform_admin for scope='platform'. So if the demo class points
+// directly at Bridge HQ's course, eve@demo.edu can open the units
+// but every save fails with "Not authorized to edit document".
+//
+// Fix: clone the course tree into Bridge Demo School org, owned by
+// eve. Cloned units are scope='org', scope_id=Bridge Demo School →
+// canEditUnit lets active-teacher members of that org edit. Problems
+// stay platform-scope and are referenced (not cloned) by both the
+// canonical and cloned topic_problems rows.
+//
+// Idempotent: detects an existing clone by its well-known UUID and
+// only performs the clone once.
+
+const BRIDGE_DEMO_SCHOOL_ORG_ID = "d386983b-6da4-4cb8-8057-f2aa70d27c07";
+const EVE_DEMO_USER_ID = "d0d3b031-a483-4214-97fb-48c9584f4dcb";
+const DEMO_CLASS_ID = "00000000-0000-0000-0000-000000400101";
+
+// Well-known UUID for the demo-class clone of Bridge HQ Python 101.
+// Hard-coded so the wire-up is idempotent without needing a separate
+// lookup table.
+const DEMO_CLONE_COURSE_ID = "00000000-0000-0000-0000-de7000000001";
+
+interface DemoWireSummary {
+  cloned: boolean; // true if a fresh clone was made; false if the existing one was reused
+  cloneCourseId: string;
+  unitCount: number;
+}
+
+async function wireDemoClass(
+  tx: Tx,
+  sourceCourseId: string,
+): Promise<DemoWireSummary> {
+  // Refuse to run if the prerequisites aren't there. Each is a
+  // separately-installable seed; failure modes should be loud.
+  const [demoOrg] = await tx.execute(
+    sql`SELECT 1 FROM organizations WHERE id = ${BRIDGE_DEMO_SCHOOL_ORG_ID}`,
+  );
+  if (!demoOrg) {
+    throw new Error(
+      `wire-demo-class: Bridge Demo School org (${BRIDGE_DEMO_SCHOOL_ORG_ID}) does not exist; run scripts/seed_problem_demo.sql first`,
+    );
+  }
+  const [eve] = await tx.execute(
+    sql`SELECT 1 FROM users WHERE id = ${EVE_DEMO_USER_ID}`,
+  );
+  if (!eve) {
+    throw new Error(
+      `wire-demo-class: eve@demo.edu (${EVE_DEMO_USER_ID}) does not exist; run scripts/seed_problem_demo.sql first`,
+    );
+  }
+  const [demoClass] = await tx
+    .select({ id: classes.id, courseId: classes.courseId })
+    .from(classes)
+    .where(eq(classes.id, DEMO_CLASS_ID));
+  if (!demoClass) {
+    throw new Error(
+      `wire-demo-class: demo class (${DEMO_CLASS_ID}) does not exist; run scripts/seed_problem_demo.sql first`,
+    );
+  }
+
+  // Detect an existing clone by its well-known UUID.
+  const [existingClone] = await tx
+    .select({ id: courses.id, title: courses.title })
+    .from(courses)
+    .where(eq(courses.id, DEMO_CLONE_COURSE_ID));
+
+  if (existingClone) {
+    // Already cloned. Just ensure the demo class points at it.
+    if (demoClass.courseId !== DEMO_CLONE_COURSE_ID) {
+      await tx
+        .update(classes)
+        .set({ courseId: DEMO_CLONE_COURSE_ID, updatedAt: new Date() })
+        .where(eq(classes.id, DEMO_CLASS_ID));
+    }
+    const cloneTopics = await tx
+      .select({ id: topics.id })
+      .from(topics)
+      .where(eq(topics.courseId, DEMO_CLONE_COURSE_ID));
+    return {
+      cloned: false,
+      cloneCourseId: DEMO_CLONE_COURSE_ID,
+      unitCount: cloneTopics.length,
+    };
+  }
+
+  // Fresh clone. Get the source course details.
+  const [sourceCourse] = await tx
+    .select()
+    .from(courses)
+    .where(eq(courses.id, sourceCourseId));
+  if (!sourceCourse) {
+    throw new Error(
+      `wire-demo-class: source course ${sourceCourseId} not found; run the importer's main pass first`,
+    );
+  }
+
+  // Clone the course into Bridge Demo School, owned by eve. Title
+  // stays the same (no " (Copy)" suffix — this IS the demo class's
+  // version).
+  await tx.insert(courses).values({
+    id: DEMO_CLONE_COURSE_ID,
+    orgId: BRIDGE_DEMO_SCHOOL_ORG_ID,
+    createdBy: EVE_DEMO_USER_ID,
+    title: sourceCourse.title,
+    description: sourceCourse.description,
+    gradeLevel: sourceCourse.gradeLevel,
+    language: sourceCourse.language,
+    isPublished: true,
+  });
+
+  // Clone topics, units, unit_documents, and topic_problems in
+  // source order. For each source topic:
+  //   - Clone the topic under the new course (gen_random_uuid).
+  //   - Find the unit linked to the source topic (1:1 invariant).
+  //   - Clone the unit into Bridge Demo School org.
+  //   - Clone the unit_document (problem-ref attrs reference platform
+  //     problems and don't need to change).
+  //   - Link the cloned topic to the cloned unit.
+  //   - Copy topic_problems entries to the cloned topic.
+  const sourceTopicsRows = await tx
+    .select({
+      id: topics.id,
+      title: topics.title,
+      description: topics.description,
+      sortOrder: topics.sortOrder,
+    })
+    .from(topics)
+    .where(eq(topics.courseId, sourceCourseId))
+    .orderBy(topics.sortOrder);
+
+  let unitCount = 0;
+  for (const st of sourceTopicsRows) {
+    // Clone topic.
+    const [clonedTopic] = await tx
+      .insert(topics)
+      .values({
+        courseId: DEMO_CLONE_COURSE_ID,
+        title: st.title,
+        description: st.description,
+        sortOrder: st.sortOrder,
+      })
+      .returning({ id: topics.id });
+
+    // Find the source unit linked to this topic.
+    const [sourceUnit] = await tx
+      .select()
+      .from(teachingUnits)
+      .where(eq(teachingUnits.topicId, st.id));
+    if (!sourceUnit) {
+      throw new Error(
+        `wire-demo-class: source topic ${st.id} has no linked unit (1:1 invariant violated)`,
+      );
+    }
+
+    // Clone unit into Bridge Demo School org. Slug must be unique
+    // per (scope, scope_id) so suffix it with "-demo" to avoid
+    // colliding with any existing org-scope unit. status starts at
+    // classroom_ready so eve doesn't have to transition each one.
+    const [clonedUnit] = await tx
+      .insert(teachingUnits)
+      .values({
+        scope: "org",
+        scopeId: BRIDGE_DEMO_SCHOOL_ORG_ID,
+        title: sourceUnit.title,
+        slug: sourceUnit.slug ? `${sourceUnit.slug}-demo` : null,
+        summary: sourceUnit.summary,
+        gradeLevel: sourceUnit.gradeLevel,
+        subjectTags: sourceUnit.subjectTags,
+        standardsTags: sourceUnit.standardsTags,
+        estimatedMinutes: sourceUnit.estimatedMinutes,
+        materialType: sourceUnit.materialType,
+        status: "classroom_ready",
+        topicId: null,
+        createdBy: EVE_DEMO_USER_ID,
+      })
+      .returning({ id: teachingUnits.id });
+
+    // Clone unit_document (the blocks JSON references platform
+    // problems via problemId attrs — those stay valid).
+    const [sourceDoc] = await tx
+      .select({ blocks: unitDocuments.blocks })
+      .from(unitDocuments)
+      .where(eq(unitDocuments.unitId, sourceUnit.id));
+    if (sourceDoc) {
+      await tx.insert(unitDocuments).values({
+        unitId: clonedUnit.id,
+        blocks: sourceDoc.blocks,
+      });
+    }
+
+    // Link cloned topic ↔ cloned unit (1:1).
+    await tx
+      .update(teachingUnits)
+      .set({ topicId: clonedTopic.id })
+      .where(eq(teachingUnits.id, clonedUnit.id));
+
+    // Copy topic_problems for the cloned topic. Problems stay
+    // platform-scope and shared.
+    const sourceTPs = await tx
+      .select()
+      .from(topicProblems)
+      .where(eq(topicProblems.topicId, st.id));
+    for (const tp of sourceTPs) {
+      await tx.insert(topicProblems).values({
+        topicId: clonedTopic.id,
+        problemId: tp.problemId,
+        sortOrder: tp.sortOrder,
+        attachedBy: EVE_DEMO_USER_ID,
+      });
+    }
+
+    unitCount++;
+  }
+
+  // Update the demo class's course_id to point at the clone.
+  await tx
+    .update(classes)
+    .set({ courseId: DEMO_CLONE_COURSE_ID, updatedAt: new Date() })
+    .where(eq(classes.id, DEMO_CLASS_ID));
+
+  return {
+    cloned: true,
+    cloneCourseId: DEMO_CLONE_COURSE_ID,
+    unitCount,
+  };
+}
+
+// =========================================================
 // Main
 // =========================================================
 
@@ -815,6 +1060,7 @@ interface ImportSummary {
   testCaseCount: number;
   applied: boolean;
   libraryOnly: boolean;
+  demoWire?: DemoWireSummary;
 }
 
 export async function runImporter(args: CliArgs): Promise<ImportSummary> {
@@ -859,6 +1105,7 @@ export async function runImporter(args: CliArgs): Promise<ImportSummary> {
   const client: Sql = postgres(connectionString, { max: 1 });
   const db = drizzle(client);
 
+  let demoWire: DemoWireSummary | undefined;
   try {
     await db.transaction(async (tx) => {
       const idIssues = await checkIdentities(tx, tree, args.allowRename);
@@ -879,6 +1126,10 @@ export async function runImporter(args: CliArgs): Promise<ImportSummary> {
       await runCoursePass(tx, tree);
       await runLinkPass(tx, tree);
       await postInsertVerification(tx, tree);
+
+      if (args.wireDemoClass) {
+        demoWire = await wireDemoClass(tx, tree.course.id);
+      }
     });
   } finally {
     await client.end();
@@ -891,6 +1142,7 @@ export async function runImporter(args: CliArgs): Promise<ImportSummary> {
     testCaseCount,
     applied: true,
     libraryOnly: args.libraryOnly,
+    demoWire,
   };
 }
 
@@ -913,6 +1165,12 @@ if (isMainModule()) {
         process.stdout.write(
           `OK: applied ${summary.libraryOnly ? "library-only" : "full"} import — course ${summary.courseId}, ${summary.unitCount} unit(s), ${summary.problemCount} problem(s), ${summary.testCaseCount} test case(s)\n`,
         );
+        if (summary.demoWire) {
+          const verb = summary.demoWire.cloned ? "cloned" : "verified existing";
+          process.stdout.write(
+            `OK: demo class ${verb} — course ${summary.demoWire.cloneCourseId} owned by Bridge Demo School, ${summary.demoWire.unitCount} unit(s)\n`,
+          );
+        }
       } else {
         process.stdout.write(
           `OK (dry-run): course ${summary.courseId}, ${summary.unitCount} unit(s), ${summary.problemCount} problem(s), ${summary.testCaseCount} test case(s). Pass --apply to write to the DB.\n`,
