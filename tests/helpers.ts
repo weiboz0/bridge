@@ -1,4 +1,5 @@
 import { drizzle } from "drizzle-orm/postgres-js";
+import { sql } from "drizzle-orm";
 import postgres from "postgres";
 import * as schema from "@/lib/db/schema";
 import { nanoid } from "nanoid";
@@ -24,7 +25,15 @@ export async function cleanupDatabase() {
   // Plan 044: clean teaching_units before topics so the topic_id FK
   // (ON DELETE SET NULL) doesn't leave orphan unit rows.
   await testDb.delete(schema.unitDocuments);
+  // Plan 049: problem-bank tables hold FKs into users (created_by /
+  // attached_by). Wipe them before the user delete or the FK cascade
+  // is too narrow to reach. test_cases lives outside the Drizzle
+  // schema (drizzle/0008_problems.sql), so use raw SQL.
+  await testDb.execute(sql`DELETE FROM test_cases`);
+  await testDb.delete(schema.topicProblems);
+  await testDb.delete(schema.problemSolutions);
   await testDb.delete(schema.teachingUnits);
+  await testDb.delete(schema.problems);
   await testDb.delete(schema.topics);
   await testDb.delete(schema.courses);
   await testDb.delete(schema.orgMemberships);

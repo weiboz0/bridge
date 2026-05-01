@@ -43,7 +43,10 @@ const slug = z
 
 const nonEmptyString = z.string().min(1);
 
-const gradeLevel = z.enum(["K-2", "3-5", "6-8", "9-12"]);
+// gradeLevel matches the DB's grade_level enum (drizzle/0008+), which
+// is `["K-5", "6-8", "9-12"]`. The wider K-2/3-5 split that some
+// curriculum tooling uses is NOT a DB value — keep this aligned.
+const gradeLevel = z.enum(["K-5", "6-8", "9-12"]);
 
 const difficulty = z.enum(["easy", "medium", "hard"]);
 
@@ -145,7 +148,11 @@ export const unitFileSchema = z
     subjectTags: tagList,
     standardsTags: tagList,
     estimatedMinutes: z.number().int().positive().max(600).optional(),
-    materialType: z.enum(["notes", "lesson", "worksheet"]).default("notes"),
+    // material_type matches the DB column's $type<>: notes | slides
+    // | worksheet | reference. The default mirrors `teaching_units`.
+    materialType: z
+      .enum(["notes", "slides", "worksheet", "reference"])
+      .default("notes"),
     blocks: z.array(unitBlock).default([]),
     problems: z.array(problem).min(1),
   })
