@@ -1,0 +1,237 @@
+id: 3b7b1da8-70e1-4029-92f0-2d260f7130c3
+slug: dicts-and-sets
+title: 8. Dicts & Sets
+description: |
+  Map keys to values with `dict`. Track unique items with `set`. Use
+  `in` for fast membership checks; iterate keys, values, and items.
+gradeLevel: 9-12
+subjectTags:
+  - python
+  - dicts
+  - sets
+standardsTags: []
+estimatedMinutes: 45
+materialType: notes
+blocks:
+  - type: heading
+    text: Big idea
+  - type: paragraph
+    text: |
+      A *dict* (dictionary) maps each *key* to a *value*. Use `{}` or
+      `dict()` to create one; access with `d[key]`. A *set* is a
+      collection where each item appears at most once and order
+      doesn't matter. Both support `O(1)` membership tests with `in`.
+  - type: heading
+    text: Worked example
+  - type: code
+    text: |
+      counts = {}
+      for word in ["a", "b", "a", "c", "b", "a"]:
+          counts[word] = counts.get(word, 0) + 1
+      print(counts)        # {'a': 3, 'b': 2, 'c': 1}
+      print(set("hello"))  # {'h', 'e', 'l', 'o'} (order varies)
+  - type: heading
+    text: Try it
+  - type: problem-ref
+    problemSlug: word-count
+    visibility: always
+  - type: problem-ref
+    problemSlug: unique-vowels
+    visibility: always
+  - type: problem-ref
+    problemSlug: gradebook-lookup
+    visibility: always
+  - type: heading
+    text: Common pitfalls
+  - type: list
+    text: |
+      `d[key]` raises `KeyError` if the key isn't there. Use
+      `d.get(key, default)` if you want a fallback.
+      Sets are unordered. Don't rely on iteration order being
+      "alphabetical" or "insertion order".
+      Dicts (3.7+) DO preserve insertion order — but sets don't.
+      Mutable values (lists, dicts) can't be set elements; use tuples
+      if you need to.
+  - type: heading
+    text: Vocabulary
+  - type: list
+    text: |
+      key — what you look something up by.
+      value — the thing the key maps to.
+      set — collection of unique items, unordered.
+      `in` — membership test: `"a" in d` checks keys, `"a" in s` checks elements.
+problems:
+  - id: bfab2684-8613-4c0a-b396-1a946d52066d
+    slug: word-count
+    title: Word Count
+    description: |
+      Read one line of text. Print each word and its count, in the
+      order each word first appeared, one per line in `word: count`
+      format.
+
+      Words are separated by single spaces.
+
+      **Input:** `the cat sat on the mat`
+
+      **Output:**
+      ```
+      the: 2
+      cat: 1
+      sat: 1
+      on: 1
+      mat: 1
+      ```
+    difficulty: medium
+    gradeLevel: 9-12
+    tags:
+      - dicts
+      - strings
+    starterCode:
+      python: |
+        words = input().split()
+        # Count each word; print word: count in first-seen order.
+    solution:
+      language: python
+      code: |
+        words = input().split()
+        counts = {}
+        for w in words:
+            counts[w] = counts.get(w, 0) + 1
+        for w, c in counts.items():
+            print(f"{w}: {c}")
+    testCases:
+      - name: Example
+        stdin: "the cat sat on the mat"
+        expectedStdout: |-
+          the: 2
+          cat: 1
+          sat: 1
+          on: 1
+          mat: 1
+        isExample: true
+      - name: "Hidden: all unique"
+        stdin: "a b c"
+        expectedStdout: |-
+          a: 1
+          b: 1
+          c: 1
+        isExample: false
+      - name: "Hidden: all same"
+        stdin: "x x x x x"
+        expectedStdout: "x: 5"
+        isExample: false
+
+  - id: 05c85fcf-bc4f-4469-8219-37cb0deb20c8
+    slug: unique-vowels
+    title: Unique Vowels
+    description: |
+      Read one line of text. Print how many *distinct* lowercase
+      vowels (`a e i o u`) appear in it.
+
+      **Input:** `learning python is fun`
+
+      **Output:** `5`
+
+      (Vowels present: a, e, i, o, u — all five.)
+    difficulty: easy
+    gradeLevel: 9-12
+    tags:
+      - sets
+      - strings
+    starterCode:
+      python: |
+        s = input()
+        # Count distinct lowercase a, e, i, o, u in s.
+    solution:
+      language: python
+      code: |
+        s = input()
+        found = set()
+        for ch in s:
+            if ch in "aeiou":
+                found.add(ch)
+        print(len(found))
+    testCases:
+      - name: Example
+        stdin: "learning python is fun"
+        expectedStdout: "5"
+        isExample: true
+      - name: "Hidden: all five"
+        stdin: "the quick brown fox jumps over a lazy dog"
+        expectedStdout: "5"
+        isExample: false
+      - name: "Hidden: none"
+        stdin: "rhythm"
+        expectedStdout: "0"
+        isExample: false
+
+  - id: 802515d5-be0c-42a8-a42d-7383c1c7e482
+    slug: gradebook-lookup
+    title: Gradebook Lookup
+    description: |
+      First line: an integer N — the number of student records.
+      Next N lines: each is a student record `name score` (name is one
+      word, score is an integer 0-100).
+      Last line: a name to look up.
+
+      Print the score for that name, or `not found` if the name isn't
+      in the gradebook.
+
+      **Input:**
+      ```
+      3
+      Ada 92
+      Grace 88
+      Linus 75
+      Grace
+      ```
+
+      **Output:** `88`
+    difficulty: medium
+    gradeLevel: 9-12
+    tags:
+      - dicts
+      - lookup
+    starterCode:
+      python: |
+        n = int(input())
+        gradebook = {}
+        # Read n lines of "name score" into gradebook.
+        # Then read the lookup name and print the score (or "not found").
+    solution:
+      language: python
+      code: |
+        n = int(input())
+        gradebook = {}
+        for _ in range(n):
+            name, score = input().split()
+            gradebook[name] = int(score)
+        target = input()
+        if target in gradebook:
+            print(gradebook[target])
+        else:
+            print("not found")
+    testCases:
+      - name: "Example: hit"
+        stdin: |-
+          3
+          Ada 92
+          Grace 88
+          Linus 75
+          Grace
+        expectedStdout: "88"
+        isExample: true
+      - name: "Example: miss"
+        stdin: |-
+          2
+          Ada 92
+          Grace 88
+          Bob
+        expectedStdout: "not found"
+        isExample: true
+      - name: "Hidden: empty book"
+        stdin: |-
+          0
+          Ada
+        expectedStdout: "not found"
+        isExample: false

@@ -75,14 +75,29 @@ func (c *PistonClient) Execute(ctx context.Context, language, code string) (*Pis
 }
 
 // ExecuteWithStdin runs code through Piston with stdin input.
+//
+// Uses a 10s run/compile timeout (production grading default). Note
+// that vanilla Piston caps run_timeout at 3000ms; deployments wanting
+// a longer timeout must raise the Piston `run_timeout` config. For
+// tooling that needs a smaller default (e.g., the run-piston CLI used
+// by the Python 101 importer against a stock Piston instance), use
+// ExecuteWithStdinTimeout instead.
 func (c *PistonClient) ExecuteWithStdin(ctx context.Context, language, code, stdin string) (*PistonExecuteResponse, error) {
+	return c.ExecuteWithStdinTimeout(ctx, language, code, stdin, 10000, 10000)
+}
+
+// ExecuteWithStdinTimeout runs code through Piston with custom run
+// and compile timeouts in milliseconds. Vanilla Piston rejects
+// timeouts > 3000ms by default; pass <= 3000 if running against a
+// stock instance.
+func (c *PistonClient) ExecuteWithStdinTimeout(ctx context.Context, language, code, stdin string, runTimeoutMs, compileTimeoutMs int) (*PistonExecuteResponse, error) {
 	reqBody := PistonExecuteRequest{
-		Language: language,
-		Version:  "*", // latest available
-		Files:    []PistonFile{{Content: code}},
-		Stdin:    stdin,
-		RunTimeout:     10000, // 10 seconds
-		CompileTimeout: 10000,
+		Language:       language,
+		Version:        "*", // latest available
+		Files:          []PistonFile{{Content: code}},
+		Stdin:          stdin,
+		RunTimeout:     runTimeoutMs,
+		CompileTimeout: compileTimeoutMs,
 	}
 
 	bodyJSON, err := json.Marshal(reqBody)

@@ -1,0 +1,239 @@
+id: 72ef6e72-e72e-4190-8515-66a59303dd8d
+slug: functions
+title: 9. Functions
+description: |
+  Define your own functions with `def`. Take parameters, return
+  values, and call functions from other functions. Understand local
+  vs global scope.
+gradeLevel: 9-12
+subjectTags:
+  - python
+  - functions
+standardsTags: []
+estimatedMinutes: 50
+materialType: notes
+blocks:
+  - type: heading
+    text: Big idea
+  - type: paragraph
+    text: |
+      A *function* is a named block of code you can call by name.
+      Define one with `def name(params):` followed by an indented
+      body. `return` sends a value back to the caller. Variables
+      created inside a function are *local* — they don't leak to the
+      outside.
+  - type: heading
+    text: Worked example
+  - type: code
+    text: |
+      def square(x):
+          return x * x
+
+      def sum_of_squares(a, b):
+          return square(a) + square(b)
+
+      print(sum_of_squares(3, 4))  # 25
+  - type: heading
+    text: Try it
+  - type: problem-ref
+    problemSlug: factorial
+    visibility: always
+  - type: problem-ref
+    problemSlug: is-prime
+    visibility: always
+  - type: problem-ref
+    problemSlug: palindrome
+    visibility: always
+  - type: heading
+    text: Common pitfalls
+  - type: list
+    text: |
+      A function without `return` returns `None`.
+      Forgetting `return` (versus `print`) is a common bug — printing
+      doesn't pass the value to the caller.
+      Mutating arguments inside a function affects the caller's value
+      if the argument is mutable (list, dict). Be deliberate about it.
+      Default arguments evaluated once at definition time — don't use
+      mutable defaults like `def f(x=[]):`.
+  - type: heading
+    text: Vocabulary
+  - type: list
+    text: |
+      def — keyword that defines a function.
+      parameter — a name in the function's signature.
+      argument — the value you pass when calling.
+      return — sends a value back to the caller and exits the function.
+problems:
+  - id: 48838739-e727-4a41-9589-a7a041d3206c
+    slug: factorial
+    title: Factorial
+    description: |
+      Read a non-negative integer N. Print N!  (`N * (N-1) * ... * 1`,
+      with `0! = 1`).
+
+      Define a function `factorial(n)` and call it. Don't import
+      `math`.
+
+      **Input:** `5`
+
+      **Output:** `120`
+    difficulty: easy
+    gradeLevel: 9-12
+    tags:
+      - functions
+      - loops
+    starterCode:
+      python: |
+        def factorial(n):
+            # Return n!
+            pass
+
+        n = int(input())
+        print(factorial(n))
+    solution:
+      language: python
+      code: |
+        def factorial(n):
+            result = 1
+            for i in range(2, n + 1):
+                result *= i
+            return result
+
+        n = int(input())
+        print(factorial(n))
+    testCases:
+      - name: "Example: 5"
+        stdin: "5"
+        expectedStdout: "120"
+        isExample: true
+      - name: "Hidden: 0"
+        stdin: "0"
+        expectedStdout: "1"
+        isExample: false
+      - name: "Hidden: 1"
+        stdin: "1"
+        expectedStdout: "1"
+        isExample: false
+      - name: "Hidden: 10"
+        stdin: "10"
+        expectedStdout: "3628800"
+        isExample: false
+
+  - id: ceea57a8-4bba-4ab4-86bd-de7f202af044
+    slug: is-prime
+    title: Is Prime
+    description: |
+      Read an integer N (≥ 2). Print `Yes` if N is prime, `No`
+      otherwise.
+
+      Define `is_prime(n)` that returns `True` or `False`.
+
+      **Input:** `7`
+
+      **Output:** `Yes`
+    difficulty: medium
+    gradeLevel: 9-12
+    tags:
+      - functions
+      - loops
+      - conditionals
+    starterCode:
+      python: |
+        def is_prime(n):
+            # Return True if n is prime, else False.
+            pass
+
+        n = int(input())
+        print("Yes" if is_prime(n) else "No")
+    solution:
+      language: python
+      code: |
+        def is_prime(n):
+            if n < 2:
+                return False
+            i = 2
+            while i * i <= n:
+                if n % i == 0:
+                    return False
+                i += 1
+            return True
+
+        n = int(input())
+        print("Yes" if is_prime(n) else "No")
+    testCases:
+      - name: "Example: 7"
+        stdin: "7"
+        expectedStdout: "Yes"
+        isExample: true
+      - name: "Example: 9"
+        stdin: "9"
+        expectedStdout: "No"
+        isExample: true
+      - name: "Hidden: 2"
+        stdin: "2"
+        expectedStdout: "Yes"
+        isExample: false
+      - name: "Hidden: 1"
+        stdin: "1"
+        expectedStdout: "No"
+        isExample: false
+      - name: "Hidden: large prime"
+        stdin: "97"
+        expectedStdout: "Yes"
+        isExample: false
+
+  - id: a4868073-f595-4208-a188-b9103e825cf5
+    slug: palindrome
+    title: Palindrome
+    description: |
+      Read one line of text. Print `Yes` if it's a palindrome (reads
+      the same forwards and backwards), `No` otherwise. Compare
+      case-sensitively, including spaces and punctuation.
+
+      Define `palindrome(s)`.
+
+      **Input:** `racecar`
+
+      **Output:** `Yes`
+    difficulty: easy
+    gradeLevel: 9-12
+    tags:
+      - functions
+      - strings
+    starterCode:
+      python: |
+        def palindrome(s):
+            # Return True if s reads the same forwards and backwards.
+            pass
+
+        s = input()
+        print("Yes" if palindrome(s) else "No")
+    solution:
+      language: python
+      code: |
+        def palindrome(s):
+            return s == s[::-1]
+
+        s = input()
+        print("Yes" if palindrome(s) else "No")
+    testCases:
+      - name: "Example: racecar"
+        stdin: "racecar"
+        expectedStdout: "Yes"
+        isExample: true
+      - name: "Example: hello"
+        stdin: "hello"
+        expectedStdout: "No"
+        isExample: true
+      - name: "Hidden: empty"
+        stdin: ""
+        expectedStdout: "Yes"
+        isExample: false
+      - name: "Hidden: single char"
+        stdin: "x"
+        expectedStdout: "Yes"
+        isExample: false
+      - name: "Hidden: case-sensitive"
+        stdin: "Racecar"
+        expectedStdout: "No"
+        isExample: false

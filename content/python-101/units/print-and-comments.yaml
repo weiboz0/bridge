@@ -1,0 +1,129 @@
+id: bbd5212f-cb47-4ea5-a68f-a0ee04d95cd4
+slug: print-and-comments
+title: 1. Print & Comments
+description: |
+  Your very first program. You'll see how Python's `print` function
+  sends text to the screen, and how `#` comments let you leave notes
+  in your code without changing what it does.
+gradeLevel: 9-12
+subjectTags:
+  - python
+  - intro
+  - output
+standardsTags: []
+estimatedMinutes: 30
+materialType: notes
+blocks:
+  - type: heading
+    text: Big idea
+  - type: paragraph
+    text: |
+      Programs talk to people by *printing*. In Python, anything you
+      pass to `print()` shows up on the screen, exactly as written
+      between the quotes. Comments — lines that start with `#` —
+      are notes for humans; Python ignores them when it runs.
+  - type: heading
+    text: Worked example
+  - type: code
+    text: |
+      # This is a comment. Python ignores it.
+      print("Hello, World!")
+  - type: paragraph
+    text: |
+      Running this prints `Hello, World!`. The quotes are part of the
+      *code*, not part of the output — they tell Python where the
+      string starts and ends.
+  - type: heading
+    text: Try it
+  - type: problem-ref
+    problemSlug: hello-world
+    visibility: always
+  - type: problem-ref
+    problemSlug: three-lines
+    visibility: always
+  - type: heading
+    text: Common pitfalls
+  - type: list
+    text: |
+      Forgetting the quotes around the text — Python treats unquoted
+      words as variable names and complains they're not defined.
+      Mismatched quote types — `print("Hello')` is a syntax error.
+      Missing parentheses — `print "Hello"` works in Python 2 but is
+      a syntax error in Python 3 (which is what we use here).
+  - type: heading
+    text: Vocabulary
+  - type: list
+    text: |
+      print — built-in function that displays text on the screen.
+      string — a sequence of characters between quotes, like "Hi!".
+      comment — a line starting with `#`; for humans, ignored by Python.
+problems:
+  - id: 1402cc8d-af9c-40a1-9b81-d470299070f6
+    slug: hello-world
+    title: Hello, World
+    description: |
+      Print the exact text:
+
+      ```
+      Hello, World!
+      ```
+
+      Use the `print` function. There is no input.
+    difficulty: easy
+    gradeLevel: 9-12
+    tags:
+      - output
+      - print
+    starterCode:
+      python: |
+        # Print Hello, World! exactly as shown above.
+    solution:
+      language: python
+      code: |
+        print("Hello, World!")
+    testCases:
+      - name: Example
+        stdin: ""
+        expectedStdout: "Hello, World!"
+        isExample: true
+      - name: "Hidden: exact match"
+        stdin: ""
+        expectedStdout: "Hello, World!"
+        isExample: false
+
+  - id: 0786b83e-e4c5-40a2-b307-b65794060d38
+    slug: three-lines
+    title: Three Lines
+    description: |
+      Print three lines exactly:
+
+      ```
+      line 1
+      line 2
+      line 3
+      ```
+
+      Each line goes on its own line. The grader checks them in this
+      order.
+    difficulty: easy
+    gradeLevel: 9-12
+    tags:
+      - output
+      - print
+    starterCode:
+      python: |
+        # Print each line on its own line, in order.
+    solution:
+      language: python
+      code: |
+        print("line 1")
+        print("line 2")
+        print("line 3")
+    testCases:
+      - name: Example
+        stdin: ""
+        expectedStdout: |-
+          line 1
+          line 2
+          line 3
+        isExample: true

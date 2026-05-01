@@ -1,0 +1,247 @@
+id: f5ebe462-add5-497f-bc1a-2c064fabeb15
+slug: files-and-exceptions
+title: 10. Files & Exceptions
+description: |
+  Read multi-line input. Handle bad input with `try` / `except`.
+  (For the grader, "files" are simulated through stdin.)
+gradeLevel: 9-12
+subjectTags:
+  - python
+  - files
+  - exceptions
+standardsTags: []
+estimatedMinutes: 50
+materialType: notes
+blocks:
+  - type: heading
+    text: Big idea
+  - type: paragraph
+    text: |
+      Real Python programs read from files with `open()`, but for
+      these problems you'll read multi-line input from stdin (the
+      grader feeds the lines as if they were a file). When something
+      can fail (e.g., `int("oops")`), wrap it in `try: ... except:` so
+      your program doesn't crash.
+  - type: heading
+    text: Worked example
+  - type: code
+    text: |
+      import sys
+
+      total = 0
+      for line in sys.stdin:
+          line = line.strip()
+          try:
+              total += int(line)
+          except ValueError:
+              pass  # Skip non-integer lines.
+      print(total)
+  - type: heading
+    text: Try it
+  - type: problem-ref
+    problemSlug: count-lines
+    visibility: always
+  - type: problem-ref
+    problemSlug: csv-row-sum
+    visibility: always
+  - type: problem-ref
+    problemSlug: safe-int-parsing
+    visibility: always
+  - type: heading
+    text: Common pitfalls
+  - type: list
+    text: |
+      `for line in sys.stdin:` includes the trailing newline.
+      Use `line.strip()` or `line.rstrip("\n")`.
+      `except:` (bare) catches EVERYTHING including KeyboardInterrupt.
+      Catch the specific exception, e.g., `except ValueError:`.
+      Don't use `try` to skip *expected* control flow. Use `if` for
+      conditions you can check ahead of time.
+  - type: heading
+    text: Vocabulary
+  - type: list
+    text: |
+      exception — an error raised at runtime.
+      try/except — runs the try block; if it raises, runs the except.
+      ValueError — wrong-type-of-value error (e.g., int("abc")).
+      stdin — the standard input stream. Iterating yields lines.
+problems:
+  - id: 075f9c7c-af7b-4356-bbd0-edcffba2f398
+    slug: count-lines
+    title: Count Lines
+    description: |
+      Read all lines from stdin until EOF. Print the number of
+      non-empty lines.
+
+      A line is "empty" if it has no characters once the trailing
+      newline is stripped.
+
+      **Input:**
+      ```
+      hello
+
+      world
+
+      python
+      ```
+
+      **Output:** `3`
+    difficulty: easy
+    gradeLevel: 9-12
+    tags:
+      - stdin
+      - loops
+    starterCode:
+      python: |
+        import sys
+        # Count non-empty lines from sys.stdin.
+    solution:
+      language: python
+      code: |
+        import sys
+        count = 0
+        for line in sys.stdin:
+            if line.strip():
+                count += 1
+        print(count)
+    testCases:
+      - name: Example
+        stdin: |-
+          hello
+
+          world
+
+          python
+        expectedStdout: "3"
+        isExample: true
+      - name: "Hidden: all blank"
+        stdin: "\n\n\n"
+        expectedStdout: "0"
+        isExample: false
+      - name: "Hidden: single line"
+        stdin: "hello"
+        expectedStdout: "1"
+        isExample: false
+
+  - id: 42659962-e411-4d05-8cd7-c3459b3e6ff6
+    slug: csv-row-sum
+    title: CSV Row Sum
+    description: |
+      Each input line is a row of comma-separated integers (no
+      spaces). Print the sum of each row, one per line, in input order.
+
+      **Input:**
+      ```
+      1,2,3
+      10,20
+      5
+      ```
+
+      **Output:**
+      ```
+      6
+      30
+      5
+      ```
+    difficulty: medium
+    gradeLevel: 9-12
+    tags:
+      - stdin
+      - strings
+      - loops
+    starterCode:
+      python: |
+        import sys
+        # For each line, parse the integers and print the sum.
+    solution:
+      language: python
+      code: |
+        import sys
+        for line in sys.stdin:
+            line = line.strip()
+            if not line:
+                continue
+            nums = [int(x) for x in line.split(",")]
+            print(sum(nums))
+    testCases:
+      - name: Example
+        stdin: |-
+          1,2,3
+          10,20
+          5
+        expectedStdout: |-
+          6
+          30
+          5
+        isExample: true
+      - name: "Hidden: negatives"
+        stdin: |-
+          -1,-2,3
+          0,0,0
+        expectedStdout: |-
+          0
+          0
+        isExample: false
+
+  - id: 5ff97431-3071-4a93-95b4-43f0c0b4e3f5
+    slug: safe-int-parsing
+    title: Safe Int Parsing
+    description: |
+      Each input line might be an integer or might be garbage. Print
+      the sum of all the lines that ARE integers (ignore the rest).
+
+      **Input:**
+      ```
+      10
+      hello
+      5
+      world
+      -3
+      ```
+
+      **Output:** `12`
+    difficulty: medium
+    gradeLevel: 9-12
+    tags:
+      - exceptions
+      - try-except
+    starterCode:
+      python: |
+        import sys
+        # Sum the integer lines; skip anything that fails int().
+    solution:
+      language: python
+      code: |
+        import sys
+        total = 0
+        for line in sys.stdin:
+            line = line.strip()
+            try:
+                total += int(line)
+            except ValueError:
+                continue
+        print(total)
+    testCases:
+      - name: Example
+        stdin: |-
+          10
+          hello
+          5
+          world
+          -3
+        expectedStdout: "12"
+        isExample: true
+      - name: "Hidden: all bad"
+        stdin: |-
+          a
+          b
+          c
+        expectedStdout: "0"
+        isExample: false
+      - name: "Hidden: all good"
+        stdin: |-
+          1
+          2
+          3
+        expectedStdout: "6"
+        isExample: false

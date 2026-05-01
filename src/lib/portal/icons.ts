@@ -18,6 +18,7 @@ export function getIconChar(iconName: string): string {
     "help-circle": "❓",
     "file-text": "📄",
     "video": "🎥",
+    "puzzle": "🧩",
   };
   return icons[iconName] || "•";
 }

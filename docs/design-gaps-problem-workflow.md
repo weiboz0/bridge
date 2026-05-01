@@ -1,5 +1,12 @@
 # Design gaps surfaced by authoring a real course
 
+> **Historical note (plan 049):** the seed file referenced below
+> (`scripts/seed_python_101.sql`) was retired when plan 049 introduced
+> the YAML-based authoring format at `content/python-101/`. Treat this
+> file as a historical inventory of friction points the *original*
+> SQL-based authoring exposed; some are now resolved by the importer
+> (see `content/python-101/README.md`), others are still open.
+
 *Context:* writing `scripts/seed_python_101.sql` (a 6-topic, 12-problem Python 101 unit) against the Problem / Attempt / Test workflow shipped in plans 024–026. The seed works end-to-end; the issues below are real friction points that will surface again when teachers author their own problems. Ordered roughly by impact.
 
 ---
