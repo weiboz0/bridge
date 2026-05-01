@@ -48,6 +48,7 @@ import { readdir, readFile, stat } from "node:fs/promises";
 import { join, basename } from "node:path";
 import { sql, eq, and, isNull, inArray } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
+import { nanoid } from "nanoid";
 import postgres, { type Sql } from "postgres";
 import {
   courses,
@@ -375,36 +376,116 @@ async function checkIdentities(
  *
  *   { type: "doc", content: [<block>, ...] }
  *
- * For plan 049, only `problem-ref` blocks survive into
- * unit_documents.blocks. Prose blocks in the YAML are documentation
- * for authors; teachers can edit prose in the unit editor afterward.
- * This keeps the importer's surface area small for v1.
+ * Maps each authoring block to a Tiptap-compatible node so the
+ * unit renders with its prose intact. Mapping (see KNOWN_NODE_TYPES
+ * in src/components/editor/tiptap/teaching-unit-editor.tsx for the
+ * authoritative whitelist):
+ *
+ *   heading      -> heading (level 2)
+ *   paragraph    -> paragraph
+ *   list         -> bulletList of listItem(paragraph) per non-empty line
+ *   callout      -> teacher-note wrapping a paragraph (closest match;
+ *                    the editor has no native callout type)
+ *   code         -> codeBlock with language attr
+ *   problem-ref  -> problem-ref custom node
  */
 function buildUnitDocumentBlocks(
   unit: UnitFile,
   problemIdBySlug: Map<string, string>,
 ): Record<string, unknown> {
   const blocks: Record<string, unknown>[] = [];
-  let blockIdx = 0;
+  let problemRefIdx = 0;
   for (const block of unit.blocks) {
-    if (block.type !== "problem-ref") continue;
-    const problemId = problemIdBySlug.get(block.problemSlug);
-    if (!problemId) {
-      throw new Error(
-        `unit ${unit.slug}: problem-ref to "${block.problemSlug}" but no problem id was registered`,
-      );
+    if (block.type === "problem-ref") {
+      const problemId = problemIdBySlug.get(block.problemSlug);
+      if (!problemId) {
+        throw new Error(
+          `unit ${unit.slug}: problem-ref to "${block.problemSlug}" but no problem id was registered`,
+        );
+      }
+      blocks.push({
+        type: "problem-ref",
+        attrs: {
+          id: `b${String(problemRefIdx).padStart(3, "0")}`,
+          problemId,
+          pinnedRevision: null,
+          visibility: block.visibility,
+          overrideStarter: null,
+        },
+      });
+      problemRefIdx++;
+      continue;
     }
-    blocks.push({
-      type: "problem-ref",
-      attrs: {
-        id: `b${String(blockIdx).padStart(3, "0")}`,
-        problemId,
-        pinnedRevision: null,
-        visibility: block.visibility,
-        overrideStarter: null,
-      },
-    });
-    blockIdx++;
+
+    // Prose blocks. The text comes from the YAML's `text` field, which
+    // arrives as a single string (`|`-block scalars preserve the
+    // newlines). Some block types want it split into list items; the
+    // rest treat the whole string as a single block.
+    const text = block.text;
+    switch (block.type) {
+      case "heading":
+        blocks.push({
+          type: "heading",
+          attrs: { level: 2 },
+          content: text.length > 0 ? [{ type: "text", text }] : [],
+        });
+        break;
+
+      case "paragraph":
+        // Authors may put multi-paragraph content in one YAML block via
+        // blank-line splits. Emit one `paragraph` node per chunk so
+        // the editor renders them with proper spacing.
+        for (const chunk of text.split(/\n{2,}/)) {
+          const trimmed = chunk.trim();
+          if (!trimmed) continue;
+          blocks.push({
+            type: "paragraph",
+            content: [{ type: "text", text: trimmed }],
+          });
+        }
+        break;
+
+      case "list": {
+        const items = text
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter((line) => line.length > 0)
+          .map((line) => ({
+            type: "listItem",
+            content: [
+              {
+                type: "paragraph",
+                content: [{ type: "text", text: line }],
+              },
+            ],
+          }));
+        if (items.length > 0) {
+          blocks.push({ type: "bulletList", content: items });
+        }
+        break;
+      }
+
+      case "callout":
+        blocks.push({
+          type: "teacher-note",
+          attrs: { id: nanoid() },
+          content: [
+            {
+              type: "paragraph",
+              content: text.length > 0 ? [{ type: "text", text }] : [],
+            },
+          ],
+        });
+        break;
+
+      case "code":
+        blocks.push({
+          type: "codeBlock",
+          attrs: { language: "python" },
+          content: text.length > 0 ? [{ type: "text", text }] : [],
+        });
+        break;
+    }
   }
   return { type: "doc", content: blocks };
 }
