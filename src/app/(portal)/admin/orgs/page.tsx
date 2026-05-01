@@ -1,5 +1,6 @@
-import { api } from "@/lib/api-client";
-import { Card, CardContent } from "@/components/ui/card";
+import { redirect } from "next/navigation";
+import { api, ApiError } from "@/lib/api-client";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { OrgActions } from "@/components/admin/org-actions";
 
 interface Org {
@@ -18,7 +19,44 @@ export default async function AdminOrgsPage({
 }) {
   const { status } = await searchParams;
   const path = status ? `/api/admin/orgs?status=${encodeURIComponent(status)}` : "/api/admin/orgs";
-  const orgs = await api<Org[]>(path);
+
+  // PortalShell already gates admin access via /api/me/portal-access,
+  // but defend in depth: a session whose JWT doesn't carry
+  // `isPlatformAdmin` (e.g., admin granted in the DB after the
+  // session was issued) can pass the portal check via membership but
+  // still fail RequireAdmin on Go's admin endpoints. Show a clean
+  // card instead of throwing the raw ApiError.
+  let orgs: Org[];
+  try {
+    orgs = await api<Org[]>(path);
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 401) {
+      redirect("/login");
+    }
+    if (e instanceof ApiError && e.status === 403) {
+      return (
+        <div className="p-6 max-w-2xl">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-lg">Platform admin access required</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2 text-sm text-muted-foreground">
+              <p>
+                Your session doesn&apos;t have platform-admin privileges. If
+                you were just granted the role, sign out and back in to
+                refresh your session.
+              </p>
+              <p>
+                If you don&apos;t expect to be a platform admin, return to{" "}
+                <a href="/" className="underline text-primary">your dashboard</a>.
+              </p>
+            </CardContent>
+          </Card>
+        </div>
+      );
+    }
+    throw e; // surface unexpected errors
+  }
 
   return (
     <div className="p-6 space-y-6">
