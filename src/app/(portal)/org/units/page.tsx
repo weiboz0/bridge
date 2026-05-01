@@ -159,9 +159,26 @@ export default async function OrgUnitsPage({
               {items.map((u) => (
                 <tr key={u.id} className="border-t hover:bg-muted/30">
                   <td className="px-4 py-2 font-medium">
-                    <Link href={`/teacher/units/${u.id}/edit`} className="text-primary underline-offset-2 hover:underline">
-                      {u.title}
-                    </Link>
+                    {/*
+                     * Only link units the caller can edit. Platform-
+                     * scope units render as plain titles — clicking
+                     * /teacher/units/{id}/edit on those would just
+                     * 403 the save (canEditUnit requires platform
+                     * admin for platform scope). Org-scope units in
+                     * the caller's org are editable; we link those.
+                     */}
+                    {u.scope === "org" ? (
+                      <Link
+                        href={`/teacher/units/${u.id}/edit`}
+                        className="text-primary underline-offset-2 hover:underline"
+                      >
+                        {u.title}
+                      </Link>
+                    ) : (
+                      <span title="Platform-scope library unit — read-only from this view">
+                        {u.title}
+                      </span>
+                    )}
                   </td>
                   <td className="px-4 py-2 text-xs text-muted-foreground font-mono">
                     {u.slug ?? "—"}

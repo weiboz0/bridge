@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { api, ApiError } from "@/lib/api-client";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 interface Problem {
   id: string;
@@ -57,6 +57,23 @@ export default async function TeacherProblemsPage({
     data = await api<ListResponse>(path);
   } catch (e) {
     if (e instanceof ApiError && e.status === 401) redirect("/login");
+    if (e instanceof ApiError && e.status === 403) {
+      return (
+        <div className="p-6 max-w-2xl">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-lg">Problem bank unavailable</CardTitle>
+            </CardHeader>
+            <CardContent className="text-sm text-muted-foreground">
+              <p>
+                Your account doesn&apos;t have permission to browse the problem
+                bank. Return to <a href="/" className="underline text-primary">your dashboard</a>.
+              </p>
+            </CardContent>
+          </Card>
+        </div>
+      );
+    }
     throw e;
   }
   const items = data.items ?? [];

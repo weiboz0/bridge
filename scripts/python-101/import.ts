@@ -890,6 +890,17 @@ async function wireDemoClass(
 
   if (existingClone) {
     // Already cloned. Just ensure the demo class points at it.
+    // Important: re-runs of --wire-demo-class do NOT refresh the
+    // cloned course's content from the source. The clone is eve's
+    // editable copy — auto-refreshing would clobber any local
+    // edits she's made. To push source updates into the demo
+    // clone, delete the clone (e.g. DELETE FROM courses WHERE
+    // id = '<DEMO_CLONE_COURSE_ID>' CASCADE) and re-run the
+    // importer; a follow-up plan should add an explicit
+    // `--refresh-demo-clone` flag for content authors.
+    process.stderr.write(
+      `WARNING: demo clone ${DEMO_CLONE_COURSE_ID} already exists; --wire-demo-class is NOT refreshing its content from the source. Drop the clone and re-run if you want fresh content.\n`,
+    );
     if (demoClass.courseId !== DEMO_CLONE_COURSE_ID) {
       await tx
         .update(classes)
