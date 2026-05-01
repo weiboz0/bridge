@@ -1,10 +1,12 @@
-# Plan 050 — Refresh JWT claims on every NextAuth `jwt()` call
+# Plan 050 — Auth correctness: JWT refresh + DEV_SKIP_AUTH production guard
 
 ## Status
 
-- **Date:** 2026-05-01
-- **Origin:** Codex post-impl review of PR #79 (`fix/browser-theme-and-admin-403`) — `[IMPORTANT]` follow-up.
+- **Date:** 2026-05-01 (re-scoped to absorb DEV_SKIP_AUTH guard)
+- **Origin:** Codex post-impl review of PR #79 + `docs/reviews/009-deep-codebase-review-2026-04-30.md` §P1-2.
 - **Scope:** Backend auth only. No UI work.
+
+This plan combines two narrow auth-correctness fixes that share the same surface (NextAuth JWT + Go middleware) but are independent: refresh the JWT's `isPlatformAdmin` claim from the DB on every `jwt()` call, AND prevent `DEV_SKIP_AUTH` from accidentally activating in production.
 
 ## Problem
 
@@ -17,11 +19,17 @@ Two consequences:
 
 The Go side reads the same JWT field at `platform/internal/auth/jwt.go:156-158` and `platform/internal/auth/middleware.go:191-205`. Whatever the TS jwt callback writes, the Go middleware trusts.
 
+## Problem 2: `DEV_SKIP_AUTH` has no production guard
+
+`platform/internal/auth/middleware.go:89-104` honors a `DEV_SKIP_AUTH` env var: any non-empty value bypasses authentication entirely and injects a synthetic `Dev User` claims struct. `DEV_SKIP_AUTH=admin` grants full platform-admin access. There is no `APP_ENV == "production"` check — if the variable accidentally leaks into a staging or production deployment (operator error, secrets-manager mistake, container env misconfiguration), every request is treated as a fully-privileged dev user.
+
+Per review 009-2026-04-30 §P1-2 the recommendation is: at server startup, panic (or refuse to start) when `DEV_SKIP_AUTH != "" && APP_ENV == "production"`. Also explicitly zero `ImpersonatedBy` on the synthetic claims to avoid the impersonator-bypass carve-out in `RequireAdmin`.
+
 ## Out of scope
 
 - The `id` field on the token. It's set once on first login and never legitimately changes; refreshing it would be redundant.
 - Email/name updates. Those flow through profile-edit handlers; not part of the JWT claims surface for authorization.
-- Any change to the Go-side claim parsing or middleware. That layer is correct as-is — it just trusts what the TS side writes.
+- Any change to the Go-side claim parsing or middleware beyond the startup guard. That layer is correct as-is — it just trusts what the TS side writes.
 - Soft-deleted users. Bridge has no soft-delete today; if/when it does, this plan revisits.
 
 ## Approach
@@ -59,12 +67,20 @@ The `if (user)` branch (first-login signup-link flow at `src/lib/auth.ts:182-191
 
 ## Files
 
+**JWT refresh path:**
 - Modify: `src/lib/auth.ts` — JWT callback rewritten as above.
-- Modify: `tests/integration/auth-jwt-refresh.test.ts` (new) — integration test covering:
+- Add: `tests/integration/auth-jwt-refresh.test.ts` — integration test covering:
   - Promotion: user signs in → not admin → DB sets `is_platform_admin=true` → next protected request shows admin role.
   - Demotion: user signs in as admin → DB sets `is_platform_admin=false` → next protected request rejected.
   - Account deletion: user's `users` row deleted → next request behaves as unauthenticated.
 - Verify: existing `tests/integration/admin-orgs-api.test.ts` and `admin-users-api.test.ts` still pass — the page-level 403 card from PR #79 remains correct as defense in depth.
+
+**DEV_SKIP_AUTH guard path:**
+- Modify: `platform/cmd/api/main.go` — at startup, before wiring any handler, check `os.Getenv("DEV_SKIP_AUTH") != ""` AND `os.Getenv("APP_ENV") == "production"`. If both, `slog.Error(...)` and `os.Exit(1)` (refuse to start). Document the guard inline.
+- Modify: `platform/internal/auth/middleware.go:89-104` — explicitly zero `ImpersonatedBy` on the synthetic dev claims so that `RequireAdmin`'s impersonator-bypass carve-out doesn't accidentally accept dev claims as admin.
+- Add: `platform/cmd/api/main_test.go` (or a smaller `auth/dev_skip_test.go`) — table-driven test that the startup guard returns/exits when both env vars are set.
+
+**APP_ENV convention:** if Bridge doesn't currently set `APP_ENV`, the guard treats absence-of-`APP_ENV` as "not production" (safe default for dev). Document the convention in `docs/setup.md` so deploys know to set `APP_ENV=production` in prod env.
 
 ## Risks
 
