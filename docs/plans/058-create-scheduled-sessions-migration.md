@@ -150,3 +150,45 @@ Pass 2 caught a stale 0014:33-49 citation in the Risks table. Pass 3 caught conf
 > "No remaining blockers found. Ordering is sound, idempotence now covers ENUM/table/index/FK paths, and test scope covers enum values, columns, indexes, and FK constraint."
 
 **Status: ready for implementation.**
+
+---
+
+## Post-Execution Report
+
+Implementation shipped 2026-05-01 on branch `fix/058-scheduled-sessions-migration` (PR #81). Two commits:
+
+- `1369d2d` — initial migration + Drizzle parity + 4-assertion regression test.
+- `97f965f` — Codex post-impl pass-1 fixups: missing FK reference on `sessions.scheduledSessionId` (CRITICAL drift between schema.ts and the migration); column test broadened to assert `udt_name` + `column_default`; index test broadened to assert column lists via `pg_index → pg_attribute`; FK test broadened to assert `conkey`/`confkey` so a column swap is caught.
+
+### What landed
+
+- **`drizzle/0023_create_scheduled_sessions.sql`** — backfills the `schedule_status` ENUM, the `scheduled_sessions` table, three named indexes, and the `sessions.scheduled_session_id` FK that 0014's `IF EXISTS` guard skipped on fresh DBs. All clauses idempotent.
+- **`src/lib/db/schema.ts`** — `scheduleStatusEnum` pgEnum and `scheduledSessions` pgTable matching the migration shape; `sessions.scheduledSessionId` now declares `.references((): AnyPgColumn => scheduledSessions.id, { onDelete: "set null" })` (uses the lazy callback form because `scheduledSessions` is declared later in the same module).
+- **`tests/integration/schema-scheduled-sessions.test.ts`** — 4 assertions (ENUM values, columns/types/defaults/nullability, index column lists, FK columns + delete behavior).
+
+### Verification
+
+- `bun run test`: 533 passed (74 files, 11 skipped) — up from 529 with the 4 new schema parity tests.
+- `cd platform && go test ./... -count=1 -timeout 180s`: all packages pass.
+- Idempotent re-apply on `bridge` and `bridge_test` (both hand-created): NOTICE "already exists, skipping" on every CREATE; no UPDATE on the constraint guard.
+- **Fresh-DB bootstrap** (the test that would have caught the original gap): `dropdb && createdb bridge_058_test`, then ran every `drizzle/0*.sql` in order via `psql -f`. Result: clean run, `\d scheduled_sessions` shows all 11 columns, 4 indexes, 3 FKs (including the one 0014 used to skip). Test DB dropped after.
+- `tsc --noEmit`: clean.
+
+### Codex review summary
+
+- **Pre-impl plan review:** 6 passes to CONCUR. Most rounds were narrow citation tightening (the `EXCEPTION WHEN duplicate_object` vs `IF NOT EXISTS pg_type` distinction).
+- **Post-impl review pass 1:** 1 [CRITICAL] (missing FK reference) + 3 [IMPORTANT] (test scope on types/defaults, index columns, FK columns). All addressed in `97f965f`.
+- **Post-impl review pass 2:** "POST-IMPL CONCUR — All four findings fixed; no new issues introduced."
+
+### Deviations from the plan
+
+None. The implementation matches the approved plan section-for-section. The lazy-callback FK pattern `(): AnyPgColumn => scheduledSessions.id` was added in response to the Codex post-impl pass-1 [CRITICAL] finding; the plan didn't anticipate that schema.ts would need it because the plan was written before the implementation surfaced the forward-reference ordering issue.
+
+### Open follow-ups
+
+- None blocking. The broader Drizzle drift problem (`drizzle-kit push` could still emit ALTER statements for OTHER schema/migration mismatches not yet audited) is its own concern, tracked by the existing Plans 054 (drop stale `documents.classroom_id`) and the schema parity gaps cataloged in `docs/reviews/009-deep-codebase-review-2026-04-30.md` §P1-12.
+- `drizzle-kit migrate` is broken for migrations beyond 0002 (only 0000-0002 are in `drizzle/meta/_journal.json`). `TODO.md` already flags this as known infra debt; this plan does not fix it.
+
+### Sign-off
+
+**Status: ready for merge.** All CLAUDE.md requirements satisfied — Codex pre-impl plan review (CONCUR), Codex post-impl code review (CONCUR), full test suites pass, fresh-DB bootstrap verified, post-execution report written.
