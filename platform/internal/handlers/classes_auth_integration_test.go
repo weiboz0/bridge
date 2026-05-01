@@ -32,6 +32,11 @@ func authFxClaimsByRole(fx *sessionPageFixture, role string) *auth.Claims {
 		return &auth.Claims{UserID: fx.teacher.ID}
 	case "student":
 		return &auth.Claims{UserID: fx.student.ID}
+	case "ta":
+		// TA isn't part of the standard fixture; tests that need a TA
+		// caller add one via addTAToFixture below and use a UserID
+		// claim with the returned TA's user ID.
+		return &auth.Claims{UserID: fx.outsider.ID}
 	case "outsider":
 		return &auth.Claims{UserID: fx.outsider.ID}
 	case "orgAdmin":
@@ -40,6 +45,30 @@ func authFxClaimsByRole(fx *sessionPageFixture, role string) *auth.Claims {
 		return &auth.Claims{UserID: fx.admin.ID, IsPlatformAdmin: true}
 	}
 	return nil
+}
+
+// addTAToFixture promotes the fixture's `outsider` user into the
+// class as a TA. Used by tests that need to verify the TA boundary
+// (passes `roster`, fails `mutate`). Returns the membership ID for
+// remove/update tests.
+//
+// We reuse the outsider rather than creating a new user because the
+// fixture's cleanup hooks already drop their memberships at test
+// teardown. After this call, the outsider IS a TA member of the
+// class — `authFxClaimsByRole(fx, "outsider")` would test that
+// (incorrectly) so use `authFxClaimsByRole(fx, "ta")` instead, which
+// returns the same UserID but signals intent in the test name.
+func addTAToFixture(t *testing.T, fx *sessionPageFixture) string {
+	t.Helper()
+	classes := store.NewClassStore(fx.db)
+	m, err := classes.AddClassMember(t.Context(), store.AddClassMemberInput{
+		ClassID: fx.classID,
+		UserID:  fx.outsider.ID,
+		Role:    "ta",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, m)
+	return m.ID
 }
 
 func callArchiveClass(t *testing.T, ch *ClassHandler, classID string, claims *auth.Claims) int {
@@ -231,6 +260,70 @@ func TestRemoveMember_AuthMatrix(t *testing.T) {
 			assert.Equal(t, tc.expected, code, "role=%s", tc.role)
 		})
 	}
+}
+
+// --- TA boundary -----------------------------------------------------------
+
+// The TA boundary distinguishes `roster` (passes) from `mutate`
+// (fails). TA is a teaching role but not a class-admin role: a TA
+// can see the roster but cannot archive the class or mutate
+// memberships. Without this test, the level distinction is
+// untested.
+
+func TestListMembers_TA_Allowed(t *testing.T) {
+	fx := newSessionPageFixture(t, "lm-ta")
+	addTAToFixture(t, fx)
+	ch := newClassHandlerForFixture(fx)
+	code := callListMembers(t, ch, fx.classID, authFxClaimsByRole(fx, "ta"))
+	assert.Equal(t, http.StatusOK, code)
+}
+
+func TestArchiveClass_TA_Denied(t *testing.T) {
+	fx := newSessionPageFixture(t, "arch-ta")
+	addTAToFixture(t, fx)
+	ch := newClassHandlerForFixture(fx)
+	code := callArchiveClass(t, ch, fx.classID, authFxClaimsByRole(fx, "ta"))
+	assert.Equal(t, http.StatusNotFound, code)
+}
+
+func TestAddMember_TA_Denied(t *testing.T) {
+	fx := newSessionPageFixture(t, "am-ta")
+	addTAToFixture(t, fx)
+	ch := newClassHandlerForFixture(fx)
+	// TA tries to add a NEW user — pick a fresh email that exists in
+	// users via the platform admin (admin user is registered in the
+	// fixture but not a class member).
+	code := callAddMember(t, ch, fx.classID, fx.admin.Email, authFxClaimsByRole(fx, "ta"))
+	assert.Equal(t, http.StatusNotFound, code)
+}
+
+func TestUpdateMemberRole_TA_Denied(t *testing.T) {
+	fx := newSessionPageFixture(t, "umr-ta")
+	addTAToFixture(t, fx)
+	ch := newClassHandlerForFixture(fx)
+	memberID := findStudentMembershipID(t, fx)
+	code := callUpdateMemberRole(t, ch, fx.classID, memberID, "ta", authFxClaimsByRole(fx, "ta"))
+	assert.Equal(t, http.StatusNotFound, code)
+}
+
+func TestRemoveMember_TA_Denied(t *testing.T) {
+	fx := newSessionPageFixture(t, "rm-ta")
+	addTAToFixture(t, fx)
+	ch := newClassHandlerForFixture(fx)
+	memberID := findStudentMembershipID(t, fx)
+	code := callRemoveMember(t, ch, fx.classID, memberID, authFxClaimsByRole(fx, "ta"))
+	assert.Equal(t, http.StatusNotFound, code)
+}
+
+// --- nil-store guard -------------------------------------------------------
+
+// RequireClassAuthority returns ErrAccessHelperMisconfigured (so the
+// caller writes 500) when the class store is nil. A misconfigured
+// handler is a programming bug, not an access decision.
+func TestRequireClassAuthority_NilStoreReturnsErr(t *testing.T) {
+	_, ok, err := RequireClassAuthority(t.Context(), nil, nil, &auth.Claims{UserID: "u-1"}, "c-1", AccessRead)
+	assert.False(t, ok)
+	assert.ErrorIs(t, err, ErrAccessHelperMisconfigured)
 }
 
 // --- impersonator carve-out ------------------------------------------------

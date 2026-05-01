@@ -2,10 +2,17 @@ package handlers
 
 import (
 	"context"
+	"errors"
 
 	"github.com/weiboz0/bridge/platform/internal/auth"
 	"github.com/weiboz0/bridge/platform/internal/store"
 )
+
+// ErrAccessHelperMisconfigured is returned by RequireClassAuthority
+// when a required store dependency is nil. Callers see this as a 500
+// (Database error) rather than a silent 404; a misconfigured handler
+// is a programming bug, not an access decision.
+var ErrAccessHelperMisconfigured = errors.New("access helper misconfigured: required store is nil")
 
 // AccessLevel describes how privileged the caller must be to pass a
 // `RequireClassAuthority` check. Plan 052.
@@ -67,6 +74,12 @@ func RequireClassAuthority(
 ) (*store.Class, bool, error) {
 	if claims == nil {
 		return nil, false, nil
+	}
+	if classes == nil {
+		// Handler wired without a class store — surface a real error
+		// so the caller writes 500. Silently returning (nil, false, nil)
+		// would mask the misconfiguration as a 404.
+		return nil, false, ErrAccessHelperMisconfigured
 	}
 
 	class, err := classes.GetClass(ctx, classID)
