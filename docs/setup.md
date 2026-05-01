@@ -54,6 +54,35 @@ To browse the database visually:
 bun run db:studio
 ```
 
+### Seeding sample content
+
+```bash
+# 1. Bootstrap the Bridge HQ org + system user (one-time, idempotent).
+psql postgresql://work@127.0.0.1:5432/bridge -f scripts/seed_bridge_hq.sql
+
+# 2. Bring up Piston for solution verification (one-time).
+docker run -d --rm --privileged -v /piston \
+  --name piston -p 2000:2000 ghcr.io/engineer-man/piston
+curl -X POST http://localhost:2000/api/v2/packages \
+  -H 'Content-Type: application/json' \
+  -d '{"language":"python","version":"3.10.0"}'
+
+# 3. Import Python 101 (validates YAML, runs all reference solutions
+#    against Piston, writes to the DB in one transaction).
+bun run content:python-101:import --apply
+
+# 4. Wire the demo class to Bridge HQ Python 101 (idempotent).
+psql postgresql://work@127.0.0.1:5432/bridge -f scripts/wire_python_101_demo_class.sql
+```
+
+To skip the Piston pre-flight (e.g., on a host without Docker), pass
+`--skip-sandbox` to step 3. This is fine for trying out the workflow,
+but reference solutions won't be verified against CPython.
+
+The Python 101 source-of-truth is `content/python-101/`. Edit the
+YAML files, run the importer, and the changes propagate. See
+`content/python-101/README.md` for the authoring guide.
+
 ## Google OAuth Setup
 
 1. Go to [Google Cloud Console](https://console.cloud.google.com)

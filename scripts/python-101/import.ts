@@ -378,8 +378,7 @@ async function checkIdentities(
  * For plan 049, only `problem-ref` blocks survive into
  * unit_documents.blocks. Prose blocks in the YAML are documentation
  * for authors; teachers can edit prose in the unit editor afterward.
- * This matches the legacy `seed_python_101.sql` behavior and keeps
- * the importer's surface area small for v1.
+ * This keeps the importer's surface area small for v1.
  */
 function buildUnitDocumentBlocks(
   unit: UnitFile,

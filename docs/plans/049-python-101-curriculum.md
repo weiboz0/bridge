@@ -2,9 +2,10 @@
 
 ## Status
 
-- **Date:** 2026-04-30
+- **Date:** 2026-04-30 (started) → 2026-04-30 (shipped, all 6 phases)
 - **Branch:** `feat/049-python-101-curriculum`
 - **Goal:** Build a **platform-scope library** of 12 teaching units and ~60 problems for introductory Python (Option B per user 2026-04-30), then create a Bridge-HQ-org-scoped Python 101 course as the canonical arrangement. Other orgs adopt via the existing `CloneCourse` flow. Replace the legacy seed at `scripts/seed_python_101.sql` (broken since plan 046 dropped `topics.lesson_content`).
+- **Outcome:** Authored 12 units / 34 problems / 107 test cases. All reference solutions verified by real CPython through Piston. Bridge HQ Python 101 course live in dev DB; demo class wired to it. Legacy seed retired. See "Post-execution report" at the bottom.
 
 ## Sources
 
@@ -406,3 +407,76 @@ Two follow-up Codex reviews on the substantive rewrite (commit `e22feb6`) return
 The plan retains 1 CONCERN from dispatch 3:
 
 - **Phase 5 terminology audit** is in scope; the implementation pass MUST grep authored prose for stale "Topic" copy and align with plan 048's "Focus Area" rename. Captured in Phase 5 step 7.
+
+---
+
+## Post-execution report
+
+Shipped 2026-04-30 across 6 phases on branch `feat/049-python-101-curriculum`.
+
+### What landed
+
+| Phase | Commit | Summary |
+|---|---|---|
+| 0 | `0cfc3b2`, `58ac387` | Bridge HQ org + system user seed; Piston runtime path decided (Go CLI shellout); legacy extract drafted as Phase-4 starting drafts |
+| 1 | `c7d24a9` | Zod schema + validator CLI + `content/python-101/README.md`; pinned `uuid@14.0.0` and `yaml@2.8.3`; 27 unit tests |
+| 2 | `27ba9fb` | `platform/cmd/run-piston` Go CLI + `sandbox-runner.ts` + transactional `import.ts` (3-pass: library → course → link); 6 integration tests + 4 Go CLI tests; `cleanupDatabase` updated for the problem-bank tables |
+| 3 | `06ed3bd` | Canary unit `print-and-comments` (2 problems carried over from the legacy seed); end-to-end --apply against bridge_test and bridge dev verified at the DB level |
+| 4 | `853039a` | 11 remaining units authored (variables-and-types, arithmetic-and-operators, strings, conditionals, loops, lists, dicts-and-sets, functions, files-and-exceptions, classes-and-objects, capstone); course.yaml expanded to all 12 topics; 34 problems / 107 test cases total |
+| 5 | `09291c1` | Real Piston pre-flight against all 34 reference solutions × 107 test cases. Three author bugs caught and fixed: count-vowels off-by-one (7→6), unique-vowels missed `o` (4→5), hangman EOFError from `\|-` chomping the second stdin line. `PistonClient.ExecuteWithStdinTimeout` extracted (vanilla Piston caps run_timeout at 3000ms) |
+| 6 | (this commit) | Demo class wired to Bridge HQ Python 101 via `scripts/wire_python_101_demo_class.sql`; legacy `scripts/seed_python_101.sql` deleted; `docs/setup.md` updated with seeding flow; `docs/design-gaps-problem-workflow.md` annotated as historical |
+
+### Numbers
+
+- **12 teaching units** authored at platform scope (`teaching_units.scope='platform'`, `scope_id=NULL`).
+- **34 problems**, all `scope='platform'`, `status='published'`.
+- **34 canonical solutions** (one per problem, `is_published=true`).
+- **107 test cases** (canonical, `owner_id=NULL`). All run cleanly through CPython 3.10 via Piston with the documented expected stdout.
+- **34 `topic_problems` rows** linking problems to course topics.
+- **1 course** (`Python 101 — Introduction to Programming`, id `8935aea2-e208-48d6-b5fa-56e54d1dc451`) in Bridge HQ org.
+- **12 topics** in the course, each linked 1:1 to a teaching unit per plan 044.
+- **1 wired demo class** (`Python 101 · Period 3`, id `00000000-0000-0000-0000-000000400101`).
+
+### Tests
+
+- `bun run test`: 526 passed / 11 skipped / 73 files (unchanged from baseline).
+- `cd platform && go test ./... -count=1`: all packages pass; `cmd/run-piston`: 4 tests (happy path, transport error, invalid stdin, missing fields).
+- Integration tests in `tests/integration/python-101-import.test.ts`: 6 cases (dry-run; full apply; idempotent re-run; library-only; slug-rename guard; rollback on conflict).
+
+### Deviations from the original plan
+
+1. **`CloneCourse` for the demo wire-up was skipped.** Plan 049's Phase 6 called for `Courses.CloneCourse(BRIDGE_HQ_PYTHON_101_ID, eveDemoUserId)` followed by a `classes.course_id` swap. CloneCourse intentionally drops the topic→unit links during the clone (per plan 044's 1:1 invariant — only one course can claim a given platform-scope unit), so the cloned course's topics would render without teaching content, defeating the demo. **Resolution:** the demo class points DIRECTLY at Bridge HQ Python 101 via `scripts/wire_python_101_demo_class.sql`. There's no DB constraint requiring `classes.org_id == courses.org_id`, and Bridge HQ is the canonical publisher. Cross-org "subscribe" semantics (the proper fix) is a future plan; documented in the SQL file's header comment. The simpler approach IS the long-term fix until the user wants per-org curriculum forks, at which point a follow-up plan adds clone-with-units-too logic.
+
+2. **Phase 0 audit step "audit `scripts/seed_problem_demo.sql`"** — kept, no overlap with Python 101. No code change needed.
+
+3. **Phase 3 throughput artifact** — wrote `docs/plans/049-python-101-throughput.md` after the canary, with a Phase 4 projection of ~10.5h focused authoring across the remaining 11 units. Actual Phase 4 ran in a single session (~75 min wall-clock, including 3 fixes from Phase 5).
+
+4. **Phase 5 picker discovery test (browser smoke A) and Phase 5 step 6 (different-org teacher view)** — not executed; require manual UI testing. Documented as deferred to a session with browser access.
+
+5. **Phase 5 terminology audit (CONCERN from Codex pass-3)** — the authored prose uses "topic" idiomatically (e.g., "advanced topic" in vocabulary lists) and "Focus Area" doesn't appear. The plan-048 rename is a UI-label rename in `src/app/...`; authored content describes the concept, not the UI. No prose changes needed; this matches the rename's intent.
+
+### Authoring throughput (actual)
+
+Phase 4 wall-clock was ~75 minutes (12 units × ~6 min each, including the 3 fixes Phase 5 caught). Per-unit median was much shorter than the canary's projected 30-45 min — the schema + validator + importer toolchain made authoring mechanical. Bottleneck was domain-side (counting vowels correctly, choosing meaningful test inputs), not toolchain-side.
+
+### Open follow-ups (non-blocking; no plan filed yet)
+
+- **Browser smoke A and B** — manual UI testing in a session with browser access. Add a one-line note to the next session.
+- **Cross-org course subscription semantics** — if/when a second org wants to teach Python 101 with their own copy, design a "subscribe" or "fork" model. The current 1:1 unit↔topic invariant blocks two courses claiming the same units. Plan 050+.
+- **Pyodide ↔ Piston drift catalog** — the canary's 3 fixes were author bugs, not drift. But the constraint list in `content/python-101/README.md` is preventive, not exhaustive. As real students hit drift, expand the list.
+- **Authoring CLI helpers** — `bun run new-uuid` (one-liner today), maybe a scaffolder for new units. Defer until authors complain.
+
+### Pull-request checklist
+
+- [x] All phases committed separately.
+- [x] Plan 049 has Phase status updates and this post-execution report.
+- [x] Full vitest suite passes.
+- [x] Full Go suite passes (including the new `cmd/run-piston` package).
+- [x] Importer is idempotent (re-running yields no-op).
+- [x] Real Piston pre-flight passes for all 34 problems × 107 cases.
+- [x] Demo class points at Bridge HQ Python 101 in dev DB.
+- [x] Legacy seed (`scripts/seed_python_101.sql`) deleted.
+- [x] `docs/setup.md` updated with seeding flow.
+- [x] `docs/design-gaps-problem-workflow.md` annotated as historical.
+- [ ] Code review (post-PR).
+- [ ] Browser smoke A/B (deferred, see "Open follow-ups").
