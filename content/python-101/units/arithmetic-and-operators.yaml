@@ -1,0 +1,197 @@
+id: 1ee982b0-cacf-4cfd-a36e-b75556a5ab46
+slug: arithmetic-and-operators
+title: 3. Arithmetic & Operators
+description: |
+  Integers and floats. The four basic operators, plus floor-division
+  (`//`), modulo (`%`), and exponent (`**`). Operator precedence and
+  parentheses.
+gradeLevel: 9-12
+subjectTags:
+  - python
+  - intro
+  - arithmetic
+standardsTags: []
+estimatedMinutes: 35
+materialType: notes
+blocks:
+  - type: heading
+    text: Big idea
+  - type: paragraph
+    text: |
+      Python has two number kinds: `int` (whole numbers) and `float`
+      (numbers with a decimal point). The four basic operators
+      (`+ - * /`) work as you'd expect, but `/` always gives a
+      float — even when the inputs are whole. Use `//` for integer
+      floor-division and `%` for the remainder.
+  - type: heading
+    text: Worked example
+  - type: code
+    text: |
+      print(7 / 2)    # 3.5
+      print(7 // 2)   # 3
+      print(7 % 2)    # 1
+      print(2 ** 10)  # 1024
+  - type: heading
+    text: Try it
+  - type: problem-ref
+    problemSlug: circle-area
+    visibility: always
+  - type: problem-ref
+    problemSlug: tip-calculator
+    visibility: always
+  - type: problem-ref
+    problemSlug: modulo-clock
+    visibility: always
+  - type: heading
+    text: Common pitfalls
+  - type: list
+    text: |
+      `/` always returns a float — `4 / 2` is `2.0`, not `2`.
+      Use `//` when you want integer division.
+      Operator precedence: `*` and `/` happen before `+` and `-`.
+      Use parentheses when in doubt.
+      `2 ** 3` is exponentiation, not `2 ^ 3`. The caret is bitwise XOR.
+  - type: heading
+    text: Vocabulary
+  - type: list
+    text: |
+      int — a whole number, positive or negative.
+      float — a number with a decimal point.
+      operator — the symbol that combines two values: `+ - * / // % **`.
+      modulo — the remainder after division. `7 % 3` is `1`.
+problems:
+  - id: 5acf797a-fac6-44cb-bf51-ffff61c7b25f
+    slug: circle-area
+    title: Area of a Circle
+    description: |
+      Read a radius (an integer). Print the area of the circle as a
+      float. Use `3.14159` for π — don't import `math`.
+
+      Area = π × r².
+
+      **Input:** `5`
+
+      **Output:** `78.53975`
+    difficulty: easy
+    gradeLevel: 9-12
+    tags:
+      - arithmetic
+      - floats
+    starterCode:
+      python: |
+        r = int(input())
+        # Compute and print the area. Use 3.14159 for pi.
+    solution:
+      language: python
+      code: |
+        r = int(input())
+        print(3.14159 * r * r)
+    testCases:
+      - name: Example
+        stdin: "5"
+        expectedStdout: "78.53975"
+        isExample: true
+      - name: "Hidden: r=1"
+        stdin: "1"
+        expectedStdout: "3.14159"
+        isExample: false
+      - name: "Hidden: r=10"
+        stdin: "10"
+        expectedStdout: "314.159"
+        isExample: false
+
+  - id: f438b6eb-7d02-4007-a1bf-fc0d24026e81
+    slug: tip-calculator
+    title: Tip Calculator
+    description: |
+      Read a bill amount (integer cents) and a tip percent (integer
+      0-100). Print the tip in cents (as an integer — round down).
+
+      Tip = bill × percent ÷ 100, floor-divided.
+
+      **Input:**
+      ```
+      2000
+      15
+      ```
+
+      **Output:** `300`
+    difficulty: easy
+    gradeLevel: 9-12
+    tags:
+      - arithmetic
+      - integer-division
+    starterCode:
+      python: |
+        bill = int(input())
+        pct = int(input())
+        # Print the tip in cents (whole number).
+    solution:
+      language: python
+      code: |
+        bill = int(input())
+        pct = int(input())
+        print(bill * pct // 100)
+    testCases:
+      - name: Example
+        stdin: |-
+          2000
+          15
+        expectedStdout: "300"
+        isExample: true
+      - name: "Hidden: 20% of 5000"
+        stdin: |-
+          5000
+          20
+        expectedStdout: "1000"
+        isExample: false
+      - name: "Hidden: rounds down"
+        stdin: |-
+          1001
+          10
+        expectedStdout: "100"
+        isExample: false
+
+  - id: 1b12ebd7-1049-4868-9cfd-97981e655125
+    slug: modulo-clock
+    title: Clock Hour
+    description: |
+      Read a number of hours since midnight (an integer ≥ 0; could be
+      huge). Print the hour-of-day in 24-hour format (0-23).
+
+      Use `%`.
+
+      **Input:** `30`
+
+      **Output:** `6`
+    difficulty: easy
+    gradeLevel: 9-12
+    tags:
+      - modulo
+      - arithmetic
+    starterCode:
+      python: |
+        h = int(input())
+        # Print the hour-of-day (0-23).
+    solution:
+      language: python
+      code: |
+        h = int(input())
+        print(h % 24)
+    testCases:
+      - name: Example
+        stdin: "30"
+        expectedStdout: "6"
+        isExample: true
+      - name: "Hidden: midnight"
+        stdin: "0"
+        expectedStdout: "0"
+        isExample: false
+      - name: "Hidden: full day"
+        stdin: "24"
+        expectedStdout: "0"
+        isExample: false
+      - name: "Hidden: huge"
+        stdin: "1000000"
+        expectedStdout: "16"
+        isExample: false

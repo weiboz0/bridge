@@ -1,0 +1,209 @@
+id: ec067d9a-9055-4000-b55c-03b00a0d7745
+slug: conditionals
+title: 5. Conditionals
+description: |
+  Make decisions with `if`, `elif`, and `else`. Compare values with
+  `==`, `!=`, `<`, `>`, `<=`, `>=`. Combine conditions with `and`,
+  `or`, `not`.
+gradeLevel: 9-12
+subjectTags:
+  - python
+  - conditionals
+standardsTags: []
+estimatedMinutes: 40
+materialType: notes
+blocks:
+  - type: heading
+    text: Big idea
+  - type: paragraph
+    text: |
+      A *condition* is an expression that evaluates to `True` or
+      `False`. `if` runs a block when the condition is true. `elif`
+      ("else if") chains more conditions; `else` runs when none of
+      the above did. Indentation marks the body of each branch.
+  - type: heading
+    text: Worked example
+  - type: code
+    text: |
+      n = int(input())
+      if n > 0:
+          print("positive")
+      elif n < 0:
+          print("negative")
+      else:
+          print("zero")
+  - type: heading
+    text: Try it
+  - type: problem-ref
+    problemSlug: fizzbuzz
+    visibility: always
+  - type: problem-ref
+    problemSlug: pass-or-fail
+    visibility: always
+  - type: problem-ref
+    problemSlug: leap-year
+    visibility: always
+  - type: heading
+    text: Common pitfalls
+  - type: list
+    text: |
+      `=` is assignment; `==` is comparison.
+      Forgetting the `:` at the end of `if`, `elif`, or `else`.
+      Indentation must be consistent — Python uses spaces (4 by
+      convention) to mark the body. Mixing tabs and spaces is an error.
+      Order matters in `elif` chains. Once a branch matches, the rest
+      are skipped.
+  - type: heading
+    text: Vocabulary
+  - type: list
+    text: |
+      condition — an expression that's either True or False.
+      branch — a block of code that may or may not run, depending on
+      a condition.
+      boolean — a True/False value.
+      operator — `and`, `or`, `not` combine booleans.
+problems:
+  - id: 76c4a62a-4d12-481f-9f4c-8645e5f81f6e
+    slug: fizzbuzz
+    title: FizzBuzz (Single)
+    description: |
+      Read a single integer N. Print one of:
+
+      - `Fizz` if N is divisible by 3 (but not 5)
+      - `Buzz` if N is divisible by 5 (but not 3)
+      - `FizzBuzz` if N is divisible by both
+      - the integer itself otherwise
+
+      **Input:** `15`
+
+      **Output:** `FizzBuzz`
+    difficulty: easy
+    gradeLevel: 9-12
+    tags:
+      - conditionals
+      - modulo
+    starterCode:
+      python: |
+        n = int(input())
+        # Print Fizz / Buzz / FizzBuzz / n based on divisibility.
+    solution:
+      language: python
+      code: |
+        n = int(input())
+        if n % 15 == 0:
+            print("FizzBuzz")
+        elif n % 3 == 0:
+            print("Fizz")
+        elif n % 5 == 0:
+            print("Buzz")
+        else:
+            print(n)
+    testCases:
+      - name: "Example: 15"
+        stdin: "15"
+        expectedStdout: "FizzBuzz"
+        isExample: true
+      - name: "Example: 9"
+        stdin: "9"
+        expectedStdout: "Fizz"
+        isExample: true
+      - name: "Hidden: 10"
+        stdin: "10"
+        expectedStdout: "Buzz"
+        isExample: false
+      - name: "Hidden: 7"
+        stdin: "7"
+        expectedStdout: "7"
+        isExample: false
+
+  - id: 8e1946fc-8d63-46bd-93c4-daabe6865256
+    slug: pass-or-fail
+    title: Pass or Fail
+    description: |
+      Read a score (an integer between 0 and 100, inclusive). Print
+      `Pass` if the score is 60 or higher, else `Fail`.
+
+      **Input:** `75`
+
+      **Output:** `Pass`
+    difficulty: easy
+    gradeLevel: 9-12
+    tags:
+      - conditionals
+    starterCode:
+      python: |
+        score = int(input())
+        # Print Pass or Fail.
+    solution:
+      language: python
+      code: |
+        score = int(input())
+        if score >= 60:
+            print("Pass")
+        else:
+            print("Fail")
+    testCases:
+      - name: "Example: pass"
+        stdin: "75"
+        expectedStdout: "Pass"
+        isExample: true
+      - name: "Example: fail"
+        stdin: "45"
+        expectedStdout: "Fail"
+        isExample: true
+      - name: "Hidden: exactly 60"
+        stdin: "60"
+        expectedStdout: "Pass"
+        isExample: false
+      - name: "Hidden: zero"
+        stdin: "0"
+        expectedStdout: "Fail"
+        isExample: false
+
+  - id: 2718c1e4-b479-4495-9535-8617e887289f
+    slug: leap-year
+    title: Leap Year
+    description: |
+      Read a year (an integer ≥ 1). Print `Yes` if it's a leap year,
+      `No` otherwise.
+
+      Leap-year rule: divisible by 4 AND (not divisible by 100 OR
+      divisible by 400).
+
+      **Input:** `2000`
+
+      **Output:** `Yes`
+    difficulty: medium
+    gradeLevel: 9-12
+    tags:
+      - conditionals
+      - boolean-logic
+    starterCode:
+      python: |
+        y = int(input())
+        # Print Yes if y is a leap year, else No.
+    solution:
+      language: python
+      code: |
+        y = int(input())
+        if y % 4 == 0 and (y % 100 != 0 or y % 400 == 0):
+            print("Yes")
+        else:
+            print("No")
+    testCases:
+      - name: "Example: 2000"
+        stdin: "2000"
+        expectedStdout: "Yes"
+        isExample: true
+      - name: "Example: 1900"
+        stdin: "1900"
+        expectedStdout: "No"
+        isExample: true
+      - name: "Hidden: 2024"
+        stdin: "2024"
+        expectedStdout: "Yes"
+        isExample: false
+      - name: "Hidden: 2023"
+        stdin: "2023"
+        expectedStdout: "No"
+        isExample: false

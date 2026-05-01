@@ -1,0 +1,215 @@
+id: 5df498fc-098f-418e-b63e-91515af5a64f
+slug: capstone
+title: 12. Capstone
+description: |
+  Pull together everything from the previous 11 units: input parsing,
+  loops, conditionals, lists/dicts, functions, and classes — to build
+  two end-to-end mini-programs.
+gradeLevel: 9-12
+subjectTags:
+  - python
+  - capstone
+  - mixed-concepts
+standardsTags: []
+estimatedMinutes: 90
+materialType: notes
+blocks:
+  - type: heading
+    text: Big idea
+  - type: paragraph
+    text: |
+      Real programs aren't a single concept — they combine many. The
+      problems below don't introduce new syntax; they ask you to
+      compose what you already know. Read the problem statement
+      carefully, plan on paper if it helps, and break the problem into
+      smaller functions or methods.
+  - type: heading
+    text: Try it
+  - type: problem-ref
+    problemSlug: hangman-subset
+    visibility: always
+  - type: problem-ref
+    problemSlug: shopping-cart
+    visibility: always
+  - type: heading
+    text: Strategy notes
+  - type: list
+    text: |
+      Plan the data first. Decide which value goes in which structure
+      (list, dict, set) before you start writing.
+      Write small functions and call them. A 50-line solution should
+      have at least 2-3 helper functions; a 100-line solution should
+      have 5+.
+      Test the example case mentally before running. If you can't
+      walk through the inputs and outputs in your head, you don't
+      understand the problem yet.
+  - type: heading
+    text: Vocabulary
+  - type: list
+    text: |
+      decomposition — breaking a problem into smaller pieces.
+      state — the data your program is tracking (the cart, the game).
+      end-to-end — input → process → output, all in one program.
+problems:
+  - id: e289dbb0-0780-4259-b62e-dbf9c6639338
+    slug: hangman-subset
+    title: Hangman Reveal
+    description: |
+      You're given a secret word and a list of guessed letters.
+      Print the word with each *unguessed* letter replaced by `_`.
+      Letters are case-sensitive.
+
+      **Input format**
+      Line 1: the secret word.
+      Line 2: zero or more guessed letters separated by single spaces
+      (the line may be empty).
+
+      **Input:**
+      ```
+      hello
+      h e l
+      ```
+
+      **Output:** `hell_`
+
+      Example with no guesses:
+
+      **Input:**
+      ```
+      python
+
+      ```
+
+      **Output:** `______`
+    difficulty: medium
+    gradeLevel: 9-12
+    tags:
+      - capstone
+      - strings
+      - sets
+    starterCode:
+      python: |
+        word = input()
+        guesses_line = input()
+        guesses = set(guesses_line.split())
+        # Build the revealed string and print it.
+    solution:
+      language: python
+      code: |
+        word = input()
+        guesses_line = input()
+        guesses = set(guesses_line.split())
+        out = []
+        for ch in word:
+            if ch in guesses:
+                out.append(ch)
+            else:
+                out.append("_")
+        print("".join(out))
+    testCases:
+      - name: "Example: hello"
+        stdin: |-
+          hello
+          h e l
+        expectedStdout: "hell_"
+        isExample: true
+      - name: "Example: no guesses"
+        stdin: |-
+          python
+
+        expectedStdout: "______"
+        isExample: true
+      - name: "Hidden: all guessed"
+        stdin: |-
+          cat
+          c a t
+        expectedStdout: "cat"
+        isExample: false
+      - name: "Hidden: case-sensitive"
+        stdin: |-
+          Hello
+          h e l
+        expectedStdout: "_ell_"
+        isExample: false
+
+  - id: a6e916df-ab9b-47f7-8271-20d3e86c880a
+    slug: shopping-cart
+    title: Shopping Cart Total
+    description: |
+      You'll receive a sequence of `add NAME PRICE` and
+      `remove NAME` commands, one per line, until EOF. Track the cart
+      as a dict from name to price. After all commands, print the
+      total of the items still in the cart, formatted as
+      `Total: $X` where X is an integer (cents not supported here).
+
+      `remove NAME` for an item not in the cart is a no-op.
+
+      **Input:**
+      ```
+      add apple 1
+      add banana 2
+      add carrot 3
+      remove banana
+      add date 4
+      ```
+
+      **Output:** `Total: $8`
+
+      (1 + 3 + 4 = 8; banana was removed.)
+    difficulty: medium
+    gradeLevel: 9-12
+    tags:
+      - capstone
+      - dicts
+      - stdin
+    starterCode:
+      python: |
+        import sys
+        cart = {}
+        for line in sys.stdin:
+            parts = line.split()
+            if not parts:
+                continue
+            # Handle "add NAME PRICE" or "remove NAME".
+            pass
+        # Print the total.
+    solution:
+      language: python
+      code: |
+        import sys
+        cart = {}
+        for line in sys.stdin:
+            parts = line.split()
+            if not parts:
+                continue
+            if parts[0] == "add":
+                cart[parts[1]] = int(parts[2])
+            elif parts[0] == "remove":
+                cart.pop(parts[1], None)
+        print(f"Total: ${sum(cart.values())}")
+    testCases:
+      - name: Example
+        stdin: |-
+          add apple 1
+          add banana 2
+          add carrot 3
+          remove banana
+          add date 4
+        expectedStdout: "Total: $8"
+        isExample: true
+      - name: "Hidden: empty"
+        stdin: ""
+        expectedStdout: "Total: $0"
+        isExample: false
+      - name: "Hidden: remove missing"
+        stdin: |-
+          add x 5
+          remove y
+        expectedStdout: "Total: $5"
+        isExample: false
+      - name: "Hidden: replace"
+        stdin: |-
+          add x 1
+          add x 5
+        expectedStdout: "Total: $5"
+        isExample: false

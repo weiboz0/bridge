@@ -10,3 +10,25 @@ language: python
 topics:
   - id: 45df683c-c7df-47d7-94d5-b0d4740ca804
     unitSlug: print-and-comments
+  - id: 36ea2cb4-cbe1-4a65-bb7f-fa1831cf7b2c
+    unitSlug: variables-and-types
+  - id: 06ec5d5c-f54a-4a96-b762-1d091de45955
+    unitSlug: arithmetic-and-operators
+  - id: c961e94a-10e1-4987-9bda-6b71d67221bc
+    unitSlug: strings
+  - id: f247d7ba-6a5b-4197-a374-0695fb093503
+    unitSlug: conditionals
+  - id: 56933f99-4124-4dba-9a72-75bbecf49a44
+    unitSlug: loops
+  - id: 5cf18b89-6238-425f-9a59-ace114f985f7
+    unitSlug: lists
+  - id: 82d17248-d197-4c90-8ac6-b7b6c1d02860
+    unitSlug: dicts-and-sets
+  - id: c61122e4-1b49-4454-84f4-b2c7733cc3a9
+    unitSlug: functions
+  - id: 30f82990-c806-4cb6-8928-fbd1574f405c
+    unitSlug: files-and-exceptions
+  - id: c21e3542-a7bf-44c7-a332-75dd7c7fc84b
+    unitSlug: classes-and-objects
+  - id: 7ce2a756-0508-4fc1-8e84-cc6a6c502f92
+    unitSlug: capstone

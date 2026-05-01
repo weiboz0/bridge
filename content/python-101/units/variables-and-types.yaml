@@ -1,0 +1,168 @@
+id: cfaa9df8-0861-4042-ae81-3040191f9d9c
+slug: variables-and-types
+title: 2. Variables & Types
+description: |
+  Store values in variables. Read input from the user. Tell apart
+  numbers, text, and booleans, and convert between them.
+gradeLevel: 9-12
+subjectTags:
+  - python
+  - intro
+  - variables
+standardsTags: []
+estimatedMinutes: 35
+materialType: notes
+blocks:
+  - type: heading
+    text: Big idea
+  - type: paragraph
+    text: |
+      A *variable* is a name you give to a value so you can use it
+      later. Python figures out the *type* (int, float, str, bool)
+      from the value. `input()` reads a single line of text from the
+      user; if you want a number, convert it with `int(...)` or
+      `float(...)`.
+  - type: heading
+    text: Worked example
+  - type: code
+    text: |
+      name = input()
+      age = int(input())
+      print(f"{name} is {age} years old.")
+  - type: heading
+    text: Try it
+  - type: problem-ref
+    problemSlug: seconds-in-a-day
+    visibility: always
+  - type: problem-ref
+    problemSlug: f-to-c
+    visibility: always
+  - type: problem-ref
+    problemSlug: format-greeting
+    visibility: always
+  - type: heading
+    text: Common pitfalls
+  - type: list
+    text: |
+      Forgetting to convert input — `input()` always returns a string;
+      `"3" + "4"` is `"34"`, not `7`.
+      Mixing types inside an f-string is fine — Python coerces them.
+      `name = input` (without parentheses) stores the function itself,
+      not the result. Always include the `()`.
+  - type: heading
+    text: Vocabulary
+  - type: list
+    text: |
+      variable — a name bound to a value.
+      type — the kind of value (int, float, str, bool).
+      cast — converting between types: `int("3")`, `str(7)`, `float("1.5")`.
+      f-string — `f"…{var}…"` syntax for embedding values inside text.
+problems:
+  - id: 4c0089dd-5ba0-42c7-8fca-a16bdf198826
+    slug: seconds-in-a-day
+    title: Seconds in a Day
+    description: |
+      Print the number of seconds in a day. Compute it; don't just
+      hard-code `86400`.
+
+      No input.
+    difficulty: easy
+    gradeLevel: 9-12
+    tags:
+      - arithmetic
+      - variables
+    starterCode:
+      python: |
+        # Hint: 24 hours, 60 minutes per hour, 60 seconds per minute.
+    solution:
+      language: python
+      code: |
+        print(24 * 60 * 60)
+    testCases:
+      - name: Example
+        stdin: ""
+        expectedStdout: "86400"
+        isExample: true
+
+  - id: 781d8af0-c28b-4437-be56-0d3cb11de4b7
+    slug: f-to-c
+    title: Fahrenheit to Celsius
+    description: |
+      Read one Fahrenheit temperature (an integer) and print the
+      equivalent Celsius temperature as a float.
+
+      Formula: `C = (F - 32) * 5 / 9`.
+
+      **Input:** `212`
+
+      **Output:** `100.0`
+    difficulty: easy
+    gradeLevel: 9-12
+    tags:
+      - arithmetic
+      - input
+      - floats
+    starterCode:
+      python: |
+        f = int(input())
+        # Compute Celsius and print it.
+    solution:
+      language: python
+      code: |
+        f = int(input())
+        print((f - 32) * 5 / 9)
+    testCases:
+      - name: Boiling
+        stdin: "212"
+        expectedStdout: "100.0"
+        isExample: true
+      - name: Freezing
+        stdin: "32"
+        expectedStdout: "0.0"
+        isExample: true
+      - name: "Hidden: body temp"
+        stdin: "98"
+        expectedStdout: "36.666666666666664"
+        isExample: false
+
+  - id: 00e04f53-6726-4afb-b1c6-23441bd9453a
+    slug: format-greeting
+    title: Format a Greeting
+    description: |
+      Read a name (one line) and an age (one line, integer). Print:
+
+      ```
+      Hello, {name}! You are {age} years old.
+      ```
+
+      Use an f-string. Watch your punctuation.
+    difficulty: easy
+    gradeLevel: 9-12
+    tags:
+      - strings
+      - input
+      - f-strings
+    starterCode:
+      python: |
+        name = input()
+        age = int(input())
+        # Build and print the sentence.
+    solution:
+      language: python
+      code: |
+        name = input()
+        age = int(input())
+        print(f"Hello, {name}! You are {age} years old.")
+    testCases:
+      - name: Example
+        stdin: |-
+          Ada
+          23
+        expectedStdout: "Hello, Ada! You are 23 years old."
+        isExample: true
+      - name: "Hidden: longer name"
+        stdin: |-
+          Grace Hopper
+          85
+        expectedStdout: "Hello, Grace Hopper! You are 85 years old."
+        isExample: false

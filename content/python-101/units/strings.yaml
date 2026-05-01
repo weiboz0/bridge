@@ -1,0 +1,202 @@
+id: e0b476c6-867b-4b59-96df-da0cc64cbf5c
+slug: strings
+title: 4. Strings
+description: |
+  Index, slice, and iterate strings. Common methods: `lower()`,
+  `upper()`, `replace()`, `split()`, `count()`. Build new strings with
+  `+` and f-strings.
+gradeLevel: 9-12
+subjectTags:
+  - python
+  - strings
+standardsTags: []
+estimatedMinutes: 40
+materialType: notes
+blocks:
+  - type: heading
+    text: Big idea
+  - type: paragraph
+    text: |
+      A *string* is a sequence of characters. You can read individual
+      characters with `s[0]`, `s[1]`, …, count from the right with
+      negative indices (`s[-1]` is the last character), and take a
+      *slice* with `s[start:end]`. Strings are *immutable* — methods
+      like `upper()` don't change the original; they return a new
+      string.
+  - type: heading
+    text: Worked example
+  - type: code
+    text: |
+      s = "Hello"
+      print(s[0])       # H
+      print(s[-1])      # o
+      print(s[1:4])     # ell
+      print(s.lower())  # hello
+      print(len(s))     # 5
+  - type: heading
+    text: Try it
+  - type: problem-ref
+    problemSlug: count-vowels
+    visibility: always
+  - type: problem-ref
+    problemSlug: reverse-string
+    visibility: always
+  - type: problem-ref
+    problemSlug: censor-word
+    visibility: always
+  - type: heading
+    text: Common pitfalls
+  - type: list
+    text: |
+      Strings are immutable. `s[0] = "x"` raises a TypeError.
+      Slicing is half-open — `s[1:4]` includes indices 1, 2, 3 but
+      not 4.
+      Forgetting that methods return NEW strings: `s.upper()` doesn't
+      change `s`. You need `s = s.upper()`.
+      Off-by-one in indexing: the first index is `0`, the last is
+      `len(s) - 1`.
+  - type: heading
+    text: Vocabulary
+  - type: list
+    text: |
+      index — the position of a character: `s[i]`.
+      slice — a substring: `s[start:end]`. End is exclusive.
+      immutable — can't be changed in place.
+      method — a function attached to a value: `s.upper()`.
+problems:
+  - id: df777791-286d-4ec1-87cc-c30abf2bb359
+    slug: count-vowels
+    title: Count Vowels
+    description: |
+      Read one line of text. Print how many lowercase vowels
+      (`a e i o u`) it contains. Ignore uppercase vowels — only
+      lowercase counts.
+
+      **Input:** `learning python is fun`
+
+      **Output:** `7`
+    difficulty: easy
+    gradeLevel: 9-12
+    tags:
+      - strings
+      - loops
+    starterCode:
+      python: |
+        s = input()
+        # Count lowercase a, e, i, o, u in s.
+    solution:
+      language: python
+      code: |
+        s = input()
+        count = 0
+        for ch in s:
+            if ch in "aeiou":
+                count += 1
+        print(count)
+    testCases:
+      - name: Example
+        stdin: "learning python is fun"
+        expectedStdout: "7"
+        isExample: true
+      - name: "Hidden: empty"
+        stdin: ""
+        expectedStdout: "0"
+        isExample: false
+      - name: "Hidden: no vowels"
+        stdin: "rhythm"
+        expectedStdout: "0"
+        isExample: false
+      - name: "Hidden: uppercase ignored"
+        stdin: "AEIOU aeiou"
+        expectedStdout: "5"
+        isExample: false
+
+  - id: 8981d3d1-56ea-447f-a7cb-930faa0ad5db
+    slug: reverse-string
+    title: Reverse a String
+    description: |
+      Read one line of text. Print the same text reversed.
+
+      Use slicing.
+
+      **Input:** `hello`
+
+      **Output:** `olleh`
+    difficulty: easy
+    gradeLevel: 9-12
+    tags:
+      - strings
+      - slicing
+    starterCode:
+      python: |
+        s = input()
+        # Hint: there is a one-line slice that reverses a string.
+    solution:
+      language: python
+      code: |
+        s = input()
+        print(s[::-1])
+    testCases:
+      - name: Example
+        stdin: "hello"
+        expectedStdout: "olleh"
+        isExample: true
+      - name: "Hidden: single char"
+        stdin: "a"
+        expectedStdout: "a"
+        isExample: false
+      - name: "Hidden: with spaces"
+        stdin: "ab cd"
+        expectedStdout: "dc ba"
+        isExample: false
+
+  - id: ac650311-6c34-4ce2-9056-abf11f250883
+    slug: censor-word
+    title: Censor a Word
+    description: |
+      Read two lines: a sentence, then a word to censor. Print the
+      sentence with every occurrence of the word replaced by asterisks
+      of the same length.
+
+      **Input:**
+      ```
+      I love cats and cats love me
+      cats
+      ```
+
+      **Output:** `I love **** and **** love me`
+    difficulty: medium
+    gradeLevel: 9-12
+    tags:
+      - strings
+      - replace
+    starterCode:
+      python: |
+        sentence = input()
+        word = input()
+        # Replace each occurrence of word with asterisks of equal length.
+    solution:
+      language: python
+      code: |
+        sentence = input()
+        word = input()
+        print(sentence.replace(word, "*" * len(word)))
+    testCases:
+      - name: Example
+        stdin: |-
+          I love cats and cats love me
+          cats
+        expectedStdout: "I love **** and **** love me"
+        isExample: true
+      - name: "Hidden: no occurrences"
+        stdin: |-
+          quick brown fox
+          dog
+        expectedStdout: "quick brown fox"
+        isExample: false
+      - name: "Hidden: short word"
+        stdin: |-
+          a b a b a
+          a
+        expectedStdout: "* b * b *"
+        isExample: false

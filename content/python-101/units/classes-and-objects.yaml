@@ -1,0 +1,340 @@
+id: 162209c5-b1fa-4aa4-8a67-d1202b706db4
+slug: classes-and-objects
+title: 11. Classes & Objects
+description: |
+  Define your own type with `class`. Initialize state in `__init__`,
+  add behavior with methods, and use `__str__` for friendly printing.
+gradeLevel: 9-12
+subjectTags:
+  - python
+  - classes
+  - objects
+standardsTags: []
+estimatedMinutes: 50
+materialType: notes
+blocks:
+  - type: heading
+    text: Big idea
+  - type: paragraph
+    text: |
+      A *class* is a blueprint for objects that bundle data and
+      behavior together. `__init__(self, ...)` runs when you create
+      an object and is where you set up the object's *attributes*.
+      Methods are functions defined inside the class; the first
+      parameter is always `self`, the object the method is being
+      called on.
+  - type: heading
+    text: Worked example
+  - type: code
+    text: |
+      class Counter:
+          def __init__(self):
+              self.value = 0
+
+          def increment(self):
+              self.value += 1
+
+          def __str__(self):
+              return f"Counter({self.value})"
+
+      c = Counter()
+      c.increment()
+      c.increment()
+      print(c)  # Counter(2)
+  - type: heading
+    text: Try it
+  - type: problem-ref
+    problemSlug: counter-class
+    visibility: always
+  - type: problem-ref
+    problemSlug: rectangle-area
+    visibility: always
+  - type: problem-ref
+    problemSlug: bank-account
+    visibility: always
+  - type: heading
+    text: Common pitfalls
+  - type: list
+    text: |
+      Forgetting `self` as the first parameter of every method.
+      Setting attributes outside `__init__` works but is harder to
+      reason about — initialize all attributes there.
+      `class Foo:` (no parens) and `class Foo():` are equivalent.
+      Confusing class attributes with instance attributes — `name`
+      defined at class level is shared across instances.
+  - type: heading
+    text: Vocabulary
+  - type: list
+    text: |
+      class — a blueprint.
+      instance / object — a concrete thing built from the blueprint.
+      attribute — a piece of data attached to an object: `obj.x`.
+      method — a function attached to a class.
+      __init__ — the constructor; runs when you create an instance.
+      __str__ — controls how `print(obj)` displays the object.
+problems:
+  - id: 767369b6-d329-4385-b588-c69e0967ace7
+    slug: counter-class
+    title: Counter Class
+    description: |
+      Build a `Counter` class with:
+
+      - `__init__(self)` that sets `self.value = 0`
+      - `increment(self)` that adds 1 to `self.value`
+      - `__str__(self)` that returns `f"Counter({self.value})"`
+
+      Read a single integer N from stdin. Create a counter, increment
+      it N times, then print it.
+
+      **Input:** `3`
+
+      **Output:** `Counter(3)`
+    difficulty: easy
+    gradeLevel: 9-12
+    tags:
+      - classes
+      - methods
+    starterCode:
+      python: |
+        class Counter:
+            def __init__(self):
+                self.value = 0
+
+            def increment(self):
+                # Add 1 to self.value
+                pass
+
+            def __str__(self):
+                return f"Counter({self.value})"
+
+        n = int(input())
+        c = Counter()
+        for _ in range(n):
+            c.increment()
+        print(c)
+    solution:
+      language: python
+      code: |
+        class Counter:
+            def __init__(self):
+                self.value = 0
+
+            def increment(self):
+                self.value += 1
+
+            def __str__(self):
+                return f"Counter({self.value})"
+
+        n = int(input())
+        c = Counter()
+        for _ in range(n):
+            c.increment()
+        print(c)
+    testCases:
+      - name: "Example: 3"
+        stdin: "3"
+        expectedStdout: "Counter(3)"
+        isExample: true
+      - name: "Hidden: 0"
+        stdin: "0"
+        expectedStdout: "Counter(0)"
+        isExample: false
+      - name: "Hidden: 100"
+        stdin: "100"
+        expectedStdout: "Counter(100)"
+        isExample: false
+
+  - id: a97cfb62-af18-4c92-b6b6-df5e5cefe040
+    slug: rectangle-area
+    title: Rectangle Class
+    description: |
+      Build a `Rectangle` class with:
+
+      - `__init__(self, w, h)` storing width and height
+      - `area(self)` returning `w * h`
+      - `__str__(self)` returning `f"Rectangle(w={self.w}, h={self.h}, area={self.area()})"`
+
+      Read two integers (width then height, on separate lines).
+      Create a Rectangle and print it.
+
+      **Input:**
+      ```
+      3
+      4
+      ```
+
+      **Output:** `Rectangle(w=3, h=4, area=12)`
+    difficulty: easy
+    gradeLevel: 9-12
+    tags:
+      - classes
+      - methods
+    starterCode:
+      python: |
+        class Rectangle:
+            def __init__(self, w, h):
+                # Store width and height.
+                pass
+
+            def area(self):
+                # Return w * h.
+                pass
+
+            def __str__(self):
+                return f"Rectangle(w={self.w}, h={self.h}, area={self.area()})"
+
+        w = int(input())
+        h = int(input())
+        print(Rectangle(w, h))
+    solution:
+      language: python
+      code: |
+        class Rectangle:
+            def __init__(self, w, h):
+                self.w = w
+                self.h = h
+
+            def area(self):
+                return self.w * self.h
+
+            def __str__(self):
+                return f"Rectangle(w={self.w}, h={self.h}, area={self.area()})"
+
+        w = int(input())
+        h = int(input())
+        print(Rectangle(w, h))
+    testCases:
+      - name: Example
+        stdin: |-
+          3
+          4
+        expectedStdout: "Rectangle(w=3, h=4, area=12)"
+        isExample: true
+      - name: "Hidden: square"
+        stdin: |-
+          5
+          5
+        expectedStdout: "Rectangle(w=5, h=5, area=25)"
+        isExample: false
+      - name: "Hidden: thin"
+        stdin: |-
+          1
+          100
+        expectedStdout: "Rectangle(w=1, h=100, area=100)"
+        isExample: false
+
+  - id: 872ac0a5-d45d-4b04-8aac-3da7f355a44c
+    slug: bank-account
+    title: Bank Account
+    description: |
+      Build a `BankAccount` class with:
+
+      - `__init__(self)` setting `self.balance = 0`
+      - `deposit(self, amount)` adding `amount` to the balance
+      - `withdraw(self, amount)` subtracting `amount` from the
+        balance, but only if `amount <= self.balance`. Otherwise the
+        withdrawal does nothing.
+      - `__str__(self)` returning `f"Balance: {self.balance}"`
+
+      Then read commands from stdin: each line is either
+      `deposit N` or `withdraw N`. After all commands, print the
+      account.
+
+      **Input:**
+      ```
+      deposit 100
+      withdraw 30
+      withdraw 200
+      deposit 50
+      ```
+
+      **Output:** `Balance: 120`
+
+      (200 was rejected because the balance was only 70 at that point.)
+    difficulty: medium
+    gradeLevel: 9-12
+    tags:
+      - classes
+      - methods
+      - conditionals
+    starterCode:
+      python: |
+        import sys
+
+        class BankAccount:
+            def __init__(self):
+                self.balance = 0
+
+            def deposit(self, amount):
+                # Add amount.
+                pass
+
+            def withdraw(self, amount):
+                # Subtract amount only if amount <= self.balance.
+                pass
+
+            def __str__(self):
+                return f"Balance: {self.balance}"
+
+        acct = BankAccount()
+        for line in sys.stdin:
+            parts = line.split()
+            if not parts:
+                continue
+            cmd, amt = parts[0], int(parts[1])
+            if cmd == "deposit":
+                acct.deposit(amt)
+            elif cmd == "withdraw":
+                acct.withdraw(amt)
+        print(acct)
+    solution:
+      language: python
+      code: |
+        import sys
+
+        class BankAccount:
+            def __init__(self):
+                self.balance = 0
+
+            def deposit(self, amount):
+                self.balance += amount
+
+            def withdraw(self, amount):
+                if amount <= self.balance:
+                    self.balance -= amount
+
+            def __str__(self):
+                return f"Balance: {self.balance}"
+
+        acct = BankAccount()
+        for line in sys.stdin:
+            parts = line.split()
+            if not parts:
+                continue
+            cmd, amt = parts[0], int(parts[1])
+            if cmd == "deposit":
+                acct.deposit(amt)
+            elif cmd == "withdraw":
+                acct.withdraw(amt)
+        print(acct)
+    testCases:
+      - name: Example
+        stdin: |-
+          deposit 100
+          withdraw 30
+          withdraw 200
+          deposit 50
+        expectedStdout: "Balance: 120"
+        isExample: true
+      - name: "Hidden: only deposits"
+        stdin: |-
+          deposit 50
+          deposit 50
+        expectedStdout: "Balance: 100"
+        isExample: false
+      - name: "Hidden: overdraft only"
+        stdin: |-
+          withdraw 10
+          withdraw 20
+        expectedStdout: "Balance: 0"
+        isExample: false

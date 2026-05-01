@@ -1,0 +1,195 @@
+id: 845f15c7-19e1-4740-9943-2919e4e461f4
+slug: lists
+title: 7. Lists
+description: |
+  Build, index, slice, and iterate lists. Mutate with `append()`,
+  `pop()`, `remove()`. Build new lists with comprehensions.
+gradeLevel: 9-12
+subjectTags:
+  - python
+  - lists
+standardsTags: []
+estimatedMinutes: 45
+materialType: notes
+blocks:
+  - type: heading
+    text: Big idea
+  - type: paragraph
+    text: |
+      A *list* is an ordered, mutable collection of values. Use `[]`
+      to create one; index with `lst[0]`, `lst[-1]`; slice with
+      `lst[1:4]`. Add with `append`, remove with `pop` or `remove`.
+      Iterate with `for x in lst:`.
+  - type: heading
+    text: Worked example
+  - type: code
+    text: |
+      nums = [3, 1, 4, 1, 5]
+      print(len(nums))     # 5
+      print(nums[0])       # 3
+      print(nums[-1])      # 5
+      print(sum(nums))     # 14
+      nums.append(9)
+      print(nums)          # [3, 1, 4, 1, 5, 9]
+  - type: heading
+    text: Try it
+  - type: problem-ref
+    problemSlug: average-of-list
+    visibility: always
+  - type: problem-ref
+    problemSlug: remove-duplicates
+    visibility: always
+  - type: problem-ref
+    problemSlug: running-max
+    visibility: always
+  - type: heading
+    text: Common pitfalls
+  - type: list
+    text: |
+      Lists are mutable — `lst.append(x)` changes the original list
+      AND returns `None`. Don't write `lst = lst.append(x)`.
+      `lst.remove(x)` removes the FIRST occurrence; raises ValueError
+      if `x` isn't there.
+      Iterating and mutating at the same time is a classic bug
+      magnet. Make a copy or build a new list.
+      `range` returns a range object, not a list. Use `list(range(n))`
+      if you actually want a list.
+  - type: heading
+    text: Vocabulary
+  - type: list
+    text: |
+      list — ordered, mutable collection.
+      append — add to the end.
+      pop — remove and return (default: last element).
+      list comprehension — `[expr for x in lst]` builds a new list.
+problems:
+  - id: 9587f04c-8cd0-4314-a898-8b1758e92191
+    slug: average-of-list
+    title: Average of a List
+    description: |
+      Read one line of space-separated integers. Print the average as
+      a float (use `/`, not `//`).
+
+      Assume at least one integer.
+
+      **Input:** `1 2 3 4 5`
+
+      **Output:** `3.0`
+    difficulty: easy
+    gradeLevel: 9-12
+    tags:
+      - lists
+      - builtins
+    starterCode:
+      python: |
+        nums = list(map(int, input().split()))
+        # Print the average.
+    solution:
+      language: python
+      code: |
+        nums = list(map(int, input().split()))
+        print(sum(nums) / len(nums))
+    testCases:
+      - name: Example
+        stdin: "1 2 3 4 5"
+        expectedStdout: "3.0"
+        isExample: true
+      - name: "Hidden: singleton"
+        stdin: "42"
+        expectedStdout: "42.0"
+        isExample: false
+      - name: "Hidden: negatives"
+        stdin: "-2 0 2"
+        expectedStdout: "0.0"
+        isExample: false
+
+  - id: 324fa6e9-b302-4055-acc7-cc7a9d2b5427
+    slug: remove-duplicates
+    title: Remove Duplicates
+    description: |
+      Read one line of space-separated integers. Print the integers in
+      the order they first appeared, with duplicates removed,
+      space-separated on one line.
+
+      **Input:** `3 1 4 1 5 9 2 6 5 3`
+
+      **Output:** `3 1 4 5 9 2 6`
+    difficulty: medium
+    gradeLevel: 9-12
+    tags:
+      - lists
+      - sets
+    starterCode:
+      python: |
+        nums = input().split()
+        # Build a list with duplicates removed, preserving first-seen order.
+    solution:
+      language: python
+      code: |
+        nums = input().split()
+        seen = set()
+        out = []
+        for n in nums:
+            if n not in seen:
+                seen.add(n)
+                out.append(n)
+        print(" ".join(out))
+    testCases:
+      - name: Example
+        stdin: "3 1 4 1 5 9 2 6 5 3"
+        expectedStdout: "3 1 4 5 9 2 6"
+        isExample: true
+      - name: "Hidden: all unique"
+        stdin: "1 2 3"
+        expectedStdout: "1 2 3"
+        isExample: false
+      - name: "Hidden: all same"
+        stdin: "7 7 7 7"
+        expectedStdout: "7"
+        isExample: false
+
+  - id: 4e4fac50-9de8-4d05-a055-cefcf564783a
+    slug: running-max
+    title: Running Max
+    description: |
+      Read one line of space-separated integers. Print, on one line,
+      the *running maximum* — for each position, the largest value
+      seen up to and including that position. Numbers are
+      space-separated.
+
+      **Input:** `2 1 4 3 5 2`
+
+      **Output:** `2 2 4 4 5 5`
+    difficulty: medium
+    gradeLevel: 9-12
+    tags:
+      - lists
+      - loops
+    starterCode:
+      python: |
+        nums = list(map(int, input().split()))
+        # Build a list of running maxes; print space-separated.
+    solution:
+      language: python
+      code: |
+        nums = list(map(int, input().split()))
+        out = []
+        best = nums[0]
+        for n in nums:
+            if n > best:
+                best = n
+            out.append(str(best))
+        print(" ".join(out))
+    testCases:
+      - name: Example
+        stdin: "2 1 4 3 5 2"
+        expectedStdout: "2 2 4 4 5 5"
+        isExample: true
+      - name: "Hidden: monotonic"
+        stdin: "1 2 3 4 5"
+        expectedStdout: "1 2 3 4 5"
+        isExample: false
+      - name: "Hidden: decreasing"
+        stdin: "5 4 3 2 1"
+        expectedStdout: "5 5 5 5 5"
+        isExample: false
