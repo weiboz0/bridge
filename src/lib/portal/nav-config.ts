@@ -11,6 +11,7 @@ export const portalConfigs: Record<string, PortalConfig> = {
     navItems: [
       { label: "Organizations", href: "/admin/orgs", icon: "building-2" },
       { label: "Users", href: "/admin/users", icon: "users" },
+      { label: "Units", href: "/admin/units", icon: "file-text" },
     ],
   },
   org_admin: {
@@ -19,13 +20,11 @@ export const portalConfigs: Record<string, PortalConfig> = {
     basePath: "/org",
     navItems: [
       { label: "Dashboard", href: "/org", icon: "layout-dashboard" },
-      // No cross-portal links — /teacher/* requires the teacher role and
-      // redirects org admins back to /org. Org-scoped Units/Sessions views
-      // are tracked in plan 040.
       { label: "Teachers", href: "/org/teachers", icon: "graduation-cap" },
       { label: "Students", href: "/org/students", icon: "users" },
       { label: "Courses", href: "/org/courses", icon: "book-open" },
       { label: "Classes", href: "/org/classes", icon: "school" },
+      { label: "Units", href: "/org/units", icon: "file-text" },
       { label: "Settings", href: "/org/settings", icon: "settings" },
     ],
   },
@@ -36,6 +35,7 @@ export const portalConfigs: Record<string, PortalConfig> = {
     navItems: [
       { label: "Dashboard", href: "/teacher", icon: "layout-dashboard" },
       { label: "Units", href: "/teacher/units", icon: "file-text" },
+      { label: "Problems", href: "/teacher/problems", icon: "puzzle" },
       { label: "Sessions", href: "/teacher/sessions", icon: "video" },
       { label: "Courses", href: "/teacher/courses", icon: "book-open" },
       { label: "Classes", href: "/teacher/classes", icon: "school" },
