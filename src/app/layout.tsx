@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { cookies } from "next/headers";
 import { Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import { SessionProvider } from "@/components/session-provider";
@@ -19,32 +20,27 @@ export const metadata: Metadata = {
   description: "A live-first K-12 coding education platform",
 };
 
-// Theme bootstrap — runs before React hydration to prevent FOUC.
-//
-// Plan 048 phase 2: rendered as a literal <script> inside <head> via
-// dangerouslySetInnerHTML. Plan 040's next/script + beforeInteractive
-// approach inside <body> still triggered the dev-overlay warning
-// "Encountered a script tag while rendering React component" in
-// Next 16. The supported App Router pattern for sync inline scripts
-// that need to run before hydration is to render them in <head>.
-//
+// Theme is read server-side from the `bridge-theme` cookie and
+// applied as a class on <html>. Replaces the prior inline-script
+// FOUC-prevention dance (plan 040 / 048) which kept tripping
+// React 19 + Next 16's "Encountered a script tag while rendering
+// React component" dev warning. The cookie is written by
+// src/lib/hooks/use-theme.ts on every theme change, alongside
+// localStorage (kept for backwards compat with prior deployments).
 // e2e/theme-bootstrap.spec.ts is the regression gate.
-const themeScript = `(function(){var t=localStorage.getItem('bridge-theme')||'light';if(t==='dark'){document.documentElement.classList.add('dark');}else{document.documentElement.classList.remove('dark');}})();`;
-
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const cookieStore = await cookies();
+  const isDark = cookieStore.get("bridge-theme")?.value === "dark";
   return (
     <html
       lang="en"
-      className={`${inter.variable} ${jetbrainsMono.variable} h-full antialiased`}
+      className={`${inter.variable} ${jetbrainsMono.variable} h-full antialiased${isDark ? " dark" : ""}`}
       suppressHydrationWarning
     >
-      <head>
-        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
-      </head>
       <body className="min-h-full flex flex-col bg-background text-foreground font-sans">
         <SessionProvider>
           <ImpersonateBanner />

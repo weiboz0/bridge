@@ -1,4 +1,6 @@
-import { api } from "@/lib/api-client";
+import { redirect } from "next/navigation";
+import { api, ApiError } from "@/lib/api-client";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { UserActions } from "@/components/admin/user-actions";
 
 interface UserItem {
@@ -18,10 +20,41 @@ export default async function AdminUsersPage() {
   // also tells us who the current admin is. Avoids the dual-source pattern
   // (NextAuth session vs. Go-loaded users) that 039 removed from session
   // pages — same boundary, applied here too.
-  const [identity, userList] = await Promise.all([
-    api<IdentityResponse>("/api/me/identity"),
-    api<UserItem[]>("/api/admin/users"),
-  ]);
+  let identity: IdentityResponse;
+  let userList: UserItem[];
+  try {
+    [identity, userList] = await Promise.all([
+      api<IdentityResponse>("/api/me/identity"),
+      api<UserItem[]>("/api/admin/users"),
+    ]);
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 401) {
+      redirect("/login");
+    }
+    if (e instanceof ApiError && e.status === 403) {
+      return (
+        <div className="p-6 max-w-2xl">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-lg">Platform admin access required</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2 text-sm text-muted-foreground">
+              <p>
+                Your session doesn&apos;t have platform-admin privileges. If
+                you were just granted the role, sign out and back in to
+                refresh your session.
+              </p>
+              <p>
+                If you don&apos;t expect to be a platform admin, return to{" "}
+                <a href="/" className="underline text-primary">your dashboard</a>.
+              </p>
+            </CardContent>
+          </Card>
+        </div>
+      );
+    }
+    throw e;
+  }
 
   return (
     <div className="p-6 space-y-6">
