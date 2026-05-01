@@ -1,0 +1,12 @@
+id: 8935aea2-e208-48d6-b5fa-56e54d1dc451
+title: Python 101 — Introduction to Programming
+description: |
+  A first course in Python. You'll learn to print output, store values
+  in variables, do arithmetic, branch with conditionals, repeat with
+  loops, and work with strings, lists, dicts, files, and classes by
+  solving small problems that build on each other.
+gradeLevel: 9-12
+language: python
+topics:
+  - id: 45df683c-c7df-47d7-94d5-b0d4740ca804
+    unitSlug: print-and-comments

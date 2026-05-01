@@ -271,6 +271,20 @@ The platform's `test_cases` table only stores `expected_stdout` (string). The gr
 
 **Phase 3 is the integration AND throughput gate.** Re-estimate Phases 4-5 from the actual Phase 3 time. If the multiplier projects 4-5 to >120h, split into a separate plan.
 
+**Phase 3 status (2026-04-30):**
+
+- ✅ Authored `content/python-101/course.yaml` (one topic) and `content/python-101/units/print-and-comments.yaml` (2 problems carried over from the legacy seed: `hello-world`, `three-lines`).
+- ✅ Validator: clean (`bun run scripts/python-101/validate.ts` exits 0).
+- ✅ Importer dry-run: clean.
+- ✅ Importer `--apply --skip-sandbox` against `bridge_test`: 1 course / 1 topic / 1 unit (linked) / 2 problems / 2 published canonical solutions / 3 test cases / 2 topic_problems / 1 unit_document with 2 problem-ref blocks. All row counts and shapes match the YAML 1:1.
+- ✅ Importer `--apply --skip-sandbox` against `bridge` dev DB. Idempotent re-run leaves test_cases count unchanged at 3 (no duplicates).
+- ⚠️ **Real-Piston verification is BLOCKED in this dev environment.** The `ghcr.io/engineer-man/piston` image refuses to start without `--privileged` (its `isolate` sandbox needs `CAP_SYS_ADMIN` to mount tmpfs and create user namespaces). The Claude Code shell sandbox correctly denied `docker run --privileged` as an unauthorized weakening of container isolation. So the canary is verified end-to-end at the DB level but NOT yet at the executor-correctness level. Two paths forward:
+  1. The user grants `docker run --privileged` permission once and runs `docker run -d --rm --privileged -p 2000:2000 ghcr.io/engineer-man/piston` followed by `curl -X POST http://localhost:2000/api/v2/packages -H 'Content-Type: application/json' -d '{"language":"python","version":"3.10.0"}'`, then re-runs the importer WITHOUT `--skip-sandbox` to confirm both reference solutions match expected stdout. Add a follow-up commit recording the verdict.
+  2. If a Piston deployment exists elsewhere (staging, shared dev), point `PISTON_URL` at it and re-run.
+  Either way, Phase 5 (full-scale verification) is gated on this — `--skip-sandbox` is for CI/test only and SHOULD NOT be used to ship Phase 6.
+- ⏳ **Browser smokes A and B are pending.** They require a logged-in teacher session in another org for smoke A, and a demo-class student session for smoke B. Documented for whoever runs the next session.
+- ⏳ **Throughput artifact** drafted at `docs/plans/049-python-101-throughput.md` (single-data-point estimate; full breakdown after Phase 4 starts).
+
 ### Phase 4: Author remaining 11 units + their problems
 
 **Files:**
