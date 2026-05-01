@@ -15,18 +15,28 @@ export function useTheme() {
   const [theme, setThemeState] = useState<Theme>("light");
 
   useEffect(() => {
-    // The server already set the `dark` class via cookie; sync local
-    // state from the DOM rather than a fresh localStorage read so
-    // we agree with what the user is actually seeing.
-    const current = document.documentElement.classList.contains("dark") ? "dark" : "light";
-    setThemeState(current);
-    // Backwards compat: if a legacy localStorage entry exists but no
-    // cookie, mirror it so subsequent SSR renders pick the right
-    // theme on first paint.
+    const cookieAlreadySet = document.cookie.includes(`${COOKIE_NAME}=`);
     const stored = localStorage.getItem(COOKIE_NAME) as Theme | null;
-    if (stored && !document.cookie.includes(`${COOKIE_NAME}=`)) {
+    // Backwards compat for users with a legacy localStorage entry
+    // and no cookie yet: mirror localStorage to the cookie AND apply
+    // it to the current page (DOM + state) so they don't see a
+    // one-time light flash on first migration. Without this branch,
+    // the SSR pass — which had no cookie — already rendered light;
+    // we'd only fix the *next* visit.
+    if (!cookieAlreadySet && stored === "dark") {
+      writeThemeCookie(stored);
+      document.documentElement.classList.add("dark");
+      setThemeState("dark");
+      return;
+    }
+    if (!cookieAlreadySet && stored === "light") {
       writeThemeCookie(stored);
     }
+    // Otherwise sync local state from the DOM (the server-rendered
+    // class is the source of truth for what the user is actually
+    // seeing).
+    const current = document.documentElement.classList.contains("dark") ? "dark" : "light";
+    setThemeState(current);
   }, []);
 
   const setTheme = useCallback((newTheme: Theme) => {
