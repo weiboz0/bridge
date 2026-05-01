@@ -12,6 +12,7 @@ import {
   integer,
   doublePrecision,
   primaryKey,
+  type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 
 // --- Enums ---
@@ -46,6 +47,16 @@ export const editorModeEnum = pgEnum("editor_mode", [
 export const sessionStatusEnum = pgEnum("session_status", [
   "live",
   "ended",
+]);
+
+// schedule_status mirrors the `schedule_status` ENUM created in
+// drizzle/0023_create_scheduled_sessions.sql. Live values:
+// planned | in_progress | completed | cancelled.
+export const scheduleStatusEnum = pgEnum("schedule_status", [
+  "planned",
+  "in_progress",
+  "completed",
+  "cancelled",
 ]);
 
 export const participantStatusEnum = pgEnum("participant_status", [
@@ -198,7 +209,10 @@ export const sessions = pgTable(
     title: varchar("title", { length: 255 }).notNull(),
     inviteToken: varchar("invite_token", { length: 24 }),
     inviteExpiresAt: timestamp("invite_expires_at", { withTimezone: true }),
-    scheduledSessionId: uuid("scheduled_session_id"),
+    scheduledSessionId: uuid("scheduled_session_id").references(
+      (): AnyPgColumn => scheduledSessions.id,
+      { onDelete: "set null" },
+    ),
     status: sessionStatusEnum("status").notNull().default("live"),
     settings: jsonb("settings").default({}),
     startedAt: timestamp("started_at").defaultNow().notNull(),
@@ -209,6 +223,41 @@ export const sessions = pgTable(
   (table) => [
     index("sessions_class_idx").on(table.classId),
     index("sessions_class_status_idx").on(table.classId, table.status),
+  ]
+);
+
+// scheduled_sessions: the source rows for `sessions.scheduled_session_id`.
+// See platform/internal/store/schedule.go for the canonical query
+// shape. Backfilled in drizzle/0023_create_scheduled_sessions.sql
+// (plan 058) — the table existed in dev but had no migration before
+// 0023.
+export const scheduledSessions = pgTable(
+  "scheduled_sessions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    classId: uuid("class_id")
+      .notNull()
+      .references(() => classes.id, { onDelete: "cascade" }),
+    teacherId: uuid("teacher_id")
+      .notNull()
+      .references(() => users.id),
+    title: varchar("title", { length: 255 }),
+    scheduledStart: timestamp("scheduled_start", { withTimezone: true }).notNull(),
+    scheduledEnd: timestamp("scheduled_end", { withTimezone: true }).notNull(),
+    recurrence: jsonb("recurrence"),
+    topicIds: uuid("topic_ids").array(),
+    status: scheduleStatusEnum("status").notNull().default("planned"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index("scheduled_sessions_class_idx").on(table.classId),
+    index("scheduled_sessions_start_idx").on(table.scheduledStart),
+    index("scheduled_sessions_status_idx").on(table.classId, table.status),
   ]
 );
 
