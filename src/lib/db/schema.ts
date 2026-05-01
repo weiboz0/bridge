@@ -12,6 +12,7 @@ import {
   integer,
   doublePrecision,
   primaryKey,
+  type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 
 // --- Enums ---
@@ -208,7 +209,10 @@ export const sessions = pgTable(
     title: varchar("title", { length: 255 }).notNull(),
     inviteToken: varchar("invite_token", { length: 24 }),
     inviteExpiresAt: timestamp("invite_expires_at", { withTimezone: true }),
-    scheduledSessionId: uuid("scheduled_session_id"),
+    scheduledSessionId: uuid("scheduled_session_id").references(
+      (): AnyPgColumn => scheduledSessions.id,
+      { onDelete: "set null" },
+    ),
     status: sessionStatusEnum("status").notNull().default("live"),
     settings: jsonb("settings").default({}),
     startedAt: timestamp("started_at").defaultNow().notNull(),

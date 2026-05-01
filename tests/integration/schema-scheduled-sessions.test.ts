@@ -33,16 +33,23 @@ describe("scheduled_sessions schema parity (plan 058)", () => {
     ]);
   });
 
-  it("scheduled_sessions table exists with the expected columns", async () => {
+  it("scheduled_sessions table has the expected columns, types, defaults, nullability", async () => {
     const rows = (await testDb.execute(sql`
-      SELECT column_name, data_type, is_nullable
+      SELECT
+        column_name,
+        data_type,
+        udt_name,
+        is_nullable,
+        column_default
       FROM information_schema.columns
       WHERE table_schema = 'public' AND table_name = 'scheduled_sessions'
       ORDER BY ordinal_position
     `)) as unknown as Array<{
       column_name: string;
       data_type: string;
+      udt_name: string;
       is_nullable: string;
+      column_default: string | null;
     }>;
     const columns = rows.map((r) => r.column_name);
     expect(columns).toEqual([
@@ -60,6 +67,22 @@ describe("scheduled_sessions schema parity (plan 058)", () => {
     ]);
 
     const byName = new Map(rows.map((r) => [r.column_name, r]));
+
+    // Types — protect against silently-changed column shapes.
+    expect(byName.get("id")?.udt_name).toBe("uuid");
+    expect(byName.get("class_id")?.udt_name).toBe("uuid");
+    expect(byName.get("teacher_id")?.udt_name).toBe("uuid");
+    expect(byName.get("title")?.udt_name).toBe("varchar");
+    expect(byName.get("scheduled_start")?.udt_name).toBe("timestamptz");
+    expect(byName.get("scheduled_end")?.udt_name).toBe("timestamptz");
+    expect(byName.get("recurrence")?.udt_name).toBe("jsonb");
+    // PostgreSQL stores arrays with a leading `_` in udt_name (`_uuid` for uuid[]).
+    expect(byName.get("topic_ids")?.udt_name).toBe("_uuid");
+    expect(byName.get("status")?.udt_name).toBe("schedule_status");
+    expect(byName.get("created_at")?.udt_name).toBe("timestamptz");
+    expect(byName.get("updated_at")?.udt_name).toBe("timestamptz");
+
+    // Nullability.
     expect(byName.get("id")?.is_nullable).toBe("NO");
     expect(byName.get("class_id")?.is_nullable).toBe("NO");
     expect(byName.get("teacher_id")?.is_nullable).toBe("NO");
@@ -69,34 +92,68 @@ describe("scheduled_sessions schema parity (plan 058)", () => {
     expect(byName.get("recurrence")?.is_nullable).toBe("YES");
     expect(byName.get("topic_ids")?.is_nullable).toBe("YES");
     expect(byName.get("status")?.is_nullable).toBe("NO");
+    expect(byName.get("created_at")?.is_nullable).toBe("NO");
+    expect(byName.get("updated_at")?.is_nullable).toBe("NO");
+
+    // Defaults — gen_random_uuid() on id, 'planned' on status, now() on timestamps.
+    expect(byName.get("id")?.column_default).toMatch(/^gen_random_uuid\(\)$/);
+    expect(byName.get("status")?.column_default).toMatch(/^'planned'/);
+    expect(byName.get("created_at")?.column_default).toMatch(/^now\(\)/);
+    expect(byName.get("updated_at")?.column_default).toMatch(/^now\(\)/);
   });
 
-  it("scheduled_sessions indexes are all present", async () => {
+  it("scheduled_sessions indexes have the expected names AND columns", async () => {
+    // Codex post-impl review: name-only checks pass even if the
+    // index points at the wrong column. Verify column lists too via
+    // pg_index → pg_attribute.
     const rows = (await testDb.execute(sql`
-      SELECT indexname
-      FROM pg_indexes
-      WHERE schemaname = 'public' AND tablename = 'scheduled_sessions'
-      ORDER BY indexname
-    `)) as unknown as Array<{ indexname: string }>;
-    const names = new Set(rows.map((r) => r.indexname));
-    // pkey is implicit; the three named indexes come from the
-    // migration. If any of these go missing, the migration drifted
-    // from the schema.
-    expect(names.has("scheduled_sessions_pkey")).toBe(true);
-    expect(names.has("scheduled_sessions_class_idx")).toBe(true);
-    expect(names.has("scheduled_sessions_start_idx")).toBe(true);
-    expect(names.has("scheduled_sessions_status_idx")).toBe(true);
+      SELECT
+        i.relname AS index_name,
+        ARRAY(
+          SELECT a.attname
+          FROM unnest(ix.indkey) WITH ORDINALITY AS k(attnum, ord)
+          JOIN pg_attribute a ON a.attrelid = ix.indrelid AND a.attnum = k.attnum
+          ORDER BY k.ord
+        ) AS column_names
+      FROM pg_index ix
+      JOIN pg_class i ON i.oid = ix.indexrelid
+      JOIN pg_class t ON t.oid = ix.indrelid
+      WHERE t.relname = 'scheduled_sessions'
+      ORDER BY i.relname
+    `)) as unknown as Array<{
+      index_name: string;
+      column_names: string[];
+    }>;
+    const byName = new Map(rows.map((r) => [r.index_name, r.column_names]));
+    expect(byName.get("scheduled_sessions_pkey")).toEqual(["id"]);
+    expect(byName.get("scheduled_sessions_class_idx")).toEqual(["class_id"]);
+    expect(byName.get("scheduled_sessions_start_idx")).toEqual(["scheduled_start"]);
+    expect(byName.get("scheduled_sessions_status_idx")).toEqual([
+      "class_id",
+      "status",
+    ]);
   });
 
-  it("sessions.scheduled_session_id FK targets scheduled_sessions(id)", async () => {
-    // Constraint name matches what 0014_session_model.sql:81-90
-    // declared. Migration 0023 re-attaches it on a fresh DB chain
-    // where 0014's IF EXISTS guard would have skipped it.
+  it("sessions.scheduled_session_id FK columns and behavior are correct", async () => {
+    // Codex post-impl review: also verify the local + referenced
+    // column names (conkey/confkey) so a swap goes caught.
     const rows = (await testDb.execute(sql`
       SELECT
         c.conname,
         c.confdeltype,
-        ref.relname AS referenced_table
+        ref.relname AS referenced_table,
+        (
+          SELECT array_agg(att.attname ORDER BY u.ord)
+          FROM unnest(c.conkey) WITH ORDINALITY AS u(attnum, ord)
+          JOIN pg_attribute att
+            ON att.attrelid = c.conrelid AND att.attnum = u.attnum
+        ) AS local_columns,
+        (
+          SELECT array_agg(att.attname ORDER BY u.ord)
+          FROM unnest(c.confkey) WITH ORDINALITY AS u(attnum, ord)
+          JOIN pg_attribute att
+            ON att.attrelid = c.confrelid AND att.attnum = u.attnum
+        ) AS referenced_columns
       FROM pg_constraint c
       JOIN pg_class src ON src.oid = c.conrelid
       LEFT JOIN pg_class ref ON ref.oid = c.confrelid
@@ -106,10 +163,14 @@ describe("scheduled_sessions schema parity (plan 058)", () => {
       conname: string;
       confdeltype: string;
       referenced_table: string;
+      local_columns: string[];
+      referenced_columns: string[];
     }>;
     expect(rows).toHaveLength(1);
     expect(rows[0].referenced_table).toBe("scheduled_sessions");
     // confdeltype 'n' === SET NULL (per pg_constraint catalog).
     expect(rows[0].confdeltype).toBe("n");
+    expect(rows[0].local_columns).toEqual(["scheduled_session_id"]);
+    expect(rows[0].referenced_columns).toEqual(["id"]);
   });
 });
