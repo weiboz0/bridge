@@ -2508,3 +2508,27 @@ func TestTeachingUnitHandler_Get_OrgStudent_CoachReadyBound_200(t *testing.T) {
 	w := doUnitGet(t, fx.h.GetUnit, "/api/units/"+u.ID, map[string]string{"id": u.ID}, fx.claims(fx.student1, false))
 	assert.Equal(t, http.StatusOK, w.Code, "coach_ready status should be student-visible")
 }
+
+func TestTeachingUnitHandler_Get_OrgStudent_ArchivedBound_200(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	// Archived units stay readable by bound students — read-only
+	// historical content. (The plan documents archived alongside
+	// classroom_ready and coach_ready.)
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "archived", "Archived Unit", fx.teacher1.ID)
+	wireStudentToUnit(t, fx, u)
+
+	w := doUnitGet(t, fx.h.GetUnit, "/api/units/"+u.ID, map[string]string{"id": u.ID}, fx.claims(fx.student1, false))
+	assert.Equal(t, http.StatusOK, w.Code, "archived status should be student-visible")
+}
+
+func TestTeachingUnitHandler_Get_OrgStudent_ReviewedBound_404(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	// reviewed = teacher-only intermediate state. Even with a
+	// binding, students should not see it (matches the plan's
+	// "draft/reviewed → student denied" rule).
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "reviewed", "Reviewed Unit", fx.teacher1.ID)
+	wireStudentToUnit(t, fx, u)
+
+	w := doUnitGet(t, fx.h.GetUnit, "/api/units/"+u.ID, map[string]string{"id": u.ID}, fx.claims(fx.student1, false))
+	assert.Equal(t, http.StatusNotFound, w.Code, "reviewed status should remain teacher-only")
+}

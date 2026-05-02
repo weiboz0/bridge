@@ -146,9 +146,11 @@ func RequireClassAuthority(
 //   - platform scope: classroom_ready/coach_ready/archived
 //     → any authenticated viewer; draft/reviewed → platform admin only.
 //   - org scope: active teacher or org_admin in the unit's org.
-//     Students pass via Plan 061 — verified class binding (an active
-//     class_membership in a class whose course owns the unit's topic),
-//     limited to classroom_ready / coach_ready / archived units.
+//     Students pass via Plan 061 — verified class binding (any
+//     class_membership row in a class whose course owns the unit's
+//     topic; existence-only since class_memberships has no status
+//     column), limited to classroom_ready / coach_ready / archived
+//     units.
 //   - personal scope: owner only.
 //   - platform admin: bypass at every scope/status.
 //
