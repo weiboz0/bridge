@@ -136,6 +136,13 @@ func (h *ScheduleHandler) Create(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, sched)
 }
 
+// List returns the scheduled sessions for a class.
+//
+// Plan 052 PR-B: requires AccessRead — caller must be a class member,
+// instructor, org_admin of the class's org, or platform admin.
+// Previously checked only `claims != nil`, allowing any authenticated
+// user to enumerate scheduled sessions for any class. Schedule
+// subsystem returns 403 on deny per `schedule.go:85-87` precedent.
 func (h *ScheduleHandler) List(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
@@ -144,6 +151,17 @@ func (h *ScheduleHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 
 	classID := chi.URLParam(r, "classId")
+
+	_, ok, err := RequireClassAuthority(r.Context(), h.Classes, h.Orgs, claims, classID, AccessRead)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if !ok {
+		writeError(w, http.StatusForbidden, "Access denied")
+		return
+	}
+
 	schedules, err := h.Schedules.ListByClass(r.Context(), classID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
@@ -152,6 +170,9 @@ func (h *ScheduleHandler) List(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, schedules)
 }
 
+// ListUpcoming returns the next-N upcoming scheduled sessions for a class.
+//
+// Plan 052 PR-B: requires AccessRead. Same auth rule as List.
 func (h *ScheduleHandler) ListUpcoming(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
@@ -160,6 +181,17 @@ func (h *ScheduleHandler) ListUpcoming(w http.ResponseWriter, r *http.Request) {
 	}
 
 	classID := chi.URLParam(r, "classId")
+
+	_, ok, err := RequireClassAuthority(r.Context(), h.Classes, h.Orgs, claims, classID, AccessRead)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if !ok {
+		writeError(w, http.StatusForbidden, "Access denied")
+		return
+	}
+
 	limit := 10
 	if l := r.URL.Query().Get("limit"); l != "" {
 		if n, err := strconv.Atoi(l); err == nil && n > 0 && n <= 50 {

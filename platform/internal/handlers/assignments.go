@@ -12,6 +12,10 @@ import (
 type AssignmentHandler struct {
 	Assignments *store.AssignmentStore
 	Classes     *store.ClassStore
+	// Plan 052 PR-B: Orgs store needed by RequireClassAuthority
+	// for the org_admin bypass branch. Nil-safe — `RequireClassAuthority`
+	// skips the org-admin check when nil but loses that bypass path.
+	Orgs *store.OrgStore
 }
 
 func (h *AssignmentHandler) Routes(r chi.Router) {
@@ -144,6 +148,13 @@ func (h *AssignmentHandler) ListAssignments(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, assignments)
 }
 
+// GetAssignment handles GET /api/assignments/{id}
+//
+// Plan 052 PR-B: requires AccessRead on the assignment's class.
+// Previously checked only `claims != nil`, leaking assignment
+// metadata (and the implied class/course association) for any
+// assignment by UUID. Returns 403 on deny per `assignments.go:133-135`
+// existing precedent.
 func (h *AssignmentHandler) GetAssignment(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
@@ -160,6 +171,17 @@ func (h *AssignmentHandler) GetAssignment(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusNotFound, "Not found")
 		return
 	}
+
+	_, ok, err := RequireClassAuthority(r.Context(), h.Classes, h.Orgs, claims, assignment.ClassID, AccessRead)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if !ok {
+		writeError(w, http.StatusForbidden, "Access denied")
+		return
+	}
+
 	writeJSON(w, http.StatusOK, assignment)
 }
 

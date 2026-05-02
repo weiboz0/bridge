@@ -201,7 +201,11 @@ func TestScheduleHandler_List_UsesSessionScheduledBackref(t *testing.T) {
 	session, err := schedules.StartScheduledSession(ctx, sched.ID, teacher.ID)
 	require.NoError(t, err)
 
-	h := &ScheduleHandler{Schedules: schedules}
+	// Plan 052 PR-B: List now requires AccessRead via
+	// RequireClassAuthority, which needs Classes + Orgs stores. The
+	// teacher created the class so AccessRead passes (CreateClass
+	// auto-adds the creator as instructor).
+	h := &ScheduleHandler{Schedules: schedules, Classes: classes, Orgs: orgs}
 	req := httptest.NewRequest(http.MethodGet, "/api/classes/"+class.ID+"/schedule", nil)
 	req = withChiParams(req, map[string]string{"classId": class.ID})
 	req = withClaims(req, &auth.Claims{UserID: teacher.ID})

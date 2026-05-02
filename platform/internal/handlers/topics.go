@@ -135,6 +135,11 @@ func (h *TopicHandler) ListTopics(w http.ResponseWriter, r *http.Request) {
 }
 
 // GetTopic handles GET /api/courses/{courseId}/topics/{topicId}
+//
+// Plan 052 PR-B: gate via course access, mirroring ListTopics's
+// existing pattern at lines 106-127. Previously checked only
+// `claims != nil`, leaking course structure / unit links / metadata
+// for any topic by UUID.
 func (h *TopicHandler) GetTopic(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
@@ -151,6 +156,34 @@ func (h *TopicHandler) GetTopic(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "Not found")
 		return
 	}
+
+	// Course access check — same shape as ListTopics. Topic subsystem
+	// returns 403 on deny per `topics.go:122-124` precedent.
+	if !claims.IsPlatformAdmin {
+		course, err := h.Courses.GetCourse(r.Context(), topic.CourseID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "Database error")
+			return
+		}
+		if course == nil {
+			// Course was deleted but topic survived (FK should have
+			// cascaded; defensive).
+			writeError(w, http.StatusNotFound, "Not found")
+			return
+		}
+		if course.CreatedBy != claims.UserID {
+			hasAccess, err := h.Courses.UserHasAccessToCourse(r.Context(), topic.CourseID, claims.UserID)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "Database error")
+				return
+			}
+			if !hasAccess {
+				writeError(w, http.StatusForbidden, "Access denied")
+				return
+			}
+		}
+	}
+
 	writeJSON(w, http.StatusOK, topic)
 }
 

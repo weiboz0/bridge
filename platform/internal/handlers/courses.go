@@ -263,6 +263,11 @@ func (h *CourseHandler) DeleteCourse(w http.ResponseWriter, r *http.Request) {
 }
 
 // CloneCourse handles POST /api/courses/{id}/clone
+//
+// Plan 052 PR-B: caller must have access to the source course.
+// Previously checked only `claims != nil`, allowing any authenticated
+// user to clone any course by ID and walk away with a private copy.
+// 403 on deny per `courses.go:160-168` precedent.
 func (h *CourseHandler) CloneCourse(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
@@ -271,6 +276,31 @@ func (h *CourseHandler) CloneCourse(w http.ResponseWriter, r *http.Request) {
 	}
 
 	courseID := chi.URLParam(r, "id")
+
+	// Resolve source course + apply course-access check before the clone.
+	if !claims.IsPlatformAdmin {
+		course, err := h.Courses.GetCourse(r.Context(), courseID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "Database error")
+			return
+		}
+		if course == nil {
+			writeError(w, http.StatusNotFound, "Course not found")
+			return
+		}
+		if course.CreatedBy != claims.UserID {
+			hasAccess, err := h.Courses.UserHasAccessToCourse(r.Context(), courseID, claims.UserID)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "Database error")
+				return
+			}
+			if !hasAccess {
+				writeError(w, http.StatusForbidden, "Access denied")
+				return
+			}
+		}
+	}
+
 	cloned, err := h.Courses.CloneCourse(r.Context(), courseID, claims.UserID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Failed to clone course")
