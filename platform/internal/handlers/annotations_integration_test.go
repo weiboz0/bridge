@@ -91,6 +91,77 @@ func callResolve(t *testing.T, h *AnnotationHandler, claims *auth.Claims, annotI
 	return w.Code
 }
 
+// addAnnotTA creates a fresh user, makes them an active TA in the
+// fixture's class, and returns their ID. Codex pass-1 flagged that
+// the matrix never exercised the TA branch of RequireClassAuthority.
+func addAnnotTA(t *testing.T, fx *sessionPageFixture, suffix string) string {
+	t.Helper()
+	users := store.NewUserStore(fx.db)
+	classes := store.NewClassStore(fx.db)
+	orgs := store.NewOrgStore(fx.db)
+	ctx := context.Background()
+
+	u, err := users.RegisterUser(ctx, store.RegisterInput{
+		Name:     "TA " + suffix,
+		Email:    "ta-" + suffix + "@example.com",
+		Password: "testpassword123",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		fx.db.ExecContext(ctx, "DELETE FROM session_participants WHERE user_id = $1", u.ID)
+		fx.db.ExecContext(ctx, "DELETE FROM class_memberships WHERE user_id = $1", u.ID)
+		fx.db.ExecContext(ctx, "DELETE FROM org_memberships WHERE user_id = $1", u.ID)
+		fx.db.ExecContext(ctx, "DELETE FROM auth_providers WHERE user_id = $1", u.ID)
+		fx.db.ExecContext(ctx, "DELETE FROM users WHERE id = $1", u.ID)
+	})
+	_, err = orgs.AddOrgMember(ctx, store.AddMemberInput{
+		OrgID: fx.orgID, UserID: u.ID, Role: "teacher", Status: "active",
+	})
+	require.NoError(t, err)
+	_, err = classes.AddClassMember(ctx, store.AddClassMemberInput{
+		ClassID: fx.classID, UserID: u.ID, Role: "ta",
+	})
+	require.NoError(t, err)
+	return u.ID
+}
+
+// addAnnotPeerStudent creates a second student-role user enrolled in
+// the same class as fx.student. Used for the "another student in
+// the same class looking at someone else's doc" denial — they have
+// a class membership row but NO read access to fx.student's
+// annotations because they're neither the doc owner nor class
+// staff.
+func addAnnotPeerStudent(t *testing.T, fx *sessionPageFixture, suffix string) string {
+	t.Helper()
+	users := store.NewUserStore(fx.db)
+	classes := store.NewClassStore(fx.db)
+	orgs := store.NewOrgStore(fx.db)
+	ctx := context.Background()
+
+	u, err := users.RegisterUser(ctx, store.RegisterInput{
+		Name:     "Peer " + suffix,
+		Email:    "peer-" + suffix + "@example.com",
+		Password: "testpassword123",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		fx.db.ExecContext(ctx, "DELETE FROM session_participants WHERE user_id = $1", u.ID)
+		fx.db.ExecContext(ctx, "DELETE FROM class_memberships WHERE user_id = $1", u.ID)
+		fx.db.ExecContext(ctx, "DELETE FROM org_memberships WHERE user_id = $1", u.ID)
+		fx.db.ExecContext(ctx, "DELETE FROM auth_providers WHERE user_id = $1", u.ID)
+		fx.db.ExecContext(ctx, "DELETE FROM users WHERE id = $1", u.ID)
+	})
+	_, err = orgs.AddOrgMember(ctx, store.AddMemberInput{
+		OrgID: fx.orgID, UserID: u.ID, Role: "student", Status: "active",
+	})
+	require.NoError(t, err)
+	_, err = classes.AddClassMember(ctx, store.AddClassMemberInput{
+		ClassID: fx.classID, UserID: u.ID, Role: "student",
+	})
+	require.NoError(t, err)
+	return u.ID
+}
+
 // seedAnnotation creates one teacher-authored annotation on the
 // fixture's student doc; returns the annotation row for use as the
 // target of delete/resolve tests.
@@ -122,8 +193,10 @@ func TestAnnotationAuth_RejectsNonSessionPrefix(t *testing.T) {
 		"unit:abc-123",
 		"broadcast:abc-123",
 		"d1",
-		"session:abc",                // wrong shape
-		"session:abc:teacher:def",    // wrong middle
+		"session:abc",             // wrong shape (only 2 parts)
+		"session:abc:teacher:def", // wrong middle (must be "user")
+		"session::user:abc",       // empty session id
+		"session:abc:user:",       // empty owner id
 	}
 	for _, doc := range cases {
 		t.Run(doc, func(t *testing.T) {
@@ -138,6 +211,8 @@ func TestAnnotationAuth_RejectsNonSessionPrefix(t *testing.T) {
 func TestAnnotationAuth_ListMatrix(t *testing.T) {
 	fx := newSessionPageFixture(t, "anno-list")
 	h := newAnnotationHandlerForFixture(fx)
+	taID := addAnnotTA(t, fx, "list")
+	peerID := addAnnotPeerStudent(t, fx, "list")
 	docID := annotDocID(fx, fx.student.ID)
 
 	cases := []struct {
@@ -148,7 +223,9 @@ func TestAnnotationAuth_ListMatrix(t *testing.T) {
 		{"teacher of session", &auth.Claims{UserID: fx.teacher.ID}, http.StatusOK},
 		{"platform admin", &auth.Claims{UserID: fx.admin.ID, IsPlatformAdmin: true}, http.StatusOK},
 		{"org_admin (class staff via org role)", &auth.Claims{UserID: fx.orgAdmin.ID}, http.StatusOK},
+		{"class TA", &auth.Claims{UserID: taID}, http.StatusOK},
 		{"doc owner (student on own doc)", &auth.Claims{UserID: fx.student.ID}, http.StatusOK},
+		{"peer student in same class (other student's doc)", &auth.Claims{UserID: peerID}, http.StatusNotFound},
 		{"outsider (no membership)", &auth.Claims{UserID: fx.outsider.ID}, http.StatusNotFound},
 	}
 	for _, tc := range cases {
@@ -161,6 +238,8 @@ func TestAnnotationAuth_ListMatrix(t *testing.T) {
 func TestAnnotationAuth_CreateMatrix(t *testing.T) {
 	fx := newSessionPageFixture(t, "anno-create")
 	h := newAnnotationHandlerForFixture(fx)
+	taID := addAnnotTA(t, fx, "create")
+	peerID := addAnnotPeerStudent(t, fx, "create")
 	docID := annotDocID(fx, fx.student.ID)
 
 	cases := []struct {
@@ -171,11 +250,15 @@ func TestAnnotationAuth_CreateMatrix(t *testing.T) {
 		{"teacher of session", &auth.Claims{UserID: fx.teacher.ID}, http.StatusCreated},
 		{"platform admin", &auth.Claims{UserID: fx.admin.ID, IsPlatformAdmin: true}, http.StatusCreated},
 		{"org_admin (class staff via org role)", &auth.Claims{UserID: fx.orgAdmin.ID}, http.StatusCreated},
+		{"class TA", &auth.Claims{UserID: taID}, http.StatusCreated},
 		// Doc owner CAN read but CANNOT create — annotations are
 		// teacher-only feedback. 403 (not 404) so the response
 		// distinguishes "you have read access but no write" from
 		// "no read access at all".
 		{"doc owner (student on own doc)", &auth.Claims{UserID: fx.student.ID}, http.StatusForbidden},
+		// Peer student is in the same class but isn't the doc
+		// owner and isn't class staff — no read access → 404.
+		{"peer student in same class (other student's doc)", &auth.Claims{UserID: peerID}, http.StatusNotFound},
 		{"outsider (no membership)", &auth.Claims{UserID: fx.outsider.ID}, http.StatusNotFound},
 	}
 	for _, tc := range cases {
@@ -190,6 +273,8 @@ func TestAnnotationAuth_CreateMatrix(t *testing.T) {
 func TestAnnotationAuth_DeleteMatrix(t *testing.T) {
 	fx := newSessionPageFixture(t, "anno-del")
 	h := newAnnotationHandlerForFixture(fx)
+	taID := addAnnotTA(t, fx, "del")
+	peerID := addAnnotPeerStudent(t, fx, "del")
 
 	cases := []struct {
 		name   string
@@ -199,7 +284,9 @@ func TestAnnotationAuth_DeleteMatrix(t *testing.T) {
 		{"teacher of session", &auth.Claims{UserID: fx.teacher.ID}, http.StatusOK},
 		{"platform admin", &auth.Claims{UserID: fx.admin.ID, IsPlatformAdmin: true}, http.StatusOK},
 		{"org_admin", &auth.Claims{UserID: fx.orgAdmin.ID}, http.StatusOK},
+		{"class TA", &auth.Claims{UserID: taID}, http.StatusOK},
 		{"doc owner (student on own doc)", &auth.Claims{UserID: fx.student.ID}, http.StatusForbidden},
+		{"peer student in same class", &auth.Claims{UserID: peerID}, http.StatusNotFound},
 		{"outsider", &auth.Claims{UserID: fx.outsider.ID}, http.StatusNotFound},
 	}
 	for _, tc := range cases {
@@ -216,6 +303,8 @@ func TestAnnotationAuth_DeleteMatrix(t *testing.T) {
 func TestAnnotationAuth_ResolveMatrix(t *testing.T) {
 	fx := newSessionPageFixture(t, "anno-res")
 	h := newAnnotationHandlerForFixture(fx)
+	taID := addAnnotTA(t, fx, "res")
+	peerID := addAnnotPeerStudent(t, fx, "res")
 	annot := seedAnnotation(t, h, fx)
 
 	cases := []struct {
@@ -224,7 +313,11 @@ func TestAnnotationAuth_ResolveMatrix(t *testing.T) {
 		want   int
 	}{
 		{"teacher of session", &auth.Claims{UserID: fx.teacher.ID}, http.StatusOK},
+		{"platform admin", &auth.Claims{UserID: fx.admin.ID, IsPlatformAdmin: true}, http.StatusOK},
+		{"org_admin", &auth.Claims{UserID: fx.orgAdmin.ID}, http.StatusOK},
+		{"class TA", &auth.Claims{UserID: taID}, http.StatusOK},
 		{"doc owner (student on own doc)", &auth.Claims{UserID: fx.student.ID}, http.StatusForbidden},
+		{"peer student in same class", &auth.Claims{UserID: peerID}, http.StatusNotFound},
 		{"outsider", &auth.Claims{UserID: fx.outsider.ID}, http.StatusNotFound},
 	}
 	for _, tc := range cases {
@@ -249,20 +342,24 @@ func TestAnnotationAuth_NoClaims(t *testing.T) {
 }
 
 // --- Other-student-in-same-class returns 404 (not 403) ---
+//
+// The matrix tests above cover this with `addAnnotPeerStudent`. This
+// dedicated test pins the load-bearing distinction down: a real
+// student-role member of the doc-owner's class who is NOT the doc
+// owner gets 404 across every endpoint. Belt-and-suspenders to
+// guard against a future refactor that accidentally collapses
+// "doc owner" with "any class member".
 
 func TestAnnotationAuth_OtherStudentSameClass_404(t *testing.T) {
 	fx := newSessionPageFixture(t, "anno-othr")
 	h := newAnnotationHandlerForFixture(fx)
+	peerID := addAnnotPeerStudent(t, fx, "othr")
 	annot := seedAnnotation(t, h, fx)
-
-	// outsider isn't in the class — but here we simulate "another
-	// student in the same class" by creating a new student-role
-	// user via the existing fixture. The fixture doesn't pre-build
-	// one, so we add it inline.
-	otherStudent := &auth.Claims{UserID: fx.outsider.ID} // outsider stands in for "non-doc-owner without class staff role"
+	peerClaims := &auth.Claims{UserID: peerID}
 
 	docID := annotDocID(fx, fx.student.ID)
-	assert.Equal(t, http.StatusNotFound, callList(t, h, otherStudent, docID))
-	assert.Equal(t, http.StatusNotFound, callDelete(t, h, otherStudent, annot.ID))
-	assert.Equal(t, http.StatusNotFound, callResolve(t, h, otherStudent, annot.ID))
+	assert.Equal(t, http.StatusNotFound, callList(t, h, peerClaims, docID))
+	assert.Equal(t, http.StatusNotFound, callCreate(t, h, peerClaims, docID))
+	assert.Equal(t, http.StatusNotFound, callDelete(t, h, peerClaims, annot.ID))
+	assert.Equal(t, http.StatusNotFound, callResolve(t, h, peerClaims, annot.ID))
 }
