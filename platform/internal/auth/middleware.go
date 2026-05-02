@@ -85,13 +85,21 @@ func NewMiddleware(secret string) *Middleware {
 // platform admin, or a UUID for a specific user.
 func (m *Middleware) RequireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Dev auth bypass — never use in production
+		// Dev auth bypass — never use in production. Plan 050: the
+		// startup-time guard in cmd/api/main.go panics if
+		// DEV_SKIP_AUTH is set with APP_ENV=production, so reaching
+		// this branch in prod is impossible. The explicit
+		// `ImpersonatedBy: ""` below is documentation/test hardening
+		// — Go's struct-literal omission already gives the field
+		// its zero value; the explicit line makes intent visible to
+		// grep / future readers.
 		if devUser := os.Getenv("DEV_SKIP_AUTH"); devUser != "" {
 			claims := &Claims{
 				UserID:          devUser,
 				Name:            "Dev User",
 				Email:           "dev@localhost",
 				IsPlatformAdmin: devUser == "admin",
+				ImpersonatedBy:  "",
 			}
 			// If it looks like a UUID, use it as-is. Otherwise treat "admin"
 			// as a platform admin with a placeholder ID.
