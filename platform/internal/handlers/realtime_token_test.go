@@ -375,17 +375,57 @@ func TestInternalAuth_RehydratesPlatformAdminFromDB(t *testing.T) {
 	assert.True(t, resp2.Allowed, "DB-rehydrated platform admin must pass")
 }
 
-// If `sub` doesn't resolve to a real user (deleted, malformed), the
-// internal endpoint must respond `Allowed: false` rather than erroring
-// out — this is defense against compromised/malformed callbacks.
-func TestInternalAuth_UnknownSub_Denied(t *testing.T) {
+// Internal endpoint distinguishes real authorization denials (200 +
+// allowed:false) from infrastructure failures (4xx/5xx) so Hocuspocus
+// retry logic and ops alerting don't conflate "deny" with "broken".
+func TestInternalAuth_UnknownSub_404(t *testing.T) {
 	fx := newSessionPageFixture(t, "rt-int-unknown")
 	h := newRealtimeHandlerForFixture(fx)
 	docName := "session:" + fx.sessionID + ":user:" + fx.student.ID
 
-	// uuid-shaped but never-registered sub.
-	code, resp := callInternalAuth(t, h, rtSecret, docName, "00000000-0000-0000-0000-000000000000")
-	require.Equal(t, http.StatusOK, code)
-	assert.False(t, resp.Allowed)
-	assert.NotEmpty(t, resp.Reason)
+	// uuid-shaped but never-registered sub → 404 (user missing).
+	code, _ := callInternalAuth(t, h, rtSecret, docName, "00000000-0000-0000-0000-000000000000")
+	assert.Equal(t, http.StatusNotFound, code)
+}
+
+// Malformed documentName → 400, not 200/Allowed:false. Hocuspocus
+// shouldn't be told "this user can't access this doc" when the
+// problem is really that the doc-name is garbage.
+func TestInternalAuth_BadDocName_400(t *testing.T) {
+	fx := newSessionPageFixture(t, "rt-int-baddoc")
+	h := newRealtimeHandlerForFixture(fx)
+
+	cases := []string{
+		"garbage:nope",
+		"session",
+		"session:abc:teacher:def",
+		"broadcast:abc:extra",
+	}
+	for _, doc := range cases {
+		t.Run(doc, func(t *testing.T) {
+			code, _ := callInternalAuth(t, h, rtSecret, doc, fx.student.ID)
+			assert.Equal(t, http.StatusBadRequest, code, "doc=%q should yield 400", doc)
+		})
+	}
+}
+
+// Missing target resource (e.g. session deleted between mint and
+// recheck) → 404, not 200/Allowed:false.
+func TestInternalAuth_MissingResource_404(t *testing.T) {
+	fx := newSessionPageFixture(t, "rt-int-missing")
+	h := newRealtimeHandlerForFixture(fx)
+
+	docName := "session:00000000-0000-0000-0000-000000000000:user:" + fx.student.ID
+	code, _ := callInternalAuth(t, h, rtSecret, docName, fx.student.ID)
+	assert.Equal(t, http.StatusNotFound, code)
+}
+
+// Misconfigured handler (Users store nil) → 500, not silent
+// allowed:false. Note: this is a programming error, not a runtime
+// state — but we want it to surface loudly if someone re-wires the
+// handler without populating Users.
+func TestInternalAuth_NilUsersStore_500(t *testing.T) {
+	h := &RealtimeHandler{HocuspocusTokenSecret: rtSecret /* Users intentionally nil */}
+	code, _ := callInternalAuth(t, h, rtSecret, "session:x:user:y", "u-1")
+	assert.Equal(t, http.StatusInternalServerError, code)
 }

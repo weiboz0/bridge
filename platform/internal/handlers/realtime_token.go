@@ -162,17 +162,24 @@ func (h *RealtimeHandler) InternalAuth(w http.ResponseWriter, r *http.Request) {
 	// untrusted at this layer for that bit because it could be
 	// stale, and we never want to trust client-supplied admin
 	// claims server-side.
+	//
+	// Status-code conventions (so Hocuspocus / ops can distinguish
+	// real "no" decisions from infrastructure failures):
+	//   200 + {allowed: true|false} → authorization rendered.
+	//   400 → malformed input (bad sub, bad documentName).
+	//   404 → user or resource doesn't exist.
+	//   500 → server-side failure (DB down, store misconfigured).
 	if h.Users == nil {
-		writeJSON(w, http.StatusOK, internalAuthResponse{Allowed: false, Reason: "Users store unavailable"})
+		writeError(w, http.StatusInternalServerError, "Users store unavailable")
 		return
 	}
 	user, err := h.Users.GetUserByID(r.Context(), body.Sub)
 	if err != nil {
-		writeJSON(w, http.StatusOK, internalAuthResponse{Allowed: false, Reason: "User lookup failed"})
+		writeError(w, http.StatusInternalServerError, "User lookup failed")
 		return
 	}
 	if user == nil {
-		writeJSON(w, http.StatusOK, internalAuthResponse{Allowed: false, Reason: "User not found"})
+		writeError(w, http.StatusNotFound, "User not found")
 		return
 	}
 	rehydratedClaims := &auth.Claims{
@@ -186,7 +193,16 @@ func (h *RealtimeHandler) InternalAuth(w http.ResponseWriter, r *http.Request) {
 	}
 	_, decision := h.authorizeDocument(r.Context(), rehydratedClaims, body.DocumentName)
 	if decision != nil {
-		writeJSON(w, http.StatusOK, internalAuthResponse{Allowed: false, Reason: decision.Message})
+		// Only forbid-decisions become {allowed: false}. Anything
+		// else (400 malformed doc-name, 404 missing session/unit/
+		// attempt, 500 DB error) surfaces as a real HTTP error so
+		// Hocuspocus retry logic and ops alerting can tell the
+		// difference between "deny" and "broken".
+		if decision.Status == http.StatusForbidden {
+			writeJSON(w, http.StatusOK, internalAuthResponse{Allowed: false, Reason: decision.Message})
+			return
+		}
+		writeError(w, decision.Status, decision.Message)
 		return
 	}
 	writeJSON(w, http.StatusOK, internalAuthResponse{Allowed: true})
