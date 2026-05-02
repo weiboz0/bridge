@@ -13,9 +13,20 @@ import {
   numeric,
   doublePrecision,
   primaryKey,
+  customType,
   type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
+
+// Plan 054 drift fix — Drizzle has no native `tsvector` type. The
+// custom type below maps to it so `db:generate` emits the correct
+// column DDL (or, more importantly, doesn't try to migrate an
+// existing tsvector column into a text column).
+const tsvector = customType<{ data: string; driverData: string }>({
+  dataType() {
+    return "tsvector";
+  },
+});
 
 // --- Enums ---
 
@@ -681,10 +692,10 @@ export const teachingUnits = pgTable(
     // `to_tsvector('english', title || ' ' || summary)`. Application
     // code never reads/writes it directly — it powers the
     // teaching_units_search_idx GIN index for full-text search.
-    // Declared as text since Drizzle doesn't have a native tsvector
-    // type; the .generatedAlwaysAs marker keeps `db:generate` from
-    // trying to insert into it.
-    searchVector: text("search_vector").generatedAlwaysAs(
+    // Uses the local `tsvector` customType so the Drizzle column
+    // type matches the live `tsvector` exactly (text would still be
+    // drifted).
+    searchVector: tsvector("search_vector").generatedAlwaysAs(
       sql`to_tsvector('english', coalesce(title, '') || ' ' || coalesce(summary, ''))`,
     ),
     createdBy: uuid("created_by").notNull().references(() => users.id),

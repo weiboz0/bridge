@@ -113,8 +113,26 @@ describe("schema drift (plan 054)", () => {
       expect(await columnExists("avg_rating")).toBe(true);
     });
 
-    it("search_vector generated column exists", async () => {
-      expect(await columnExists("search_vector")).toBe(true);
+    it("search_vector exists AND has live type tsvector (not text — drift catch)", async () => {
+      // Plan 054 pass-2 fix: `column_name` existence alone wasn't
+      // catching the text-vs-tsvector drift Codex flagged. Assert
+      // the live atttypid via pg_catalog so a Drizzle declaration
+      // that uses the wrong type fails this test loudly.
+      const rows = (await testDb.execute(sql`
+        SELECT pg_catalog.format_type(a.atttypid, a.atttypmod) AS type_name,
+               a.attgenerated AS generated_kind
+        FROM pg_attribute a
+        JOIN pg_class c ON c.oid = a.attrelid
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public'
+          AND c.relname = 'teaching_units'
+          AND a.attname = 'search_vector'
+          AND a.attnum > 0
+      `)) as unknown as Array<{ type_name: string; generated_kind: string }>;
+      expect(rows.length).toBe(1);
+      expect(rows[0].type_name).toBe("tsvector");
+      // 's' = STORED generated column.
+      expect(rows[0].generated_kind).toBe("s");
     });
   });
 });
