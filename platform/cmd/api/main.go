@@ -245,8 +245,9 @@ func main() {
 		unitAIH.Routes(r)
 
 		collectionH := &handlers.UnitCollectionHandler{
-			Collections: stores.UnitCollections,
-			Orgs:        stores.Orgs,
+			Collections:   stores.UnitCollections,
+			Orgs:          stores.Orgs,
+			TeachingUnits: stores.TeachingUnits,
 		}
 		collectionH.Routes(r)
 
