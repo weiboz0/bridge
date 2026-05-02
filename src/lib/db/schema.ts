@@ -10,10 +10,23 @@ import {
   index,
   boolean,
   integer,
+  numeric,
   doublePrecision,
   primaryKey,
+  customType,
   type AnyPgColumn,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+
+// Plan 054 drift fix — Drizzle has no native `tsvector` type. The
+// custom type below maps to it so `db:generate` emits the correct
+// column DDL (or, more importantly, doesn't try to migrate an
+// existing tsvector column into a text column).
+const tsvector = customType<{ data: string; driverData: string }>({
+  dataType() {
+    return "tsvector";
+  },
+});
 
 // --- Enums ---
 
@@ -458,8 +471,6 @@ export const documents = pgTable(
     ownerId: uuid("owner_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
-    /** @deprecated Legacy column name — use classId in application code. Rename requires migration. */
-    classroomId: uuid("classroom_id"),
     sessionId: uuid("session_id"),
     topicId: uuid("topic_id"),
     language: programmingLanguageEnum("language").notNull().default("python"),
@@ -470,7 +481,6 @@ export const documents = pgTable(
   },
   (table) => [
     index("documents_owner_idx").on(table.ownerId),
-    index("documents_classroom_idx").on(table.classroomId),
     index("documents_session_idx").on(table.sessionId),
   ]
 );
@@ -672,6 +682,22 @@ export const teachingUnits = pgTable(
       .notNull()
       .default("draft"),
     topicId: uuid("topic_id").references(() => topics.id, { onDelete: "set null" }),
+    // Plan 054 drift fix — these columns exist in the live DB
+    // (migrations 0019_discovery.sql) but were missing from this
+    // Drizzle declaration. Without them, `bun run db:generate`
+    // would emit a DROP COLUMN against the live table.
+    usageCount: integer("usage_count").notNull().default(0),
+    avgRating: numeric("avg_rating", { precision: 3, scale: 2 }),
+    // search_vector is a STORED generated column populated from
+    // `to_tsvector('english', title || ' ' || summary)`. Application
+    // code never reads/writes it directly — it powers the
+    // teaching_units_search_idx GIN index for full-text search.
+    // Uses the local `tsvector` customType so the Drizzle column
+    // type matches the live `tsvector` exactly (text would still be
+    // drifted).
+    searchVector: tsvector("search_vector").generatedAlwaysAs(
+      sql`to_tsvector('english', coalesce(title, '') || ' ' || coalesce(summary, ''))`,
+    ),
     createdBy: uuid("created_by").notNull().references(() => users.id),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
@@ -687,6 +713,29 @@ export const teachingUnits = pgTable(
       t.status
     ),
     createdByIdx: index("teaching_units_created_by_idx").on(t.createdBy),
+    // Plan 054 drift fix — these indexes exist in the live DB but
+    // were missing from Drizzle. Order matches the migrations
+    // (0016 first, then 0017, then 0019).
+    //
+    // teaching_units_scope_slug_uniq is an EXPRESSION index over
+    // COALESCE(scope_id::text, '') so platform-scope rows (with
+    // scope_id IS NULL) don't all collide on the same key. Drizzle's
+    // .on() takes raw SQL via `sql\`\`` for the expression column.
+    scopeSlugUniqIdx: uniqueIndex("teaching_units_scope_slug_uniq")
+      .on(t.scope, sql`COALESCE(${t.scopeId}::text, '')`, t.slug)
+      .where(sql`${t.slug} IS NOT NULL`),
+    topicIdUniqIdx: uniqueIndex("teaching_units_topic_id_uniq")
+      .on(t.topicId)
+      .where(sql`${t.topicId} IS NOT NULL`),
+    subjectTagsGinIdx: index("teaching_units_subject_tags_gin_idx").using(
+      "gin",
+      t.subjectTags,
+    ),
+    standardsTagsGinIdx: index("teaching_units_standards_tags_gin_idx").using(
+      "gin",
+      t.standardsTags,
+    ),
+    searchIdx: index("teaching_units_search_idx").using("gin", t.searchVector),
   })
 );
 
