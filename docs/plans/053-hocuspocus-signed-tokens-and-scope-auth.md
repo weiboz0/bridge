@@ -108,7 +108,8 @@ Dispatch `codex:codex-rescue` on this plan focusing on (a) the JWT claim shape's
 - Defense-in-depth `onLoadDocument` DB check via the new internal endpoint.
 - **Backward-compat parsing (Codex Phase 0 follow-up):** with the flag OFF, the parser must accept BOTH the legacy `userId:role` shape (current behavior) AND a signed JWT (newly-deployed clients during the rollout window). Detect by string shape: if the token starts with `ey` (base64-encoded JWT header `{"alg":"HS256"}` always starts with `ey`) treat as JWT and verify; otherwise fall back to `split(":")`. With the flag ON, rejecting any unsigned token is unconditional.
 - Tests added in this phase:
-  - `tests/integration/realtime-token-mint.test.ts` — vitest end-to-end for `POST /api/realtime/token` (mocked Go via existing Go-proxy stub).
+  - `tests/unit/realtime-jwt.test.ts` — Vitest unit coverage for the Node-side JWT verifier (`verifyRealtimeJwt`): round-trip, wrong secret, tampered payload, alg=none, wrong issuer, expired, future iat, missing claims, malformed, garbage body. Plus `rechckDocumentAccess` with mocked fetch covering 200/allow, 200/deny, 4xx, 5xx, network error.
+  - **NOTE (revised vs Phase 0 plan):** the original plan also called for `tests/integration/realtime-token-mint.test.ts` as a Vitest end-to-end for `POST /api/realtime/token`. After landing, this is omitted because (a) the route has no Next.js file — it goes straight through the `next.config.ts` rewrite to Go; (b) Go integration tests in `platform/internal/handlers/realtime_token_test.go` already cover the endpoint exhaustively (22 cases); (c) no proxy-stub infrastructure exists in Bridge's Vitest setup, so a "mocked Go" test would test the mock, not the system. The full mint → connect → verify round-trip is best ratcheted by the Phase 3 Playwright e2e (`e2e/hocuspocus-auth.spec.ts`).
 
 ### Phase 3: client-side token fetch
 
