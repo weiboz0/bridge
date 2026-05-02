@@ -152,3 +152,34 @@ behavior detail:
 ### Pass 2 — 2026-05-02: **CONCUR**
 
 All 5 pass-1 items correctly addressed; ready for implementation.
+
+---
+
+## Phase 1 Post-Implementation Review (2026-05-02)
+
+### Pass 1 — 1 blocker + 1 warning, both fixed
+
+1. **BLOCKER:** `searchVector` declared as `text()` but the live DB
+   column is `tsvector` — fix only addressed surface drift, not the
+   type mismatch. **Fix:** added a local `customType` for `tsvector`
+   and switched `searchVector` to use it.
+2. **WARNING:** regression test only asserted column existence; would
+   not catch a future text-vs-tsvector mistake. **Fix:** strengthened
+   the test to query `pg_catalog.format_type(a.atttypid, a.atttypmod)`
+   and assert `'tsvector'`, plus `a.attgenerated='s'` for STORED.
+
+### Pass 2 — **CONCUR**
+
+> Both fixes are correct and sufficient, no remaining blockers. The
+> branch is clear to proceed to merge.
+
+### Final scope
+
+- 6 src files modified (schema, documents lib + route, teaching-units
+  lib, plus 2 new tests).
+- Drift items 1, 2, 3 all resolved + the new tsvector column type +
+  3 missing teaching_units indexes uncovered during implementation
+  (subject_tags GIN, standards_tags GIN, plus the 3 originally
+  documented).
+
+Vitest: 587 passed (13 new). Go suite: green.
