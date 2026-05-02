@@ -170,41 +170,11 @@ func (h *ClassHandler) ListMyClasses(w http.ResponseWriter, r *http.Request) {
 // `404 Not found` for both — leaking class existence to non-members is the
 // bug we're fixing.
 func (h *ClassHandler) CanAccessClass(r *http.Request, classID string, claims *auth.Claims) (*store.Class, bool, error) {
-	class, err := h.Classes.GetClass(r.Context(), classID)
-	if err != nil {
-		return nil, false, err
-	}
-	if class == nil {
-		return nil, false, nil
-	}
-
-	if claims.IsPlatformAdmin || claims.ImpersonatedBy != "" {
-		return class, true, nil
-	}
-
-	members, err := h.Classes.ListClassMembers(r.Context(), classID)
-	if err != nil {
-		return nil, false, err
-	}
-	for _, m := range members {
-		if m.UserID == claims.UserID {
-			return class, true, nil
-		}
-	}
-
-	if h.Orgs != nil {
-		roles, err := h.Orgs.GetUserRolesInOrg(r.Context(), class.OrgID, claims.UserID)
-		if err != nil {
-			return nil, false, err
-		}
-		for _, role := range roles {
-			if role.Role == "org_admin" {
-				return class, true, nil
-			}
-		}
-	}
-
-	return nil, false, nil
+	// Plan 052 PR-A: thin wrapper around the free `RequireClassAuthority`
+	// helper so the new helper is the single source of truth for
+	// class-access decisions (callable from non-ClassHandler types
+	// like ScheduleHandler / AssignmentHandler in PR-B).
+	return RequireClassAuthority(r.Context(), h.Classes, h.Orgs, claims, classID, AccessRead)
 }
 
 // GetClass handles GET /api/classes/{id}
@@ -229,6 +199,10 @@ func (h *ClassHandler) GetClass(w http.ResponseWriter, r *http.Request) {
 }
 
 // ArchiveClass handles PATCH /api/classes/{id}
+//
+// Plan 052: requires `mutate` authority (instructor / org_admin /
+// platform admin). Previously checked only `claims != nil`, allowing
+// any authenticated user to archive any class by UUID.
 func (h *ClassHandler) ArchiveClass(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
@@ -236,7 +210,20 @@ func (h *ClassHandler) ArchiveClass(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	archived, err := h.Classes.ArchiveClass(r.Context(), chi.URLParam(r, "id"))
+	classID := chi.URLParam(r, "id")
+	_, ok, err := RequireClassAuthority(r.Context(), h.Classes, h.Orgs, claims, classID, AccessMutate)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if !ok {
+		// 404 on deny, matching the class-subsystem precedent at
+		// `classes.go:218-225`. Don't leak class existence.
+		writeError(w, http.StatusNotFound, "Not found")
+		return
+	}
+
+	archived, err := h.Classes.ArchiveClass(r.Context(), classID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
@@ -280,6 +267,13 @@ func (h *ClassHandler) JoinClass(w http.ResponseWriter, r *http.Request) {
 }
 
 // AddMember handles POST /api/classes/{id}/members
+//
+// Plan 052: requires `mutate` authority. Previously any authenticated
+// user could inject any user with any role into any class.
+//
+// Body parsing runs before auth so malformed payloads return 400
+// without surfacing class existence to malformed callers; the auth
+// gate then runs before any store mutation.
 func (h *ClassHandler) AddMember(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
@@ -302,6 +296,16 @@ func (h *ClassHandler) AddMember(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.Role != "" && !store.IsValidClassMemberRole(body.Role) {
 		writeError(w, http.StatusBadRequest, "invalid role")
+		return
+	}
+
+	_, ok, err := RequireClassAuthority(r.Context(), h.Classes, h.Orgs, claims, classID, AccessMutate)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if !ok {
+		writeError(w, http.StatusNotFound, "Not found")
 		return
 	}
 
@@ -335,6 +339,12 @@ func (h *ClassHandler) AddMember(w http.ResponseWriter, r *http.Request) {
 }
 
 // ListMembers handles GET /api/classes/{id}/members
+//
+// Plan 052: requires `roster` authority (instructor / TA / org_admin
+// / platform admin). The roster includes student email + name PII
+// (`store/classes.go:45-52`), so plain class members do NOT pass.
+// Help-queue UX uses session_participants, not class members, so
+// students don't legitimately need this view.
 func (h *ClassHandler) ListMembers(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
@@ -342,7 +352,19 @@ func (h *ClassHandler) ListMembers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	members, err := h.Classes.ListClassMembers(r.Context(), chi.URLParam(r, "id"))
+	classID := chi.URLParam(r, "id")
+
+	_, ok, err := RequireClassAuthority(r.Context(), h.Classes, h.Orgs, claims, classID, AccessRoster)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if !ok {
+		writeError(w, http.StatusNotFound, "Not found")
+		return
+	}
+
+	members, err := h.Classes.ListClassMembers(r.Context(), classID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
@@ -351,6 +373,8 @@ func (h *ClassHandler) ListMembers(w http.ResponseWriter, r *http.Request) {
 }
 
 // UpdateMemberRole handles PATCH /api/classes/{id}/members/{memberId}
+//
+// Plan 052: requires `mutate` authority.
 func (h *ClassHandler) UpdateMemberRole(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
@@ -360,6 +384,16 @@ func (h *ClassHandler) UpdateMemberRole(w http.ResponseWriter, r *http.Request) 
 
 	classID := chi.URLParam(r, "id")
 	memberID := chi.URLParam(r, "memberId")
+
+	_, ok, err := RequireClassAuthority(r.Context(), h.Classes, h.Orgs, claims, classID, AccessMutate)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if !ok {
+		writeError(w, http.StatusNotFound, "Not found")
+		return
+	}
 
 	membership, err := h.Classes.GetClassMembership(r.Context(), memberID)
 	if err != nil {
@@ -391,6 +425,8 @@ func (h *ClassHandler) UpdateMemberRole(w http.ResponseWriter, r *http.Request) 
 }
 
 // RemoveMember handles DELETE /api/classes/{id}/members/{memberId}
+//
+// Plan 052: requires `mutate` authority.
 func (h *ClassHandler) RemoveMember(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
@@ -400,6 +436,16 @@ func (h *ClassHandler) RemoveMember(w http.ResponseWriter, r *http.Request) {
 
 	classID := chi.URLParam(r, "id")
 	memberID := chi.URLParam(r, "memberId")
+
+	_, ok, err := RequireClassAuthority(r.Context(), h.Classes, h.Orgs, claims, classID, AccessMutate)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if !ok {
+		writeError(w, http.StatusNotFound, "Not found")
+		return
+	}
 
 	membership, err := h.Classes.GetClassMembership(r.Context(), memberID)
 	if err != nil {
