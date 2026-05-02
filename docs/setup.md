@@ -138,6 +138,22 @@ exposed publicly. (It is registered OUTSIDE the user-auth middleware so
 the bearer check runs first; mounting it under user-auth would 401 the
 unauthenticated callback before the bearer could be validated.)
 
+### Hocuspocus-side configuration (plan 053 phase 2)
+
+The Node process (`server/hocuspocus.ts`) reads three env vars:
+
+- `HOCUSPOCUS_TOKEN_SECRET` — the same secret as above. Empty disables
+  the JWT path entirely; legacy `userId:role` parsing is the only mode
+  in that case.
+- `HOCUSPOCUS_REQUIRE_SIGNED_TOKEN=1` — phase-4 hard cutover. With the
+  flag ON, ANY non-JWT token is rejected. With it OFF (default during
+  rollout), legacy `userId:role` is still accepted alongside JWT, so
+  old browser tabs minted before the client-side rollout don't break.
+- `GO_INTERNAL_API_URL` — base URL the Hocuspocus Node process uses to
+  call the recheck endpoint. Defaults to `http://localhost:8002` (Go's
+  local port). The recheck path is internal-only — keep it off any
+  internet-facing route.
+
 ## Trusted Reverse-Proxy Configuration
 
 The Go backend chooses between the secure (`__Secure-authjs.session-token`)
