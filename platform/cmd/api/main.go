@@ -173,7 +173,7 @@ func main() {
 		docH := &handlers.DocumentHandler{Documents: stores.Documents}
 		docH.Routes(r)
 
-		assignH := &handlers.AssignmentHandler{Assignments: stores.Assignments, Classes: stores.Classes}
+		assignH := &handlers.AssignmentHandler{Assignments: stores.Assignments, Classes: stores.Classes, Orgs: stores.Orgs}
 		assignH.Routes(r)
 
 		subH := &handlers.SubmissionHandler{Assignments: stores.Assignments, Classes: stores.Classes}
