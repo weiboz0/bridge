@@ -70,7 +70,17 @@ Concretely the matrix shape is:
   - platform admin — list/create/delete/resolve 200.
   - outsider (no membership) — 404 across the board.
   - documentId with non-`session:` prefix → 400.
-- Modify: `tests/integration/annotations-api.test.ts` — same matrix at the API layer.
+- Modify: `tests/integration/annotations-api.test.ts` — see deletions below.
+
+**Shadow-route cleanup** (discovered during impl; same pattern as plan 055):
+
+The Next routes `src/app/api/annotations/route.ts` and `src/app/api/annotations/[id]/route.ts` are unguarded mirrors of the Go handlers (only `await auth()` for a session check). `next.config.ts` already proxies `/api/annotations/:path*` to Go, so browser flow uses the Go side. The Next routes are reachable only via direct fetch or test imports — both leak.
+
+- Delete: `src/app/api/annotations/route.ts`
+- Delete: `src/app/api/annotations/[id]/route.ts`
+- Delete: `src/lib/annotations.ts` (becomes orphaned once the Next routes go).
+- Delete: `tests/unit/annotations.test.ts` (tests `@/lib/annotations` library functions; dead code after the deletion).
+- Delete: `tests/integration/annotations-api.test.ts` (imports the Next handlers; the Go integration tests below replace coverage).
 
 ## Risks
 
