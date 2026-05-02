@@ -4,8 +4,6 @@ import type { Database } from "@/lib/db";
 
 interface CreateDocumentInput {
   ownerId: string;
-  /** Maps to legacy DB column `classroom_id` (schema field: classroomId). */
-  classId?: string;
   sessionId?: string;
   topicId?: string;
   language?: "python" | "javascript" | "blockly";
@@ -16,7 +14,6 @@ export async function createDocument(db: Database, input: CreateDocumentInput) {
     .insert(documents)
     .values({
       ownerId: input.ownerId,
-      classroomId: input.classId,
       sessionId: input.sessionId,
       topicId: input.topicId,
       language: input.language,
@@ -35,11 +32,10 @@ export async function getDocument(db: Database, documentId: string) {
 
 export async function listDocuments(
   db: Database,
-  filters: { ownerId?: string; classId?: string; sessionId?: string }
+  filters: { ownerId?: string; sessionId?: string }
 ) {
   const conditions = [];
   if (filters.ownerId) conditions.push(eq(documents.ownerId, filters.ownerId));
-  if (filters.classId) conditions.push(eq(documents.classroomId, filters.classId));
   if (filters.sessionId) conditions.push(eq(documents.sessionId, filters.sessionId));
 
   if (conditions.length === 0) return [];
@@ -79,8 +75,7 @@ export async function updatePlainText(
 export async function getOrCreateDocument(
   db: Database,
   ownerId: string,
-  sessionId: string,
-  classId?: string
+  sessionId: string
 ) {
   // Check if document already exists for this owner+session
   const existing = await db
@@ -97,7 +92,7 @@ export async function getOrCreateDocument(
 
   const [doc] = await db
     .insert(documents)
-    .values({ ownerId, sessionId, classroomId: classId })
+    .values({ ownerId, sessionId })
     .returning();
   return doc;
 }

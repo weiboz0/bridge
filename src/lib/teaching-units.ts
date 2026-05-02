@@ -72,6 +72,10 @@ export async function createUnit(data: CreateUnitInput): Promise<TeachingUnit> {
       gradeLevel: data.gradeLevel ?? null,
       subjectTags: data.subjectTags ?? [],
       estimatedMinutes: data.estimatedMinutes ?? null,
+      // Plan 054 drift fix — without this line the picker is
+      // decorative; the backend defaults every created unit to
+      // `notes` regardless of caller intent.
+      materialType: data.materialType ?? "notes",
     }),
   })
   if (!res.ok) {
