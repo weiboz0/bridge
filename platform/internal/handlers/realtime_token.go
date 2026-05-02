@@ -326,11 +326,18 @@ func roleForSessionMember(callerID, studentID string, session *store.LiveSession
 	return "teacher" // admin or class-staff opening someone else's doc
 }
 
-// broadcast:{sessionId} — gate must mirror the REST broadcast handler
-// (`SessionHandler.ToggleBroadcast`): platform admin OR the session's
-// teacher. Class-staff (instructors / TAs / org_admins) do NOT pass —
-// the REST gate doesn't grant them `POST /api/sessions/{id}/broadcast`,
-// so the realtime mint can't be broader.
+// broadcast:{sessionId} — broadcast docs are one-way: the teacher
+// writes, everyone-in-the-class reads. Two roles, two gates:
+//
+//   role="teacher" (write/start/stop): platform admin OR the
+//     session's teacher. Mirrors `SessionHandler.ToggleBroadcast`.
+//   role="user" (read-only viewer): any class member or session
+//     participant.
+//
+// The Hocuspocus side doesn't distinguish reader vs writer for
+// broadcast docs (Yjs CRDTs are inherently bidirectional); the JWT
+// role exists for awareness/UI labeling and for future
+// server-enforced read-only.
 func (h *RealtimeHandler) authorizeBroadcastDoc(ctx context.Context, claims *auth.Claims, sessionID string) (string, *authDecision) {
 	if h.Sessions == nil {
 		return "", &authDecision{Status: http.StatusInternalServerError, Message: "Sessions store unavailable"}
@@ -342,13 +349,26 @@ func (h *RealtimeHandler) authorizeBroadcastDoc(ctx context.Context, claims *aut
 	if session == nil {
 		return "", &authDecision{Status: http.StatusNotFound, Message: "Session not found"}
 	}
+	// Teacher/admin path — write role.
 	if claims.IsPlatformAdmin {
 		return "teacher", nil
 	}
 	if session.TeacherID == claims.UserID {
 		return "teacher", nil
 	}
-	return "", &authDecision{Status: http.StatusForbidden, Message: "broadcast restricted to session teacher"}
+	// Reader path — class member.
+	if session.ClassID != nil && h.Classes != nil {
+		if _, ok, err := RequireClassAuthority(ctx, h.Classes, h.Orgs, claims, *session.ClassID, AccessRead); err == nil && ok {
+			return "user", nil
+		}
+	}
+	// Reader path — session participant (covers token-joined users
+	// who aren't enrolled in the class).
+	if existing, err := h.Sessions.GetSessionParticipant(ctx, sessionID, claims.UserID); err == nil && existing != nil &&
+		(existing.Status == "invited" || existing.Status == "present") {
+		return "user", nil
+	}
+	return "", &authDecision{Status: http.StatusForbidden, Message: "broadcast: not a member or teacher of this session"}
 }
 
 // attempt:{attemptId} — Phase 1 narrow rule: ATTEMPT OWNER ONLY.

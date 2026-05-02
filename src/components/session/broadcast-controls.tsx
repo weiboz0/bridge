@@ -2,21 +2,25 @@
 
 import { useState } from "react";
 import { useYjsProvider } from "@/lib/yjs/use-yjs-provider";
+import { useRealtimeToken } from "@/lib/realtime/use-realtime-token";
 import { CodeEditor } from "@/components/editor/code-editor";
 import { Button } from "@/components/ui/button";
 
 interface BroadcastControlsProps {
   sessionId: string;
-  token: string;
 }
 
-export function BroadcastControls({ sessionId, token }: BroadcastControlsProps) {
+export function BroadcastControls({ sessionId }: BroadcastControlsProps) {
   const [broadcasting, setBroadcasting] = useState(false);
 
-  const documentName = `broadcast:${sessionId}`;
+  const documentName = broadcasting ? `broadcast:${sessionId}` : "noop";
+  // Plan 053 phase 3 — JWT minted per-doc; helper returns "" until
+  // the mint resolves. useYjsProvider's shouldConnect guard handles
+  // empty-token by skipping the WS open.
+  const realtimeToken = useRealtimeToken(documentName);
   const { yText, provider, connected } = useYjsProvider({
-    documentName: broadcasting ? documentName : "noop",
-    token,
+    documentName,
+    token: realtimeToken,
   });
 
   function toggleBroadcast() {

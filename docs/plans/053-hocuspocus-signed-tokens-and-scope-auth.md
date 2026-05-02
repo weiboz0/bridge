@@ -231,3 +231,114 @@ follow-up if a future regression demands it.
 
 **Phase 1 status: ready to merge.** Phase 2 (server-side verify in
 Hocuspocus + backward-compat parser) is the next plan-053 unit.
+
+---
+
+## Phase 2 Post-Implementation Review (2026-05-02)
+
+Phase 2 shipped (PR #87, merged to main). Two commits:
+`eba13e4` (initial), `ab48b03` (Codex pass-1 fix: plan rationale).
+
+### Codex Pass 1 — 1 finding
+
+> Phase 2 plan called for `tests/integration/realtime-token-mint.test.ts`
+> (Vitest end-to-end through the Go-proxy stub). The actual ship had
+> only Vitest unit coverage for the JWT verifier + recheck helper.
+
+**Resolution (ab48b03):** plan updated to document why the integration
+test was omitted: (a) `/api/realtime/token` has no Next.js route file
+— it goes straight through the rewrite; (b) Go integration tests in
+`platform/internal/handlers/realtime_token_test.go` already cover
+the endpoint exhaustively (22 cases); (c) no Vitest proxy-stub
+infrastructure exists in Bridge; a "mocked Go" test would test the
+mock, not the system; (d) the full mint → connect → verify
+round-trip is the Phase 3 Playwright e2e (`e2e/hocuspocus-auth.spec.ts`).
+
+### Codex Pass 2 — **CONCUR**
+
+Codex verified all three legs of the rationale against the codebase
+and confirmed no pre-merge coverage gap. Phase 2 was ready to merge.
+
+### Final test counts
+
+- 14 Vitest unit tests for `verifyRealtimeJwt` (round-trip, wrong
+  secret, tampered payload, alg=none, wrong issuer, expired, future
+  iat, missing claims, malformed, garbage body).
+- 6 Vitest unit tests for `rechckDocumentAccess` (200/allow,
+  200/deny, 4xx, 5xx, network error, propagates).
+- Full Vitest: 547 passed.
+- Go suite unaffected (no Go changes in Phase 2).
+
+---
+
+## Phase 3 Post-Implementation Review (2026-05-02)
+
+Phase 3 shipped on `fix/053-3-client-mint`. Commit `<TBD>`.
+
+### Scope changes during execution
+
+Two latent bugs surfaced and were addressed inline:
+
+1. **Broadcast scope was teacher-only (Phase 1 oversight).** In Phase
+   1, Codex pass-1 narrowed `authorizeBroadcastDoc` to mirror the
+   REST broadcast handler `ToggleBroadcast` (admin OR session
+   teacher). But broadcast docs are one-way: the teacher writes,
+   class members read. Students need to mint a token to receive the
+   broadcast — they couldn't under the Phase 1 narrow rule. Phase 3
+   broadens `authorizeBroadcastDoc` to:
+   - role="teacher" for platform admin OR session.TeacherID (write)
+   - role="user" for any class member or session participant (read)
+
+   Tests updated:
+   `TestMintToken_BroadcastDoc_TeacherOK_StudentDenied` →
+   `TestMintToken_BroadcastDoc_TeacherWrites_StudentReads`. New test
+   `TestMintToken_BroadcastDoc_OrgAdmin_GetsReadRole` confirms
+   org_admin gets reader role (not writer — start/stop is REST-gate-
+   only).
+
+2. **Teacher-watch attempt scope DEFERRED.** The Phase 1 owner-only
+   rule plus a long-broken `teacherCanViewAttempt` query in
+   `server/attempts.ts:72` (queries `problems.topic_id`, dropped in
+   migration 0013) means teacher-watch can't migrate to the helper
+   in Phase 3 without expanding the Go scope. Filed as plan 053b
+   `docs/plans/053b-teacher-watch-attempt-scope.md`. Phase 4 of plan
+   053 must NOT flip the flag in prod until 053b ships.
+
+### Files
+
+**Created:**
+- `src/lib/realtime/get-token.ts` — helper with per-doc-name cache,
+  in-flight dedup, leeway-based refresh.
+- `src/lib/realtime/use-realtime-token.ts` — React hook wrapper.
+- `tests/unit/realtime-get-token.test.ts` — 13 tests (cache, dedup,
+  refresh, error mapping, response validation).
+- `e2e/hocuspocus-auth.spec.ts` — 3 Playwright tests (authenticated
+  mint, unauthenticated 401, unauthorized 403/404).
+- `docs/plans/053b-teacher-watch-attempt-scope.md` — follow-up.
+
+**Modified (5 callsite refactors out of the planned 6):**
+- `src/components/problem/problem-shell.tsx` — student attempt doc.
+- `src/lib/yjs/use-yjs-tiptap.ts` — teacher unit doc.
+- `src/components/session/student/student-session.tsx` — student
+  session doc + broadcast.
+- `src/components/session/teacher/teacher-dashboard.tsx` — teacher
+  selected-student doc; dropped `token` prop pass-through.
+- `src/components/session/student-tile.tsx` — each tile mints its
+  own per-student-doc JWT (drop `token` prop).
+- `src/components/session/student-grid.tsx` — drop `token` prop
+  (no longer passing through).
+- `src/components/session/broadcast-controls.tsx` — drop `token`
+  prop, mint internally.
+
+**Modified Go side (Phase 1 oversight fix):**
+- `platform/internal/handlers/realtime_token.go` —
+  `authorizeBroadcastDoc` now grants role=user to class members and
+  session participants.
+- `platform/internal/handlers/realtime_token_test.go` — broadcast
+  test names + assertions updated; new `_OrgAdmin_GetsReadRole`
+  test.
+
+**Deferred (the 6th callsite):**
+- `src/components/problem/teacher-watch-shell.tsx` — kept legacy
+  `${teacherId}:teacher` token. In-line comment explains the
+  deferral and points to plan 053b.

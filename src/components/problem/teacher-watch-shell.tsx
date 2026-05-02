@@ -50,6 +50,24 @@ export function TeacherWatchShell({
   // Connect read-only to the active attempt's Yjs room. Hocuspocus enforces
   // read-only on the teacher side via teacherCanViewAttempt; CodeEditor
   // additionally renders Monaco with readOnly=true.
+  //
+  // Plan 053 phase 3 — DELIBERATELY NOT migrated to useRealtimeToken.
+  // Reasons:
+  //   1. Phase 1 narrowed `attempt:{aid}` mint scope to OWNER-ONLY.
+  //      A teacher minting for a student's attempt would get 403.
+  //   2. The TS-side `teacherCanViewAttempt` helper at
+  //      server/attempts.ts:72 is itself broken — it queries
+  //      `problems.topic_id` which was dropped in migration 0013
+  //      (problem bank rework). Teacher-watch via legacy auth has
+  //      been silently failing since then.
+  //
+  // Tracked in plan 053b (filed as a follow-up): expand the Go
+  // `authorizeAttemptDoc` to include class-staff via a fixed
+  // attempt → topic_problems → topic → course → class join, and
+  // migrate this callsite. Until 053b ships, teacher-watch keeps the
+  // legacy `${teacherId}:teacher` token. With HOCUSPOCUS_REQUIRE_SIGNED_TOKEN=1
+  // (phase 4 cutover), this view will fail until 053b lands — DO
+  // NOT flip the flag in prod before 053b is shipped.
   const { yText, provider, connected } = useYjsProvider({
     documentName: teacherId && activeAttemptId ? `attempt:${activeAttemptId}` : "noop",
     token: teacherId ? `${teacherId}:teacher` : "",

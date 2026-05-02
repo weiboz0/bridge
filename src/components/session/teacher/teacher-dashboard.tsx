@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
 import { usePanelLayout } from "@/lib/hooks/use-panel-layout";
 import { useYjsProvider } from "@/lib/yjs/use-yjs-provider";
+import { useRealtimeToken } from "@/lib/realtime/use-realtime-token";
 import { TeacherHeader } from "./teacher-header";
 import { StudentListPanel } from "./student-list-panel";
 import { ModeToolbar, type DashboardMode } from "./mode-toolbar";
@@ -133,14 +134,17 @@ export function TeacherDashboard({
   const [isAddingParticipant, setIsAddingParticipant] = useState(false);
 
   const userId = session?.user?.id || "";
-  const token = `${userId}:teacher`;
 
   const selectedDocName = selectedStudent
     ? `session:${sessionId}:user:${selectedStudent}`
-    : "";
+    : "noop";
+  // Plan 053 phase 3 — mint a JWT for the selected student's doc.
+  // The cache in `getRealtimeToken` keeps this to one mint per
+  // (doc, tab); switching students re-fetches.
+  const realtimeToken = useRealtimeToken(selectedDocName);
   const { yText, provider, connected } = useYjsProvider({
-    documentName: selectedDocName || "noop",
-    token,
+    documentName: selectedDocName,
+    token: realtimeToken,
   });
 
   const fetchParticipants = useCallback(async () => {
@@ -324,7 +328,6 @@ export function TeacherDashboard({
             <StudentGrid
               sessionId={sessionId}
               participants={participants}
-              token={token}
               onSelectStudent={handleSelectStudent}
             />
           </div>
