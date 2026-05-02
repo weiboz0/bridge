@@ -1,4 +1,4 @@
-import { eq, and } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { classMemberships, classes, users } from "@/lib/db/schema";
 import type { Database } from "@/lib/db";
 
@@ -7,6 +7,14 @@ interface AddClassMemberInput {
   userId: string;
   role?: "instructor" | "ta" | "student" | "observer" | "guest" | "parent";
 }
+
+// Plan 055: dropped getClassMembership, updateClassMemberRole, and
+// removeClassMember when the shadow `/api/classes/[id]/members*`
+// Next routes were deleted. The Go handlers are the source of truth
+// for those mutations now (plan 052). The remaining helpers below
+// (addClassMember, listClassMembers, joinClassByCode) are still
+// used by /api/assignments and /api/classes/join, which haven't
+// migrated yet.
 
 export async function addClassMember(db: Database, input: AddClassMemberInput) {
   const [member] = await db
@@ -35,35 +43,6 @@ export async function listClassMembers(db: Database, classId: string) {
     .from(classMemberships)
     .innerJoin(users, eq(classMemberships.userId, users.id))
     .where(eq(classMemberships.classId, classId));
-}
-
-export async function getClassMembership(db: Database, membershipId: string) {
-  const [member] = await db
-    .select()
-    .from(classMemberships)
-    .where(eq(classMemberships.id, membershipId));
-  return member || null;
-}
-
-export async function updateClassMemberRole(
-  db: Database,
-  membershipId: string,
-  role: "instructor" | "ta" | "student" | "observer" | "guest" | "parent"
-) {
-  const [updated] = await db
-    .update(classMemberships)
-    .set({ role })
-    .where(eq(classMemberships.id, membershipId))
-    .returning();
-  return updated || null;
-}
-
-export async function removeClassMember(db: Database, membershipId: string) {
-  const [removed] = await db
-    .delete(classMemberships)
-    .where(eq(classMemberships.id, membershipId))
-    .returning();
-  return removed || null;
 }
 
 export async function joinClassByCode(
