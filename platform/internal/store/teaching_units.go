@@ -335,6 +335,36 @@ func (s *TeachingUnitStore) GetUnitByTopicID(ctx context.Context, topicID string
 		`SELECT `+teachingUnitColumns+` FROM teaching_units WHERE topic_id = $1`, topicID))
 }
 
+// IsStudentInTopicCourse reports whether `userID` has a class
+// membership row in any class whose `course_id` matches the
+// `course_id` of `topicID`. Existence-only — `class_memberships`
+// has no `status` column and existing course-access checks
+// (`UserHasAccessToCourse` in store/courses.go) don't filter on
+// one either.
+//
+// Plan 061 — used by `CanViewUnit` to widen access for students
+// whose class is wired into the unit's topic.
+func (s *TeachingUnitStore) IsStudentInTopicCourse(ctx context.Context, userID, topicID string) (bool, error) {
+	if userID == "" || topicID == "" {
+		return false, nil
+	}
+	var exists bool
+	err := s.db.QueryRowContext(ctx,
+		`SELECT EXISTS (
+			SELECT 1
+			FROM topics t
+			INNER JOIN classes c ON c.course_id = t.course_id
+			INNER JOIN class_memberships cm ON cm.class_id = c.id
+			WHERE t.id = $1 AND cm.user_id = $2
+		)`,
+		topicID, userID,
+	).Scan(&exists)
+	if err != nil {
+		return false, err
+	}
+	return exists, nil
+}
+
 // ListUnitsByTopicIDs returns a map of topic_id → linked TeachingUnit for
 // the given topic IDs, with the same cross-org leak guard as the TS-side
 // listLinkedUnitsByTopicIds (units must be platform-scope OR scope_id

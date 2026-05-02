@@ -141,8 +141,10 @@ func (h *TeachingUnitHandler) Routes(r chi.Router) {
 func (h *TeachingUnitHandler) canViewUnit(ctx context.Context, c *auth.Claims, u *store.TeachingUnit) bool {
 	// Plan 052 PR-C: thin wrapper around the free `CanViewUnit`
 	// helper so non-handler-method callers (e.g., UnitCollectionHandler)
-	// can apply the same rule. Behavior is unchanged.
-	return CanViewUnit(ctx, h.Orgs, c, u)
+	// can apply the same rule.
+	// Plan 061: passes h.Units so the helper can run the
+	// student-binding check.
+	return CanViewUnit(ctx, h.Orgs, h.Units, c, u)
 }
 
 // canEditUnit checks whether the caller may create, update, or delete a unit

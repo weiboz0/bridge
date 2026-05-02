@@ -146,15 +146,24 @@ func RequireClassAuthority(
 //   - platform scope: classroom_ready/coach_ready/archived
 //     → any authenticated viewer; draft/reviewed → platform admin only.
 //   - org scope: active teacher or org_admin in the unit's org.
-//     Students are denied (plan 031 narrowing; plan 061 will widen
-//     this for verified class binding).
+//     Students pass via Plan 061 — verified class binding (any
+//     class_membership row in a class whose course owns the unit's
+//     topic; existence-only since class_memberships has no status
+//     column), limited to classroom_ready / coach_ready / archived
+//     units.
 //   - personal scope: owner only.
 //   - platform admin: bypass at every scope/status.
 //
 // Plan 052 PR-C: free-function form so non-TeachingUnitHandler
 // callers (UnitCollectionHandler.AddItem) can apply the same rule.
 // `TeachingUnitHandler.canViewUnit` is a thin wrapper around this.
-func CanViewUnit(ctx context.Context, orgs *store.OrgStore, claims *auth.Claims, unit *store.TeachingUnit) bool {
+//
+// Plan 061: takes a TeachingUnitStore so the student-binding check
+// can be done in a single SQL query without callers wiring it
+// themselves. Pass nil if the caller doesn't have one wired —
+// student-binding will be skipped (so callers that don't yet take
+// the store fall back to the pre-061 behavior).
+func CanViewUnit(ctx context.Context, orgs *store.OrgStore, units *store.TeachingUnitStore, claims *auth.Claims, unit *store.TeachingUnit) bool {
 	if claims == nil || unit == nil {
 		return false
 	}
@@ -163,19 +172,40 @@ func CanViewUnit(ctx context.Context, orgs *store.OrgStore, claims *auth.Claims,
 	}
 	switch unit.Scope {
 	case "platform":
-		return unit.Status == "classroom_ready" ||
+		// Public reading-room content — visible to any authed user
+		// once published. (Draft/reviewed are platform-admin-only;
+		// we already returned true above for IsPlatformAdmin.)
+		if unit.Status == "classroom_ready" ||
 			unit.Status == "coach_ready" ||
-			unit.Status == "archived"
+			unit.Status == "archived" {
+			return true
+		}
+		return false
 	case "org":
 		if unit.ScopeID == nil || orgs == nil {
 			return false
 		}
+		// Org teachers and org_admins always pass (any unit status,
+		// editing or otherwise).
 		roles, _ := orgs.GetUserRolesInOrg(ctx, *unit.ScopeID, claims.UserID)
 		for _, m := range roles {
 			if m.Status != "active" {
 				continue
 			}
 			if m.Role == "org_admin" || m.Role == "teacher" {
+				return true
+			}
+		}
+		// Plan 061 — student-binding path. Student passes when the
+		// unit is linked to a topic owned by a course they're
+		// enrolled in (via class_membership), AND the unit is in a
+		// student-readable status.
+		if units != nil && unit.TopicID != nil &&
+			(unit.Status == "classroom_ready" ||
+				unit.Status == "coach_ready" ||
+				unit.Status == "archived") {
+			ok, err := units.IsStudentInTopicCourse(ctx, claims.UserID, *unit.TopicID)
+			if err == nil && ok {
 				return true
 			}
 		}
