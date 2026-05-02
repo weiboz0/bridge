@@ -617,6 +617,26 @@ func (h *SessionHandler) SessionEvents(w http.ResponseWriter, r *http.Request) {
 
 	sessionID := chi.URLParam(r, "id")
 
+	// Plan 063 — auth gate must run BEFORE any SSE headers go out.
+	// Once we write `Content-Type: text/event-stream` we can't return
+	// a clean status code; the client sees a malformed stream. So:
+	// load the session first (404 if missing), then run the
+	// canJoinSession gate (403 if denied), and only then start the
+	// stream.
+	session, err := h.Sessions.GetSession(r.Context(), sessionID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if session == nil {
+		writeError(w, http.StatusNotFound, "Not found")
+		return
+	}
+	if status, msg := h.canJoinSession(r, session, claims); status != 0 {
+		writeError(w, status, msg)
+		return
+	}
+
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -651,7 +671,16 @@ func (h *SessionHandler) GetHelpQueue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	participants, err := h.Sessions.GetSessionParticipants(r.Context(), chi.URLParam(r, "id"))
+	sessionID := chi.URLParam(r, "id")
+
+	// Plan 063 — teacher-only roster. isSessionAuthority loads the
+	// session itself and writes the 403/404 response on failure;
+	// just check the bool and bail out.
+	if _, ok := h.isSessionAuthority(w, r, sessionID, claims); !ok {
+		return
+	}
+
+	participants, err := h.Sessions.GetSessionParticipants(r.Context(), sessionID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
@@ -678,6 +707,25 @@ func (h *SessionHandler) ToggleHelp(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sessionID := chi.URLParam(r, "id")
+
+	// Plan 063 — caller must be a class member of the session's
+	// class (or the session teacher / class staff / admin via the
+	// usual superset paths). Caller-is-target is enforced by the
+	// body shape: only `{raised}` is accepted, and the update is
+	// against `claims.UserID`.
+	session, err := h.Sessions.GetSession(r.Context(), sessionID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if session == nil {
+		writeError(w, http.StatusNotFound, "Not found")
+		return
+	}
+	if status, msg := h.canJoinSession(r, session, claims); status != 0 {
+		writeError(w, status, msg)
+		return
+	}
 
 	var body struct {
 		Raised bool `json:"raised"`
