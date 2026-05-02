@@ -339,7 +339,11 @@ func TestTeachingUnitHandler_Get_OrgTeacher_200(t *testing.T) {
 func TestTeachingUnitHandler_Get_OrgStudent_404(t *testing.T) {
 	fx := newUnitFixture(t, t.Name())
 	u := fx.mkUnit(t, "org", &fx.org1.ID, "classroom_ready", "Ready Unit", fx.teacher1.ID)
-	// Plan-031 narrowing: org students are denied regardless of status.
+	// Plan 061: org students are denied UNLESS they have a class
+	// membership wired to the unit's topic. The fixture's student1
+	// has no class binding, so even classroom_ready is invisible.
+	// (Bound-success path is in
+	// TestTeachingUnitHandler_Get_OrgStudent_ViaClassBinding_200.)
 	w := doUnitGet(t, fx.h.GetUnit, "/api/units/"+u.ID, map[string]string{"id": u.ID}, fx.claims(fx.student1, false))
 	assert.Equal(t, http.StatusNotFound, w.Code)
 }
@@ -2335,4 +2339,172 @@ func mustMarshal(t *testing.T, v any) json.RawMessage {
 	b, err := json.Marshal(v)
 	require.NoError(t, err)
 	return b
+}
+
+// --- Plan 061 — student class-binding access ---
+//
+// CanViewUnit now lets a student view an org-scope unit when they
+// have a class_membership in a class whose course owns the unit's
+// topic, AND the unit is in a student-readable status. Below: the
+// access matrix.
+
+// wireStudentToUnit creates a course, topic, class, and student
+// membership such that `fx.student1` becomes a class member of a
+// class whose course's topic is then linked to `unit`. Returns the
+// linked unit.
+func wireStudentToUnit(t *testing.T, fx *unitFixture, unit *store.TeachingUnit) *store.TeachingUnit {
+	t.Helper()
+	ctx := context.Background()
+	courses := store.NewCourseStore(fx.sqlDB)
+	topics := store.NewTopicStore(fx.sqlDB)
+	classes := store.NewClassStore(fx.sqlDB)
+
+	course, err := courses.CreateCourse(ctx, store.CreateCourseInput{
+		OrgID:      fx.org1.ID,
+		CreatedBy:  fx.teacher1.ID,
+		Title:      "Course for Plan 061 " + unit.ID[:8],
+		GradeLevel: "K-5",
+		Language:   "python",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		fx.sqlDB.ExecContext(ctx, "DELETE FROM courses WHERE id = $1", course.ID)
+	})
+
+	topic, err := topics.CreateTopic(ctx, store.CreateTopicInput{
+		CourseID: course.ID,
+		Title:    "Topic for Plan 061",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		fx.sqlDB.ExecContext(ctx, "DELETE FROM topics WHERE id = $1", topic.ID)
+	})
+
+	class, err := classes.CreateClass(ctx, store.CreateClassInput{
+		CourseID:  course.ID,
+		OrgID:     fx.org1.ID,
+		Title:     "Class for Plan 061",
+		Term:      "fall",
+		CreatedBy: fx.teacher1.ID,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		fx.sqlDB.ExecContext(ctx, "DELETE FROM class_settings WHERE class_id = $1", class.ID)
+		fx.sqlDB.ExecContext(ctx, "DELETE FROM class_memberships WHERE class_id = $1", class.ID)
+		fx.sqlDB.ExecContext(ctx, "DELETE FROM classes WHERE id = $1", class.ID)
+	})
+
+	_, err = classes.AddClassMember(ctx, store.AddClassMemberInput{
+		ClassID: class.ID, UserID: fx.student1.ID, Role: "student",
+	})
+	require.NoError(t, err)
+
+	linked, err := fx.h.Units.LinkUnitToTopic(ctx, unit.ID, topic.ID)
+	require.NoError(t, err)
+	require.NotNil(t, linked)
+	return linked
+}
+
+func TestTeachingUnitHandler_Get_OrgStudent_ViaClassBinding_200(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "classroom_ready", "Bound Unit", fx.teacher1.ID)
+	wireStudentToUnit(t, fx, u)
+
+	w := doUnitGet(t, fx.h.GetUnit, "/api/units/"+u.ID, map[string]string{"id": u.ID}, fx.claims(fx.student1, false))
+	assert.Equal(t, http.StatusOK, w.Code, "student in class wired to unit's topic should pass")
+}
+
+func TestTeachingUnitHandler_Get_OrgStudent_DraftBound_404(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	// Status filter blocks even with a binding — drafts/reviewed are
+	// teacher-only.
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Draft Bound", fx.teacher1.ID)
+	wireStudentToUnit(t, fx, u)
+
+	w := doUnitGet(t, fx.h.GetUnit, "/api/units/"+u.ID, map[string]string{"id": u.ID}, fx.claims(fx.student1, false))
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func TestTeachingUnitHandler_Get_OrgStudent_NoBinding_404(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	// Unit is classroom_ready BUT student has no class membership
+	// in a class wired to a topic linked to this unit.
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "classroom_ready", "Unbound Unit", fx.teacher1.ID)
+
+	w := doUnitGet(t, fx.h.GetUnit, "/api/units/"+u.ID, map[string]string{"id": u.ID}, fx.claims(fx.student1, false))
+	assert.Equal(t, http.StatusNotFound, w.Code, "student without class binding should be denied")
+}
+
+func TestTeachingUnitHandler_Get_OrgStudent_OtherCourseBinding_404(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	ctx := context.Background()
+
+	// Wire student1 into a class for course-A.
+	courses := store.NewCourseStore(fx.sqlDB)
+	classes := store.NewClassStore(fx.sqlDB)
+	topics := store.NewTopicStore(fx.sqlDB)
+	courseA, err := courses.CreateCourse(ctx, store.CreateCourseInput{
+		OrgID: fx.org1.ID, CreatedBy: fx.teacher1.ID, Title: "Course A",
+		GradeLevel: "K-5", Language: "python",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { fx.sqlDB.ExecContext(ctx, "DELETE FROM courses WHERE id = $1", courseA.ID) })
+	classA, err := classes.CreateClass(ctx, store.CreateClassInput{
+		CourseID: courseA.ID, OrgID: fx.org1.ID, Title: "Class A",
+		Term: "fall", CreatedBy: fx.teacher1.ID,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		fx.sqlDB.ExecContext(ctx, "DELETE FROM class_settings WHERE class_id = $1", classA.ID)
+		fx.sqlDB.ExecContext(ctx, "DELETE FROM class_memberships WHERE class_id = $1", classA.ID)
+		fx.sqlDB.ExecContext(ctx, "DELETE FROM classes WHERE id = $1", classA.ID)
+	})
+	_, err = classes.AddClassMember(ctx, store.AddClassMemberInput{
+		ClassID: classA.ID, UserID: fx.student1.ID, Role: "student",
+	})
+	require.NoError(t, err)
+
+	// Unit is linked to a topic in course-B (different course).
+	courseB, err := courses.CreateCourse(ctx, store.CreateCourseInput{
+		OrgID: fx.org1.ID, CreatedBy: fx.teacher1.ID, Title: "Course B",
+		GradeLevel: "K-5", Language: "python",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { fx.sqlDB.ExecContext(ctx, "DELETE FROM courses WHERE id = $1", courseB.ID) })
+	topicB, err := topics.CreateTopic(ctx, store.CreateTopicInput{
+		CourseID: courseB.ID, Title: "Topic in B",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { fx.sqlDB.ExecContext(ctx, "DELETE FROM topics WHERE id = $1", topicB.ID) })
+
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "classroom_ready", "B Unit", fx.teacher1.ID)
+	_, err = fx.h.Units.LinkUnitToTopic(ctx, u.ID, topicB.ID)
+	require.NoError(t, err)
+
+	w := doUnitGet(t, fx.h.GetUnit, "/api/units/"+u.ID, map[string]string{"id": u.ID}, fx.claims(fx.student1, false))
+	assert.Equal(t, http.StatusNotFound, w.Code, "membership in a DIFFERENT course must not grant unit access")
+}
+
+func TestTeachingUnitHandler_Get_OrgStudent_NoTopicId_404(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	// Library content (topic_id NULL) is teacher-only — students
+	// see only topic-bound units.
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "classroom_ready", "Library Unit", fx.teacher1.ID)
+	// (no LinkUnitToTopic call)
+
+	// Make student1 a class member somewhere — proves the test
+	// isn't just "no membership at all".
+	wireStudentToUnit(t, fx, fx.mkUnit(t, "org", &fx.org1.ID, "classroom_ready", "Wire Bait", fx.teacher1.ID))
+
+	w := doUnitGet(t, fx.h.GetUnit, "/api/units/"+u.ID, map[string]string{"id": u.ID}, fx.claims(fx.student1, false))
+	assert.Equal(t, http.StatusNotFound, w.Code, "unit without topic_id must remain student-invisible")
+}
+
+func TestTeachingUnitHandler_Get_OrgStudent_CoachReadyBound_200(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "coach_ready", "Coach Ready", fx.teacher1.ID)
+	wireStudentToUnit(t, fx, u)
+
+	w := doUnitGet(t, fx.h.GetUnit, "/api/units/"+u.ID, map[string]string{"id": u.ID}, fx.claims(fx.student1, false))
+	assert.Equal(t, http.StatusOK, w.Code, "coach_ready status should be student-visible")
 }

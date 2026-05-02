@@ -363,7 +363,7 @@ func (h *UnitCollectionHandler) AddItem(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
 	}
-	if candidate == nil || !CanViewUnit(r.Context(), h.Orgs, claims, candidate) {
+	if candidate == nil || !CanViewUnit(r.Context(), h.Orgs, h.TeachingUnits, claims, candidate) {
 		writeError(w, http.StatusNotFound, "Unit not found")
 		return
 	}
