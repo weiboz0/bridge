@@ -277,11 +277,12 @@ Phase 3 shipped on `fix/053-3-client-mint`. Commit `<TBD>`.
 
 ### Scope changes during execution
 
-Two latent bugs surfaced and were addressed inline:
+Three latent bugs surfaced. One was fixed inline; the other two are
+deferred to plan 053b (which itself depends on plan 049 for one half).
 
-1. **Broadcast scope was teacher-only (Phase 1 oversight).** In Phase
-   1, Codex pass-1 narrowed `authorizeBroadcastDoc` to mirror the
-   REST broadcast handler `ToggleBroadcast` (admin OR session
+1. **Broadcast scope was teacher-only (Phase 1 oversight) — FIXED INLINE.**
+   In Phase 1, Codex pass-1 narrowed `authorizeBroadcastDoc` to mirror
+   the REST broadcast handler `ToggleBroadcast` (admin OR session
    teacher). But broadcast docs are one-way: the teacher writes,
    class members read. Students need to mint a token to receive the
    broadcast — they couldn't under the Phase 1 narrow rule. Phase 3
@@ -296,13 +297,42 @@ Two latent bugs surfaced and were addressed inline:
    org_admin gets reader role (not writer — start/stop is REST-gate-
    only).
 
-2. **Teacher-watch attempt scope DEFERRED.** The Phase 1 owner-only
-   rule plus a long-broken `teacherCanViewAttempt` query in
-   `server/attempts.ts:72` (queries `problems.topic_id`, dropped in
-   migration 0013) means teacher-watch can't migrate to the helper
-   in Phase 3 without expanding the Go scope. Filed as plan 053b
-   `docs/plans/053b-teacher-watch-attempt-scope.md`. Phase 4 of plan
-   053 must NOT flip the flag in prod until 053b ships.
+2. **Teacher-watch attempt scope — DEFERRED to 053b.** The Phase 1
+   owner-only rule plus a long-broken `teacherCanViewAttempt` query
+   in `server/attempts.ts:72` (queries `problems.topic_id`, dropped
+   in migration 0013) means teacher-watch can't migrate to the
+   helper in Phase 3 without expanding the Go scope. Filed in
+   `docs/plans/053b-teacher-watch-attempt-scope.md`.
+
+3. **Parent-viewer auth — DEFERRED to 053b (depends on plan 049).**
+   The Go `authorizeSessionDoc` has no parent path, and Bridge has no
+   parent-child link in the DB (plan 049 was scheduled but didn't
+   ship). The legacy Hocuspocus path accepts `role === "parent"`
+   without checks — that IS the security hole this plan closes.
+   Migrating requires plan 049's parent-child schema first.
+
+**Phase 4 of plan 053 must NOT flip the flag in prod until plans
+053b AND 049 ship.** With the flag flipped, both deferred sites lose
+their legacy fallback and break.
+
+### Final callsite tally
+
+Of the 6 token-construction sites listed in the plan's failure-mode
+table:
+
+| # | File | Status |
+|---|---|---|
+| 1 | `teacher-dashboard.tsx` (session teacher) | Migrated |
+| 2 | `student-session.tsx` (session student + broadcast) | Migrated |
+| 3 | `live-session-viewer.tsx` (parent viewer) | Deferred (053b/049) |
+| 4 | `problem-shell.tsx` (student attempt) | Migrated |
+| 5 | `teacher-watch-shell.tsx` (teacher watch) | Deferred (053b) |
+| 6 | `use-yjs-tiptap.ts` (unit editor) | Migrated |
+
+4 sites migrated, 2 deferred. Plus prop-cleanup follow-on for
+`student-tile.tsx` / `student-grid.tsx` / `broadcast-controls.tsx`
+(each used to receive `token` via props from teacher-dashboard;
+now each mints its own per-doc JWT internally).
 
 ### Files
 
@@ -312,11 +342,13 @@ Two latent bugs surfaced and were addressed inline:
 - `src/lib/realtime/use-realtime-token.ts` — React hook wrapper.
 - `tests/unit/realtime-get-token.test.ts` — 13 tests (cache, dedup,
   refresh, error mapping, response validation).
-- `e2e/hocuspocus-auth.spec.ts` — 3 Playwright tests (authenticated
-  mint, unauthenticated 401, unauthorized 403/404).
+- `tests/unit/use-realtime-token.test.tsx` — 4 hook tests
+  (pending/initial, noop/empty, A→B clear, cancelled-on-unmount).
+- `e2e/hocuspocus-auth.spec.ts` — 6 Playwright tests (3 HTTP mint +
+  3 WS round-trip: valid/forged/expired).
 - `docs/plans/053b-teacher-watch-attempt-scope.md` — follow-up.
 
-**Modified (5 callsite refactors out of the planned 6):**
+**Migrated (4 sites):**
 - `src/components/problem/problem-shell.tsx` — student attempt doc.
 - `src/lib/yjs/use-yjs-tiptap.ts` — teacher unit doc.
 - `src/components/session/student/student-session.tsx` — student
@@ -379,4 +411,21 @@ Plan 053 phase 4 MUST NOT flip the flag in prod until 053b ships
    referencing plan 053b + extended 053b with bug 3 (parent-child
    linking dependency on plan 049).
 
-### Codex Pass 2 — _pending_
+### Codex Pass 2 — 2 blockers, both fixed in commit `<TBD>`
+
+1. **WS test settled on `onConnect` instead of `onAuthenticated`.**
+   Hocuspocus emits `connect` on the first server message, BEFORE
+   the server has accepted/rejected the auth token. Forged/expired
+   tests could spuriously settle as "connected" before the auth-
+   failure event lands. Fix: settle the success path on
+   `onAuthenticated`; failure paths still settle on
+   `onAuthenticationFailed` / `onClose` / timeout.
+
+2. **Plan inconsistency** — main file said "5 callsite refactors out
+   of the planned 6" in one place, "2 of 6 deferred" in another.
+   053b said "two latent bugs" while listing three. Fixed: this
+   section now spells out 4 migrated + 2 deferred, with a per-row
+   table; 053b retitled to "Deferred mint sites" with 3 bugs in
+   scope.
+
+### Codex Pass 3 — _pending_

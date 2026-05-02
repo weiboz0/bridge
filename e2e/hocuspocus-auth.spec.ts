@@ -89,11 +89,19 @@ async function tryConnect(
       url,
       WebSocketPolyfill: WebSocket,
     });
+    // IMPORTANT: settle the SUCCESS path on `onAuthenticated`, NOT
+    // `onConnect`. The provider fires `onConnect` on the FIRST
+    // server message, BEFORE the server has accepted or rejected
+    // the auth token (Hocuspocus sends a permission-denied message
+    // for failed auth, but `onConnect` has already fired by then).
+    // Resolving on `onConnect` would let forged/expired-token tests
+    // spuriously settle as "connected" before the auth failure
+    // event lands.
     const provider = new HocuspocusProvider({
       websocketProvider,
       name: documentName,
       token,
-      onConnect: () => settle({ outcome: "connected" }),
+      onAuthenticated: () => settle({ outcome: "connected" }),
       onAuthenticationFailed: ({ reason }: { reason: string }) =>
         settle({ outcome: "authFailed", reason }),
       onClose: () => settle({ outcome: "closed" }),
