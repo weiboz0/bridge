@@ -26,22 +26,61 @@ The store layer `CreateAnnotation` and `ListAnnotations` (`store/annotations.go:
 
 ## Approach
 
-Two-layer fix:
+Three-layer fix:
 
-1. **Resolve the target document.** Annotations are keyed on `documentId`, which is `session:<sessionId>:user:<userId>` for student session docs (per the legacy classroom format). The handler must resolve `documentId` → underlying session/class/attempt → apply membership rules.
-2. **Apply role-aware access:**
-   - Document owner (the student in the session) can always read/create/delete their own annotations.
-   - Class instructor / TA / org_admin of the class's org / platform admin can read all annotations for documents in their class context AND create new ones.
-   - Anyone else: 404.
+1. **Restrict accepted documentId prefixes.** Annotations today only target `session:<sessionId>:user:<userId>`. Other realtime doc shapes (`attempt:*`, `unit:*`, `broadcast:*`) are not annotation surfaces. Reject anything else with 400 — explicitly, with a test.
+2. **Resolve the session.** Parse `session:<sid>:user:<uid>` → load the session → derive class/owner.
+3. **Apply role-aware access:**
+   - Read (List): doc owner (the student) OR session teacher OR class staff (instructor/TA/org_admin) OR platform admin. Anyone else → 404.
+   - Create / Delete / Resolve: **teacher only** — session teacher OR class staff (instructor/TA/org_admin) OR platform admin. Students do NOT create or modify annotations: the existing UI confirms (`AnnotationForm` is rendered only in the teacher dashboard at `teacher-dashboard.tsx:371`; no student-side annotation form exists). The store also hardcodes `AuthorType: "teacher"`.
 
-Returning 404 (not 403) matches existing patterns where document existence shouldn't leak by ID.
+**Deny-shape rule** (matches `classes.go:193-195`, `sessions.go:423-426`, `problems.go:359-360, 378-384, 433-439`):
+
+- **404** — when the caller lacks READ access to the annotation's document. Don't leak existence.
+- **403** — when the caller CAN read (i.e., they're the doc owner or have class-roster authority) but lacks the teacher-tier authority needed for the mutation. Example: a student CAN read their own doc's annotations (list = 200), but they can't create/delete/resolve them (= 403).
+
+Concretely the matrix shape is:
+
+| Actor | List | Create / Delete / Resolve |
+|---|---|---|
+| Doc owner (student on own doc) | 200 | 403 |
+| Other student in same class | 404 | 404 |
+| Student in different class / outsider | 404 | 404 |
+| Session teacher / class instructor / TA / org_admin / platform admin | 200 | 200 |
+| Non-`session:` documentId | 400 | 400 |
 
 ## Files
 
-- Modify: `platform/internal/handlers/annotations.go` — add `requireAnnotationAccess(ctx, claims, documentID, level)` helper. Wire into the four endpoints.
-- Modify: `platform/internal/store/annotations.go` — accept the access decision; otherwise the store stays simple.
-- Modify: `platform/internal/handlers/annotations_test.go` and `tests/integration/annotations-api.test.ts` — extend with the cross-user denial matrix (outsider/student-in-other-class/teacher-of-different-class/instructor/platform-admin).
-- Verify: existing tests still pass.
+- Modify: `platform/internal/handlers/annotations.go`
+  - Add `requireAnnotationAccess(ctx, claims, documentID, level)` helper. Returns the resolved session + role assignment, or an `authDecision`-shaped error (status + message).
+  - Helper uses `RequireClassAuthority(ctx, h.Classes, h.Orgs, claims, *session.ClassID, AccessRoster)` for the class-staff path — same pattern plan 052/053 established.
+  - Add `Sessions`, `Classes`, `Orgs` fields to `AnnotationHandler`. Wire from `main.go`.
+  - Wire the helper into Create/List/Delete/Resolve.
+- Modify: `platform/internal/store/annotations.go`
+  - Add `GetAnnotation(ctx, id) (*Annotation, error)` so Delete/Resolve can fetch the annotation, derive its `documentID`, then authorize.
+- Modify: `platform/cmd/api/main.go` — pass `stores.Sessions`, `stores.Classes`, `stores.Orgs` into `AnnotationHandler`.
+- Modify: `platform/internal/handlers/annotations_test.go` — replace synthetic `d1` documentIds with real session-shaped IDs, add cross-user denial matrix:
+  - student in same class on **own** doc — list 200, create/delete/resolve 403 (CAN read, can't write).
+  - student in same class on another student's doc — list 404, create/delete/resolve 404.
+  - student in different class — 404 across the board.
+  - teacher of session — list/create/delete/resolve 200.
+  - class instructor (not session teacher) — list/create/delete/resolve 200.
+  - class TA — list/create/delete/resolve 200 (AccessRoster covers TAs).
+  - org_admin of class's org — list/create/delete/resolve 200.
+  - platform admin — list/create/delete/resolve 200.
+  - outsider (no membership) — 404 across the board.
+  - documentId with non-`session:` prefix → 400.
+- Modify: `tests/integration/annotations-api.test.ts` — see deletions below.
+
+**Shadow-route cleanup** (discovered during impl; same pattern as plan 055):
+
+The Next routes `src/app/api/annotations/route.ts` and `src/app/api/annotations/[id]/route.ts` are unguarded mirrors of the Go handlers (only `await auth()` for a session check). `next.config.ts` already proxies `/api/annotations/:path*` to Go, so browser flow uses the Go side. The Next routes are reachable only via direct fetch or test imports — both leak.
+
+- Delete: `src/app/api/annotations/route.ts`
+- Delete: `src/app/api/annotations/[id]/route.ts`
+- Delete: `src/lib/annotations.ts` (becomes orphaned once the Next routes go).
+- Delete: `tests/unit/annotations.test.ts` (tests `@/lib/annotations` library functions; dead code after the deletion).
+- Delete: `tests/integration/annotations-api.test.ts` (imports the Next handlers; the Go integration tests below replace coverage).
 
 ## Risks
 
@@ -59,4 +98,45 @@ Returning 404 (not 403) matches existing patterns where document existence shoul
 
 ## Codex Review of This Plan
 
-(Filled in after Phase 0.)
+### Pass 1 — 2026-05-02: BLOCKED → fixes folded in
+
+Codex found 5 blockers; plan revised inline:
+
+1. **Student create/delete is wrong.** No student-side AnnotationForm
+   exists; store hardcodes `AuthorType: "teacher"`. Plan now says
+   create/delete/resolve are teacher-only (session teacher / class
+   staff / org_admin / platform admin). Students retain READ access
+   to their own doc's annotations.
+
+2. **DocumentId scope under-specified.** Today annotations only target
+   `session:*` docs. Plan now explicitly rejects other prefixes
+   (`attempt:*`, `unit:*`, `broadcast:*`) with 400 + a test.
+
+3. **`GetAnnotation(ctx, id)` is missing.** Delete/Resolve need it
+   to look up the annotation's documentID before authorizing. Plan
+   now adds the store method.
+
+4. **`AnnotationHandler` needs `Sessions`/`Classes`/`Orgs` stores.**
+   Plan now wires them from main.go and uses the existing
+   `RequireClassAuthority(...AccessRoster)` helper from plan 052.
+
+5. **Tests use synthetic `d1` documentIds and have no cross-user
+   denial coverage.** Plan now specifies a 9-case matrix at both
+   handler and integration level using session-shaped IDs from a
+   real fixture.
+
+### Pass 2 — 2026-05-02: 1 blocker, fixed inline
+
+Codex caught a self-contradiction: the Approach said "Create/delete/
+resolve return 403" globally, but the matrix had same-class
+other-student mutation as 404. Resolution: the helper distinguishes
+read-deny (404) from write-deny (403) based on whether the caller has
+read-level access at all. A student on their OWN doc can read but
+not write → 403 on mutations. A student on another student's doc has
+no read access → 404 across the board. Matrix table now spells this
+out explicitly. AccessRoster confirmed correct (allows TAs, matches
+existing grading/teacher patterns).
+
+### Pass 3 — 2026-05-02: **CONCUR**
+
+Plan is clear to proceed to implementation.

@@ -52,6 +52,14 @@ func scanAnnotation(row interface{ Scan(...any) error }) (*Annotation, error) {
 	return &a, nil
 }
 
+// GetAnnotation looks up a single annotation by ID. Plan 056: used
+// by Delete/Resolve to fetch the annotation's documentID before
+// authorizing the mutation.
+func (s *AnnotationStore) GetAnnotation(ctx context.Context, id string) (*Annotation, error) {
+	return scanAnnotation(s.db.QueryRowContext(ctx,
+		`SELECT `+annotationColumns+` FROM code_annotations WHERE id = $1`, id))
+}
+
 func (s *AnnotationStore) CreateAnnotation(ctx context.Context, input CreateAnnotationInput) (*Annotation, error) {
 	id := uuid.New().String()
 	return scanAnnotation(s.db.QueryRowContext(ctx,

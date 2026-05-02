@@ -207,7 +207,12 @@ func main() {
 		subH := &handlers.SubmissionHandler{Assignments: stores.Assignments, Classes: stores.Classes}
 		subH.Routes(r)
 
-		annotH := &handlers.AnnotationHandler{Annotations: stores.Annotations}
+		annotH := &handlers.AnnotationHandler{
+			Annotations: stores.Annotations,
+			Sessions:    stores.Sessions,
+			Classes:     stores.Classes,
+			Orgs:        stores.Orgs,
+		}
 		annotH.Routes(r)
 
 		if llmBackend != nil {
