@@ -12,8 +12,9 @@ type Config struct {
 	Server   ServerConfig   `toml:"server"`
 	Database DatabaseConfig `toml:"database"`
 	Auth     AuthConfig     `toml:"auth"`
-	LLM      LLMConfig     `toml:"llm"`
+	LLM      LLMConfig      `toml:"llm"`
 	Sandbox  SandboxConfig  `toml:"sandbox"`
+	Realtime RealtimeConfig `toml:"realtime"`
 }
 
 type ServerConfig struct {
@@ -38,6 +39,16 @@ type LLMConfig struct {
 
 type SandboxConfig struct {
 	PistonURL string `toml:"piston_url"`
+}
+
+// RealtimeConfig — plan 053. The shared HMAC secret used to sign
+// Hocuspocus connection JWTs (`POST /api/realtime/token`) and to
+// gate the internal auth endpoint
+// (`POST /api/internal/realtime/auth`). Both Go and the Hocuspocus
+// Node process must read the SAME secret. Sourced from
+// HOCUSPOCUS_TOKEN_SECRET; never lives in the TOML config file.
+type RealtimeConfig struct {
+	HocuspocusTokenSecret string `toml:"-"`
 }
 
 func Load(path string) (*Config, error) {
@@ -80,6 +91,10 @@ func Load(path string) (*Config, error) {
 
 	if v := os.Getenv("PISTON_URL"); v != "" {
 		cfg.Sandbox.PistonURL = v
+	}
+
+	if v := os.Getenv("HOCUSPOCUS_TOKEN_SECRET"); v != "" {
+		cfg.Realtime.HocuspocusTokenSecret = v
 	}
 
 	// Resolve LLM API key from provider-specific env var
