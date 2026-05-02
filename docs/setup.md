@@ -113,6 +113,18 @@ openssl rand -base64 32
 
 Add it to `.env` as `NEXTAUTH_SECRET`.
 
+## Environment Classification (plan 050)
+
+Set `APP_ENV` to one of `development`, `staging`, `production`. The
+Go API uses it to gate the `DEV_SKIP_AUTH` safety check:
+
+- With `DEV_SKIP_AUTH` set AND `APP_ENV=production`, the server
+  refuses to start. `DEV_SKIP_AUTH` bypasses authentication entirely
+  (any request → fully-privileged dev user); a leak into prod would
+  silently make every request admin.
+- Absence of `APP_ENV` is treated as "not production" (safe default
+  for dev). Set `APP_ENV=production` in production deployments.
+
 ## Hocuspocus Token Secret (plan 053)
 
 The Go API mints short-lived HMAC-SHA256 JWTs that the browser presents to the

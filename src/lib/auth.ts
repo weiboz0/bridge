@@ -7,6 +7,7 @@ import { users, authProviders } from "@/lib/db/schema";
 import { eq, and } from "drizzle-orm";
 import { z } from "zod";
 import { getSessionCookieName, isSecureAuthScheme } from "@/lib/auth-cookie";
+import { refreshJwtFromDb } from "@/lib/auth-jwt-callback";
 
 const loginSchema = z.object({
   email: z.string().email(),
@@ -178,18 +179,11 @@ export const authConfig = {
       }
       return true;
     },
-    async jwt({ token, user }) {
-      if (user) {
-        const [dbUser] = await db
-          .select()
-          .from(users)
-          .where(eq(users.email, token.email!));
-        if (dbUser) {
-          token.id = dbUser.id;
-          token.isPlatformAdmin = dbUser.isPlatformAdmin;
-        }
-      }
-      return token;
+    async jwt({ token }) {
+      // Plan 050 — refresh `id` and `isPlatformAdmin` from the DB on
+      // EVERY request via the extracted helper (which is testable
+      // without pulling NextAuth into vitest's node resolver).
+      return refreshJwtFromDb(token);
     },
     async session({ session, token }) {
       if (token) {

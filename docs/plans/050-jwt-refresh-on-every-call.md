@@ -23,7 +23,7 @@ The Go side reads the same JWT field at `platform/internal/auth/jwt.go:156-158` 
 
 `platform/internal/auth/middleware.go:89-104` honors a `DEV_SKIP_AUTH` env var: any non-empty value bypasses authentication entirely and injects a synthetic `Dev User` claims struct. `DEV_SKIP_AUTH=admin` grants full platform-admin access. There is no `APP_ENV == "production"` check — if the variable accidentally leaks into a staging or production deployment (operator error, secrets-manager mistake, container env misconfiguration), every request is treated as a fully-privileged dev user.
 
-Per review 009-2026-04-30 §P1-2 the recommendation is: at server startup, panic (or refuse to start) when `DEV_SKIP_AUTH != "" && APP_ENV == "production"`. Also explicitly zero `ImpersonatedBy` on the synthetic claims to avoid the impersonator-bypass carve-out in `RequireAdmin`.
+Per review 009-2026-04-30 §P1-2 the recommendation is: at server startup, panic (or refuse to start) when `DEV_SKIP_AUTH != "" && APP_ENV == "production"`. Separately, the synthetic dev claims literal will get an explicit `ImpersonatedBy: ""` line — this is **documentation/test hardening only, NOT a behavior change**: the field is already zero-valued via Go's struct-literal omission, but explicit zeroing makes future readers (and grep) see the intent.
 
 ## Out of scope
 
@@ -68,19 +68,52 @@ The `if (user)` branch (first-login signup-link flow at `src/lib/auth.ts:182-191
 ## Files
 
 **JWT refresh path:**
-- Modify: `src/lib/auth.ts` — JWT callback rewritten as above.
-- Add: `tests/integration/auth-jwt-refresh.test.ts` — integration test covering:
-  - Promotion: user signs in → not admin → DB sets `is_platform_admin=true` → next protected request shows admin role.
-  - Demotion: user signs in as admin → DB sets `is_platform_admin=false` → next protected request rejected.
-  - Account deletion: user's `users` row deleted → next request behaves as unauthenticated.
-- Verify: existing `tests/integration/admin-orgs-api.test.ts` and `admin-users-api.test.ts` still pass — the page-level 403 card from PR #79 remains correct as defense in depth.
+- Modify: `src/lib/auth.ts` — JWT callback rewritten as above. Export
+  the callback (or `authConfig.callbacks.jwt`) so a unit test can drive
+  it directly.
+- Add: `tests/unit/auth-jwt-refresh.test.ts` — UNIT test of the
+  exported jwt callback, NOT an integration test. The existing
+  integration harness (`tests/api-helpers.ts:27-43`) mocks `auth()`
+  directly and never exercises `callbacks.jwt`; there is no pattern
+  for "real cookie session, mutate DB between requests, assert new
+  claim". The unit test calls
+  `authConfig.callbacks.jwt({ token, user: undefined })` after DB
+  mutation and asserts the returned token. Three scenarios:
+  - Promotion: `users.is_platform_admin = true` after first sign-in →
+    callback returns `token.isPlatformAdmin = true`.
+  - Demotion: `users.is_platform_admin = false` after first sign-in →
+    callback returns `token.isPlatformAdmin = false`.
+  - Account deletion: `users` row removed → callback nulls `id` and
+    `isPlatformAdmin`, so NextAuth treats the next request as
+    unauthenticated.
+- Verify: existing `tests/integration/admin-orgs-api.test.ts` still
+  passes (note: `admin-users-api.test.ts` referenced in earlier draft
+  does NOT exist — there is no admin-users TS API test in this
+  codebase). The page-level 403 card from PR #79 remains correct as
+  defense in depth.
 
 **DEV_SKIP_AUTH guard path:**
-- Modify: `platform/cmd/api/main.go` — at startup, before wiring any handler, check `os.Getenv("DEV_SKIP_AUTH") != ""` AND `os.Getenv("APP_ENV") == "production"`. If both, `slog.Error(...)` and `os.Exit(1)` (refuse to start). Document the guard inline.
-- Modify: `platform/internal/auth/middleware.go:89-104` — explicitly zero `ImpersonatedBy` on the synthetic dev claims so that `RequireAdmin`'s impersonator-bypass carve-out doesn't accidentally accept dev claims as admin.
-- Add: `platform/cmd/api/main_test.go` (or a smaller `auth/dev_skip_test.go`) — table-driven test that the startup guard returns/exits when both env vars are set.
+- Modify: `platform/cmd/api/main.go` — at startup, before wiring any
+  handler, check `os.Getenv("DEV_SKIP_AUTH") != ""` AND
+  `os.Getenv("APP_ENV") == "production"`. If both, `slog.Error(...)`
+  and `os.Exit(1)` (refuse to start). Document the guard inline.
+- Modify: `platform/internal/auth/middleware.go:89-104` — **explicit
+  zeroing for documentation/test hardening only**, NOT a behavioral
+  fix. The synthetic dev claims struct literal already omits
+  `ImpersonatedBy`, which means it carries Go's zero value `""` today.
+  The change adds an explicit `ImpersonatedBy: ""` line so future
+  readers (and grep) can see the field was deliberately zeroed.
+  Behavior unchanged.
+- Add: `platform/cmd/api/main_test.go` (or a smaller
+  `auth/dev_skip_test.go`) — table-driven test that the startup guard
+  returns/exits when both env vars are set.
 
-**APP_ENV convention:** if Bridge doesn't currently set `APP_ENV`, the guard treats absence-of-`APP_ENV` as "not production" (safe default for dev). Document the convention in `docs/setup.md` so deploys know to set `APP_ENV=production` in prod env.
+**APP_ENV convention:** APP_ENV is already used at
+`platform/internal/auth/middleware.go:45` (cookie-domain diagnostics).
+The guard treats absence-of-`APP_ENV` as "not production" (safe default
+for dev). Add `APP_ENV=` to `.env.example` (currently absent) and
+document the convention in `docs/setup.md` so deploys know to set
+`APP_ENV=production` in prod env.
 
 ## Risks
 
@@ -100,7 +133,7 @@ Per CLAUDE.md plan review gate: dispatch `codex:codex-rescue` to review THIS pla
 ### Phase 1: rewrite the callback + tests
 
 - Implement the callback change.
-- Add `tests/integration/auth-jwt-refresh.test.ts`. Cover all three scenarios above.
+- Add `tests/unit/auth-jwt-refresh.test.ts` (UNIT, not integration — see Files section). Cover all three scenarios above by calling the exported `authConfig.callbacks.jwt` directly.
 - Run `bun run test` end-to-end. Run `cd platform && go test ./...` (no Go-side changes; smoke).
 - Self-review the diff.
 - Commit.
@@ -114,4 +147,47 @@ Per CLAUDE.md plan review gate: dispatch `codex:codex-rescue` to review THIS pla
 
 ## Codex Review of This Plan
 
-(Filled in after the Phase 0 review pass.)
+### Pass 1 — 2026-05-02: BLOCKED → fixes folded in
+
+Codex flagged 3 blockers, all addressed inline:
+
+1. **`tests/integration/admin-users-api.test.ts` doesn't exist** —
+   plan referenced a non-existent file. Fix: removed the reference;
+   existing `admin-orgs-api.test.ts` is the only verification target
+   for the page-level 403 card regression.
+
+2. **`ImpersonatedBy` "gap" is not real** — the struct literal at
+   `platform/internal/auth/middleware.go:89-104` already omits the
+   field, so Go's zero-value `""` is in place. The change is now
+   documented as "explicit zeroing for documentation/test hardening,
+   not a behavioral fix" so future readers don't misread it as a
+   security patch.
+
+3. **Test harness can't drive JWT refresh end-to-end** — existing
+   `tests/api-helpers.ts:27-43` mocks `auth()` directly; no harness
+   exists for "real cookie + DB mutation + re-request". Fix: scope
+   to a UNIT test of the exported `authConfig.callbacks.jwt` function
+   (call directly, mutate DB, call again, assert returned token).
+   Avoids needing new harness while still exercising the proposed
+   change.
+
+Confirmed (no blockers):
+- `src/lib/auth.ts:181-193` matches plan; impersonation flow is
+  cookie-based (not `token.impersonatedBy`), no interaction.
+- NextAuth v5 (`next-auth@5.0.0-beta.30`) fires `callbacks.jwt` on
+  every authenticated request — plan's premise is correct.
+- APP_ENV is already used at `middleware.go:45`; no competing
+  convention. `.env.example` needs an `APP_ENV=` entry (now
+  documented in the Files section).
+
+### Pass 2 — 2026-05-02: 2 line-level inconsistencies, both fixed
+
+- Plan §Phase 1 line 136 said integration test path; corrected to
+  unit test path (matches Files section).
+- Plan §Problem 2 line 26 still framed `ImpersonatedBy` as a
+  security fix; reworded to "documentation/test hardening only".
+
+### Pass 3 — 2026-05-02: **CONCUR**
+
+Codex confirmed both pass-2 fixes correctly applied; no remaining
+issues. Plan is clear to proceed to Phase 1 implementation.

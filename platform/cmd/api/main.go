@@ -27,6 +27,11 @@ import (
 func main() {
 	slog.Info("Starting Bridge Go API server")
 
+	if err := validateDevAuthEnv(os.Getenv); err != nil {
+		slog.Error(err.Error())
+		os.Exit(1)
+	}
+
 	// Load config
 	cfg, err := config.Load("config.toml")
 	if err != nil {
@@ -338,4 +343,29 @@ func maskURL(url string) string {
 		return url[:30] + "..."
 	}
 	return url
+}
+
+// Plan 050: refuse to start when DEV_SKIP_AUTH is set with
+// APP_ENV=production. DEV_SKIP_AUTH bypasses authentication entirely
+// (any request → fully-privileged dev user). If the variable leaks
+// into staging/prod via operator error or secrets-manager misconfig,
+// every request becomes admin. Absence-of-APP_ENV is treated as "not
+// production" (safe default for dev).
+//
+// Extracted as a function (taking a getEnv closure) so the guard is
+// unit-testable without invoking os.Exit.
+func validateDevAuthEnv(getEnv func(string) string) error {
+	devSkipAuth := getEnv("DEV_SKIP_AUTH")
+	if devSkipAuth == "" {
+		return nil
+	}
+	if appEnv := getEnv("APP_ENV"); appEnv == "production" {
+		return fmt.Errorf(
+			"refusing to start: DEV_SKIP_AUTH=%q is set with APP_ENV=production. Unset DEV_SKIP_AUTH or set APP_ENV != production",
+			devSkipAuth,
+		)
+	}
+	slog.Warn("DEV_SKIP_AUTH is active — all requests bypass authentication. NEVER use in production.",
+		"DEV_SKIP_AUTH", devSkipAuth)
+	return nil
 }
