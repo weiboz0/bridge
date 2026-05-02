@@ -62,6 +62,11 @@ func TestGetTopic_AuthMatrix(t *testing.T) {
 		// student: class member; class is in the topic's course → passes
 		// UserHasAccessToCourse → 200.
 		{"student", http.StatusOK},
+		// ta: class member (added inline) → passes UserHasAccessToCourse
+		// just like student → 200. TA is a teaching role but for
+		// course-content reads it has the same access as any class
+		// member.
+		{"ta", http.StatusOK},
 		// instructor: created the course → passes via creator check → 200.
 		{"instructor", http.StatusOK},
 		// orgAdmin: not a class member of the test class. Course creator
@@ -74,6 +79,9 @@ func TestGetTopic_AuthMatrix(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.role, func(t *testing.T) {
 			fx := newSessionPageFixture(t, "gt-"+tc.role)
+			if tc.role == "ta" {
+				addTAToFixture(t, fx)
+			}
 			ch := newTopicHandlerForFixture(fx)
 			topicID := findFixtureTopicID(t, fx)
 			code := callGetTopic(t, ch, fx.courseID, topicID, authFxClaimsByRole(fx, tc.role))

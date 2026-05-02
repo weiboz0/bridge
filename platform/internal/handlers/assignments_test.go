@@ -58,6 +58,7 @@ func TestGetAssignment_AuthMatrix(t *testing.T) {
 		// 403 on deny per `assignments.go:133-135` precedent.
 		{"outsider", http.StatusForbidden},
 		{"student", http.StatusOK},
+		{"ta", http.StatusOK}, // TA: AccessRead passes (any class member)
 		{"instructor", http.StatusOK},
 		{"orgAdmin", http.StatusOK},
 		{"platformAdmin", http.StatusOK},
@@ -65,6 +66,9 @@ func TestGetAssignment_AuthMatrix(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.role, func(t *testing.T) {
 			fx := newSessionPageFixture(t, "ga-"+tc.role)
+			if tc.role == "ta" {
+				addTAToFixture(t, fx)
+			}
 			assignmentID := seedAssignment(t, fx)
 			ch := newAssignmentHandlerForFixture(fx)
 			code := callGetAssignment(t, ch, assignmentID, authFxClaimsByRole(fx, tc.role))

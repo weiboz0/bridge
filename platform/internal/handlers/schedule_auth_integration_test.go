@@ -72,6 +72,7 @@ func TestScheduleList_AuthMatrix(t *testing.T) {
 		// 403 on deny per `schedule.go:85-87` precedent.
 		{"outsider", http.StatusForbidden},
 		{"student", http.StatusOK},      // class member, AccessRead passes
+		{"ta", http.StatusOK},           // TA added inline; AccessRead passes
 		{"instructor", http.StatusOK},   // class instructor
 		{"orgAdmin", http.StatusOK},     // org_admin of class's org
 		{"platformAdmin", http.StatusOK},
@@ -79,6 +80,9 @@ func TestScheduleList_AuthMatrix(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.role, func(t *testing.T) {
 			fx := newSessionPageFixture(t, "sl-"+tc.role)
+			if tc.role == "ta" {
+				addTAToFixture(t, fx)
+			}
 			seedSchedule(t, fx)
 			ch := newScheduleHandlerForFixture(fx)
 			code := callScheduleList(t, ch, fx.classID, authFxClaimsByRole(fx, tc.role))
@@ -94,6 +98,7 @@ func TestScheduleListUpcoming_AuthMatrix(t *testing.T) {
 	}{
 		{"outsider", http.StatusForbidden},
 		{"student", http.StatusOK},
+		{"ta", http.StatusOK},
 		{"instructor", http.StatusOK},
 		{"orgAdmin", http.StatusOK},
 		{"platformAdmin", http.StatusOK},
@@ -101,6 +106,9 @@ func TestScheduleListUpcoming_AuthMatrix(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.role, func(t *testing.T) {
 			fx := newSessionPageFixture(t, "slu-"+tc.role)
+			if tc.role == "ta" {
+				addTAToFixture(t, fx)
+			}
 			seedSchedule(t, fx)
 			ch := newScheduleHandlerForFixture(fx)
 			code := callScheduleListUpcoming(t, ch, fx.classID, authFxClaimsByRole(fx, tc.role))

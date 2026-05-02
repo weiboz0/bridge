@@ -44,6 +44,11 @@ func TestCloneCourse_AuthMatrix(t *testing.T) {
 		// student passes via class-membership-implies-course-access
 		// (UserHasAccessToCourse uses class memberships).
 		{"student", http.StatusCreated},
+		// ta: class member (added inline) → passes UserHasAccessToCourse
+		// just like student → 201. Whether TAs SHOULD be able to clone
+		// is a product question; the auth model treats them the same
+		// as students for course reads.
+		{"ta", http.StatusCreated},
 		// instructor: class member AND course creator (CreateCourse
 		// in the fixture sets created_by = teacher.ID).
 		{"instructor", http.StatusCreated},
@@ -57,6 +62,9 @@ func TestCloneCourse_AuthMatrix(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.role, func(t *testing.T) {
 			fx := newSessionPageFixture(t, "cc-"+tc.role)
+			if tc.role == "ta" {
+				addTAToFixture(t, fx)
+			}
 			ch := newCourseHandlerForFixture(fx)
 			code := callCloneCourse(t, ch, fx.courseID, authFxClaimsByRole(fx, tc.role))
 			assert.Equal(t, tc.expected, code, "role=%s", tc.role)
