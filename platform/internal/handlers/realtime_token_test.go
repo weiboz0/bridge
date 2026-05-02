@@ -32,6 +32,7 @@ func newRealtimeHandlerForFixture(fx *sessionPageFixture) *RealtimeHandler {
 		TeachingUnits:         store.NewTeachingUnitStore(fx.db),
 		Problems:              store.NewProblemStore(fx.db),
 		Attempts:              store.NewAttemptStore(fx.db),
+		Users:                 store.NewUserStore(fx.db),
 		HocuspocusTokenSecret: rtSecret,
 	}
 }
@@ -164,6 +165,25 @@ func TestMintToken_BroadcastDoc_TeacherOK_StudentDenied(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, codeS)
 }
 
+// Broadcast must mirror the REST /api/sessions/{id}/broadcast gate:
+// platform admin OR session.TeacherID. Class-staff (instructor / TA /
+// org_admin) DON'T pass — the realtime mint can't be broader than the
+// REST gate. This test locks that down: orgAdmin has class-mutate
+// authority via org-admin status but is not the session teacher and is
+// not a platform admin → must be denied.
+func TestMintToken_BroadcastDoc_OrgAdminDenied(t *testing.T) {
+	fx := newSessionPageFixture(t, "rt-bc-oa")
+	h := newRealtimeHandlerForFixture(fx)
+	docName := "broadcast:" + fx.sessionID
+
+	code, _ := callMintToken(t, h, docName, &auth.Claims{UserID: fx.orgAdmin.ID})
+	assert.Equal(t, http.StatusForbidden, code, "org_admin must NOT mint broadcast tokens — REST gate is teacher-only")
+
+	// Platform admin DOES pass (matches REST gate).
+	codeA, _ := callMintToken(t, h, docName, &auth.Claims{UserID: fx.admin.ID, IsPlatformAdmin: true})
+	assert.Equal(t, http.StatusOK, codeA, "platform admin must pass to match REST gate")
+}
+
 func TestMintToken_AttemptDoc_OwnerOK_OthersDenied(t *testing.T) {
 	fx := newSessionPageFixture(t, "rt-att")
 	h := newRealtimeHandlerForFixture(fx)
@@ -204,14 +224,17 @@ func TestMintToken_AttemptDoc_OwnerOK_OthersDenied(t *testing.T) {
 	codeO, _ := callMintToken(t, h, docName, &auth.Claims{UserID: fx.student.ID})
 	assert.Equal(t, http.StatusOK, codeO)
 
-	// non-owner non-admin denied (Phase-1 narrow rule; teacher-watch
-	// path is deferred to phase-2)
+	// Phase-1 narrow rule: ATTEMPT IS OWNER-ONLY. No admin bypass,
+	// no impersonator bypass, no class-staff. The teacher-watch
+	// path arrives in phase-2 alongside attempt → class resolution.
 	codeT, _ := callMintToken(t, h, docName, &auth.Claims{UserID: fx.teacher.ID})
 	assert.Equal(t, http.StatusForbidden, codeT)
 
-	// platform admin OK
 	codeA, _ := callMintToken(t, h, docName, &auth.Claims{UserID: fx.admin.ID, IsPlatformAdmin: true})
-	assert.Equal(t, http.StatusOK, codeA)
+	assert.Equal(t, http.StatusForbidden, codeA, "platform admin must NOT bypass attempt scope in phase 1")
+
+	codeImp, _ := callMintToken(t, h, docName, &auth.Claims{UserID: fx.outsider.ID, ImpersonatedBy: fx.admin.ID})
+	assert.Equal(t, http.StatusForbidden, codeImp, "impersonator must NOT bypass attempt scope in phase 1")
 }
 
 func TestMintToken_UnitDoc_OrgTeacherOK_StudentDenied(t *testing.T) {
@@ -304,4 +327,65 @@ func TestInternalAuth_AllowedAndDenied(t *testing.T) {
 	require.Equal(t, http.StatusOK, code2)
 	assert.False(t, resp2.Allowed)
 	assert.NotEmpty(t, resp2.Reason)
+}
+
+// The internal endpoint runs OUTSIDE the user-auth middleware, so it
+// must rebuild claims from the DB rather than trust the JWT's sub
+// alone. Specifically `IsPlatformAdmin` must be re-read from
+// `users.is_platform_admin` — otherwise an admin token minted at
+// `t-1` (when the user was admin) would still pass the recheck at
+// `t+10min` after the user was demoted.
+func TestInternalAuth_RehydratesPlatformAdminFromDB(t *testing.T) {
+	fx := newSessionPageFixture(t, "rt-int-admin")
+	h := newRealtimeHandlerForFixture(fx)
+
+	// Seed an org-scope unit in the fixture's org; the outsider is
+	// NOT an org member and would otherwise fail authorizeUnitDoc.
+	units := store.NewTeachingUnitStore(fx.db)
+	u, err := units.CreateUnit(t.Context(), store.CreateTeachingUnitInput{
+		Scope:     "org",
+		ScopeID:   &fx.orgID,
+		Title:     "Internal Auth Unit",
+		Status:    "draft",
+		CreatedBy: fx.teacher.ID,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		fx.db.ExecContext(context.Background(), "DELETE FROM teaching_units WHERE id = $1", u.ID)
+	})
+	docName := "unit:" + u.ID
+
+	// Without DB admin: outsider is denied.
+	code, resp := callInternalAuth(t, h, rtSecret, docName, fx.outsider.ID)
+	require.Equal(t, http.StatusOK, code)
+	assert.False(t, resp.Allowed, "outsider without DB admin must be denied")
+
+	// Promote outsider to platform admin in the DB.
+	_, err = fx.db.ExecContext(context.Background(),
+		"UPDATE users SET is_platform_admin = true WHERE id = $1", fx.outsider.ID)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		fx.db.ExecContext(context.Background(),
+			"UPDATE users SET is_platform_admin = false WHERE id = $1", fx.outsider.ID)
+	})
+
+	// Now the same call should pass via DB-rehydrated admin status.
+	code2, resp2 := callInternalAuth(t, h, rtSecret, docName, fx.outsider.ID)
+	require.Equal(t, http.StatusOK, code2)
+	assert.True(t, resp2.Allowed, "DB-rehydrated platform admin must pass")
+}
+
+// If `sub` doesn't resolve to a real user (deleted, malformed), the
+// internal endpoint must respond `Allowed: false` rather than erroring
+// out — this is defense against compromised/malformed callbacks.
+func TestInternalAuth_UnknownSub_Denied(t *testing.T) {
+	fx := newSessionPageFixture(t, "rt-int-unknown")
+	h := newRealtimeHandlerForFixture(fx)
+	docName := "session:" + fx.sessionID + ":user:" + fx.student.ID
+
+	// uuid-shaped but never-registered sub.
+	code, resp := callInternalAuth(t, h, rtSecret, docName, "00000000-0000-0000-0000-000000000000")
+	require.Equal(t, http.StatusOK, code)
+	assert.False(t, resp.Allowed)
+	assert.NotEmpty(t, resp.Reason)
 }

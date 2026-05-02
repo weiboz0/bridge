@@ -132,9 +132,11 @@ If the secret is unset, the `/api/realtime/token` endpoint returns
 remains active (plan 053 phase 4 removes that fallback). Production deployments
 MUST set this before enabling the realtime-token feature flag.
 
-The sibling `/api/internal/realtime/authorize` endpoint is server-to-server
+The sibling `/api/internal/realtime/auth` endpoint is server-to-server
 only and is gated by the same secret as a bearer token — it must NOT be
-exposed publicly.
+exposed publicly. (It is registered OUTSIDE the user-auth middleware so
+the bearer check runs first; mounting it under user-auth would 401 the
+unauthenticated callback before the bearer could be validated.)
 
 ## Trusted Reverse-Proxy Configuration
 

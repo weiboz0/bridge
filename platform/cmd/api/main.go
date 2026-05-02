@@ -114,6 +114,29 @@ func main() {
 		meH.OptionalAuthRoutes(r)
 	})
 
+	// Plan 053 phase 1: Hocuspocus realtime token endpoints. Two
+	// surfaces, two auth styles. The handler is built once here and
+	// referenced from both the user-auth group (Routes) and the
+	// outside-auth registration below (InternalRoutes).
+	//   - POST /api/realtime/token: USER-AUTHENTICATED. Mounted
+	//     INSIDE the RequireAuth group via realtimeH.Routes(r).
+	//   - POST /api/internal/realtime/auth: SERVER-TO-SERVER.
+	//     Mounted OUTSIDE any user-auth middleware so the bearer
+	//     check (HOCUSPOCUS_TOKEN_SECRET) runs first; mounting it
+	//     under RequireAuth would 401 the unauthenticated callback
+	//     before our handler could see the bearer.
+	realtimeH := &handlers.RealtimeHandler{
+		Sessions:              stores.Sessions,
+		Classes:               stores.Classes,
+		Orgs:                  stores.Orgs,
+		TeachingUnits:         stores.TeachingUnits,
+		Problems:              stores.Problems,
+		Attempts:              stores.Attempts,
+		Users:                 stores.Users,
+		HocuspocusTokenSecret: cfg.Realtime.HocuspocusTokenSecret,
+	}
+	realtimeH.InternalRoutes(r)
+
 	// Authenticated routes
 	r.Group(func(r chi.Router) {
 		r.Use(authMw.RequireAuth)
@@ -256,19 +279,9 @@ func main() {
 		}
 		uploadH.Routes(r)
 
-		// Plan 053 phase 1: Hocuspocus realtime token mint + internal
-		// auth endpoints. The HocuspocusTokenSecret is empty until the
-		// operator sets HOCUSPOCUS_TOKEN_SECRET; in that state the
-		// endpoints return 503 (Realtime tokens not configured).
-		realtimeH := &handlers.RealtimeHandler{
-			Sessions:              stores.Sessions,
-			Classes:               stores.Classes,
-			Orgs:                  stores.Orgs,
-			TeachingUnits:         stores.TeachingUnits,
-			Problems:              stores.Problems,
-			Attempts:              stores.Attempts,
-			HocuspocusTokenSecret: cfg.Realtime.HocuspocusTokenSecret,
-		}
+		// Plan 053 phase 1: USER-AUTHENTICATED mint endpoint. The
+		// matching server-to-server callback endpoint is registered
+		// outside this group (see realtimeH definition above).
 		realtimeH.Routes(r)
 	})
 

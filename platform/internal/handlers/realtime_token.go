@@ -35,19 +35,27 @@ type RealtimeHandler struct {
 	TeachingUnits *store.TeachingUnitStore
 	Problems      *store.ProblemStore
 	Attempts      *store.AttemptStore
+	Users         *store.UserStore
 	// HocuspocusTokenSecret is the HMAC key shared between the Go API
 	// and the Hocuspocus Node process. Empty = realtime endpoints
 	// return 503 (server misconfigured).
 	HocuspocusTokenSecret string
 }
 
-// Routes registers the public mint endpoint and the internal auth
-// endpoint. The internal endpoint is grouped under /api/internal/
-// to make the user-vs-internal split obvious in routing tables.
+// Routes registers the public mint endpoint. Must be mounted INSIDE
+// the user-auth group so callers carry verified Bridge claims.
 func (h *RealtimeHandler) Routes(r chi.Router) {
 	r.Route("/api/realtime", func(r chi.Router) {
 		r.Post("/token", h.MintToken)
 	})
+}
+
+// InternalRoutes registers the server-to-server callback endpoint.
+// Must be mounted OUTSIDE the user-auth group: Hocuspocus calls this
+// with a shared bearer secret, not a Bridge user session, and any
+// user-auth middleware would reject the unauthenticated request
+// before our bearer check runs.
+func (h *RealtimeHandler) InternalRoutes(r chi.Router) {
 	r.Route("/api/internal/realtime", func(r chi.Router) {
 		r.Post("/auth", h.InternalAuth)
 	})
@@ -145,12 +153,38 @@ func (h *RealtimeHandler) InternalAuth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Reuse authorizeDocument with synthetic claims for the JWT's
-	// `sub`. The internal endpoint trusts that the caller (Hocuspocus)
-	// has already verified the JWT signature; this is the
-	// defense-in-depth re-check against the DB.
-	syntheticClaims := &auth.Claims{UserID: body.Sub}
-	_, decision := h.authorizeDocument(r.Context(), syntheticClaims, body.DocumentName)
+	// The internal endpoint runs OUTSIDE the user-auth middleware
+	// (Hocuspocus carries the shared bearer, not a Bridge session).
+	// We trust that the caller (Hocuspocus) has verified the JWT
+	// signature; what we re-check is whether `sub`'s CURRENT
+	// permissions in the DB still allow the doc. Rehydrate the
+	// platform-admin bit from the users table — the JWT is
+	// untrusted at this layer for that bit because it could be
+	// stale, and we never want to trust client-supplied admin
+	// claims server-side.
+	if h.Users == nil {
+		writeJSON(w, http.StatusOK, internalAuthResponse{Allowed: false, Reason: "Users store unavailable"})
+		return
+	}
+	user, err := h.Users.GetUserByID(r.Context(), body.Sub)
+	if err != nil {
+		writeJSON(w, http.StatusOK, internalAuthResponse{Allowed: false, Reason: "User lookup failed"})
+		return
+	}
+	if user == nil {
+		writeJSON(w, http.StatusOK, internalAuthResponse{Allowed: false, Reason: "User not found"})
+		return
+	}
+	rehydratedClaims := &auth.Claims{
+		UserID:          user.ID,
+		Email:           user.Email,
+		Name:            user.Name,
+		IsPlatformAdmin: user.IsPlatformAdmin,
+		// ImpersonatedBy intentionally not rehydrated — impersonation
+		// is a session-level superpower; the internal recheck enforces
+		// the underlying user's actual permissions.
+	}
+	_, decision := h.authorizeDocument(r.Context(), rehydratedClaims, body.DocumentName)
 	if decision != nil {
 		writeJSON(w, http.StatusOK, internalAuthResponse{Allowed: false, Reason: decision.Message})
 		return
@@ -276,8 +310,11 @@ func roleForSessionMember(callerID, studentID string, session *store.LiveSession
 	return "teacher" // admin or class-staff opening someone else's doc
 }
 
-// broadcast:{sessionId} — the session's teacher only (or admin /
-// org_admin / class instructor for that session).
+// broadcast:{sessionId} — gate must mirror the REST broadcast handler
+// (`SessionHandler.ToggleBroadcast`): platform admin OR the session's
+// teacher. Class-staff (instructors / TAs / org_admins) do NOT pass —
+// the REST gate doesn't grant them `POST /api/sessions/{id}/broadcast`,
+// so the realtime mint can't be broader.
 func (h *RealtimeHandler) authorizeBroadcastDoc(ctx context.Context, claims *auth.Claims, sessionID string) (string, *authDecision) {
 	if h.Sessions == nil {
 		return "", &authDecision{Status: http.StatusInternalServerError, Message: "Sessions store unavailable"}
@@ -289,33 +326,25 @@ func (h *RealtimeHandler) authorizeBroadcastDoc(ctx context.Context, claims *aut
 	if session == nil {
 		return "", &authDecision{Status: http.StatusNotFound, Message: "Session not found"}
 	}
-	if claims.IsPlatformAdmin || claims.ImpersonatedBy != "" {
+	if claims.IsPlatformAdmin {
 		return "teacher", nil
 	}
 	if session.TeacherID == claims.UserID {
 		return "teacher", nil
 	}
-	if session.ClassID != nil && h.Classes != nil {
-		if _, ok, err := RequireClassAuthority(ctx, h.Classes, h.Orgs, claims, *session.ClassID, AccessMutate); err == nil && ok {
-			return "teacher", nil
-		}
-	}
 	return "", &authDecision{Status: http.StatusForbidden, Message: "broadcast restricted to session teacher"}
 }
 
-// attempt:{attemptId} — the attempt's owner OR platform admin
-// (or impersonator-of-admin per plan 039).
-//
-// Plan 053 Phase 1 deliberate narrow rule: ATTEMPT OWNER ONLY plus
-// admin bypass. The teacher-watch shell (`teacher-watch-shell.tsx:55`)
-// currently constructs `${teacherId}:teacher` for the attempt doc;
-// after Phase 1 ships, teacher-watch with a forged token still
-// fails (good) but teacher-watch with a real token won't work
-// either until Phase 2/3 wires up the class-staff path. The
-// plumbing requires resolving attempt → problem → topic_problems
-// → topic → course → class, which is its own dependency graph.
-// Tracked as a Phase 2 follow-up; Phase 1 is intentionally narrow
-// to ship.
+// attempt:{attemptId} — Phase 1 narrow rule: ATTEMPT OWNER ONLY.
+// No admin bypass, no impersonator bypass, no class-staff. The
+// teacher-watch shell currently constructs `${teacherId}:teacher`
+// for the attempt doc; after Phase 1 ships, teacher-watch with a
+// forged token still fails (good) but teacher-watch with a real
+// token won't work either until Phase 2/3 wires up the class-staff
+// path. The plumbing requires resolving attempt → problem →
+// topic_problems → topic → course → class, which is its own
+// dependency graph. Tracked as a Phase 2 follow-up; Phase 1 is
+// intentionally narrow to ship.
 func (h *RealtimeHandler) authorizeAttemptDoc(ctx context.Context, claims *auth.Claims, attemptID string) (string, *authDecision) {
 	if h.Attempts == nil {
 		return "", &authDecision{Status: http.StatusInternalServerError, Message: "Attempts store unavailable"}
@@ -327,13 +356,10 @@ func (h *RealtimeHandler) authorizeAttemptDoc(ctx context.Context, claims *auth.
 	if attempt == nil {
 		return "", &authDecision{Status: http.StatusNotFound, Message: "Attempt not found"}
 	}
-	if claims.IsPlatformAdmin || claims.ImpersonatedBy != "" {
-		return "teacher", nil
-	}
 	if attempt.UserID == claims.UserID {
 		return "user", nil
 	}
-	return "", &authDecision{Status: http.StatusForbidden, Message: "Not authorized (teacher-watch deferred to phase-2)"}
+	return "", &authDecision{Status: http.StatusForbidden, Message: "Not authorized (Phase 1 owner-only; teacher-watch deferred to phase-2)"}
 }
 
 // unit:{unitId} — caller may EDIT the unit (CanEditUnit semantics).
