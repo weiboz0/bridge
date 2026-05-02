@@ -143,7 +143,7 @@ func RequireClassAuthority(
 // CanViewUnit reports whether `claims` may view `unit`. The rules
 // mirror spec 012 §Access:
 //
-//   - platform scope: published/archived/coach_ready/classroom_ready
+//   - platform scope: classroom_ready/coach_ready/archived
 //     → any authenticated viewer; draft/reviewed → platform admin only.
 //   - org scope: active teacher or org_admin in the unit's org.
 //     Students are denied (plan 031 narrowing; plan 061 will widen

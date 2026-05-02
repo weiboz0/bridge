@@ -606,6 +606,24 @@ func TestCollectionHandler_AddItem_VisibilityMatrix(t *testing.T) {
 			},
 			expected: http.StatusNotFound,
 		},
+		{
+			name: "platform_reviewed_invisible_to_non_admin",
+			mkUnit: func(fx *collectionFixture) *store.TeachingUnit {
+				return fx.unitFx.mkUnit(t, "platform", nil, "reviewed", "Platform Reviewed", fx.unitFx.admin.ID)
+			},
+			expected: http.StatusNotFound,
+		},
+		{
+			name: "org1_archived_visible_to_org_teacher",
+			mkUnit: func(fx *collectionFixture) *store.TeachingUnit {
+				// Org-scope "archived" is visible to org teachers — the
+				// status filter only excludes for platform scope. Adding
+				// archived org units to a collection is a librarian
+				// workflow, so allow it.
+				return fx.unitFx.mkUnit(t, "org", &fx.unitFx.org1.ID, "archived", "Org1 Archived", fx.unitFx.teacher1.ID)
+			},
+			expected: http.StatusCreated,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -628,6 +646,34 @@ func TestCollectionHandler_AddItem_VisibilityMatrix(t *testing.T) {
 			assert.Equal(t, tc.expected, w.Code, "case=%s body=%s", tc.name, w.Body.String())
 		})
 	}
+}
+
+// Student in org1 owns a personal collection. They can edit their own
+// personal collection (canEditCollection passes for personal-owner).
+// They CANNOT attach an org1 draft because students are denied by
+// CanViewUnit's org-scope rule (`m.Role == "org_admin" || "teacher"`
+// only). 404 — don't leak unit existence.
+func TestCollectionHandler_AddItem_StudentCannotAttachOrgUnit(t *testing.T) {
+	fx := newCollectionFixture(t, t.Name())
+	ctx := context.Background()
+
+	// student1's own personal collection.
+	col, err := fx.ch.Collections.CreateCollection(ctx, store.CreateCollectionInput{
+		Scope: "personal", ScopeID: &fx.unitFx.student1.ID, Title: "Student Personal Col", CreatedBy: fx.unitFx.student1.ID,
+	})
+	require.NoError(t, err)
+
+	// org1 draft — created by teacher1 in student1's own org. Teachers
+	// can see it; students can't (per CanViewUnit org rule).
+	candidate := fx.unitFx.mkUnit(t, "org", &fx.unitFx.org1.ID, "draft", "Org1 Draft", fx.unitFx.teacher1.ID)
+
+	body, _ := json.Marshal(map[string]any{"unitId": candidate.ID, "sortOrder": 0})
+	req := httptest.NewRequest(http.MethodPost, "/api/collections/"+col.ID+"/items", bytes.NewReader(body))
+	req = withClaims(req, fx.claims(fx.unitFx.student1, false))
+	req = withChiParams(req, map[string]string{"id": col.ID})
+	w := httptest.NewRecorder()
+	fx.ch.AddItem(w, req)
+	assert.Equal(t, http.StatusNotFound, w.Code, "student should not see org-scope unit even in their own org")
 }
 
 // Platform admin bypasses CanViewUnit, so they CAN attach an org2

@@ -352,7 +352,8 @@ func (h *UnitCollectionHandler) AddItem(w http.ResponseWriter, r *http.Request) 
 	//
 	// Returns 404 (not 403) on missing/invisible unit so we don't
 	// leak unit existence by ID — same shape as canViewUnit's
-	// failure mode at teaching_units.go:945.
+	// failure mode in teaching_units.go (the not-found branch in
+	// the GetUnit-related read handlers).
 	if h.TeachingUnits == nil {
 		writeError(w, http.StatusInternalServerError, "Teaching units store unavailable")
 		return
