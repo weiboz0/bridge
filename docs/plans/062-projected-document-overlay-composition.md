@@ -76,4 +76,16 @@ Single commit if the composed function is already exposed; otherwise two (expose
 
 ## Codex Review of This Plan
 
-(Filled in after Phase 0.)
+### Pass 1 — 2026-05-02: **CONCUR**
+
+Codex confirmed: bug verified at `teaching_units.go:813` (GetDocument
+call) vs `:1272` (composed). `GetComposedDocument` already exposed
+with signature `(ctx, unitID) (json.RawMessage, error)`.
+`projection.ProjectBlocks` operates on a block slice independent of
+storage state — compose-then-filter is semantically correct. Non-
+overlay fallback in `GetComposedDocument` confirmed (returns raw
+doc when no overlay row exists). Existing `unitFixture` supports
+forks; new tests go alongside existing projected tests around
+`teaching_units_integration_test.go:1260`. Teacher editor uses raw
+`/document` so it's unaffected — only `/projected` (student-facing)
+is in scope.

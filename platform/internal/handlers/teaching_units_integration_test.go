@@ -1568,6 +1568,181 @@ func TestTeachingUnitHandler_Projected_NotFound_404(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, w.Code)
 }
 
+// --- Plan 062 — overlay composition ---
+//
+// /projected previously called GetDocument directly, returning only
+// the raw child blocks. For forked (overlay-child) units that
+// meant: empty doc when the child has no own blocks, stale doc
+// when the child diverged. Plan 062 routes /projected through
+// GetComposedDocument so overlays are merged before role
+// projection.
+
+// forkChildOf creates a fork of `parent` for the same teacher.
+// Returns the child unit with cleanup registered.
+func forkChildOf(t *testing.T, fx *unitFixture, parent *store.TeachingUnit) *store.TeachingUnit {
+	t.Helper()
+	ctx := context.Background()
+	child, err := fx.h.Units.ForkUnit(ctx, parent.ID, store.ForkTarget{
+		Scope: "org", ScopeID: &fx.org1.ID, CallerID: fx.teacher1.ID,
+	})
+	require.NoError(t, err)
+	fx.forkCleanup(t, child.ID)
+	return child
+}
+
+func TestTeachingUnitHandler_Projected_ForkedUnit_NoOverrides_ShowsParentBlocks(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	ctx := context.Background()
+
+	// Parent has 2 prose blocks; needs to be classroom_ready before
+	// the fork can be student-readable.
+	parent := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Parent w/ blocks", fx.teacher1.ID)
+	parentBlocks := json.RawMessage(`{"type":"doc","content":[{"type":"prose","attrs":{"id":"p1"}},{"type":"prose","attrs":{"id":"p2"}}]}`)
+	_, err := fx.h.Units.SaveDocument(ctx, parent.ID, parentBlocks)
+	require.NoError(t, err)
+	_, err = fx.h.Units.SetUnitStatus(ctx, parent.ID, "reviewed", fx.teacher1.ID)
+	require.NoError(t, err)
+	_, err = fx.h.Units.SetUnitStatus(ctx, parent.ID, "classroom_ready", fx.teacher1.ID)
+	require.NoError(t, err)
+
+	// Fork creates a child with NO overrides. Pre-062: /projected
+	// would return the child's own (empty) blocks.
+	child := forkChildOf(t, fx, parent)
+
+	w := doUnitGet(t, fx.h.GetProjectedDocument, "/api/units/"+child.ID+"/projected",
+		map[string]string{"id": child.ID}, fx.claims(fx.teacher1, false))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var resp struct {
+		Type    string                   `json:"type"`
+		Content []map[string]interface{} `json:"content"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Len(t, resp.Content, 2, "fork without overrides must show parent's blocks via composition")
+}
+
+func TestTeachingUnitHandler_Projected_ForkedUnit_HideOverlay_OmitsBlock(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	ctx := context.Background()
+
+	parent := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Hide Parent", fx.teacher1.ID)
+	parentBlocks := json.RawMessage(`{"type":"doc","content":[{"type":"prose","attrs":{"id":"b1"}},{"type":"prose","attrs":{"id":"b2"}}]}`)
+	_, err := fx.h.Units.SaveDocument(ctx, parent.ID, parentBlocks)
+	require.NoError(t, err)
+	_, err = fx.h.Units.SetUnitStatus(ctx, parent.ID, "reviewed", fx.teacher1.ID)
+	require.NoError(t, err)
+	_, err = fx.h.Units.SetUnitStatus(ctx, parent.ID, "classroom_ready", fx.teacher1.ID)
+	require.NoError(t, err)
+
+	child := forkChildOf(t, fx, parent)
+	_, err = fx.h.Units.UpdateOverlay(ctx, child.ID, store.UpdateOverlayInput{
+		BlockOverrides: json.RawMessage(`{"b1":{"action":"hide"}}`),
+	})
+	require.NoError(t, err)
+
+	w := doUnitGet(t, fx.h.GetProjectedDocument, "/api/units/"+child.ID+"/projected",
+		map[string]string{"id": child.ID}, fx.claims(fx.teacher1, false))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var resp struct {
+		Type    string                   `json:"type"`
+		Content []map[string]interface{} `json:"content"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Len(t, resp.Content, 1, "hide overlay should omit b1")
+	attrs := resp.Content[0]["attrs"].(map[string]interface{})
+	assert.Equal(t, "b2", attrs["id"])
+}
+
+func TestTeachingUnitHandler_Projected_ForkedUnit_ReplaceOverlay_ShowsReplacement(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	ctx := context.Background()
+
+	parent := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Replace Parent", fx.teacher1.ID)
+	parentBlocks := json.RawMessage(`{"type":"doc","content":[{"type":"prose","attrs":{"id":"b1"}}]}`)
+	_, err := fx.h.Units.SaveDocument(ctx, parent.ID, parentBlocks)
+	require.NoError(t, err)
+	_, err = fx.h.Units.SetUnitStatus(ctx, parent.ID, "reviewed", fx.teacher1.ID)
+	require.NoError(t, err)
+	_, err = fx.h.Units.SetUnitStatus(ctx, parent.ID, "classroom_ready", fx.teacher1.ID)
+	require.NoError(t, err)
+
+	child := forkChildOf(t, fx, parent)
+	_, err = fx.h.Units.UpdateOverlay(ctx, child.ID, store.UpdateOverlayInput{
+		BlockOverrides: json.RawMessage(`{"b1":{"action":"replace","block":{"type":"prose","attrs":{"id":"b1-replaced"}}}}`),
+	})
+	require.NoError(t, err)
+
+	w := doUnitGet(t, fx.h.GetProjectedDocument, "/api/units/"+child.ID+"/projected",
+		map[string]string{"id": child.ID}, fx.claims(fx.teacher1, false))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var resp struct {
+		Type    string                   `json:"type"`
+		Content []map[string]interface{} `json:"content"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp.Content, 1)
+	attrs := resp.Content[0]["attrs"].(map[string]interface{})
+	assert.Equal(t, "b1-replaced", attrs["id"])
+}
+
+func TestTeachingUnitHandler_Projected_ForkedUnit_TeacherOnlyParent_StudentCantSee(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	ctx := context.Background()
+
+	// Parent has a teacher-note (teacher-only) and a prose block.
+	parent := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Teacher-Note Parent", fx.teacher1.ID)
+	parentBlocks := json.RawMessage(`{"type":"doc","content":[{"type":"teacher-note","attrs":{"id":"tn1"}},{"type":"prose","attrs":{"id":"p1"}}]}`)
+	_, err := fx.h.Units.SaveDocument(ctx, parent.ID, parentBlocks)
+	require.NoError(t, err)
+	_, err = fx.h.Units.SetUnitStatus(ctx, parent.ID, "reviewed", fx.teacher1.ID)
+	require.NoError(t, err)
+	_, err = fx.h.Units.SetUnitStatus(ctx, parent.ID, "classroom_ready", fx.teacher1.ID)
+	require.NoError(t, err)
+
+	child := forkChildOf(t, fx, parent)
+
+	// Teacher previewing-as-student should NOT see the teacher-note,
+	// even though composition pulled it in from the parent. This
+	// confirms the order is compose-then-filter, not filter-then-
+	// compose.
+	w := doUnitGet(t, fx.h.GetProjectedDocument, "/api/units/"+child.ID+"/projected?role=student",
+		map[string]string{"id": child.ID}, fx.claims(fx.teacher1, false))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var resp struct {
+		Type    string                   `json:"type"`
+		Content []map[string]interface{} `json:"content"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	for _, b := range resp.Content {
+		assert.NotEqual(t, "teacher-note", b["type"], "student must not see teacher-only blocks even after composition")
+	}
+}
+
+func TestTeachingUnitHandler_Projected_NonForkedUnit_UnchangedBehavior(t *testing.T) {
+	fx := newUnitFixture(t, t.Name())
+	ctx := context.Background()
+
+	// Plain non-forked unit. /projected should still work.
+	u := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Plain", fx.teacher1.ID)
+	blocks := json.RawMessage(`{"type":"doc","content":[{"type":"prose","attrs":{"id":"p1"}}]}`)
+	_, err := fx.h.Units.SaveDocument(ctx, u.ID, blocks)
+	require.NoError(t, err)
+
+	w := doUnitGet(t, fx.h.GetProjectedDocument, "/api/units/"+u.ID+"/projected",
+		map[string]string{"id": u.ID}, fx.claims(fx.teacher1, false))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var resp struct {
+		Type    string                   `json:"type"`
+		Content []map[string]interface{} `json:"content"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp.Content, 1)
+}
+
 // ==================== ForkUnit ====================
 
 // forkCleanup deletes the child unit and its overlay/doc/revision rows created

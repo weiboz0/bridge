@@ -810,13 +810,18 @@ func (h *TeachingUnitHandler) GetProjectedDocument(w http.ResponseWriter, r *htt
 		}
 	}
 
-	// Fetch document.
-	doc, err := h.Units.GetDocument(r.Context(), unitID)
+	// Plan 062 — Fetch the COMPOSED document (parent + overlay
+	// merged), not the raw child blocks. For a unit with no overlay
+	// row the store falls back to the unit's own blocks, so this is
+	// a strict superset of the prior behavior. The original code
+	// called GetDocument here, which for forked units returned only
+	// the raw child blocks — students saw empty / stale content.
+	composedBlocks, err := h.Units.GetComposedDocument(r.Context(), unitID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
 	}
-	if doc == nil {
+	if composedBlocks == nil {
 		writeError(w, http.StatusNotFound, "Document not found")
 		return
 	}
@@ -826,12 +831,15 @@ func (h *TeachingUnitHandler) GetProjectedDocument(w http.ResponseWriter, r *htt
 		Type    string            `json:"type"`
 		Content []json.RawMessage `json:"content"`
 	}
-	if err := json.Unmarshal(doc.Blocks, &envelope); err != nil {
+	if err := json.Unmarshal(composedBlocks, &envelope); err != nil {
 		writeError(w, http.StatusInternalServerError, "Malformed document")
 		return
 	}
 
-	// Run projection.
+	// Run projection on the COMPOSED blocks. Compose-then-filter is
+	// the right order: composition merges/replaces blocks first
+	// (overlay semantics), THEN projection hides teacher-only and
+	// student-gated blocks.
 	filtered := projection.ProjectBlocks(envelope.Content, role, attemptStates)
 
 	// Return reconstructed document.
