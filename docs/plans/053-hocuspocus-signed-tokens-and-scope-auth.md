@@ -144,3 +144,89 @@ Codex Phase 0 review found 3 blockers + 3 [IMPORTANT] items, all addressed inlin
 After Passes 2-4 caught (a) test-harness placement inconsistency, (b) `GET` vs `POST` mismatch on the internal endpoint, (c) leftover "Phase 2" test-harness attribution, and (d) a stale-snapshot false alarm about "replay rejection," Pass 5 returned a clean concur.
 
 **Status: ready for Phase 1 implementation** (server-side mint + verify in Go). PR-1 of plan 053 starts on a fresh branch.
+
+---
+
+## Phase 1 Post-Implementation Review (2026-05-02)
+
+Phase 1 shipped on `fix/053-1-realtime-token-mint`. Three commits total:
+`265432a` (initial), `d172c91` (pass-1 fixes), `cb91839` (pass-2 status-code fix).
+
+### Pass 1 — 5 blockers, all fixed in `d172c91`
+
+1. **Internal endpoint behind RequireAuth** — `/api/internal/realtime/auth`
+   was registered inside the user-auth group, so the server-to-server
+   callback got 401'd before its bearer-token check could run. **Fix:**
+   split route registration: `Routes()` for the public mint endpoint
+   stays under `RequireAuth`, `InternalRoutes()` registers the bearer-
+   gated callback at the top level.
+
+2. **Attempt scope had admin/impersonator bypass** — Phase 1 promised
+   strict owner-only for attempt docs (teacher-watch path is deferred
+   to Phase 2 alongside attempt → class resolution). **Fix:** removed
+   the bypass. Test now asserts both admin and impersonator are
+   denied.
+
+3. **Broadcast scope was broader than the REST gate** —
+   `authorizeBroadcastDoc` granted access to any class staff with
+   `AccessMutate`, but `SessionHandler.ToggleBroadcast` only allows
+   platform admin OR the session's teacher. **Fix:** dropped the
+   class-staff path. New test `TestMintToken_BroadcastDoc_OrgAdminDenied`
+   locks the parity down.
+
+4. **Internal endpoint synthetic claims didn't carry admin status** —
+   With the route split (blocker 1), the internal endpoint runs outside
+   user auth, so it got only `body.Sub`. An admin demoted between mint
+   and recheck would still pass because synthetic claims had
+   `IsPlatformAdmin: false`. **Fix:** added `Users` field to
+   `RealtimeHandler` and rebuild claims via `Users.GetUserByID`,
+   reading `is_platform_admin` from the DB. `ImpersonatedBy`
+   intentionally NOT rehydrated — impersonation is a session-level
+   superpower; the recheck should evaluate the underlying user's
+   actual permissions. New test
+   `TestInternalAuth_RehydratesPlatformAdminFromDB` verifies it.
+
+5. **docs/setup.md path mismatch** — doc said
+   `/api/internal/realtime/authorize`; actual path is `/auth`. **Fix:**
+   doc corrected and amended with the mount-location rationale.
+
+### Pass 2 — 1 blocker, fixed in `cb91839`
+
+1. **InternalAuth collapsed all errors into 200/Allowed:false** —
+   Every `authDecision` failure (400 malformed doc-name, 404 missing
+   resource, 500 DB error) turned into "200 + Allowed:false", hiding
+   infrastructure problems as ordinary auth denials. **Fix:** split
+   dispatch by `decision.Status`: only `403 Forbidden` collapses to
+   `200 Allowed:false`; everything else surfaces via `writeError`.
+   User-not-found is now `404` (not `200/Allowed:false`). Four new
+   tests cover the paths:
+   `TestInternalAuth_{UnknownSub_404, BadDocName_400,
+   MissingResource_404, NilUsersStore_500}`.
+
+### Pass 3 — **CONCUR**
+
+> All four verification points confirmed: status dispatch correct,
+> leaked-info acceptable (bearer gate filters non-Hocuspocus
+> callers), test coverage sufficient, no regression on pass-1/2
+> fixes. Phase 1 is clear to merge.
+
+Two non-blocking gaps Codex noted: no test for `GetUserByID`
+returning a non-nil error (vs nil result) and no test for
+`authorizeDocument` returning `StatusInternalServerError`. Both are
+exercised at the dispatcher level by `TestInternalAuth_NilUsersStore_500`;
+producer-level coverage is belt-and-suspenders. Filed as a Phase 1
+follow-up if a future regression demands it.
+
+### Final test counts
+
+- `platform/internal/auth`: 8 unit tests on `SignRealtimeToken` /
+  `VerifyRealtimeToken` (round-trip, wrong secret, wrong issuer,
+  expired, malformed, TTL clamp, ey prefix lock-in).
+- `platform/internal/handlers`: 22 mint/internal-auth tests
+  (auth required, all 4 doc-name shapes, owner/teacher/admin/
+  impersonator matrices, bearer gate, status-code dispatch, DB
+  rehydrate, missing user/resource).
+- Full Go suite: green.
+
+**Phase 1 status: ready to merge.** Phase 2 (server-side verify in
+Hocuspocus + backward-compat parser) is the next plan-053 unit.
