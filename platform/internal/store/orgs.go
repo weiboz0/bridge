@@ -244,22 +244,19 @@ func (s *OrgStore) UpdateOrgStatus(ctx context.Context, orgID string, status str
 		return nil, nil
 	}
 
+	// Plan 060 — UpdateOrgStatus only flips `status`. The auto-stamp
+	// of `verified_at = now()` on first school activation was
+	// removed: it conflated "platform admin clicked Active" with
+	// "platform admin verified the school's signup paperwork." A
+	// real verification flow gets its own store method
+	// (MarkOrgVerified) when one is built.
 	now := time.Now()
 	var org Org
-
-	if status == "active" && existing.Type == "school" && existing.VerifiedAt == nil {
-		err = s.db.QueryRowContext(ctx,
-			`UPDATE organizations SET status = $1, verified_at = $2, updated_at = $3 WHERE id = $4
-			 RETURNING id, name, slug, type, status, contact_email, contact_name, domain, settings, verified_at, created_at, updated_at`,
-			status, now, now, orgID,
-		).Scan(&org.ID, &org.Name, &org.Slug, &org.Type, &org.Status, &org.ContactEmail, &org.ContactName, &org.Domain, &org.Settings, &org.VerifiedAt, &org.CreatedAt, &org.UpdatedAt)
-	} else {
-		err = s.db.QueryRowContext(ctx,
-			`UPDATE organizations SET status = $1, updated_at = $2 WHERE id = $3
-			 RETURNING id, name, slug, type, status, contact_email, contact_name, domain, settings, verified_at, created_at, updated_at`,
-			status, now, orgID,
-		).Scan(&org.ID, &org.Name, &org.Slug, &org.Type, &org.Status, &org.ContactEmail, &org.ContactName, &org.Domain, &org.Settings, &org.VerifiedAt, &org.CreatedAt, &org.UpdatedAt)
-	}
+	err = s.db.QueryRowContext(ctx,
+		`UPDATE organizations SET status = $1, updated_at = $2 WHERE id = $3
+		 RETURNING id, name, slug, type, status, contact_email, contact_name, domain, settings, verified_at, created_at, updated_at`,
+		status, now, orgID,
+	).Scan(&org.ID, &org.Name, &org.Slug, &org.Type, &org.Status, &org.ContactEmail, &org.ContactName, &org.Domain, &org.Settings, &org.VerifiedAt, &org.CreatedAt, &org.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
