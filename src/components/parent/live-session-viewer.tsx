@@ -29,6 +29,23 @@ export function LiveSessionViewer({
 }: LiveSessionViewerProps) {
   const [topics, setTopics] = useState<SessionTopic[]>([]);
   const documentName = `session:${sessionId}:user:${studentId}`;
+  // Plan 053 phase 3 — DELIBERATELY NOT migrated to useRealtimeToken.
+  //
+  // The Go `authorizeSessionDoc` has no parent path: there is no
+  // parent-child link in the DB to verify against. Plan 049 was
+  // scheduled to add parent-child linking but didn't ship; today
+  // parent reports return 501 (see `platform/internal/handlers/parent.go`).
+  // The legacy Hocuspocus auth (`server/hocuspocus.ts:46-52`) accepts
+  // role==="parent" without further checks — that's the only reason
+  // this view works today, and it's also a security hole the plan-053
+  // rework is closing.
+  //
+  // Migrating here would require either (a) plan 049's parent-child
+  // linking AND a new authorizeSessionDoc parent path, or (b) a
+  // separate parent-viewer doc-name that the existing
+  // canViewParentSession helper can gate. Tracked in plan 053b.
+  // HOCUSPOCUS_REQUIRE_SIGNED_TOKEN=1 (phase 4 cutover) MUST NOT flip
+  // in prod until 053b ships, or parent-viewer breaks.
   const token = `${parentId}:parent`;
 
   const { yText, provider, connected } = useYjsProvider({

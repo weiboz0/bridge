@@ -150,38 +150,56 @@ func TestMintToken_SessionDoc_OutsiderDenied(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, code)
 }
 
-func TestMintToken_BroadcastDoc_TeacherOK_StudentDenied(t *testing.T) {
+// Broadcast docs are one-way (teacher writes, class reads). Two
+// distinct roles in the JWT: "teacher" for the broadcaster, "user"
+// for viewers. Both must be allowed to mint.
+func TestMintToken_BroadcastDoc_TeacherWrites_StudentReads(t *testing.T) {
 	fx := newSessionPageFixture(t, "rt-bc")
 	h := newRealtimeHandlerForFixture(fx)
 	docName := "broadcast:" + fx.sessionID
 
+	// Teacher → role=teacher.
 	codeT, respT := callMintToken(t, h, docName, &auth.Claims{UserID: fx.teacher.ID})
 	require.Equal(t, http.StatusOK, codeT)
-	claims, err := auth.VerifyRealtimeToken(rtSecret, respT.Token)
+	teacherClaims, err := auth.VerifyRealtimeToken(rtSecret, respT.Token)
 	require.NoError(t, err)
-	assert.Equal(t, "teacher", claims.Role)
+	assert.Equal(t, "teacher", teacherClaims.Role)
 
-	codeS, _ := callMintToken(t, h, docName, &auth.Claims{UserID: fx.student.ID})
-	assert.Equal(t, http.StatusForbidden, codeS)
+	// Student (class member) → role=user. Phase-1 narrow rule was
+	// "teacher only", which broke the legacy student-reads-broadcast
+	// case. Phase 3 broadens to class-member-can-read.
+	codeS, respS := callMintToken(t, h, docName, &auth.Claims{UserID: fx.student.ID})
+	require.Equal(t, http.StatusOK, codeS)
+	studentClaims, err := auth.VerifyRealtimeToken(rtSecret, respS.Token)
+	require.NoError(t, err)
+	assert.Equal(t, "user", studentClaims.Role)
+
+	// Outsider (no membership) → still 403.
+	codeO, _ := callMintToken(t, h, docName, &auth.Claims{UserID: fx.outsider.ID})
+	assert.Equal(t, http.StatusForbidden, codeO)
 }
 
-// Broadcast must mirror the REST /api/sessions/{id}/broadcast gate:
-// platform admin OR session.TeacherID. Class-staff (instructor / TA /
-// org_admin) DON'T pass — the realtime mint can't be broader than the
-// REST gate. This test locks that down: orgAdmin has class-mutate
-// authority via org-admin status but is not the session teacher and is
-// not a platform admin → must be denied.
-func TestMintToken_BroadcastDoc_OrgAdminDenied(t *testing.T) {
+// org_admin without class membership: still allowed because they
+// have class-read authority via org-admin status. (Different from
+// pre-Phase-3 behavior where org_admin was deliberately denied to
+// mirror the REST start/stop gate.)
+func TestMintToken_BroadcastDoc_OrgAdmin_GetsReadRole(t *testing.T) {
 	fx := newSessionPageFixture(t, "rt-bc-oa")
 	h := newRealtimeHandlerForFixture(fx)
 	docName := "broadcast:" + fx.sessionID
 
-	code, _ := callMintToken(t, h, docName, &auth.Claims{UserID: fx.orgAdmin.ID})
-	assert.Equal(t, http.StatusForbidden, code, "org_admin must NOT mint broadcast tokens — REST gate is teacher-only")
+	code, resp := callMintToken(t, h, docName, &auth.Claims{UserID: fx.orgAdmin.ID})
+	require.Equal(t, http.StatusOK, code, "org_admin has class-read authority via org role")
+	claims, err := auth.VerifyRealtimeToken(rtSecret, resp.Token)
+	require.NoError(t, err)
+	assert.Equal(t, "user", claims.Role, "org_admin gets reader role, NOT writer — start/stop is REST-gate only")
 
-	// Platform admin DOES pass (matches REST gate).
-	codeA, _ := callMintToken(t, h, docName, &auth.Claims{UserID: fx.admin.ID, IsPlatformAdmin: true})
-	assert.Equal(t, http.StatusOK, codeA, "platform admin must pass to match REST gate")
+	// Platform admin → writer.
+	codeA, respA := callMintToken(t, h, docName, &auth.Claims{UserID: fx.admin.ID, IsPlatformAdmin: true})
+	require.Equal(t, http.StatusOK, codeA)
+	adminClaims, err := auth.VerifyRealtimeToken(rtSecret, respA.Token)
+	require.NoError(t, err)
+	assert.Equal(t, "teacher", adminClaims.Role)
 }
 
 func TestMintToken_AttemptDoc_OwnerOK_OthersDenied(t *testing.T) {

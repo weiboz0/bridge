@@ -5,6 +5,7 @@ import { useState, useEffect } from "react";
 import { useSession } from "next-auth/react";
 import { useStudentLayout } from "@/lib/hooks/use-student-layout";
 import { useYjsProvider } from "@/lib/yjs/use-yjs-provider";
+import { useRealtimeToken } from "@/lib/realtime/use-realtime-token";
 import { EditorSwitcher } from "@/components/editor/editor-switcher";
 import { AiChatPanel } from "@/components/ai/ai-chat-panel";
 import { RaiseHandButton } from "@/components/help-queue/raise-hand-button";
@@ -47,19 +48,23 @@ export function StudentSession({
   const [broadcastActive, setBroadcastActive] = useState(false);
 
   const userId = session?.user?.id || "";
-  const documentName = `session:${sessionId}:user:${userId}`;
-  const token = `${userId}:user`;
+  const documentName = userId ? `session:${sessionId}:user:${userId}` : "noop";
+  // Plan 053 phase 3 — per-doc JWT mint. Each doc-name gets its own
+  // token; the helper caches by doc-name so this is one round-trip
+  // per (doc, tab).
+  const realtimeToken = useRealtimeToken(documentName);
 
   const { yText, provider, connected } = useYjsProvider({
     documentName,
-    token,
+    token: realtimeToken,
   });
 
   // Broadcast document
-  const broadcastDocName = `broadcast:${sessionId}`;
+  const broadcastDocName = broadcastActive ? `broadcast:${sessionId}` : "noop";
+  const broadcastToken = useRealtimeToken(broadcastDocName);
   const { yText: broadcastYText, provider: broadcastProvider } = useYjsProvider({
-    documentName: broadcastActive ? broadcastDocName : "noop",
-    token,
+    documentName: broadcastDocName,
+    token: broadcastToken,
   });
 
   // Fetch session topics

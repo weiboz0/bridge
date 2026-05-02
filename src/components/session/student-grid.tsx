@@ -12,14 +12,12 @@ interface Participant {
 interface StudentGridProps {
   sessionId: string;
   participants: Participant[];
-  token: string;
   onSelectStudent: (studentId: string) => void;
 }
 
 export function StudentGrid({
   sessionId,
   participants,
-  token,
   onSelectStudent,
 }: StudentGridProps) {
   if (participants.length === 0) {
@@ -40,7 +38,6 @@ export function StudentGrid({
           studentName={p.name}
           status={p.status}
           helpRequestedAt={p.helpRequestedAt}
-          token={token}
           onClick={() => onSelectStudent(p.studentId)}
         />
       ))}

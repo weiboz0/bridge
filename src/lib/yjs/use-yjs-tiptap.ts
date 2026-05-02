@@ -6,6 +6,7 @@ import { HocuspocusProvider } from "@hocuspocus/provider";
 import Collaboration from "@tiptap/extension-collaboration";
 import CollaborationCursor from "@tiptap/extension-collaboration-cursor";
 import type { AnyExtension } from "@tiptap/react";
+import { useRealtimeToken } from "@/lib/realtime/use-realtime-token";
 
 // Fixed palette of 10 distinct, accessible colors for cursor labels.
 const CURSOR_COLORS = [
@@ -74,11 +75,19 @@ export function useYjsTiptap({
   // Use a counter to trigger re-renders when provider/ydoc refs change.
   const [, forceUpdate] = useState(0);
 
+  // Plan 053 phase 3 — mint a JWT scoped to this unit doc instead of
+  // constructing the legacy `${userId}:teacher` string. The hook
+  // returns "" while the mint is in flight; useEffect re-runs once
+  // the token resolves.
+  const documentName = unitId && unitId !== "noop" ? `unit:${unitId}` : "noop";
+  const realtimeToken = useRealtimeToken(documentName);
+
   const shouldConnect =
     Boolean(unitId) &&
     unitId !== "noop" &&
     Boolean(userId) &&
-    !userId.startsWith(":");
+    !userId.startsWith(":") &&
+    Boolean(realtimeToken);
 
   useEffect(() => {
     if (!shouldConnect) {
@@ -96,14 +105,12 @@ export function useYjsTiptap({
         : "ws://127.0.0.1:4000");
 
     const ydoc = new Y.Doc();
-    const documentName = `unit:${unitId}`;
-    const token = `${userId}:teacher`;
 
     const provider = new HocuspocusProvider({
       url: serverUrl,
       name: documentName,
       document: ydoc,
-      token,
+      token: realtimeToken,
       onConnect: () => {
         console.log(`[yjs-tiptap] Connected to ${documentName}`);
         setConnected(true);
@@ -131,9 +138,10 @@ export function useYjsTiptap({
       ydocRef.current = null;
       providerRef.current = null;
     };
-    // Re-run only when connection parameters change.
+    // Re-run only when connection parameters change. realtimeToken
+    // included so we rebuild the provider when the JWT refreshes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [shouldConnect, unitId, userId, userName, userColor]);
+  }, [shouldConnect, unitId, userId, userName, userColor, realtimeToken]);
 
   const ydoc = ydocRef.current;
   const provider = providerRef.current;

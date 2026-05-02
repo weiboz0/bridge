@@ -19,6 +19,7 @@ import { CodeEditor } from "@/components/editor/code-editor";
 import { OutputPanel } from "@/components/editor/output-panel";
 import { AttemptHeader } from "@/components/problem/attempt-header";
 import { useYjsProvider } from "@/lib/yjs/use-yjs-provider";
+import { useRealtimeToken } from "@/lib/realtime/use-realtime-token";
 import { usePyodide } from "@/lib/pyodide/use-pyodide";
 import { Button } from "@/components/ui/button";
 import { TestResultsCard, type TestRunSummary } from "@/components/problem/test-results-card";
@@ -61,9 +62,11 @@ export function ProblemShell({
 
   // Yjs binding for the active attempt. Doc-name change forces reconnect on
   // attempt switch.
+  const documentName = userId ? `attempt:${activeAttemptId}` : "noop";
+  const realtimeToken = useRealtimeToken(documentName);
   const { yText, provider, connected } = useYjsProvider({
-    documentName: userId ? `attempt:${activeAttemptId}` : "noop",
-    token: userId ? `${userId}:user` : "",
+    documentName,
+    token: realtimeToken,
   });
 
   // Default input selection — first example case if any, else Custom.

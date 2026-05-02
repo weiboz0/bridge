@@ -5,6 +5,7 @@ import * as Y from "yjs";
 import { HocuspocusProvider } from "@hocuspocus/provider";
 import { codeToHtml } from "shiki";
 import { AiToggleButton } from "@/components/ai/ai-toggle-button";
+import { useRealtimeToken } from "@/lib/realtime/use-realtime-token";
 
 interface StudentTileProps {
   sessionId: string;
@@ -12,7 +13,6 @@ interface StudentTileProps {
   studentName: string;
   status: string;
   helpRequestedAt?: string | null;
-  token: string;
   onClick: () => void;
 }
 
@@ -22,23 +22,28 @@ export function StudentTile({
   studentName,
   status,
   helpRequestedAt,
-  token,
   onClick,
 }: StudentTileProps) {
   const [html, setHtml] = useState("");
   const providerRef = useRef<HocuspocusProvider | null>(null);
   const yDocRef = useRef<Y.Doc | null>(null);
 
+  // Plan 053 phase 3 — each tile mints its own JWT scoped to the
+  // student's session doc. The cache in `getRealtimeToken` collapses
+  // duplicate fetches when many tiles render simultaneously.
+  const documentName = `session:${sessionId}:user:${studentId}`;
+  const realtimeToken = useRealtimeToken(documentName);
+
   useEffect(() => {
+    if (!realtimeToken) return;
     const yDoc = new Y.Doc();
     const yText = yDoc.getText("content");
-    const documentName = `session:${sessionId}:user:${studentId}`;
 
     const provider = new HocuspocusProvider({
       url: process.env.NEXT_PUBLIC_HOCUSPOCUS_URL || `ws://${window.location.hostname}:4000`,
       name: documentName,
       document: yDoc,
-      token,
+      token: realtimeToken,
     });
 
     yDocRef.current = yDoc;
@@ -74,7 +79,7 @@ export function StudentTile({
       provider.destroy();
       yDoc.destroy();
     };
-  }, [sessionId, studentId, token]);
+  }, [sessionId, studentId, documentName, realtimeToken]);
 
   const statusColor = {
     present: "bg-green-500",
