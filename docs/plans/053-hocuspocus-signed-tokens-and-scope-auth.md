@@ -338,7 +338,45 @@ Two latent bugs surfaced and were addressed inline:
   test names + assertions updated; new `_OrgAdmin_GetsReadRole`
   test.
 
-**Deferred (the 6th callsite):**
+**Deferred (2 of the 6 callsites):**
 - `src/components/problem/teacher-watch-shell.tsx` — kept legacy
-  `${teacherId}:teacher` token. In-line comment explains the
-  deferral and points to plan 053b.
+  `${teacherId}:teacher` token. Phase 1 narrowed attempt scope to
+  owner-only, plus the underlying `teacherCanViewAttempt` query is
+  broken (drops `problems.topic_id` since plan 0013).
+- `src/components/parent/live-session-viewer.tsx` — kept legacy
+  `${parentId}:parent` token. There is no parent-child link in the
+  DB (plan 049 was scheduled but didn't ship); the legacy
+  Hocuspocus path accepts `role === "parent"` without checks, which
+  IS the security hole this plan closes. Migrating requires plan
+  049's parent-child schema first.
+
+Both are tracked in `docs/plans/053b-teacher-watch-attempt-scope.md`.
+Plan 053 phase 4 MUST NOT flip the flag in prod until 053b ships
+(which requires plan 049 for the parent-viewer half).
+
+### Codex Pass 1 — 3 blockers, all fixed
+
+1. **Hook stale-token A→B race** — `use-realtime-token.ts` did not
+   clear the previous doc's token before the new mint resolved, so
+   a docName change passed the old scoped JWT into useYjsProvider
+   for the new doc. Fixed: `setToken("")` synchronously at the top
+   of the useEffect for non-noop docs. New regression test
+   `tests/unit/use-realtime-token.test.tsx::CLEARS the previous
+   token when docName changes`.
+
+2. **e2e WS round-trip missing** — original spec was HTTP-only;
+   plan promised forged + valid + expired WS coverage. Added three
+   real WS tests using `@hocuspocus/provider` directly in the
+   Playwright Node runner with the `ws` polyfill:
+   - VALID JWT → `outcome: "connected"`
+   - FORGED JWT (wrong secret) → not connected
+   - EXPIRED JWT (correct sig, exp in past) → not connected
+   All three skip gracefully when `HOCUSPOCUS_TOKEN_SECRET` is
+   unset.
+
+3. **Parent-viewer site missed** — plan listed it as the 3rd of 6
+   construction sites at line 17. Added an inline deferral comment
+   referencing plan 053b + extended 053b with bug 3 (parent-child
+   linking dependency on plan 049).
+
+### Codex Pass 2 — _pending_

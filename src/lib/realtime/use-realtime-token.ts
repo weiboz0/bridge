@@ -20,6 +20,16 @@ export function useRealtimeToken(documentName: string): string {
       setToken("");
       return;
     }
+    // CLEAR the previous doc's token synchronously before the new
+    // mint resolves. Otherwise a docName change A→B leaves the
+    // stale A-scoped token in state during the B-mint window, and
+    // useYjsProvider would feed it into a Hocuspocus connection for
+    // documentName=B → server-side `claims.scope === documentName`
+    // check fails and the WS closes (best case) or scope confusion
+    // happens (worst case). Resetting here forces useYjsProvider's
+    // `shouldConnect` guard to skip the WS open until the B-mint
+    // lands.
+    setToken("");
     let cancelled = false;
     getRealtimeToken(documentName)
       .then((t) => {

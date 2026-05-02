@@ -1,8 +1,8 @@
-# Plan 053b: Teacher-watch attempt scope (and topic_id query fix)
+# Plan 053b: Deferred mint sites (teacher-watch, parent-viewer)
 
-> Follow-up to plan 053 phase 3. Filed because two latent bugs surfaced
-> while migrating teacher-watch to the new realtime-token helper, and
-> both block Phase 4's flag flip.
+> Follow-up to plan 053 phase 3. Filed because three latent bugs
+> surfaced while migrating to the new realtime-token helper. All three
+> block Phase 4's flag flip.
 
 ## Status
 
@@ -121,6 +121,29 @@ to reflect the new rule:
 
 Add a test for the `ListClassesContainingProblem` store method.
 
+### Bug 3 — parent-viewer has no Go-side auth path
+
+`src/components/parent/live-session-viewer.tsx` connects to
+`session:{sessionId}:user:{studentId}` with role=parent. The Go
+`authorizeSessionDoc` has no parent branch — it would 403 every
+parent connection.
+
+The deeper blocker: **Bridge has no parent-child linking in the DB.**
+Plan 049 was scheduled to add it but didn't ship; today
+`POST /api/parent/children/{childId}/reports` returns 501. So even
+with a parent branch added, there's no way to verify "is this user
+the parent of this student?".
+
+The legacy Hocuspocus auth at `server/hocuspocus.ts:46-52` accepts
+`role === "parent"` without any check — that's the only reason the
+parent-viewer works today, and it's also a security hole that
+plan 053 is closing. Once `HOCUSPOCUS_REQUIRE_SIGNED_TOKEN=1`, the
+legacy parent path is gone and the unsigned `${parentId}:parent`
+token is rejected.
+
+**Phase 4 of plan 053 must NOT flip the flag in prod until both
+plan 049 (parent-child linking) and 053b ship.**
+
 ## Out of scope
 
 - Class-instructor read-only enforcement on the Hocuspocus side
@@ -130,14 +153,20 @@ Add a test for the `ListClassesContainingProblem` store method.
 - Refactoring `teacherCanViewAttempt` to share a code path with the
   Go authorizer. Once plan 053 phase 4 retires the legacy
   `userId:role` parsing, the TS helper can be deleted entirely.
+- Plan 049 (parent-child linking) is a hard prerequisite for the
+  parent-viewer fix and is tracked separately.
 
 ## Phases
 
-1. **Phase 1** — Go store method + handler change + integration tests.
+1. **Phase 1** — Go store method + `authorizeAttemptDoc` change for
+   class-instructor + integration tests.
 2. **Phase 2** — TS query fix in `server/attempts.ts`.
-3. **Phase 3** — client refactor (replace deferral comment with
-   `useRealtimeToken`).
-4. **Phase 4** — Codex review + PR + merge.
+3. **Phase 3** — `teacher-watch-shell.tsx` migration to
+   `useRealtimeToken`.
+4. **Phase 4 (depends on plan 049)** — `authorizeSessionDoc` parent
+   branch + `live-session-viewer.tsx` migration. Requires plan 049's
+   parent-child linking schema + store helpers to land first.
+5. **Phase 5** — Codex review + PR + merge.
 
 ## Codex Review of This Plan
 
