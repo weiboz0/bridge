@@ -182,18 +182,35 @@ func TestOrgStore_UpdateOrg_NotFound(t *testing.T) {
 	assert.Nil(t, updated)
 }
 
+// Plan 060: UpdateOrgStatus only flips `status`. It never stamps
+// `verified_at`. A real verification flow gets a dedicated store
+// method when one is built.
 func TestOrgStore_UpdateOrgStatus(t *testing.T) {
 	db := testDB(t)
 	store := NewOrgStore(db)
 	ctx := context.Background()
 	org := createTestOrg(t, db, store, t.Name())
 
-	// Activate school -- should set verifiedAt
 	updated, err := store.UpdateOrgStatus(ctx, org.ID, "active")
 	require.NoError(t, err)
 	require.NotNil(t, updated)
 	assert.Equal(t, "active", updated.Status)
-	assert.NotNil(t, updated.VerifiedAt)
+	assert.Nil(t, updated.VerifiedAt, "Plan 060: status flip must NOT auto-stamp verified_at, even for school orgs")
+}
+
+// Idempotence — flipping pending → active → pending → active leaves
+// `verified_at` null throughout (no spurious re-stamps).
+func TestOrgStore_UpdateOrgStatus_NoSpuriousVerify(t *testing.T) {
+	db := testDB(t)
+	store := NewOrgStore(db)
+	ctx := context.Background()
+	org := createTestOrg(t, db, store, t.Name())
+
+	for _, status := range []string{"active", "pending", "active", "suspended", "active"} {
+		updated, err := store.UpdateOrgStatus(ctx, org.ID, status)
+		require.NoError(t, err)
+		assert.Nil(t, updated.VerifiedAt, "verified_at must remain nil after status=%s", status)
+	}
 }
 
 func TestOrgStore_UpdateOrgStatus_NonSchool(t *testing.T) {
@@ -213,7 +230,7 @@ func TestOrgStore_UpdateOrgStatus_NonSchool(t *testing.T) {
 	updated, err := store.UpdateOrgStatus(ctx, org.ID, "active")
 	require.NoError(t, err)
 	assert.Equal(t, "active", updated.Status)
-	assert.Nil(t, updated.VerifiedAt, "non-school should not get verifiedAt")
+	assert.Nil(t, updated.VerifiedAt, "non-school should not get verifiedAt (unchanged behavior)")
 }
 
 func TestOrgStore_UpdateOrgStatus_NotFound(t *testing.T) {

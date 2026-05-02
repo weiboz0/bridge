@@ -65,4 +65,10 @@ Single commit.
 
 ## Codex Review of This Plan
 
-(Filled in after Phase 0.)
+### Pass 1 — 2026-05-02: **CONCUR**
+
+Codex confirmed: auto-stamp branch exists at `orgs.go:250-254`; one
+store test asserts `NotNil(updated.VerifiedAt)` (flip to non-change);
+no consumer gates on `verified_at` (UI at `org-settings-card.tsx:74`
+just displays it); `tests/integration/admin-orgs-api.test.ts:56` needs
+update; no non-admin path calls UpdateOrgStatus.

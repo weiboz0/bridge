@@ -78,22 +78,15 @@ export async function updateOrgStatus(
   orgId: string,
   status: "pending" | "active" | "suspended",
 ) {
-  // Check existing org type — only set verifiedAt for schools
-  const [existing] = await db
-    .select()
-    .from(organizations)
-    .where(eq(organizations.id, orgId));
-
-  if (!existing) return null;
-
-  const updates: Record<string, unknown> = { status, updatedAt: new Date() };
-  if (status === "active" && existing.type === "school" && !existing.verifiedAt) {
-    updates.verifiedAt = new Date();
-  }
-
+  // Plan 060 — flips status only. The auto-stamp of `verifiedAt = now()`
+  // on first school activation was removed in parity with the Go-side
+  // change in `platform/internal/store/orgs.go`: it conflated "admin
+  // clicked Active" with "admin verified the school's signup
+  // paperwork." A real verification flow gets its own helper when one
+  // is built.
   const [org] = await db
     .update(organizations)
-    .set(updates)
+    .set({ status, updatedAt: new Date() })
     .where(eq(organizations.id, orgId))
     .returning();
   return org || null;

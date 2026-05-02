@@ -53,7 +53,12 @@ describe("Platform Admin API", () => {
       const { status, body } = await parseResponse(res);
       expect(status).toBe(200);
       expect(body).toHaveProperty("status", "active");
-      expect(body).toHaveProperty("verifiedAt");
+      // Plan 060 — status flip alone does NOT stamp verifiedAt.
+      // A real verification flow will set it via a dedicated helper
+      // when built. The seed at scripts/seed_bridge_hq.sql sets it
+      // on insert for the system org; this test creates a vanilla
+      // org via createTestOrg, which leaves verifiedAt null.
+      expect((body as { verifiedAt?: string | null }).verifiedAt ?? null).toBeNull();
     });
 
     it("suspends an org", async () => {
