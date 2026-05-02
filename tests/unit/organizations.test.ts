@@ -56,11 +56,24 @@ describe("organization operations", () => {
     expect(all).toHaveLength(3);
   });
 
-  it("updates org status to active and sets verifiedAt", async () => {
+  it("updates org status to active without auto-stamping verifiedAt (plan 060)", async () => {
     const org = await createTestOrg({ status: "pending" });
+    expect(org.verifiedAt ?? null).toBeNull();
+
     const updated = await updateOrgStatus(testDb, org.id, "active");
     expect(updated!.status).toBe("active");
-    expect(updated!.verifiedAt).not.toBeNull();
+    // Plan 060 — status flip MUST NOT auto-stamp verifiedAt. A
+    // dedicated MarkOrgVerified helper covers real verification
+    // when one is built.
+    expect(updated!.verifiedAt ?? null).toBeNull();
+  });
+
+  it("does not re-stamp verifiedAt across pending→active→pending→active toggles (plan 060)", async () => {
+    const org = await createTestOrg({ status: "pending" });
+    for (const s of ["active", "pending", "active", "suspended", "active"] as const) {
+      const updated = await updateOrgStatus(testDb, org.id, s);
+      expect(updated!.verifiedAt ?? null).toBeNull();
+    }
   });
 
   it("suspends an org", async () => {
