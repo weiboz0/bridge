@@ -144,6 +144,13 @@ func TestSessionHandler_ToggleHelp_NotFound_404(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, w.Code)
 }
 
+func TestSessionHandler_ToggleHelp_NoClaims_401(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	w := fx.doRequest(t, http.MethodPost, "/api/sessions/"+fx.sessionID+"/help-queue",
+		map[string]any{"raised": true}, nil)
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
 // --- SessionEvents (SSE — class members can subscribe) ---
 //
 // SSE responses are open-ended; for these tests we construct a
