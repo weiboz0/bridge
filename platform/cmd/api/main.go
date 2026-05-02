@@ -255,6 +255,21 @@ func main() {
 			UploadDir: "uploads",
 		}
 		uploadH.Routes(r)
+
+		// Plan 053 phase 1: Hocuspocus realtime token mint + internal
+		// auth endpoints. The HocuspocusTokenSecret is empty until the
+		// operator sets HOCUSPOCUS_TOKEN_SECRET; in that state the
+		// endpoints return 503 (Realtime tokens not configured).
+		realtimeH := &handlers.RealtimeHandler{
+			Sessions:              stores.Sessions,
+			Classes:               stores.Classes,
+			Orgs:                  stores.Orgs,
+			TeachingUnits:         stores.TeachingUnits,
+			Problems:              stores.Problems,
+			Attempts:              stores.Attempts,
+			HocuspocusTokenSecret: cfg.Realtime.HocuspocusTokenSecret,
+		}
+		realtimeH.Routes(r)
 	})
 
 	// Start server

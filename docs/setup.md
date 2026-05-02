@@ -113,6 +113,29 @@ openssl rand -base64 32
 
 Add it to `.env` as `NEXTAUTH_SECRET`.
 
+## Hocuspocus Token Secret (plan 053)
+
+The Go API mints short-lived HMAC-SHA256 JWTs that the browser presents to the
+Hocuspocus WebSocket server. Both processes must share the same secret:
+
+```bash
+openssl rand -base64 32
+```
+
+Add the value to `.env` as `HOCUSPOCUS_TOKEN_SECRET`. Both `platform/` (Go API,
+which signs and verifies tokens for the internal callback) and the Hocuspocus
+Node process (`server/hocuspocus.ts`, which verifies on connect) read it from
+the same env var.
+
+If the secret is unset, the `/api/realtime/token` endpoint returns
+`503 Realtime tokens not configured` and the legacy `userId:role` token format
+remains active (plan 053 phase 4 removes that fallback). Production deployments
+MUST set this before enabling the realtime-token feature flag.
+
+The sibling `/api/internal/realtime/authorize` endpoint is server-to-server
+only and is gated by the same secret as a bearer token — it must NOT be
+exposed publicly.
+
 ## Trusted Reverse-Proxy Configuration
 
 The Go backend chooses between the secure (`__Secure-authjs.session-token`)

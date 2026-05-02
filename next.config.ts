@@ -33,6 +33,13 @@ const GO_PROXY_ROUTES = [
   "/api/units/:path*",
   "/api/collections/:path*",
   "/api/uploads/:path*",
+  // Plan 053 phase 1: client-side mint of Hocuspocus connection
+  // tokens. The Go API owns the signing key
+  // (HOCUSPOCUS_TOKEN_SECRET) and gates per-document access. The
+  // sibling /api/internal/realtime/* path is internal-only (called
+  // by the Hocuspocus Node process with the shared secret) and is
+  // NOT proxied to the browser — it runs server-side only.
+  "/api/realtime/:path*",
 ];
 
 // SharedArrayBuffer (used by the Pyodide stdin protocol) requires the page
