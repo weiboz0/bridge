@@ -139,32 +139,10 @@ func (h *TeachingUnitHandler) Routes(r chi.Router) {
 // Personal scope: owner only.
 // Platform admin bypass applies everywhere.
 func (h *TeachingUnitHandler) canViewUnit(ctx context.Context, c *auth.Claims, u *store.TeachingUnit) bool {
-	if c.IsPlatformAdmin {
-		return true
-	}
-	switch u.Scope {
-	case "platform":
-		return u.Status == "classroom_ready" || u.Status == "coach_ready" || u.Status == "archived"
-	case "org":
-		if u.ScopeID == nil {
-			return false
-		}
-		roles, _ := h.Orgs.GetUserRolesInOrg(ctx, *u.ScopeID, c.UserID)
-		for _, m := range roles {
-			if m.Status != "active" {
-				continue
-			}
-			// Plan 031 only grants teachers and org_admins access. Students
-			// are denied until plan 032 wires class/session binding.
-			if m.Role == "org_admin" || m.Role == "teacher" {
-				return true
-			}
-		}
-		return false
-	case "personal":
-		return u.ScopeID != nil && *u.ScopeID == c.UserID
-	}
-	return false
+	// Plan 052 PR-C: thin wrapper around the free `CanViewUnit`
+	// helper so non-handler-method callers (e.g., UnitCollectionHandler)
+	// can apply the same rule. Behavior is unchanged.
+	return CanViewUnit(ctx, h.Orgs, c, u)
 }
 
 // canEditUnit checks whether the caller may create, update, or delete a unit

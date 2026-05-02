@@ -27,6 +27,10 @@ func newCollectionFixture(t *testing.T, suffix string) *collectionFixture {
 	ch := &UnitCollectionHandler{
 		Collections: store.NewUnitCollectionStore(ufx.sqlDB),
 		Orgs:        store.NewOrgStore(ufx.sqlDB),
+		// Plan 052 PR-C: AddItem now verifies the candidate unit is
+		// visible to the caller (CanViewUnit). The store is needed
+		// for the GetUnit lookup.
+		TeachingUnits: store.NewTeachingUnitStore(ufx.sqlDB),
 	}
 
 	ctx := context.Background()
@@ -443,7 +447,11 @@ func TestCollectionHandler_AddItem_NonExistentUnit(t *testing.T) {
 	w := httptest.NewRecorder()
 	fx.ch.AddItem(w, req)
 
-	assert.Equal(t, http.StatusBadRequest, w.Code)
+	// Plan 052 PR-C: was 400 (FK constraint surfaced from the store)
+	// in the pre-PR-C behavior. Now AddItem looks up the unit FIRST
+	// and returns 404 on missing/invisible unit — matches the
+	// don't-leak-existence convention used by canViewUnit elsewhere.
+	assert.Equal(t, http.StatusNotFound, w.Code)
 }
 
 func TestCollectionHandler_RemoveItem_NotFound(t *testing.T) {
@@ -539,4 +547,111 @@ func TestCollectionHandler_Create_EmptyTitle(t *testing.T) {
 	fx.ch.CreateCollection(w, req)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+// Plan 052 PR-C: AddItem now verifies the candidate unit is visible
+// to the caller via CanViewUnit. Without this check, anyone with
+// canEditCollection could attach cross-org / draft / personal units
+// they have no right to see, leaking content via the collection's
+// ListItems / projection paths.
+//
+// Caller for the matrix below: teacher1 (org1 teacher; can edit
+// collections in org1). Candidate units vary by scope / status /
+// owner.
+func TestCollectionHandler_AddItem_VisibilityMatrix(t *testing.T) {
+	cases := []struct {
+		name     string
+		mkUnit   func(fx *collectionFixture) *store.TeachingUnit
+		expected int
+	}{
+		{
+			name: "org1_draft_visible_to_teacher1",
+			mkUnit: func(fx *collectionFixture) *store.TeachingUnit {
+				return fx.unitFx.mkUnit(t, "org", &fx.unitFx.org1.ID, "draft", "Org1 Draft", fx.unitFx.teacher1.ID)
+			},
+			expected: http.StatusCreated,
+		},
+		{
+			name: "org2_draft_invisible_to_teacher1",
+			mkUnit: func(fx *collectionFixture) *store.TeachingUnit {
+				return fx.unitFx.mkUnit(t, "org", &fx.unitFx.org2.ID, "draft", "Org2 Draft", fx.unitFx.teacher2.ID)
+			},
+			expected: http.StatusNotFound,
+		},
+		{
+			name: "personal_owned_by_teacher2_invisible",
+			mkUnit: func(fx *collectionFixture) *store.TeachingUnit {
+				return fx.unitFx.mkUnit(t, "personal", &fx.unitFx.teacher2.ID, "draft", "T2 Personal", fx.unitFx.teacher2.ID)
+			},
+			expected: http.StatusNotFound,
+		},
+		{
+			name: "personal_owned_by_teacher1_visible",
+			mkUnit: func(fx *collectionFixture) *store.TeachingUnit {
+				return fx.unitFx.mkUnit(t, "personal", &fx.unitFx.teacher1.ID, "draft", "T1 Personal", fx.unitFx.teacher1.ID)
+			},
+			expected: http.StatusCreated,
+		},
+		{
+			name: "platform_classroom_ready_visible",
+			mkUnit: func(fx *collectionFixture) *store.TeachingUnit {
+				return fx.unitFx.mkUnit(t, "platform", nil, "classroom_ready", "Platform CR", fx.unitFx.admin.ID)
+			},
+			expected: http.StatusCreated,
+		},
+		{
+			name: "platform_draft_invisible_to_non_admin",
+			mkUnit: func(fx *collectionFixture) *store.TeachingUnit {
+				return fx.unitFx.mkUnit(t, "platform", nil, "draft", "Platform Draft", fx.unitFx.admin.ID)
+			},
+			expected: http.StatusNotFound,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fx := newCollectionFixture(t, t.Name())
+			ctx := context.Background()
+
+			// teacher1 owns the collection (org1 scope).
+			col, err := fx.ch.Collections.CreateCollection(ctx, store.CreateCollectionInput{
+				Scope: "org", ScopeID: &fx.unitFx.org1.ID, Title: "Vis Col", CreatedBy: fx.unitFx.teacher1.ID,
+			})
+			require.NoError(t, err)
+
+			candidate := tc.mkUnit(fx)
+			body, _ := json.Marshal(map[string]any{"unitId": candidate.ID, "sortOrder": 0})
+			req := httptest.NewRequest(http.MethodPost, "/api/collections/"+col.ID+"/items", bytes.NewReader(body))
+			req = withClaims(req, fx.claims(fx.unitFx.teacher1, false))
+			req = withChiParams(req, map[string]string{"id": col.ID})
+			w := httptest.NewRecorder()
+			fx.ch.AddItem(w, req)
+			assert.Equal(t, tc.expected, w.Code, "case=%s body=%s", tc.name, w.Body.String())
+		})
+	}
+}
+
+// Platform admin bypasses CanViewUnit, so they CAN attach an org2
+// draft they have no scope-membership for. Uses a personal-scope
+// collection owned by the admin so canEditCollection passes
+// independently of the visibility check we're testing.
+func TestCollectionHandler_AddItem_PlatformAdminBypassesVisibility(t *testing.T) {
+	fx := newCollectionFixture(t, t.Name())
+	ctx := context.Background()
+
+	col, err := fx.ch.Collections.CreateCollection(ctx, store.CreateCollectionInput{
+		Scope: "personal", ScopeID: &fx.unitFx.admin.ID, Title: "Admin Personal Col", CreatedBy: fx.unitFx.admin.ID,
+	})
+	require.NoError(t, err)
+
+	// org2 draft — invisible to teacher1, visible to platform admin
+	// via CanViewUnit's IsPlatformAdmin bypass.
+	candidate := fx.unitFx.mkUnit(t, "org", &fx.unitFx.org2.ID, "draft", "Org2 Draft", fx.unitFx.teacher2.ID)
+
+	body, _ := json.Marshal(map[string]any{"unitId": candidate.ID, "sortOrder": 0})
+	req := httptest.NewRequest(http.MethodPost, "/api/collections/"+col.ID+"/items", bytes.NewReader(body))
+	req = withClaims(req, fx.claims(fx.unitFx.admin, true))
+	req = withChiParams(req, map[string]string{"id": col.ID})
+	w := httptest.NewRecorder()
+	fx.ch.AddItem(w, req)
+	assert.Equal(t, http.StatusCreated, w.Code, "platform admin should bypass CanViewUnit")
 }

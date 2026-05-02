@@ -139,3 +139,49 @@ func RequireClassAuthority(
 
 	return nil, false, nil
 }
+
+// CanViewUnit reports whether `claims` may view `unit`. The rules
+// mirror spec 012 §Access:
+//
+//   - platform scope: published/archived/coach_ready/classroom_ready
+//     → any authenticated viewer; draft/reviewed → platform admin only.
+//   - org scope: active teacher or org_admin in the unit's org.
+//     Students are denied (plan 031 narrowing; plan 061 will widen
+//     this for verified class binding).
+//   - personal scope: owner only.
+//   - platform admin: bypass at every scope/status.
+//
+// Plan 052 PR-C: free-function form so non-TeachingUnitHandler
+// callers (UnitCollectionHandler.AddItem) can apply the same rule.
+// `TeachingUnitHandler.canViewUnit` is a thin wrapper around this.
+func CanViewUnit(ctx context.Context, orgs *store.OrgStore, claims *auth.Claims, unit *store.TeachingUnit) bool {
+	if claims == nil || unit == nil {
+		return false
+	}
+	if claims.IsPlatformAdmin {
+		return true
+	}
+	switch unit.Scope {
+	case "platform":
+		return unit.Status == "classroom_ready" ||
+			unit.Status == "coach_ready" ||
+			unit.Status == "archived"
+	case "org":
+		if unit.ScopeID == nil || orgs == nil {
+			return false
+		}
+		roles, _ := orgs.GetUserRolesInOrg(ctx, *unit.ScopeID, claims.UserID)
+		for _, m := range roles {
+			if m.Status != "active" {
+				continue
+			}
+			if m.Role == "org_admin" || m.Role == "teacher" {
+				return true
+			}
+		}
+		return false
+	case "personal":
+		return unit.ScopeID != nil && *unit.ScopeID == claims.UserID
+	}
+	return false
+}

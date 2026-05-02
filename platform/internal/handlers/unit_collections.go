@@ -15,6 +15,12 @@ import (
 type UnitCollectionHandler struct {
 	Collections *store.UnitCollectionStore
 	Orgs        *store.OrgStore
+	// Plan 052 PR-C: needed for the candidate-unit visibility check
+	// in AddItem (CanViewUnit). Other endpoints don't yet require it
+	// — collections currently store unit IDs without re-checking
+	// visibility on read. If that changes, plumb the same check
+	// through ListItems.
+	TeachingUnits *store.TeachingUnitStore
 }
 
 const maxCollectionTitleLen = 255
@@ -335,6 +341,29 @@ func (h *UnitCollectionHandler) AddItem(w http.ResponseWriter, r *http.Request) 
 	}
 	if body.UnitID == "" || !isValidUUID(body.UnitID) {
 		writeError(w, http.StatusBadRequest, "unitId is required and must be a valid UUID")
+		return
+	}
+
+	// Plan 052 PR-C: verify the candidate unit is visible to the
+	// caller before attaching it. Without this check, anyone with
+	// canEditCollection permission could attach cross-org, draft, or
+	// personal units they have no right to see, leaking content via
+	// the collection's ListItems / projection paths.
+	//
+	// Returns 404 (not 403) on missing/invisible unit so we don't
+	// leak unit existence by ID — same shape as canViewUnit's
+	// failure mode at teaching_units.go:945.
+	if h.TeachingUnits == nil {
+		writeError(w, http.StatusInternalServerError, "Teaching units store unavailable")
+		return
+	}
+	candidate, err := h.TeachingUnits.GetUnit(r.Context(), body.UnitID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if candidate == nil || !CanViewUnit(r.Context(), h.Orgs, claims, candidate) {
+		writeError(w, http.StatusNotFound, "Unit not found")
 		return
 	}
 
