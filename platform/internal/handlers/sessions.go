@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -618,11 +619,18 @@ func (h *SessionHandler) SessionEvents(w http.ResponseWriter, r *http.Request) {
 	sessionID := chi.URLParam(r, "id")
 
 	// Plan 063 — auth gate must run BEFORE any SSE headers go out.
-	// Once we write `Content-Type: text/event-stream` we can't return
-	// a clean status code; the client sees a malformed stream. So:
-	// load the session first (404 if missing), then run the
-	// canJoinSession gate (403 if denied), and only then start the
-	// stream.
+	// Once we write `Content-Type: text/event-stream` we can't
+	// return a clean status code; the client sees a malformed stream.
+	//
+	// Two paths grant access:
+	//   1. canJoinSession — class members and session participants
+	//      (covers students, teachers-of-this-session, instructors,
+	//      TAs, platform admins via the IsPlatformAdmin shortcut).
+	//   2. session-authority paths NOT covered by (1) — primarily
+	//      org_admins who have oversight rights but no class
+	//      membership. We check the org-admin path inline rather
+	//      than calling isSessionAuthority (which would write its
+	//      own response).
 	session, err := h.Sessions.GetSession(r.Context(), sessionID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
@@ -633,8 +641,11 @@ func (h *SessionHandler) SessionEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if status, msg := h.canJoinSession(r, session, claims); status != 0 {
-		writeError(w, status, msg)
-		return
+		// Fall back to the org-admin oversight path.
+		if !h.isSessionOrgAdmin(r.Context(), session, claims) {
+			writeError(w, status, msg)
+			return
+		}
 	}
 
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -1025,6 +1036,34 @@ func (h *SessionHandler) authorizeSessionCreateForClass(w http.ResponseWriter, r
 
 	writeError(w, http.StatusForbidden, "Must be instructor or org admin for this class")
 	return nil, false
+}
+
+// isSessionOrgAdmin reports whether the caller is the org_admin for
+// the org owning the session's class. Plan 063 — used by
+// SessionEvents as a fall-back to canJoinSession so org-admins
+// can subscribe to live activity for sessions in their org without
+// joining as a participant.
+func (h *SessionHandler) isSessionOrgAdmin(ctx context.Context, session *store.LiveSession, claims *auth.Claims) bool {
+	if session == nil || claims == nil || session.ClassID == nil {
+		return false
+	}
+	if h.Classes == nil || h.Orgs == nil {
+		return false
+	}
+	class, err := h.Classes.GetClass(ctx, *session.ClassID)
+	if err != nil || class == nil {
+		return false
+	}
+	roles, err := h.Orgs.GetUserRolesInOrg(ctx, class.OrgID, claims.UserID)
+	if err != nil {
+		return false
+	}
+	for _, role := range roles {
+		if role.Role == "org_admin" {
+			return true
+		}
+	}
+	return false
 }
 
 // isSessionAuthority checks whether the caller has "authority" over a session:

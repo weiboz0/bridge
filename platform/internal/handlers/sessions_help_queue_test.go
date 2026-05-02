@@ -151,6 +151,49 @@ func TestSessionHandler_ToggleHelp_NoClaims_401(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
 }
 
+// Plan 063 pass-2: positive cases for class staff & admin paths on
+// ToggleHelp. Each has a class_membership row plus a pre-joined
+// participant row (UpdateParticipantStatus uses the row keyed on
+// (sessionID, callerID)).
+func TestSessionHandler_ToggleHelp_PlatformAdminOK(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	_, err := fx.h.Sessions.JoinSession(context.Background(), fx.sessionID, fx.otherUser.ID)
+	require.NoError(t, err)
+	w := fx.doRequest(t, http.MethodPost, "/api/sessions/"+fx.sessionID+"/help-queue",
+		map[string]any{"raised": true}, fx.claims(fx.otherUser, true))
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestSessionHandler_ToggleHelp_ClassInstructorOK(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	addClassMember(t, fx, fx.otherUser.ID, "instructor")
+	_, err := fx.h.Sessions.JoinSession(context.Background(), fx.sessionID, fx.otherUser.ID)
+	require.NoError(t, err)
+	w := fx.doRequest(t, http.MethodPost, "/api/sessions/"+fx.sessionID+"/help-queue",
+		map[string]any{"raised": true}, fx.claims(fx.otherUser, false))
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestSessionHandler_ToggleHelp_ClassTAOK(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	addClassMember(t, fx, fx.otherUser.ID, "ta")
+	_, err := fx.h.Sessions.JoinSession(context.Background(), fx.sessionID, fx.otherUser.ID)
+	require.NoError(t, err)
+	w := fx.doRequest(t, http.MethodPost, "/api/sessions/"+fx.sessionID+"/help-queue",
+		map[string]any{"raised": true}, fx.claims(fx.otherUser, false))
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestSessionHandler_ToggleHelp_OrgAdminOK(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	addOrgMember(t, fx, fx.otherUser.ID, "org_admin")
+	_, err := fx.h.Sessions.JoinSession(context.Background(), fx.sessionID, fx.otherUser.ID)
+	require.NoError(t, err)
+	w := fx.doRequest(t, http.MethodPost, "/api/sessions/"+fx.sessionID+"/help-queue",
+		map[string]any{"raised": true}, fx.claims(fx.otherUser, false))
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
 // --- SessionEvents (SSE — class members can subscribe) ---
 //
 // SSE responses are open-ended; for these tests we construct a
@@ -200,6 +243,37 @@ func TestSessionHandler_SessionEvents_PlatformAdminOK(t *testing.T) {
 	fx := newSessionFixture(t, t.Name())
 	code := callSSE(t, fx, fx.sessionID, fx.claims(fx.otherUser, true))
 	assert.Equal(t, http.StatusOK, code)
+}
+
+// Plan 063 pass-2: positive cases for class staff paths on
+// SessionEvents — instructors, TAs, and org_admins are
+// session-authority and should be able to subscribe to the SSE
+// stream for sessions in their class.
+func TestSessionHandler_SessionEvents_ClassInstructorOK(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	addClassMember(t, fx, fx.otherUser.ID, "instructor")
+	code := callSSE(t, fx, fx.sessionID, fx.claims(fx.otherUser, false))
+	assert.Equal(t, http.StatusOK, code)
+}
+
+func TestSessionHandler_SessionEvents_ClassTAOK(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	addClassMember(t, fx, fx.otherUser.ID, "ta")
+	code := callSSE(t, fx, fx.sessionID, fx.claims(fx.otherUser, false))
+	assert.Equal(t, http.StatusOK, code)
+}
+
+func TestSessionHandler_SessionEvents_OrgAdminOK(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	addOrgMember(t, fx, fx.otherUser.ID, "org_admin")
+	// Org admin has oversight over their org. The canJoinSession
+	// helper alone doesn't include org_admins (that's a class-
+	// membership / session-participant gate); SessionEvents falls
+	// back to the explicit isSessionOrgAdmin check so org admins
+	// can subscribe to live activity without joining as a
+	// participant.
+	code := callSSE(t, fx, fx.sessionID, fx.claims(fx.otherUser, false))
+	assert.Equal(t, http.StatusOK, code, "org_admin must be able to monitor sessions in their org via SSE")
 }
 
 func TestSessionHandler_SessionEvents_NoClaims_401(t *testing.T) {
