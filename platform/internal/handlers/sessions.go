@@ -24,6 +24,7 @@ type SessionHandler struct {
 	Topics        *store.TopicStore
 	TeachingUnits *store.TeachingUnitStore // Plan 044: per-topic Unit refs.
 	Orgs          *store.OrgStore
+	ParentLinks   *store.ParentLinkStore // Plan 064: parent-of-participant gate for GetSessionTopics.
 	Broadcaster   *events.Broadcaster
 }
 
@@ -834,8 +835,14 @@ func (h *SessionHandler) GetSessionTopics(w http.ResponseWriter, r *http.Request
 	}
 	if session.ClassID != nil {
 		if status, msg := h.canAccessClass(r, *session.ClassID, claims); status != 0 {
-			writeError(w, status, msg)
-			return
+			// Plan 064 Phase 5 — fall back to parent-of-participant
+			// for the parent-viewer flow. Parents aren't class
+			// members but should be able to read the agenda for
+			// sessions their child is joined to.
+			if !h.isParentOfAnyParticipant(r.Context(), claims.UserID, sessionID) {
+				writeError(w, status, msg)
+				return
+			}
 		}
 	} else if !claims.IsPlatformAdmin && claims.ImpersonatedBy == "" && session.TeacherID != claims.UserID {
 		writeError(w, http.StatusNotFound, "Not found")
@@ -1036,6 +1043,24 @@ func (h *SessionHandler) authorizeSessionCreateForClass(w http.ResponseWriter, r
 
 	writeError(w, http.StatusForbidden, "Must be instructor or org admin for this class")
 	return nil, false
+}
+
+// isParentOfAnyParticipant reports whether the caller is a linked
+// parent (active parent_link) of ANY participant in the given
+// session. Plan 064 Phase 5 — used by GetSessionTopics so the
+// parent-viewer flow can read the agenda for sessions their child
+// is in.
+//
+// Returns false on nil store or any DB error — gates fail closed.
+func (h *SessionHandler) isParentOfAnyParticipant(ctx context.Context, parentID, sessionID string) bool {
+	if h.ParentLinks == nil {
+		return false
+	}
+	ok, err := h.ParentLinks.IsParentOfAnyParticipant(ctx, parentID, sessionID)
+	if err != nil {
+		return false
+	}
+	return ok
 }
 
 // isSessionOrgAdmin reports whether the caller is the org_admin for
