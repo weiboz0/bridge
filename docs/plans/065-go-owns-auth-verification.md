@@ -109,10 +109,13 @@ Concretely:
    See §"Why lazy middleware mint" below for why this beats
    `events.signIn`.
 4. Behind a feature flag `BRIDGE_SESSION_AUTH=1`, Go middleware
-   `RequireAuth` / `OptionalAuth` reads `bridge.session` first; if
-   absent or invalid, falls back to the Auth.js JWE path (current
-   behavior). When the flag is `0` (default), legacy JWE path is
-   primary and the cookie is dormant.
+   `RequireAuth` / `OptionalAuth` reads `bridge.session` first.
+   **Absent** cookie → fall back to the Auth.js JWE path (legacy,
+   covers rollout race + non-browser direct-to-Go clients).
+   **Present-but-invalid** cookie → 401 unconditionally, no JWE
+   fallback (downgrade-attack defense; full rationale in Phase 3
+   §`RequireAuth` logic). When the flag is `0` (default), legacy JWE
+   path is primary and the cookie is dormant.
 5. **Live admin status in claims at the middleware layer.** Today, ~80
    handler sites read `claims.IsPlatformAdmin` across virtually every
    handler file (Codex pass-2 audit). Rather than touching each one
@@ -711,7 +714,7 @@ external verifiers come online.
 | Cookie size growth | low | HS256 JWT is ~250 bytes; roughly 0.3% of the 8KB cookie header limit. We have headroom. |
 | Lazy mint adds latency to authenticated requests | low | Mint is a single localhost HTTP call (~5ms in dev, similar in prod when Next and Go are colocated). Only fires when cookie is missing or within 24h of expiry — at most once per 6 days for steady-state users. |
 | Edge runtime restrictions break the mint | low | The mint helper uses only `fetch()` and base64 decoding — both fully Edge-supported. No DB calls, no Node-specific APIs. The Go mint endpoint runs in Node where DB access is fine. |
-| Live admin DB lookup hammers Postgres | low | Same indexed PK lookup plan 050 already does on every authenticated request. The path-based skip removes the cost from non-admin-related traffic. Add a basic load test in Phase 3 that confirms p99 latency is unchanged. |
+| Live admin DB lookup hammers Postgres | low | Same indexed PK lookup plan 050 already does on every authenticated request. AdminChecker has a 60s LRU cache absorbing repeated lookups. Add a basic load test in Phase 3 that confirms p99 latency is unchanged. |
 | Live-admin DB lookup adds latency to every authenticated request | low | Same indexed PK lookup plan 050 already does. Sub-millisecond. AdminChecker has a 60s in-process LRU cache to absorb bursts and protect against DB-connection-pool exhaustion. Phase 3 includes a basic load test confirming p99 latency is unchanged at 10× steady-state RPS. Acceptance: <1ms median admin-check latency under cache hit; <10ms p99 under cache miss; pool not saturated at 10× RPS. |
 | Secret rotation invalidates active sessions | medium | `BRIDGE_SESSION_SECRETS` is a comma-separated list. Sign with first; verify against any. Rotation procedure in §"Secret rotation" gives a 7-day overlap window before old secret is dropped, matching cookie TTL — no user-visible 401 storm. |
 | AdminChecker DB error = self-DDOS via fail-closed admin gate | low | The 60s LRU cache means a transient DB error doesn't fan out to every admin request; recently-cached values keep the gate working. Hard fail-closed (no cached value AND DB down) reverts to non-admin claims, which is the safer default than silently allowing admin during an outage. |
@@ -821,9 +824,13 @@ big six):
 
 - Add `readBridgeSessionToken` helper.
 - Add flag-gated branching in `RequireAuth` / `OptionalAuth`.
-- Add live-admin injection in middleware (path-based skip + DB
-  lookup + claim overwrite).
-- Add path-skip-list audit test.
+- Add unconditional live-admin injection in middleware (DB lookup
+  via AdminChecker + claim overwrite). **Ordering**: the AdminChecker
+  lookup runs BEFORE the impersonation overlay, since the overlay's
+  current gate at `platform/internal/auth/middleware.go:131-145`
+  reads `claims.IsPlatformAdmin` (Codex pass-4 important #1).
+  Sequence: verify token → AdminChecker overwrites IsPlatformAdmin
+  → impersonation overlay runs against the live value.
 - Extend middleware tests (8+ new cases per Files §Phase 3).
 - `cd platform && go test ./...` clean.
 - Self-review.
@@ -1011,8 +1018,39 @@ Confirmed by Codex (no resolution needed):
   correct.
 - Clock-skew handling (NBF -30s) mirrors existing realtime JWT.
 
-### Pass 4 — pending re-dispatch
+### Pass 4 — 2026-05-03: BLOCKED → 1 line-level fix + 1 important folded in
 
-Will dispatch after this commit lands. Pass-4 should confirm the
-multi-secret rotation API + the AdminChecker LRU cache shape are
-sound, and surface any remaining surprises.
+Codex pass-4 returned BLOCKED on a single sentence (the §"Approach"
+bullet that still said "absent or invalid → JWE fallback") and one
+non-blocking ordering note. Both fixed:
+
+1. **Stale "absent or invalid" sentence** at original lines 107-111
+   contradicted Phase 3's correct absent-only rule. Rewritten to
+   spell out the absent vs. present-but-invalid distinction
+   explicitly in the §"Approach" summary.
+
+2. **Phase 3 ordering** — the AdminChecker lookup must run BEFORE
+   the impersonation overlay because the overlay's current gate at
+   `platform/internal/auth/middleware.go:131-145` reads
+   `claims.IsPlatformAdmin`. Phase 3 prose now states this
+   explicitly.
+
+Confirmed by Codex (pass-4):
+
+- Multi-secret API shape `Sign(string) + Verify([]string)` is right
+  for Bridge's scale. `kid` labeling can wait.
+- 60s LRU / 1024-entry cache is appropriate for ~1000 users.
+- `cmd/api/main.go` reorder is structurally safe; no test fixture
+  or embedded-server interaction.
+- 7-day cookie TTL is fine — admin status is live-from-DB so a
+  shorter TTL would only narrow the stolen-cookie replay window
+  without fixing stale privilege.
+- No interaction issue between secret rotation and AdminChecker
+  cache.
+
+### Pass 5 — pending re-dispatch (final convergence pass)
+
+After the pass-4 fixes commit lands, dispatch Codex one more time
+to confirm the convergence. Expected outcome: CONCUR with no
+further blockers. If CONCUR, plan is cleared for Phase 1
+implementation per CLAUDE.md plan-review gate.
