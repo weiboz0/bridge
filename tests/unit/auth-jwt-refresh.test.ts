@@ -67,4 +67,28 @@ describe("refreshJwtFromDb — Plan 050 always-refresh", () => {
     const result = await refreshJwtFromDb(inputToken);
     expect(result).toBe(inputToken);
   });
+
+  // Edge runtime detection — when EdgeRuntime is a global, we can't
+  // open TCP to Postgres, so refreshJwtFromDb skips the lookup and
+  // returns the token unchanged. The middleware/Edge path keeps
+  // working with whatever was minted at last Node-side refresh.
+  it("EDGE RUNTIME: globalThis.EdgeRuntime defined → returns token unchanged (no DB hit)", async () => {
+    const user = await createTestUser({ isPlatformAdmin: false });
+    // Promote in DB but Edge can't see it.
+    await testDb.update(users).set({ isPlatformAdmin: true }).where(eq(users.id, user.id));
+
+    const stale = { email: user.email, id: user.id, isPlatformAdmin: false };
+
+    // Simulate Edge by setting the global the runtime exposes.
+    const g = globalThis as { EdgeRuntime?: unknown };
+    const orig = g.EdgeRuntime;
+    g.EdgeRuntime = "edge-runtime";
+    try {
+      const token = await refreshJwtFromDb(stale);
+      expect(token.isPlatformAdmin).toBe(false);
+      expect(token.id).toBe(user.id);
+    } finally {
+      g.EdgeRuntime = orig;
+    }
+  });
 });
