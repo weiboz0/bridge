@@ -20,12 +20,18 @@ type AdminHandler struct {
 	Stats       *store.StatsStore
 	ParentLinks *store.ParentLinkStore
 	DB          *sql.DB
+
+	// Mw is the auth middleware instance whose RequireAdmin method
+	// gates this route group. Plan 065 phase 1 promoted RequireAdmin
+	// from package-level to a method so Phase 3 can route live-admin
+	// state through the same instance. Required.
+	Mw *auth.Middleware
 }
 
 // Routes registers admin routes (all require platform admin).
 func (h *AdminHandler) Routes(r chi.Router) {
 	r.Route("/api/admin", func(r chi.Router) {
-		r.Use(auth.RequireAdmin)
+		r.Use(h.Mw.RequireAdmin)
 
 		r.Get("/stats", h.GetStats)
 		r.Get("/users", h.ListAllUsers)

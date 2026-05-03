@@ -42,6 +42,15 @@ const GO_PROXY_ROUTES = [
   "/api/realtime/:path*",
 ];
 
+// Plan 065 — /api/internal/sessions is the server-to-server bridge.session
+// mint endpoint, called by Next.js's Edge middleware via the
+// BRIDGE_INTERNAL_SECRET bearer. It must NOT appear in GO_PROXY_ROUTES:
+// that would expose the bearer-protected mint surface to browser traffic
+// (the bearer would still gate access, but pushing this onto the public
+// proxy is unnecessary attack surface). The mint helper at
+// `src/lib/bridge-session-mint.ts` (added in Phase 2) calls Go directly
+// via GO_API_URL on the server side, never through the rewrite list.
+
 // SharedArrayBuffer (used by the Pyodide stdin protocol) requires the page
 // be cross-origin isolated. Scope these headers to the Problem editor routes
 // only — other routes (sign-in popups, embedded assets) keep their current

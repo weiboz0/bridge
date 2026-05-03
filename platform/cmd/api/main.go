@@ -48,6 +48,12 @@ func main() {
 	defer database.Close()
 	slog.Info("Database connected", "url", maskURL(cfg.Database.URL))
 
+	// Build stores BEFORE auth middleware so the AdminChecker
+	// (plan 065 phase 1) can be wired into the middleware at
+	// construction time. The pre-065 order (middleware before
+	// stores) didn't allow DI of the store-backed lookup.
+	stores := handlers.NewStores(database)
+
 	// Set up auth middleware
 	jwtSecret := cfg.Auth.NextAuthSecret
 	if jwtSecret == "" {
@@ -55,9 +61,16 @@ func main() {
 		os.Exit(1)
 	}
 	authMw := auth.NewMiddleware(jwtSecret)
-
-	// Build stores
-	stores := handlers.NewStores(database)
+	// Plan 065: plumb the bridge.session reader + live-admin
+	// AdminChecker onto the middleware now so Phase 3 can flip
+	// RequireAuth to consume them without touching this file.
+	// Phase 1 builds the wiring; Phase 3 starts using it.
+	adminChecker := auth.NewCachedAdminChecker(&auth.SQLAdminLookup{DB: database})
+	authMw.WithBridgeSession(
+		cfg.BridgeSession.Secrets,
+		cfg.BridgeSession.AuthFlag,
+		adminChecker,
+	)
 
 	// Build LLM backend
 	llmBackend, err := llm.CreateBackend(llm.LLMConfig{
@@ -142,6 +155,21 @@ func main() {
 		HocuspocusTokenSecret: cfg.Realtime.HocuspocusTokenSecret,
 	}
 	realtimeH.InternalRoutes(r)
+
+	// Plan 065 Phase 1 — Bridge session mint endpoint. Like the
+	// realtime internal callback, this is server-to-server only
+	// (Auth.js's mint helper sends BRIDGE_INTERNAL_SECRET as a
+	// bearer). Mounted OUTSIDE the user-auth group so the bearer
+	// check runs first; under RequireAuth the unauthenticated
+	// caller would be 401'd before our bearer was inspected.
+	internalSessionsH := &handlers.InternalSessionsHandler{
+		Users: stores.Users,
+		// Sign with the FIRST secret in the rotation list. Phase 3
+		// uses the full list for verification.
+		PrimarySigningSecret: firstOrEmpty(cfg.BridgeSession.Secrets),
+		InternalBearer:       cfg.BridgeSession.InternalBearer,
+	}
+	internalSessionsH.Routes(r)
 
 	// Authenticated routes
 	r.Group(func(r chi.Router) {
@@ -270,6 +298,7 @@ func main() {
 			Stats:       stores.Stats,
 			ParentLinks: stores.ParentLinks,
 			DB:          database,
+			Mw:          authMw,
 		}
 		adminH.Routes(r)
 
@@ -358,6 +387,17 @@ func maskURL(url string) string {
 		return url[:30] + "..."
 	}
 	return url
+}
+
+// firstOrEmpty returns the first element of a string slice, or empty
+// when the slice is nil/empty. Used for the bridge.session signing
+// path: the rotation list verifies against any entry, but the mint
+// always uses the first.
+func firstOrEmpty(ss []string) string {
+	if len(ss) == 0 {
+		return ""
+	}
+	return ss[0]
 }
 
 // Plan 050: refuse to start when DEV_SKIP_AUTH is set with
