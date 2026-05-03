@@ -301,14 +301,16 @@ func (h *RealtimeHandler) authorizeSessionDoc(ctx context.Context, claims *auth.
 	// Plan 053b Phase 4 — parent of the doc-owning student. Two
 	// constraints:
 	//   1. Caller has an ACTIVE parent_link to studentID.
-	//   2. studentID is a participant in THIS session (so a parent
-	//      of one student can't mint tokens for unrelated sessions
-	//      whose docName happens to mention their child's id).
-	// (1) is IsParentOf; (2) is the GetSessionParticipant lookup
-	// already used below for the session-participant fall-back.
+	//   2. studentID is an ACTIVE participant (status invited or
+	//      present) in THIS session — so a parent of one student
+	//      can't mint tokens for unrelated sessions whose docName
+	//      happens to mention their child's id, AND a parent
+	//      doesn't keep access after the child has LEFT the
+	//      session (Codex post-impl pass-1 catch).
 	if h.ParentLinks != nil {
 		if isParent, err := h.ParentLinks.IsParentOf(ctx, claims.UserID, studentID); err == nil && isParent {
-			if existing, perr := h.Sessions.GetSessionParticipant(ctx, sessionID, studentID); perr == nil && existing != nil {
+			if existing, perr := h.Sessions.GetSessionParticipant(ctx, sessionID, studentID); perr == nil && existing != nil &&
+				(existing.Status == "invited" || existing.Status == "present") {
 				return "parent", nil
 			}
 		}

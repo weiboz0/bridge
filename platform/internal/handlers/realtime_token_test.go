@@ -456,6 +456,38 @@ func TestMintToken_SessionDoc_LinkedParent_OK(t *testing.T) {
 	assert.Equal(t, "parent", claims.Role)
 }
 
+// Codex post-impl pass-1 catch: GetSessionParticipant returns rows
+// with status='left' too. A parent must NOT keep access after the
+// child has left the session — only invited/present grants the
+// parent token.
+func TestMintToken_SessionDoc_ParentOfChildWhoLeft_403(t *testing.T) {
+	fx := newSessionPageFixture(t, "rt-sess-parent-left")
+	h := newRealtimeHandlerForFixture(fx)
+	ctx := context.Background()
+
+	parent := fx.outsider
+	links := store.NewParentLinkStore(fx.db)
+	_, err := links.CreateLink(ctx, parent.ID, fx.student.ID, fx.admin.ID)
+	require.NoError(t, err)
+
+	// Child joined, then left.
+	_, err = fx.h.Sessions.JoinSession(ctx, fx.sessionID, fx.student.ID)
+	require.NoError(t, err)
+	_, err = fx.h.Sessions.UpdateParticipantStatus(ctx, fx.sessionID, fx.student.ID, "left")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		fx.db.ExecContext(ctx, "DELETE FROM parent_links WHERE parent_user_id = $1 OR child_user_id = $1", parent.ID)
+		fx.db.ExecContext(ctx, "DELETE FROM session_participants WHERE session_id = $1", fx.sessionID)
+	})
+
+	h.ParentLinks = links
+
+	docName := "session:" + fx.sessionID + ":user:" + fx.student.ID
+	code, _ := callMintToken(t, h, docName, &auth.Claims{UserID: parent.ID})
+	assert.Equal(t, http.StatusForbidden, code,
+		"parent must NOT mint tokens after the child has LEFT the session")
+}
+
 // Privacy guard: a parent of one child must NOT mint tokens for an
 // unrelated child's session doc, even if the unrelated child is a
 // participant in some session. Both checks (IsParentOf AND child-
