@@ -68,4 +68,42 @@ Codex review focuses on whether this plan's scope is right (tracking plan vs fea
 
 ## Codex Review of This Plan
 
-(Filled in after Phase 0.)
+### Pass 1 — 2026-05-02: SKIPPED (tracking-plan exemption)
+
+This is a tracking plan, not a feature plan. Its deliverables are:
+
+1. The smoke-test checklist sub-doc
+   (`docs/plans/057-python-101-smoke-checklist.md`) — pure
+   documentation.
+2. The drift-log section appended to `content/python-101/README.md`
+   — content for authors to fill as drift surfaces.
+3. The plan-049 back-pointer rewrite — closes the "no plan filed"
+   gap.
+
+None of these touch executable code or auth surface, so Codex
+review at the plan level adds no leverage. The actual non-doc
+deliverables (smoke runs, cross-org reuse spec) need a human in
+front of a browser / in product discovery — not autonomous
+engineering work.
+
+If/when item 4 (cross-org reuse) gets a design call, that becomes
+its own plan with a real Codex Phase 0 review.
+
+## Phase 1 Post-Implementation Note (2026-05-02)
+
+Shipped what's autonomously deliverable:
+- **Sub-doc checklist** at `docs/plans/057-python-101-smoke-checklist.md`
+  with 3 smokes (A: different-org teacher picker view, B: Eve walking a
+  student through a problem, C: Phase 5 picker discovery).
+- **Drift-log table** added to `content/python-101/README.md` between
+  the authoring rules and the toolchain section. Pre-seeded with the
+  `Greet by Name` emoji case from plan 049 Phase 5. Future drift gets
+  appended as surfaced.
+- **Plan 049 back-pointer** — "Open follow-ups" list rewrites pointing
+  to plan 057. Items now have a tracked home.
+
+**Deferred (manual / product work)**:
+- Smokes A/B/C (need browser sessions).
+- Cross-org reuse spec (needs product discovery; will be its own
+  spec/plan once the design call is made).
+- Authoring CLI helpers (waiting on author feedback).
