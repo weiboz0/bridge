@@ -8,13 +8,16 @@
   same underlying problem from different angles: Bridge has two
   independent implementations of "decrypt the Auth.js v5 JWE cookie and
   extract identity claims," and they keep drifting.
-- **Scope:** Backend + Auth.js wiring. No portal UI changes. No new
-  user-visible features. Existing OAuth and credentials flows are
-  untouched from the user's perspective.
+- **Scope:** Backend + Auth.js wiring + Next middleware. No portal UI
+  changes. No new user-visible features. Existing OAuth and credentials
+  flows are untouched from the user's perspective.
 - **Predecessor plans this builds on:** plan 050 (JWT refresh on every
   call), plan 053 (Hocuspocus signed tokens — establishes the pattern
   this plan generalizes), plan 064 (parent_links — independent, no
   conflict).
+- **Pinned dependency context:** `next-auth@5.0.0-beta.30`,
+  `@auth/core@0.41.1` (per `bun.lock:118-120`). All claims about
+  Auth.js v5 behavior in this plan refer to these resolved versions.
 
 ## Problem
 
@@ -67,7 +70,8 @@ reason about."
   blacklisting. None are present today; not introducing them here.
 - Any change to how `bridge-impersonate` works. Impersonation overlay
   in Go middleware (`platform/internal/auth/middleware.go:135-151`)
-  continues unchanged.
+  continues unchanged. (Note: the overlay's gate "claims.IsPlatformAdmin"
+  becomes "live admin status" — see Phase 3 §"Live admin in claims".)
 - Any change to `HOCUSPOCUS_TOKEN_SECRET` and the realtime-token mint
   path from plan 053. That is a separate, narrower JWT for a specific
   resource and stays as-is. Plan 065's new cookie is for general
@@ -78,35 +82,51 @@ reason about."
 **Go mints a Bridge-issued session JWT after Auth.js completes
 authentication. Go middleware verifies that JWT instead of decrypting
 the Auth.js JWE. Auth.js stays in charge of OAuth/credentials flows;
-the JWE remains the Next-side session cookie.**
+the JWE remains the Next-side session cookie that drives Auth.js's own
+internal state.**
 
 Concretely:
 
 1. Add a new HS256 JWT format `BridgeSessionClaims` signed by Go with
    a new env var `BRIDGE_SESSION_SECRET`. Distinct from
-   `HOCUSPOCUS_TOKEN_SECRET` (different audience, different blast radius
-   on leak).
+   `HOCUSPOCUS_TOKEN_SECRET` and `NEXTAUTH_SECRET` (different audience,
+   different blast radius on leak).
 2. Add `POST /api/internal/sessions` — server-to-server endpoint
-   protected by `BRIDGE_INTERNAL_SECRET` bearer (mirrors the existing
-   `/api/internal/realtime/auth` pattern). Body: `{ email, name }`.
-   Response: `{ token, expiresAt }` after Go looks up the user in the
-   DB and embeds `id` + `isPlatformAdmin`.
-3. In Auth.js, hook the `events.signIn` event to call the mint endpoint
-   immediately after a successful sign-in (Google or credentials). Set
-   the resulting JWT as a cookie named `bridge.session` with
-   `HttpOnly`, `SameSite=Lax`, `Path=/`, `Secure` matching Auth.js's
-   cookie.
+   protected by a bearer token. The bearer is a NEW env var
+   `BRIDGE_INTERNAL_SECRET`, distinct from `HOCUSPOCUS_TOKEN_SECRET`
+   (which the realtime internal callback uses today). This avoids
+   coupling: a leak of the realtime callback bearer must not also
+   forge session cookies. Body: `{ email, name }`. Response:
+   `{ token, expiresAt }` after Go looks up the user in the DB and
+   embeds `id` + `isPlatformAdmin` (the latter is just an *initial*
+   value — see Decision §7 below for why it's not authoritative).
+3. **Lazy mint in Edge middleware** (NOT `events.signIn`). The Next
+   middleware at `src/middleware.ts` is wrapped: after Auth.js's
+   `authorized` callback runs, the middleware checks for `bridge.session`
+   in the request. If absent or expiring within 24h, the middleware
+   calls `POST /api/internal/sessions` via `fetch()` (Edge-safe) and
+   attaches the resulting cookie via `NextResponse.cookies.set()`.
+   See §"Why lazy middleware mint" below for why this beats
+   `events.signIn`.
 4. Behind a feature flag `BRIDGE_SESSION_AUTH=1`, Go middleware
    `RequireAuth` / `OptionalAuth` reads `bridge.session` first; if
    absent or invalid, falls back to the Auth.js JWE path (current
    behavior). When the flag is `0` (default), legacy JWE path is
-   primary.
-5. Migrate Next-side `isPlatformAdmin` reads off the Auth.js token and
-   onto a fetch from `/api/me/identity` (which already exists and is
-   the source of truth from Go's perspective). This collapses
-   `refreshJwtFromDb` — the Auth.js JWT no longer needs to carry
-   `isPlatformAdmin` at all.
-6. Once production is stable on `BRIDGE_SESSION_AUTH=1`, delete:
+   primary and the cookie is dormant.
+5. **Live admin status in claims at the middleware layer.** Today, ~80
+   handler sites read `claims.IsPlatformAdmin`. Rather than touching
+   each one, the Go middleware does ONE indexed DB lookup of
+   `users.is_platform_admin` per authenticated request and overwrites
+   the JWT-carried claim with the live value before invoking the
+   handler. All existing reads keep working unchanged and become
+   automatically live. Cost: one indexed lookup per authenticated
+   request — same as plan 050's `refreshJwtFromDb`.
+6. Migrate Next-side `isPlatformAdmin` reads off the Auth.js token and
+   onto a fetch from `/api/me/identity` (which already exists and,
+   after Phase 3, is the live-from-DB source of truth). This
+   collapses `refreshJwtFromDb` — the Auth.js JWT no longer needs to
+   carry `isPlatformAdmin` at all.
+7. Once production is stable on `BRIDGE_SESSION_AUTH=1`, delete:
    - `platform/internal/auth/jwt.go` JWE branch (`DecryptAuthJSToken`,
      `decryptWithSalt`, `deriveEncryptionKey`).
    - `src/lib/auth-jwt-callback.ts` (Edge guard becomes unneeded).
@@ -120,6 +140,40 @@ This is the same shape as plan 053's realtime-token pattern,
 generalized: Go is authoritative for short-lived signed access tokens,
 Auth.js orchestrates the user-facing flow.
 
+### Why lazy middleware mint (not `events.signIn`)
+
+Codex's pass-1 review flagged a load-bearing ambiguity: NextAuth v5's
+`events.signIn` *does* fire after the sign-in callback, but whether
+`cookies().set()` from inside that handler reliably attaches a
+Set-Cookie header to the OAuth-callback redirect response is **not
+verified by any test in this codebase or by an authoritative source
+in `@auth/core@0.41.1`**. There's also a real ordering concern:
+Auth.js builds its own Set-Cookie array internally; a parallel
+`cookies().set()` may or may not be appended to the same response.
+
+The lazy-middleware-mint approach sidesteps all of this:
+
+- **Edge middleware fires on every authenticated request to a portal
+  or admin path**, including the very first request the browser makes
+  after the OAuth redirect lands.
+- Auth.js v5 exposes the resolved session to middleware via `req.auth`
+  (Edge-safe — Auth.js itself runs there).
+- `fetch()` works on Edge runtime, so the middleware can call Go's
+  mint endpoint.
+- `NextResponse.cookies.set()` is the documented, Edge-supported way
+  to attach Set-Cookie to a middleware response.
+- The mint is idempotent + cached: middleware decodes the existing
+  `bridge.session` JWT *without verifying signature* (we trust our
+  own cookie's payload format) just to check `exp`. If still > 24h
+  away, no mint call is made — steady-state cost is one
+  cookie-payload-decode per request.
+- Refresh is automatic: the same logic handles initial mint AND
+  re-mint when expiry is approaching. No separate refresh endpoint
+  needed.
+
+This is the same architectural shape as plan 053's lazy realtime-token
+mint, applied at the middleware layer instead of inside a React hook.
+
 ### Why HS256 + a separate secret (not asymmetric)
 
 HS256 keeps the implementation small (one signing path, one verifying
@@ -128,8 +182,9 @@ boundary — there's no third party that needs to verify without being
 able to sign. RS256/EdDSA would buy us key separation, but at the cost
 of public-key distribution and rotation logic we don't need today. If
 we add a mobile client or external verifier later, we revisit. The
-secret is distinct from `NEXTAUTH_SECRET` and `HOCUSPOCUS_TOKEN_SECRET`
-so each compromise is independently contained.
+secret is distinct from `NEXTAUTH_SECRET`, `HOCUSPOCUS_TOKEN_SECRET`,
+and `BRIDGE_INTERNAL_SECRET` so each compromise is independently
+contained.
 
 ### Why behind a flag
 
@@ -145,7 +200,7 @@ flag lets us:
 
 This is the same pattern plan 053 used (`HOCUSPOCUS_REQUIRE_SIGNED_TOKEN`).
 
-## Decisions to lock in (first-draft, open to revision)
+## Decisions to lock in
 
 1. **Cookie name:** `bridge.session` (short, distinct from
    `authjs.session-token`, no `__Secure-` prefix variant — see #2).
@@ -153,36 +208,131 @@ This is the same pattern plan 053 used (`HOCUSPOCUS_REQUIRE_SIGNED_TOKEN`).
    based on `APP_ENV` (production → `Secure=true`, dev → `Secure=false`).
    The dual-cookie-name dance Auth.js does is a NextAuth convention we
    don't need to inherit — the canonical-cookie middleware in Go can
-   shrink to one name.
-3. **TTL:** 7 days (matches Auth.js default), refreshed on the
-   server-to-server mint call. Auth.js triggers a re-mint via a small
-   Next API route hit on every authenticated render (or via
-   middleware-on-Node, see Phase 2 below) — same cadence as plan 050's
-   "always refresh from DB."
+   shrink to one name for `bridge.session`. (The legacy JWE cookie's
+   dual-name handling stays in place until Phase 5.)
+3. **TTL:** 7 days (matches Auth.js default). Re-minted whenever the
+   middleware sees the cookie within 24h of expiry. Steady-state
+   sessions get a fresh 7-day cookie roughly every 6 days.
 4. **Claims:** `sub` (user id, UUID), `email`, `name`,
-   `isPlatformAdmin`, `iss=bridge-platform`, `exp`, `iat`, `nbf` (with
-   30s skew). Same shape as `RealtimeClaims` from plan 053, minus
-   `scope` (not relevant here) and minus `role` (we already have role
-   from `/api/me/roles`).
-5. **DB lookup ownership:** Go's mint endpoint owns the DB lookup. Next
-   never queries `users` for `isPlatformAdmin` again.
-6. **Logout:** `signOut` in Auth.js clears both cookies. Add a
-   matching `DELETE /api/internal/sessions` endpoint (or just have
-   Auth.js's signOut callback call a Set-Cookie with `Max-Age=0` —
-   the simpler path).
-7. **Session refresh on demote/promote:** Same model as plan 050. The
-   admin gate in Go calls `users.is_platform_admin` on every request
-   (via a tiny new helper). The cookie's `isPlatformAdmin` claim
-   becomes a *hint* used for portal nav rendering, not an authority.
-   If hint disagrees with DB, DB wins. This is the cleanest
-   interpretation: Go middleware's `RequireAdmin` becomes a DB call,
-   not a claim read. Cost: one indexed query per admin request — same
-   cost as plan 050's `refreshJwtFromDb`.
+   `isPlatformAdmin` (initial value at mint time — NOT authoritative;
+   see #7), `iss=bridge-platform`, `exp`, `iat`, `nbf` (with 30s
+   skew). Same shape as `RealtimeClaims` from plan 053, minus
+   `scope`/`role`.
+5. **DB lookup ownership:** Go's mint endpoint owns the user-by-email
+   DB lookup at mint time. Go's `RequireAuth` middleware additionally
+   does a user-by-id DB lookup of `is_platform_admin` on every
+   authenticated request to enforce live admin status (see #7).
+6. **Logout:** `signOut` in Auth.js clears the Auth.js cookie. The
+   middleware on the next request notices `bridge.session` exists
+   without a corresponding Auth.js session and clears it (sets
+   `Max-Age=0`). Simpler than coupling logout into Auth.js's signOut
+   callback, and self-healing if the user opens a stale tab.
+7. **Live admin in claims at the middleware layer.** Most important
+   decision in this plan. The JWT's `isPlatformAdmin` field is a
+   *cosmetic hint* — useful as a fast-path for Go middleware to skip
+   the DB lookup when the JWT clearly says non-admin AND the request
+   isn't hitting an admin path. For ALL other paths and for any path
+   touching `claims.IsPlatformAdmin` in handler code, the middleware
+   does an indexed DB lookup of `users.is_platform_admin` and rewrites
+   the claim to the live value before handlers see it. This means:
+   - All ~80 existing reads of `claims.IsPlatformAdmin` in
+     `platform/internal/handlers/*.go` keep working unchanged.
+   - Stale-grant and stale-revocation bugs are eliminated by
+     construction.
+   - The cost is one indexed PK lookup (`users_pkey`, `WHERE id = $1`)
+     per authenticated request — same as plan 050's email-keyed lookup.
+   - The fast-path skip for non-admin paths preserves the no-DB-cost
+     hot path for the bulk of requests.
 
-Decision #7 is the most important: it means **the JWT becomes
-unprivileged — losing it doesn't grant or revoke anything sensitive,
-because authorization always reverifies against the DB.** That removes
-an entire class of staleness bugs.
+   See "Live admin via middleware injection" below for the full
+   design.
+
+8. **Refresh path:** No separate refresh endpoint. The middleware's
+   lazy-mint logic handles both initial mint AND refresh-when-expiring.
+   This addresses Codex pass-1's "session refresh underspecified"
+   blocker.
+
+### Live admin via middleware injection
+
+`auth.RequireAuth` is currently package-level (no DI). Plan 065
+restructures the middleware to be method-based on a struct so it can
+hold a reference to a small `AdminChecker` interface backed by
+`UserStore`.
+
+```go
+// New: platform/internal/auth/admin_check.go
+type AdminChecker interface {
+    IsAdmin(ctx context.Context, userID string) (bool, error)
+}
+
+// Middleware is restructured.
+type Middleware struct {
+    Secret         string  // unchanged
+    BridgeSecret   string  // BRIDGE_SESSION_SECRET, new
+    AdminChecker   AdminChecker  // injected
+    BridgeAuthOn   bool    // BRIDGE_SESSION_AUTH flag
+}
+```
+
+Inside `RequireAuth`, after token verification produces `claims`:
+
+```go
+// Skip the DB lookup on the hot path (reads, no admin gates touched).
+// The skip is path-based: non-admin paths get the cosmetic hint;
+// admin paths and paths that read IsPlatformAdmin in their gate
+// logic always get a fresh value.
+if needsLiveAdminCheck(r.URL.Path) || claims.IsPlatformAdmin {
+    isAdmin, err := m.AdminChecker.IsAdmin(r.Context(), claims.UserID)
+    if err != nil {
+        // Log but don't fail the request — fall back to JWT-carried
+        // value. The follow-up DB row lookup in /api/admin/* gates
+        // catches the stale case.
+        slog.Warn("admin check DB lookup failed, using JWT value", "err", err)
+    } else {
+        claims.IsPlatformAdmin = isAdmin
+    }
+}
+```
+
+`needsLiveAdminCheck` is a path matcher: returns true for `/api/admin/*`,
+`/api/orgs/*`, `/api/sessions/*`, `/api/courses/*`, `/api/teaching-units/*`,
+`/api/topics/*`, `/api/assignments/*`, and any other path whose handler
+reads `claims.IsPlatformAdmin`. The matcher is generated from a static
+list audited in Phase 3; an offline test confirms the list covers every
+file in the grep result `grep -rn "claims.IsPlatformAdmin"
+platform/internal/handlers/*.go`.
+
+Even simpler alternative considered and rejected: always do the DB
+lookup. The hot-path skip keeps the per-request cost at zero for
+unauthenticated and pure-read traffic, and it matches what plan 050
+already established (email-key DB lookup on every authenticated
+request).
+
+`auth.RequireAdmin` becomes a method on `Middleware`:
+
+```go
+func (m *Middleware) RequireAdmin(next http.Handler) http.Handler {
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        claims := GetClaims(r.Context())
+        if claims == nil {
+            writeJSONError(w, http.StatusForbidden, "Platform admin required")
+            return
+        }
+        // claims.IsPlatformAdmin is already live by the time we get
+        // here (RequireAuth ran before RequireAdmin on this chain).
+        if !claims.IsPlatformAdmin && claims.ImpersonatedBy == "" {
+            writeJSONError(w, http.StatusForbidden, "Platform admin required")
+            return
+        }
+        next.ServeHTTP(w, r)
+    })
+}
+```
+
+Callsites that today reference the package-level `auth.RequireAdmin`
+become `mw.RequireAdmin` where `mw` is the middleware instance wired
+up in `cmd/api/main.go`. This is a mechanical rename — no behavior
+change beyond DI. Phase 3 enumerates the callsites.
 
 ## Files
 
@@ -196,6 +346,13 @@ an entire class of staleness bugs.
 - `platform/internal/auth/bridge_session_test.go` — sign+verify round
   trip, expired token, wrong secret, wrong issuer, missing claims,
   TTL clamp.
+- `platform/internal/auth/admin_check.go` — `AdminChecker` interface
+  + a default impl backed by `*store.UserStore` that does
+  `SELECT is_platform_admin FROM users WHERE id = $1`. Trivial
+  delegation; one method.
+- `platform/internal/auth/admin_check_test.go` — happy path, missing
+  user (returns false + nil error so middleware doesn't 500), DB
+  error.
 - `platform/internal/handlers/internal_sessions.go` — exposes
   `POST /api/internal/sessions`. Bearer-protected via
   `BRIDGE_INTERNAL_SECRET`. Body validation (email + name required,
@@ -208,65 +365,143 @@ an entire class of staleness bugs.
 **Modify:**
 - `platform/cmd/api/main.go` — wire the new handler under the existing
   internal-route block (NOT under `RequireAuth` — same pattern as
-  `/api/internal/realtime/auth`).
+  `/api/internal/realtime/auth`). Wire `Middleware` struct with
+  `BridgeSecret`, `BridgeAuthOn`, `AdminChecker` injected. Remove
+  any `auth.RequireAdmin` package-level references — they all
+  become method calls on the middleware instance.
 - `.env.example` — add `BRIDGE_SESSION_SECRET=` and
-  `BRIDGE_INTERNAL_SECRET=` with comments. (The latter may already
-  exist for the realtime internal callback — verify and reuse if so.)
+  `BRIDGE_INTERNAL_SECRET=` with comments explaining they are
+  distinct from `NEXTAUTH_SECRET` and `HOCUSPOCUS_TOKEN_SECRET`.
+  Also add `BRIDGE_SESSION_AUTH=` (default off).
+- `next.config.ts` — verify `/api/internal/*` is NOT proxied to Go
+  for browser hits. The current rules at `next.config.ts:24,41-45`
+  already treat `/api/internal/*` as server-side-only; confirm and
+  document inline that `bridge.session` mint calls only originate
+  from the Next runtime (middleware or server actions), never from
+  the browser. Add an explanatory comment.
 
-### Phase 2 — Auth.js mint integration
+### Phase 2 — Lazy mint in Edge middleware
 
 **Add:**
-- `src/lib/auth-bridge-session.ts` — `mintBridgeSession({ email, name })`
-  helper that calls `POST /api/internal/sessions` with the bearer and
-  returns `{ token, expiresAt }`. Pure function over `fetch`, easily
-  unit-testable. Fails closed: if the call errors, the user remains
-  signed in via Auth.js but has no `bridge.session` cookie set —
-  middleware then falls back to JWE (legacy path).
-- `tests/unit/auth-bridge-session.test.ts` — happy path (mocked
-  `fetch`), 500-from-Go, 404-from-Go, network timeout. Asserts the
-  helper never throws into Auth.js's signIn callback.
+- `src/lib/bridge-session-mint.ts` — Edge-safe helper. Two functions:
+  - `bridgeSessionExpiringSoon(token: string | undefined): boolean`
+    — base64-decodes the JWT payload (no signature verify), reads
+    `exp`, returns true when missing OR within 24h.
+  - `mintBridgeSession({ email, name }): Promise<{ token, expiresAt }>`
+    — calls `POST /api/internal/sessions` with the bearer. Returns
+    null on any error (caller falls back gracefully).
+- `tests/unit/bridge-session-mint.test.ts` — happy path, expiry
+  threshold (already-expired, 23h-from-expiry, 25h-from-expiry,
+  missing token, malformed token), mint failure, mint timeout.
+  These tests run in vitest's jsdom env and use `fetch` mocks.
 
 **Modify:**
-- `src/lib/auth.ts` — add `events.signIn` (NextAuth v5 has this hook;
-  fires after `signIn` callback completes successfully). The event
-  handler calls `mintBridgeSession`, then sets `bridge.session` via
-  `cookies().set(...)`. Strict cookie attributes per "Decisions" §1-2.
-- `src/lib/auth.ts` — the existing `jwt` callback no longer needs to
-  refresh `isPlatformAdmin` once Phase 4 lands; until then it remains
-  for legacy clients. Mark deprecated in a comment, do not delete yet.
-- `tests/integration/auth-signin.test.ts` (new) OR extend an existing
-  signin test — assert the cookie is set after a Google sign-in
-  succeeds. End-to-end coverage of the wiring.
+- `src/middleware.ts` — wrap the existing `auth as middleware` export
+  with a function that, after the auth check, conditionally mints
+  `bridge.session` and attaches it via `NextResponse.cookies.set`.
+  Auth.js v5's pattern for this is documented:
+  ```ts
+  export default auth(async (req) => {
+    const response = NextResponse.next();
+    if (req.auth?.user) {
+      const existing = req.cookies.get("bridge.session")?.value;
+      if (bridgeSessionExpiringSoon(existing)) {
+        const minted = await mintBridgeSession({
+          email: req.auth.user.email!,
+          name: req.auth.user.name ?? "Unknown",
+        });
+        if (minted) {
+          response.cookies.set("bridge.session", minted.token, {
+            httpOnly: true,
+            sameSite: "lax",
+            path: "/",
+            secure: process.env.APP_ENV === "production",
+            expires: new Date(minted.expiresAt),
+          });
+        }
+      }
+    } else {
+      // No auth → make sure stale bridge.session is cleared.
+      if (req.cookies.get("bridge.session")) {
+        response.cookies.delete("bridge.session");
+      }
+    }
+    return response;
+  });
+  ```
+- `src/middleware.ts` matcher — extend to cover authenticated API
+  paths so mint runs before the request hits Go:
+  - existing: `/teacher/:path*`, `/student/:path*`, `/parent/:path*`,
+    `/org/:path*`, `/admin/:path*`, `/api/admin/:path*`,
+    `/api/orgs/:path*`.
+  - add: `/api/me/:path*`, `/api/courses/:path*`, `/api/sessions/:path*`,
+    `/api/assignments/:path*`, `/api/topics/:path*`,
+    `/api/teaching-units/:path*`, `/api/topic-problems/:path*`,
+    `/api/problems/:path*`, `/api/realtime/:path*`,
+    `/api/annotations/:path*`, `/api/documents/:path*`. The matcher
+    list lives in `src/middleware.ts` (literal, per plan 047 phase
+    1 constraint) AND in `src/lib/portal/middleware-matcher.ts`
+    (used by unit tests). The existing parity test at
+    `tests/unit/middleware-matcher.test.ts` enforces no drift.
+- `tests/unit/middleware-bridge-session.test.ts` — integration test
+  that simulates an authenticated request with no `bridge.session`,
+  asserts the response sets the cookie. Mocks `mintBridgeSession`
+  to avoid hitting Go in the test.
 
-### Phase 3 — Go middleware reads bridge.session
+### Phase 3 — Go middleware: read bridge.session + inject live admin
 
 **Modify:**
-- `platform/internal/auth/middleware.go` — add
-  `readBridgeSessionToken(r)` helper. In `RequireAuth` and
-  `OptionalAuth`, when `BRIDGE_SESSION_AUTH=1`:
-  - Read `bridge.session` first.
-  - If present and valid → use those claims directly (no JWE
-    decryption needed).
-  - If present but invalid → 401 (don't fall back; an invalid
-    bridge.session is a real problem worth surfacing).
-  - If absent → fall back to existing JWE path.
-- `platform/internal/auth/middleware_test.go` — extend to cover all
-  three branches: bridge.session present + valid, present + invalid,
-  absent (legacy fallback). 6 new cases minimum.
-- Update `RequireAdmin` to do a DB lookup of `users.is_platform_admin`
-  and use the live value (per Decisions §7). Keep the claim-based
-  check as a fast-path "is the user even claiming admin?" — only DB
-  is authoritative. Add a small `auth.AdminCheck(ctx, userID)` helper
-  that reads `users.is_platform_admin`.
+- `platform/internal/auth/middleware.go`:
+  - Promote `RequireAuth` and `RequireAdmin` to methods on `Middleware`
+    (DI for `AdminChecker`, `BridgeSecret`, `BridgeAuthOn`).
+  - Add `readBridgeSessionToken(r *http.Request) string` that reads
+    the `bridge.session` cookie.
+  - In `RequireAuth`/`OptionalAuth`, when `m.BridgeAuthOn`:
+    1. Read `bridge.session`. If present + valid → use those claims.
+    2. If present but invalid → 401 (don't fall back; an invalid
+       bridge.session is a real problem worth surfacing). EXCEPT if
+       Auth.js JWE is also present and valid — in which case the user
+       may have a stale bridge.session that hasn't been re-minted
+       yet. Behavior: log + fall back to JWE for this request. This
+       handles a benign race between flag flip and middleware mint.
+    3. If absent → fall back to existing JWE path.
+  - After token verification (either path), invoke
+    `m.AdminChecker.IsAdmin(ctx, claims.UserID)` per the path-based
+    check from §"Live admin via middleware injection" and overwrite
+    `claims.IsPlatformAdmin` with the live value.
+- `platform/internal/auth/middleware_test.go`:
+  - Add `TestRequireAuth_BridgeSession_PreferredOverJWE`.
+  - Add `TestRequireAuth_BridgeSession_InvalidWithoutJWE_401`.
+  - Add `TestRequireAuth_BridgeSession_InvalidWithValidJWE_FallsBack`.
+  - Add `TestRequireAuth_BridgeSession_AbsentFallsBackToJWE`.
+  - Add `TestRequireAuth_LiveAdminInjection_AdminPathPromotesViaDB`.
+  - Add `TestRequireAuth_LiveAdminInjection_AdminPathDemotesViaDB`.
+  - Add `TestRequireAuth_LiveAdminInjection_NonAdminPathSkipsDB`.
+  - Add `TestRequireAuth_LiveAdminInjection_DBErrorFallsBackToJWT`.
+- `platform/cmd/api/main.go` — pass `Middleware` instance to all
+  handler `Routes(...)` calls; replace `auth.RequireAdmin` with
+  `mw.RequireAdmin`. Audit:
+  ```bash
+  grep -rn "auth.RequireAdmin\b" platform/ --include='*.go'
+  ```
+  All hits must be either method calls on `mw` or test fixtures.
+
+**Verify (no code change but explicit):**
+- All ~80 reads of `claims.IsPlatformAdmin` in
+  `platform/internal/handlers/*.go` continue to read the live value
+  without modification, because middleware overwrote the claim
+  before the handler ran. Add a Phase 3 self-review checklist that
+  greps for the read pattern, samples 5 sites, traces them through
+  the middleware-injected live value, and confirms.
 
 ### Phase 4 — Next.js stops trusting Auth.js token for `isPlatformAdmin`
 
 **Modify (10 files):**
 
 Replace every `session.user.isPlatformAdmin` read with a server-side
-fetch helper. The helper calls `/api/me/identity` (already exists),
-caches the result on the request via `React.cache` so SSR and the
-route handler share one call.
+fetch helper. The helper calls `/api/me/identity` (already exists
+and, post-Phase-3, returns the live-from-DB value). Cached on the
+request via `React.cache` so SSR and route handlers share one call.
 
 - `src/lib/identity.ts` (new) — `getIdentity(): Promise<Identity>`,
   React-cached, calls `/api/me/identity`. Returns
@@ -317,101 +552,155 @@ and stayed stable for ≥7 days.
   section's discussion of dual cookie names with the single-cookie
   model.
 
+## Rejected alternatives
+
+### Shared verification adapter (Go imports a TS module, or vice versa)
+
+Codex pass-1 raised the question: instead of porting JWE decryption
+into Go, could Go and Next share a single verification adapter?
+
+**Rejected.** This keeps the Auth.js v5 JWE format as our internal
+contract. The drift problem is the format itself — Auth.js can change
+HKDF salt strings, claim names, expiration semantics, or cookie
+encoding in any release, and any shared adapter has to track those
+changes. We've already paid that cost three times in the last 30 days
+(plans 050, 053, PR #103). Moving to a Bridge-issued JWT means our
+contract is OUR JWT shape, which we control end-to-end.
+
+### Mint via Auth.js `events.signIn` cookie write
+
+**Rejected.** Codex pass-1 flagged that `cookies().set()` from inside
+`events.signIn` is unproven against the OAuth-callback redirect
+response in `next-auth@5.0.0-beta.30`. There's also a real ordering
+hazard with Auth.js's internal cookie-array building. The lazy
+middleware mint sidesteps both concerns and gives us free refresh.
+
+### Always-DB-lookup admin in middleware (no path-based skip)
+
+**Rejected.** The path-based skip preserves zero-DB-cost on
+unauthenticated traffic (404 pages, static assets accidentally
+caught by overzealous matcher updates) and read-only paths that
+don't gate on `IsPlatformAdmin`. The skip's correctness is enforced
+by the offline test that audits the skip list against the
+`grep claims.IsPlatformAdmin` baseline in handlers. If the skip
+list ever falls behind, the offline test fails at build.
+
+### Asymmetric JWT (RS256 / EdDSA) for `bridge.session`
+
+**Rejected for now.** No third-party verifier today; HS256 with a
+single shared secret is sufficient. Revisit when mobile clients or
+external verifiers come online.
+
 ## Risks
 
 | Risk | Severity | Mitigation |
 |---|---|---|
-| Mint endpoint is a new attack surface | medium | Bearer-protected, server-to-server only, never exposed publicly. Same pattern as `/api/internal/realtime/auth`. Reject any request without the bearer with 401 BEFORE parsing the body. |
+| Mint endpoint is a new attack surface | medium | Bearer-protected via `BRIDGE_INTERNAL_SECRET`, server-to-server only, never exposed publicly. Same pattern as `/api/internal/realtime/auth`. Reject any request without the bearer with 401 BEFORE parsing the body. |
 | Cookie size growth | low | HS256 JWT is ~250 bytes; roughly 0.3% of the 8KB cookie header limit. We have headroom. |
-| Auth.js `events.signIn` doesn't fire reliably | medium | NextAuth v5 fires `events.signIn` synchronously after `callbacks.signIn` returns true. Verified at https://authjs.dev/reference/nextjs#events. Test: integration test in Phase 2 asserts the cookie is set. |
-| Cookie not set during the OAuth redirect dance | medium | Auth.js's flow ends on `/api/auth/callback/google`, which is a Node route — `cookies().set()` works there. Confirmed by reviewing how `cookies()` is used by other Auth.js callbacks today (`signin-google` flow in plan 043). |
-| Mint failure breaks login UX | medium | The helper fails closed: if Go is down or the mint fails, the user signs in via Auth.js JWE only; the new cookie isn't set; Go middleware (with flag ON) falls back to JWE. Net: identical to today's behavior. |
-| Flag flip rolls forward an admin gate that does new DB queries on every request | low | The query is the same indexed lookup we already do in `refreshJwtFromDb`. No new latency vs. plan 050. |
-| Drift between phase 4 and phase 5 | low | Phase 4 lands with the flag OFF. Both Auth.js JWT (with `isPlatformAdmin`) and the new helper coexist; route handlers use the helper. Phase 5 deletes the now-unused claim. No hot-loop window. |
+| Lazy mint adds latency to authenticated requests | low | Mint is a single localhost HTTP call (~5ms in dev, similar in prod when Next and Go are colocated). Only fires when cookie is missing or within 24h of expiry — at most once per 6 days for steady-state users. |
+| Edge runtime restrictions break the mint | low | The mint helper uses only `fetch()` and base64 decoding — both fully Edge-supported. No DB calls, no Node-specific APIs. The Go mint endpoint runs in Node where DB access is fine. |
+| Live admin DB lookup hammers Postgres | low | Same indexed PK lookup plan 050 already does on every authenticated request. The path-based skip removes the cost from non-admin-related traffic. Add a basic load test in Phase 3 that confirms p99 latency is unchanged. |
+| Path-based skip falls out of sync with handler reads | medium | Offline test in Phase 3 enumerates all `claims.IsPlatformAdmin` reads in `platform/internal/handlers/*.go` and confirms each handler's mounting path matches an entry in the skip list. The test runs in CI. |
+| Auth.js v5 `req.auth` semantics in Edge | low | Verified by Codex pass-1: `req.auth` is the Edge-safe surface Auth.js v5 documents and uses internally. Phase 2's middleware integration test exercises this directly. |
+| Mint failure on first request after sign-in | medium | Helper fails closed: if Go is unreachable, no cookie is set and Go middleware falls back to JWE (legacy path is still active during rollout). User experience identical to today. |
 | Cross-domain cookies in prod | medium | If Bridge ever splits Next and Go onto different hostnames, `bridge.session` would need a `Domain=` attribute. Today Bridge runs on a single domain via Next's proxy; verified in `next.config.ts` rewrites. Document this as a Future Work note. |
 | Test database parity | low | All new Go tests follow the existing pattern (`TEST_DATABASE_URL`, store integration tests). No new harness needed. |
 
 ## Phases
 
-### Phase 0: Pre-impl Codex review of THIS plan
+### Phase 0: Pre-impl Codex review of THIS plan (current pass)
 
 Per CLAUDE.md plan review gate. Dispatch `codex:codex-rescue` to
-review against:
+review against the context anchors enumerated below. Iterate until
+both Claude and Codex concur. Capture the verdict inline in
+`## Codex Review of This Plan` below.
 
-- `src/lib/auth.ts` and `src/lib/auth-jwt-callback.ts` (current
-  Auth.js wiring).
-- `platform/internal/auth/jwt.go` (current Go JWE verifier).
-- `platform/internal/auth/middleware.go` (cookie reading + fallback).
-- `platform/internal/handlers/realtime_token.go` (the pattern this
-  plan generalizes).
-- `platform/internal/auth/realtime_jwt.go` (the existing HS256 JWT
-  shape we're mirroring).
+Specific questions for Codex pass-2 (since pass-1 already raised the
+big six):
 
-Specific questions for Codex:
-
-1. Does `events.signIn` actually fire with reliable timing in NextAuth
-   v5 beta.30, and can `cookies().set()` from inside the event handler
-   actually attach a Set-Cookie header to the OAuth redirect response?
-   The plan assumes yes; please verify against the v5 source.
-2. Is there a hidden ordering hazard between the Auth.js cookie
-   write and the `bridge.session` cookie write that could cause one
-   to be lost?
-3. Does any existing callsite I missed read `isPlatformAdmin` directly
-   off the JWT in a way that wouldn't be caught by Phase 4's
-   replacement list? Search for `token.isPlatformAdmin` /
-   `session.user.isPlatformAdmin` / equivalents.
-4. Is the `RequireAdmin` DB-lookup-on-every-request safe under load?
-   Plan 050 already does this for the JWT callback; this plan moves
-   it to Go. Is the indexed lookup actually the right one
-   (`users_email_idx` vs `users_pkey`)? Note: plan 050 keys on email,
-   but this plan keys on `id` (since `bridge.session` carries `sub`
-   = user id). Verify the index exists for `id` (it's the PK so
-   should be fine, but please confirm the query plan).
-5. Cross-runtime gotchas: `cookies()` in Auth.js's `events.signIn` —
-   does it work the same as in a route handler? The Edge-runtime
-   surprise from PR #103 is a recent reminder to verify.
-6. Is there a simpler alternative I missed (e.g., have Go provide a
-   verification adapter that Next imports as a Node module, so they
-   share code instead of duplicating)?
-
-Iterate until both Claude and Codex concur (no blockers, all
-"important" items have explicit resolutions). Capture the verdict
-inline in `## Codex Review of This Plan` below.
+1. Does the lazy-middleware-mint approach close the "Set-Cookie
+   reliability" question? Specifically: does
+   `NextResponse.cookies.set` from inside an `auth(...)` wrapper in
+   `src/middleware.ts` reliably attach to the response that goes
+   back to the browser, including for the very first request after
+   the OAuth callback redirect?
+2. Is the path-based skip in `needsLiveAdminCheck` exhaustive for
+   the current handler grep? List any handler file that reads
+   `claims.IsPlatformAdmin` whose path is NOT in the proposed skip
+   list.
+3. Is the DI restructure of `Middleware` (adding `AdminChecker`,
+   `BridgeSecret`, `BridgeAuthOn` fields) the right shape, or is
+   there a cleaner way to plumb them?
+4. Is there any race between Phase 3's middleware overwriting
+   `claims.IsPlatformAdmin` and `claims` being passed to a handler
+   that later reads it? (Go's `http.Handler` chain is sequential
+   per-request, so I don't think so, but please verify.)
+5. The "stale bridge.session with valid JWE → fall back to JWE"
+   special case in Phase 3. Is this safe, or does it create a
+   downgrade attack surface where an attacker with a stolen JWE
+   could pair it with a forged-but-invalid bridge.session to bypass
+   the bridge-session check? (My read: no, because the JWE is the
+   strictly stronger credential — if it verifies, the user is
+   authenticated; the bridge.session "downgrade" is just falling
+   back to today's behavior. But please sanity-check.)
+6. Anything else surprising in the revised plan that pass-1 didn't
+   surface.
 
 ### Phase 1: Go mint infrastructure (PR 1)
 
 - Implement `bridge_session.go` + tests.
+- Implement `admin_check.go` + tests.
 - Implement `internal_sessions.go` handler + tests.
 - Wire under `/api/internal/sessions` in `cmd/api/main.go`.
+- Promote `RequireAuth`/`RequireAdmin`/`OptionalAuth` to methods on
+  `Middleware`. Update all callsites in `cmd/api/main.go`.
 - Add env vars to `.env.example`.
+- Update `next.config.ts` comment confirming `/api/internal/*` is
+  not browser-proxied.
 - `cd platform && go test ./... -count=1 -timeout 120s` clean.
 - Self-review the diff.
 - Codex post-impl review of phase 1.
-- PR + merge.
+- PR + merge with `BRIDGE_SESSION_AUTH=0` (no behavior change for
+  users yet — endpoint exists but unused).
 
-### Phase 2: Auth.js mint integration (PR 2)
+### Phase 2: Lazy mint in Edge middleware (PR 2)
 
-- Implement `auth-bridge-session.ts` + unit tests.
-- Wire `events.signIn` in `auth.ts`.
-- Add integration test asserting the cookie is set.
+- Implement `bridge-session-mint.ts` + unit tests.
+- Wrap `src/middleware.ts` with the lazy-mint logic.
+- Extend the matcher list in `src/middleware.ts` AND
+  `src/lib/portal/middleware-matcher.ts`.
+- Add `tests/unit/middleware-bridge-session.test.ts` integration
+  test (mocked Go mint call).
 - `bun run test` clean.
 - Self-review.
 - Codex post-impl review of phase 2.
-- PR + merge with flag OFF in dev `.env`.
+- PR + merge with `BRIDGE_SESSION_AUTH=0` (cookie is now being set
+  on every authenticated request but Go is still verifying JWE —
+  cookie is dormant).
+- Manual smoke in dev: sign in, inspect browser dev tools to confirm
+  `bridge.session` is set after the first portal request.
 
-### Phase 3: Go middleware reads bridge.session (PR 3)
+### Phase 3: Go middleware reads bridge.session + injects live admin (PR 3)
 
 - Add `readBridgeSessionToken` helper.
 - Add flag-gated branching in `RequireAuth` / `OptionalAuth`.
-- Add `auth.AdminCheck(ctx, userID)` helper.
-- `RequireAdmin` switches to DB lookup for the admin authority check.
-- Extend middleware tests (6+ new cases).
+- Add live-admin injection in middleware (path-based skip + DB
+  lookup + claim overwrite).
+- Add path-skip-list audit test.
+- Extend middleware tests (8+ new cases per Files §Phase 3).
 - `cd platform && go test ./...` clean.
 - Self-review.
 - Codex post-impl review.
-- PR + merge with `BRIDGE_SESSION_AUTH=0` (default).
+- PR + merge with `BRIDGE_SESSION_AUTH=0` (default — flag drives
+  whether bridge.session is read, but live-admin injection is ON
+  unconditionally; the latter is the plan-050 successor and has no
+  back-compat concern).
 - Manual smoke in dev: flip flag locally, sign in, hit `/admin/stats`,
-  inspect `/api/auth/debug` to confirm both layers agree.
+  inspect `/api/auth/debug` to confirm both layers agree. Then
+  manually `UPDATE users SET is_platform_admin=false WHERE
+  email='m2chrischou@gmail.com'` in dev DB and confirm next
+  `/admin/stats` request 403s without re-signing-in (live admin
+  works).
 
 ### Phase 4: Next route handlers stop reading `isPlatformAdmin` from JWT (PR 4)
 
@@ -438,10 +727,11 @@ flipped) is the safe rollback point.
 
 1. **Dev**: `BRIDGE_SESSION_AUTH=1` set in dev `.env`. Smoke-test sign
    in, admin nav, an admin API call. Verify `bridge.session` cookie
-   present in browser devtools.
+   present in browser devtools. Verify live-admin demote/promote works
+   without re-sign-in.
 2. **Staging**: deploy with flag OFF. Confirm no regressions (Go still
    verifies JWE — pure backward-compat). Then flip flag to ON. Soak
-   24h.
+   24h. Watch error rates on `/api/internal/sessions`.
 3. **Production**: deploy with flag OFF. Soak 24h (forces both teams
    to confirm new code is healthy without auth changes). Flip flag to
    ON. Soak 7 days.
@@ -449,4 +739,39 @@ flipped) is the safe rollback point.
 
 ## Codex Review of This Plan
 
-_(To be populated by Codex pass — see Phase 0.)_
+### Pass 1 — 2026-05-03: BLOCKED → all 6 findings folded in
+
+Codex flagged 6 substantive blockers + 3 non-blocking concerns. All
+addressed in this revision:
+
+1. **`events.signIn` cookie write was unproven** (Q1+Q2+Q6) → pivoted
+   approach to lazy mint in Edge middleware, which uses the documented
+   `NextResponse.cookies.set` API and Auth.js v5's `req.auth`
+   surface. New §"Why lazy middleware mint" explains the choice.
+2. **Phase 4's enumerated list missed Go-side reads of
+   `claims.IsPlatformAdmin`** (Q3) — there are ~80 reads scattered
+   across handler files, not just `RequireAdmin`. Resolved by adding
+   middleware-layer claim injection (§"Live admin via middleware
+   injection") so every existing read becomes automatically live.
+3. **Shared-adapter alternative not explicitly rejected** (Q4) — added
+   to new §"Rejected alternatives" with rationale.
+4. **`auth.RequireAdmin` package-level lacked DI** (Q5) — restructured
+   to method on `Middleware` struct holding `AdminChecker`,
+   `BridgeSecret`, `BridgeAuthOn`. Phase 1 includes the rename of
+   all callsites.
+5. **Session refresh underspecified** — addressed by lazy-middleware
+   approach: same logic that initial-mints also re-mints when
+   approaching expiry. No separate refresh route.
+6. **`BRIDGE_INTERNAL_SECRET` config wiring not explicit** — added
+   as a new env var distinct from `HOCUSPOCUS_TOKEN_SECRET`. Phase 1
+   adds it to `.env.example` with a comment.
+7. **Auth.js version pinning** (non-blocking) — pinned in §Status:
+   `next-auth@5.0.0-beta.30`, `@auth/core@0.41.1`.
+8. **`/api/internal/*` proxy behavior** (non-blocking) — added Phase 1
+   step that updates `next.config.ts` comment to confirm browser
+   requests to `/api/internal/*` are NOT proxied.
+
+### Pass 2 — pending re-dispatch
+
+Six new questions queued for pass-2 review per §Phase 0 above. Will
+populate after dispatch.
