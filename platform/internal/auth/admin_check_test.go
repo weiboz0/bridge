@@ -147,3 +147,85 @@ func TestSQLAdminLookup_NilDBReturnsError(t *testing.T) {
 	_, err := lookup.LookupIsAdmin(context.Background(), "user-1")
 	require.Error(t, err)
 }
+
+// blockingLookup lets a test pause inside LookupIsAdmin so we can
+// drive the cache-race scenario deterministically.
+type blockingLookup struct {
+	calls   atomic.Int32
+	gate    chan struct{} // close to release blocked callers
+	results []bool        // values to return on each call (sequential)
+}
+
+func (b *blockingLookup) LookupIsAdmin(_ context.Context, _ string) (bool, error) {
+	idx := b.calls.Add(1) - 1
+	<-b.gate
+	if int(idx) < len(b.results) {
+		return b.results[idx], nil
+	}
+	return false, nil
+}
+
+func TestCachedAdminChecker_RaceConcurrentFetchesConverge(t *testing.T) {
+	// Codex Phase-1 review caught a race where the second goroutine
+	// to acquire the lock (with its possibly-stale fetched value)
+	// would clobber the first goroutine's already-inserted entry.
+	// The fix: when the post-fetch re-check finds a still-valid
+	// entry, prefer it (both goroutines return the same converged
+	// value, and the cache holds a single consistent value).
+	//
+	// We can't deterministically force "A's fetch is stale, B's is
+	// fresh" without DB-level race control, but we CAN verify the
+	// cache converges to a single value after concurrent fetches
+	// and that the value is one of the two fetched results.
+	lookup := &blockingLookup{
+		gate:    make(chan struct{}),
+		results: []bool{true, false}, // first call returns true, second false
+	}
+	checker := NewCachedAdminChecker(lookup)
+
+	type result struct {
+		got bool
+		err error
+	}
+	res := make(chan result, 2)
+
+	go func() {
+		got, err := checker.IsAdmin(context.Background(), "racer")
+		res <- result{got, err}
+	}()
+	time.Sleep(20 * time.Millisecond)
+	go func() {
+		got, err := checker.IsAdmin(context.Background(), "racer")
+		res <- result{got, err}
+	}()
+	time.Sleep(20 * time.Millisecond)
+
+	// Both goroutines are now parked inside LookupIsAdmin. Release.
+	close(lookup.gate)
+
+	r1 := <-res
+	r2 := <-res
+	require.NoError(t, r1.err)
+	require.NoError(t, r2.err)
+
+	// Both racing fetches happened (the lock-released goroutine that
+	// won the lock-race got its own value; the loser got the
+	// already-inserted entry's value). After convergence, both
+	// returns must match — they're reading or being told the same
+	// cached state.
+	cached, err := checker.IsAdmin(context.Background(), "racer")
+	require.NoError(t, err)
+
+	// The cached value must be one of the two fetched results
+	// (no phantom third state) AND the loser-of-the-lock-race
+	// must have returned the same value as what's now cached.
+	assert.Contains(t, []bool{true, false}, cached,
+		"cached value must be one of the fetched values")
+
+	// At least one of the two return values must equal the cached
+	// state. (The winner returned its own value, which IS the
+	// cached state. The loser returned the winner's cached value.
+	// So both should equal `cached`.)
+	assert.Equal(t, cached, r1.got, "r1 must reflect the cached state")
+	assert.Equal(t, cached, r2.got, "r2 must reflect the cached state")
+}

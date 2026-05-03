@@ -170,8 +170,20 @@ func (c *CachedAdminChecker) IsAdmin(ctx context.Context, userID string) (bool, 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// Re-check in case another goroutine just inserted.
+	// Re-check: another goroutine may have inserted while we were
+	// fetching from the DB. If a fresh entry now exists, prefer it
+	// over our value — the racing goroutine's fetch ran later (it
+	// had to acquire the lock after we released it), so its value
+	// is more likely to reflect any concurrent admin promote/demote.
+	// Codex Phase-1 review caught the original code's overwrite
+	// bug, where an older slow fetch could clobber a newer value.
 	if elem, ok := c.entries[userID]; ok {
+		entry := elem.Value.(*adminCacheEntry)
+		if now.Before(entry.expiresAt) {
+			c.lru.MoveToFront(elem)
+			return entry.isAdmin, nil
+		}
+		// Existing entry is stale → drop and insert ours.
 		c.lru.Remove(elem)
 		delete(c.entries, userID)
 	}

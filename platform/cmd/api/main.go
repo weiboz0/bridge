@@ -39,6 +39,16 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Plan 065 — fail fast at boot when BRIDGE_SESSION_AUTH=1 but
+	// the supporting secrets are unset. Otherwise the flag-on
+	// production deployment would silently 503 every authenticated
+	// request to /api/internal/sessions, which is much harder to
+	// notice than a refused boot.
+	if err := validateBridgeSessionEnv(cfg); err != nil {
+		slog.Error(err.Error())
+		os.Exit(1)
+	}
+
 	// Initialize database
 	database, err := db.Open(cfg.Database.URL)
 	if err != nil {
@@ -398,6 +408,32 @@ func firstOrEmpty(ss []string) string {
 		return ""
 	}
 	return ss[0]
+}
+
+// validateBridgeSessionEnv refuses to start when the operator has
+// turned on plan 065's bridge.session reader (BRIDGE_SESSION_AUTH=1)
+// without configuring the secrets it needs.
+//
+// Why a startup guard instead of just letting the request-time 503
+// fire? A silent 503 on every authenticated request looks like a
+// generic upstream outage in dashboards; a refused boot fails loudly
+// in the deploy pipeline and rolls back. This mirrors plan 050's
+// DEV_SKIP_AUTH-in-production guard.
+//
+// The guard only fires when the flag is ON. With the flag off
+// (default), missing secrets are fine — the mint endpoint is
+// dormant and the legacy JWE path still works.
+func validateBridgeSessionEnv(cfg *config.Config) error {
+	if !cfg.BridgeSession.AuthFlag {
+		return nil
+	}
+	if len(cfg.BridgeSession.Secrets) == 0 {
+		return fmt.Errorf("refusing to start: BRIDGE_SESSION_AUTH=1 but BRIDGE_SESSION_SECRETS (or BRIDGE_SESSION_SECRET) is empty. Set the signing secret(s) before enabling the flag")
+	}
+	if cfg.BridgeSession.InternalBearer == "" {
+		return fmt.Errorf("refusing to start: BRIDGE_SESSION_AUTH=1 but BRIDGE_INTERNAL_SECRET is empty. The mint endpoint is unreachable without the bearer token")
+	}
+	return nil
 }
 
 // Plan 050: refuse to start when DEV_SKIP_AUTH is set with

@@ -3,6 +3,8 @@ package main
 import (
 	"strings"
 	"testing"
+
+	"github.com/weiboz0/bridge/platform/internal/config"
 )
 
 // Plan 050: validate the DEV_SKIP_AUTH × APP_ENV startup guard.
@@ -51,6 +53,90 @@ func TestValidateDevAuthEnv(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			getEnv := func(k string) string { return tc.env[k] }
 			err := validateDevAuthEnv(getEnv)
+			if tc.expectError {
+				if err == nil {
+					t.Fatalf("expected error, got nil")
+				}
+				if !strings.Contains(err.Error(), tc.errSubstr) {
+					t.Errorf("expected error containing %q, got: %v", tc.errSubstr, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+// Plan 065 Phase 1: validate the BRIDGE_SESSION_AUTH × secret-presence
+// startup guard. Refusing to boot loud > silently 503'ing every
+// authenticated request.
+func TestValidateBridgeSessionEnv(t *testing.T) {
+	cases := []struct {
+		name        string
+		cfg         *config.Config
+		expectError bool
+		errSubstr   string
+	}{
+		{
+			name: "flag OFF + everything empty → no error (dormant)",
+			cfg: &config.Config{
+				BridgeSession: config.BridgeSessionConfig{
+					AuthFlag:       false,
+					Secrets:        nil,
+					InternalBearer: "",
+				},
+			},
+		},
+		{
+			name: "flag OFF + secrets set → no error",
+			cfg: &config.Config{
+				BridgeSession: config.BridgeSessionConfig{
+					AuthFlag:       false,
+					Secrets:        []string{"s1"},
+					InternalBearer: "b",
+				},
+			},
+		},
+		{
+			name: "flag ON + secrets set + bearer set → no error",
+			cfg: &config.Config{
+				BridgeSession: config.BridgeSessionConfig{
+					AuthFlag:       true,
+					Secrets:        []string{"signing-secret"},
+					InternalBearer: "internal-bearer",
+				},
+			},
+		},
+		{
+			name: "flag ON + secrets EMPTY → ERROR",
+			cfg: &config.Config{
+				BridgeSession: config.BridgeSessionConfig{
+					AuthFlag:       true,
+					Secrets:        nil,
+					InternalBearer: "internal-bearer",
+				},
+			},
+			expectError: true,
+			errSubstr:   "BRIDGE_SESSION_SECRETS",
+		},
+		{
+			name: "flag ON + bearer EMPTY → ERROR",
+			cfg: &config.Config{
+				BridgeSession: config.BridgeSessionConfig{
+					AuthFlag:       true,
+					Secrets:        []string{"signing-secret"},
+					InternalBearer: "",
+				},
+			},
+			expectError: true,
+			errSubstr:   "BRIDGE_INTERNAL_SECRET",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateBridgeSessionEnv(tc.cfg)
 			if tc.expectError {
 				if err == nil {
 					t.Fatalf("expected error, got nil")
