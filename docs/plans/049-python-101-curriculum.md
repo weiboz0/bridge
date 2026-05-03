@@ -459,12 +459,21 @@ Shipped 2026-04-30 across 6 phases on branch `feat/049-python-101-curriculum`.
 
 Phase 4 wall-clock was ~75 minutes (12 units × ~6 min each, including the 3 fixes Phase 5 caught). Per-unit median was much shorter than the canary's projected 30-45 min — the schema + validator + importer toolchain made authoring mechanical. Bottleneck was domain-side (counting vowels correctly, choosing meaningful test inputs), not toolchain-side.
 
-### Open follow-ups (non-blocking; no plan filed yet)
+### Open follow-ups (filed as plan 057)
 
-- **Browser smoke A and B** — manual UI testing in a session with browser access. Add a one-line note to the next session.
-- **Cross-org course subscription semantics** — if/when a second org wants to teach Python 101 with their own copy, design a "subscribe" or "fork" model. The current 1:1 unit↔topic invariant blocks two courses claiming the same units. Plan 050+.
-- **Pyodide ↔ Piston drift catalog** — the canary's 3 fixes were author bugs, not drift. But the constraint list in `content/python-101/README.md` is preventive, not exhaustive. As real students hit drift, expand the list.
-- **Authoring CLI helpers** — `bun run new-uuid` (one-liner today), maybe a scaffolder for new units. Defer until authors complain.
+These items moved to `docs/plans/057-python-101-post-ship-validation.md`
+once that plan was filed. Keeping the list here as a back-pointer.
+
+- **Browser smokes A and B** + Phase 5 picker discovery (manual UI runs) →
+  `docs/plans/057-python-101-smoke-checklist.md` (sub-doc).
+- **Cross-org course subscription semantics** → plan 057 §item 4. The
+  current 1:1 unit↔topic invariant (plan 044) blocks two courses claiming
+  the same platform-scope units; the plan opens the design conversation.
+- **Pyodide ↔ Piston drift catalog** → `content/python-101/README.md` now
+  has a "Pyodide ↔ Piston drift log" section authors append to as drift
+  surfaces.
+- **Authoring CLI helpers** — still deferred (plan 057 explicitly out of
+  scope until authors complain).
 
 ### Pull-request checklist
 

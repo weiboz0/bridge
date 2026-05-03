@@ -90,6 +90,22 @@ Server-side grading runs on **Piston / CPython** (`platform/internal/sandbox/pis
 
 ---
 
+## Pyodide ↔ Piston drift log (plan 057)
+
+A running list of CPython runtime differences caught during student
+testing. Append a row each time a student or author surfaces a new
+case; reference the problem and the user-visible symptom.
+
+| Date | Problem | Symptom | Root cause | Fix |
+|---|---|---|---|---|
+| _2026-Q1_ | _Greet by Name_ | Emoji in expected stdout failed under Piston | Piston Python image locale differs from Pyodide | Dropped the emoji hidden case |
+| _2026-Q1_ | _(reserved — fill in as drift surfaces)_ |  |  |  |
+
+Authoring rules above (sections 1-6) capture the preventive guard
+rails. This table tracks what those rules failed to predict.
+
+---
+
 ## Running the toolchain locally
 
 The importer talks to Piston via a tiny Go shellout (`platform/cmd/run-piston`, Phase 2). Piston must be reachable.
