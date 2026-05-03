@@ -33,6 +33,7 @@ func newRealtimeHandlerForFixture(fx *sessionPageFixture) *RealtimeHandler {
 		Problems:              store.NewProblemStore(fx.db),
 		Attempts:              store.NewAttemptStore(fx.db),
 		Users:                 store.NewUserStore(fx.db),
+		ParentLinks:           store.NewParentLinkStore(fx.db), // Plan 053b Phase 4.
 		HocuspocusTokenSecret: rtSecret,
 	}
 }
@@ -202,16 +203,25 @@ func TestMintToken_BroadcastDoc_OrgAdmin_GetsReadRole(t *testing.T) {
 	assert.Equal(t, "teacher", adminClaims.Role)
 }
 
-func TestMintToken_AttemptDoc_OwnerOK_OthersDenied(t *testing.T) {
-	fx := newSessionPageFixture(t, "rt-att")
+// Plan 053b broadened the Phase 1 owner-only rule. Attempt-doc mint
+// now accepts: owner, platform admin, impersonator, class instructor/
+// TA where attempt-owner is in the SAME class, and org_admin where
+// attempt-owner is in some class for the relevant course. The new
+// store helpers IsTeacherOfAttempt + IsOrgAdminOfAttempt enforce
+// the popular-problem-leak constraint (both teacher and attempt-
+// owner must share a class).
+func TestMintToken_AttemptDoc_OwnerOnly_NoCourseBinding(t *testing.T) {
+	// Personal-scope problem with no topic_problems row → no class
+	// can possibly contain it. Owner gets 200; everyone else 403,
+	// EXCEPT platform admin and impersonator (admin bypass).
+	fx := newSessionPageFixture(t, "rt-att-bare")
 	h := newRealtimeHandlerForFixture(fx)
 
-	// Seed a problem + attempt owned by the student.
 	problems := store.NewProblemStore(fx.db)
 	p, err := problems.CreateProblem(t.Context(), store.CreateProblemInput{
 		Scope:       "personal",
 		ScopeID:     &fx.student.ID,
-		Title:       "Realtime Test Problem",
+		Title:       "Bare attempt problem",
 		Description: "x",
 		StarterCode: map[string]string{"python": ""},
 		Difficulty:  "easy",
@@ -225,11 +235,7 @@ func TestMintToken_AttemptDoc_OwnerOK_OthersDenied(t *testing.T) {
 
 	attempts := store.NewAttemptStore(fx.db)
 	a, err := attempts.CreateAttempt(t.Context(), store.CreateAttemptInput{
-		ProblemID: p.ID,
-		UserID:    fx.student.ID,
-		Title:     "Attempt 1",
-		Language:  "python",
-		PlainText: "",
+		ProblemID: p.ID, UserID: fx.student.ID, Title: "A1", Language: "python", PlainText: "",
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -238,21 +244,290 @@ func TestMintToken_AttemptDoc_OwnerOK_OthersDenied(t *testing.T) {
 
 	docName := "attempt:" + a.ID
 
-	// owner OK
 	codeO, _ := callMintToken(t, h, docName, &auth.Claims{UserID: fx.student.ID})
-	assert.Equal(t, http.StatusOK, codeO)
+	assert.Equal(t, http.StatusOK, codeO, "owner")
 
-	// Phase-1 narrow rule: ATTEMPT IS OWNER-ONLY. No admin bypass,
-	// no impersonator bypass, no class-staff. The teacher-watch
-	// path arrives in phase-2 alongside attempt → class resolution.
 	codeT, _ := callMintToken(t, h, docName, &auth.Claims{UserID: fx.teacher.ID})
-	assert.Equal(t, http.StatusForbidden, codeT)
+	assert.Equal(t, http.StatusForbidden, codeT, "teacher with no class binding")
 
 	codeA, _ := callMintToken(t, h, docName, &auth.Claims{UserID: fx.admin.ID, IsPlatformAdmin: true})
-	assert.Equal(t, http.StatusForbidden, codeA, "platform admin must NOT bypass attempt scope in phase 1")
+	assert.Equal(t, http.StatusOK, codeA, "platform admin (053b lifts the Phase-1 stricture)")
 
 	codeImp, _ := callMintToken(t, h, docName, &auth.Claims{UserID: fx.outsider.ID, ImpersonatedBy: fx.admin.ID})
-	assert.Equal(t, http.StatusForbidden, codeImp, "impersonator must NOT bypass attempt scope in phase 1")
+	assert.Equal(t, http.StatusOK, codeImp, "impersonator (admin-driven)")
+}
+
+// Class-staff path: teacher + attempt-owner share a class for the
+// problem's topic. Both constraints must hold.
+func TestMintToken_AttemptDoc_TeacherOfAttemptOwnerInSameClass_OK(t *testing.T) {
+	fx := newSessionPageFixture(t, "rt-att-shared")
+	h := newRealtimeHandlerForFixture(fx)
+	ctx := context.Background()
+
+	// Seed: an org problem linked to a topic of a course; the
+	// fixture's class is for that course; both teacher and student
+	// are class members. Then create an attempt by the student.
+	courses := store.NewCourseStore(fx.db)
+	topics := store.NewTopicStore(fx.db)
+	classes := store.NewClassStore(fx.db)
+	problems := store.NewProblemStore(fx.db)
+	topicProblems := store.NewTopicProblemStore(fx.db)
+	attempts := store.NewAttemptStore(fx.db)
+
+	course, err := courses.CreateCourse(ctx, store.CreateCourseInput{
+		OrgID: fx.orgID, CreatedBy: fx.teacher.ID, Title: "Plan053b Course", GradeLevel: "K-5", Language: "python",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { fx.db.ExecContext(ctx, "DELETE FROM courses WHERE id = $1", course.ID) })
+
+	topic, err := topics.CreateTopic(ctx, store.CreateTopicInput{CourseID: course.ID, Title: "T"})
+	require.NoError(t, err)
+	t.Cleanup(func() { fx.db.ExecContext(ctx, "DELETE FROM topics WHERE id = $1", topic.ID) })
+
+	cls, err := classes.CreateClass(ctx, store.CreateClassInput{
+		CourseID: course.ID, OrgID: fx.orgID, Title: "Plan053b Class", Term: "fall", CreatedBy: fx.teacher.ID,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		fx.db.ExecContext(ctx, "DELETE FROM class_settings WHERE class_id = $1", cls.ID)
+		fx.db.ExecContext(ctx, "DELETE FROM class_memberships WHERE class_id = $1", cls.ID)
+		fx.db.ExecContext(ctx, "DELETE FROM classes WHERE id = $1", cls.ID)
+	})
+	_, err = classes.AddClassMember(ctx, store.AddClassMemberInput{ClassID: cls.ID, UserID: fx.teacher.ID, Role: "instructor"})
+	require.NoError(t, err)
+	_, err = classes.AddClassMember(ctx, store.AddClassMemberInput{ClassID: cls.ID, UserID: fx.student.ID, Role: "student"})
+	require.NoError(t, err)
+
+	p, err := problems.CreateProblem(ctx, store.CreateProblemInput{
+		Scope: "org", ScopeID: &fx.orgID, Title: "Shared Problem", Description: "x",
+		StarterCode: map[string]string{"python": ""}, Difficulty: "easy", Status: "draft", CreatedBy: fx.teacher.ID,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { fx.db.ExecContext(ctx, "DELETE FROM problems WHERE id = $1", p.ID) })
+	_, err = topicProblems.Attach(ctx, topic.ID, p.ID, 0, fx.teacher.ID)
+	require.NoError(t, err)
+
+	a, err := attempts.CreateAttempt(ctx, store.CreateAttemptInput{
+		ProblemID: p.ID, UserID: fx.student.ID, Title: "A1", Language: "python", PlainText: "",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { fx.db.ExecContext(ctx, "DELETE FROM attempts WHERE id = $1", a.ID) })
+
+	docName := "attempt:" + a.ID
+
+	// Teacher (instructor in the class containing the student) → OK.
+	codeT, respT := callMintToken(t, h, docName, &auth.Claims{UserID: fx.teacher.ID})
+	require.Equal(t, http.StatusOK, codeT)
+	teacherClaims, err := auth.VerifyRealtimeToken(rtSecret, respT.Token)
+	require.NoError(t, err)
+	assert.Equal(t, "teacher", teacherClaims.Role)
+
+	// org_admin via the org membership path → OK (attempt owner is
+	// in some class for that course).
+	codeOrg, respOrg := callMintToken(t, h, docName, &auth.Claims{UserID: fx.orgAdmin.ID})
+	require.Equal(t, http.StatusOK, codeOrg)
+	orgClaims, err := auth.VerifyRealtimeToken(rtSecret, respOrg.Token)
+	require.NoError(t, err)
+	assert.Equal(t, "teacher", orgClaims.Role)
+
+	// Outsider (not in the class, not in the org) → 403.
+	codeOut, _ := callMintToken(t, h, docName, &auth.Claims{UserID: fx.outsider.ID})
+	assert.Equal(t, http.StatusForbidden, codeOut)
+}
+
+// Popular-problem leak guard: a teacher of OTHER classes for the
+// SAME problem must NOT mint tokens for an attempt of a student in
+// a DIFFERENT class. Codex caught this at Phase 0.
+func TestMintToken_AttemptDoc_PopularProblemLeak_403(t *testing.T) {
+	fx := newSessionPageFixture(t, "rt-att-leak")
+	h := newRealtimeHandlerForFixture(fx)
+	ctx := context.Background()
+
+	courses := store.NewCourseStore(fx.db)
+	topics := store.NewTopicStore(fx.db)
+	classes := store.NewClassStore(fx.db)
+	problems := store.NewProblemStore(fx.db)
+	topicProblems := store.NewTopicProblemStore(fx.db)
+	attempts := store.NewAttemptStore(fx.db)
+	users := store.NewUserStore(fx.db)
+
+	// Course A — student's class. Course B — outsider's class. Same
+	// problem linked to topics in BOTH courses.
+	courseA, err := courses.CreateCourse(ctx, store.CreateCourseInput{
+		OrgID: fx.orgID, CreatedBy: fx.teacher.ID, Title: "Course A", GradeLevel: "K-5", Language: "python",
+	})
+	require.NoError(t, err)
+	courseB, err := courses.CreateCourse(ctx, store.CreateCourseInput{
+		OrgID: fx.orgID, CreatedBy: fx.teacher.ID, Title: "Course B", GradeLevel: "K-5", Language: "python",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		fx.db.ExecContext(ctx, "DELETE FROM courses WHERE id IN ($1, $2)", courseA.ID, courseB.ID)
+	})
+
+	topicA, err := topics.CreateTopic(ctx, store.CreateTopicInput{CourseID: courseA.ID, Title: "TA"})
+	require.NoError(t, err)
+	topicB, err := topics.CreateTopic(ctx, store.CreateTopicInput{CourseID: courseB.ID, Title: "TB"})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		fx.db.ExecContext(ctx, "DELETE FROM topics WHERE id IN ($1, $2)", topicA.ID, topicB.ID)
+	})
+
+	classA, err := classes.CreateClass(ctx, store.CreateClassInput{
+		CourseID: courseA.ID, OrgID: fx.orgID, Title: "Class A", Term: "fall", CreatedBy: fx.teacher.ID,
+	})
+	require.NoError(t, err)
+	classB, err := classes.CreateClass(ctx, store.CreateClassInput{
+		CourseID: courseB.ID, OrgID: fx.orgID, Title: "Class B", Term: "fall", CreatedBy: fx.teacher.ID,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		fx.db.ExecContext(ctx, "DELETE FROM class_settings WHERE class_id IN ($1, $2)", classA.ID, classB.ID)
+		fx.db.ExecContext(ctx, "DELETE FROM class_memberships WHERE class_id IN ($1, $2)", classA.ID, classB.ID)
+		fx.db.ExecContext(ctx, "DELETE FROM classes WHERE id IN ($1, $2)", classA.ID, classB.ID)
+	})
+
+	// Student → Class A (Course A). Outsider → instructor of Class B
+	// (Course B). Both classes have the same problem.
+	_, err = classes.AddClassMember(ctx, store.AddClassMemberInput{ClassID: classA.ID, UserID: fx.student.ID, Role: "student"})
+	require.NoError(t, err)
+	// outsider must be an org member to be a class instructor.
+	orgs := store.NewOrgStore(fx.db)
+	_, err = orgs.AddOrgMember(ctx, store.AddMemberInput{OrgID: fx.orgID, UserID: fx.outsider.ID, Role: "teacher", Status: "active"})
+	require.NoError(t, err)
+	_, err = classes.AddClassMember(ctx, store.AddClassMemberInput{ClassID: classB.ID, UserID: fx.outsider.ID, Role: "instructor"})
+	require.NoError(t, err)
+	_ = users // keep linter happy if not otherwise referenced
+
+	p, err := problems.CreateProblem(ctx, store.CreateProblemInput{
+		Scope: "platform", Title: "Popular", Description: "x",
+		StarterCode: map[string]string{"python": ""}, Difficulty: "easy", Status: "classroom_ready", CreatedBy: fx.admin.ID,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { fx.db.ExecContext(ctx, "DELETE FROM problems WHERE id = $1", p.ID) })
+
+	_, err = topicProblems.Attach(ctx, topicA.ID, p.ID, 0, fx.teacher.ID)
+	require.NoError(t, err)
+	_, err = topicProblems.Attach(ctx, topicB.ID, p.ID, 0, fx.teacher.ID)
+	require.NoError(t, err)
+
+	a, err := attempts.CreateAttempt(ctx, store.CreateAttemptInput{
+		ProblemID: p.ID, UserID: fx.student.ID, Title: "A", Language: "python", PlainText: "",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { fx.db.ExecContext(ctx, "DELETE FROM attempts WHERE id = $1", a.ID) })
+
+	// Outsider is instructor of Class B but the student is in Class A.
+	// The popular-problem-leak check rejects: 403.
+	docName := "attempt:" + a.ID
+	code, _ := callMintToken(t, h, docName, &auth.Claims{UserID: fx.outsider.ID})
+	assert.Equal(t, http.StatusForbidden, code,
+		"teacher of OTHER class for same problem must NOT get tokens for student in DIFFERENT class")
+}
+
+// Plan 053b Phase 4 — parent of the doc-owning student gets a
+// `parent` role token IF the child is a participant in the session.
+func TestMintToken_SessionDoc_LinkedParent_OK(t *testing.T) {
+	fx := newSessionPageFixture(t, "rt-sess-parent")
+	h := newRealtimeHandlerForFixture(fx)
+	ctx := context.Background()
+
+	// Use outsider as the "parent": active parent_link from outsider
+	// → student, and student is a session participant.
+	parent := fx.outsider
+	links := store.NewParentLinkStore(fx.db)
+	_, err := links.CreateLink(ctx, parent.ID, fx.student.ID, fx.admin.ID)
+	require.NoError(t, err)
+	_, err = fx.h.Sessions.JoinSession(ctx, fx.sessionID, fx.student.ID)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		fx.db.ExecContext(ctx, "DELETE FROM parent_links WHERE parent_user_id = $1 OR child_user_id = $1", parent.ID)
+		fx.db.ExecContext(ctx, "DELETE FROM session_participants WHERE session_id = $1", fx.sessionID)
+	})
+
+	// Set RealtimeHandler.ParentLinks on the test handler.
+	h.ParentLinks = links
+
+	docName := "session:" + fx.sessionID + ":user:" + fx.student.ID
+	code, resp := callMintToken(t, h, docName, &auth.Claims{UserID: parent.ID})
+	require.Equal(t, http.StatusOK, code, "linked parent must mint a parent-role token for the child's session doc")
+	claims, err := auth.VerifyRealtimeToken(rtSecret, resp.Token)
+	require.NoError(t, err)
+	assert.Equal(t, "parent", claims.Role)
+}
+
+// Codex post-impl pass-1 catch: GetSessionParticipant returns rows
+// with status='left' too. A parent must NOT keep access after the
+// child has left the session — only invited/present grants the
+// parent token.
+func TestMintToken_SessionDoc_ParentOfChildWhoLeft_403(t *testing.T) {
+	fx := newSessionPageFixture(t, "rt-sess-parent-left")
+	h := newRealtimeHandlerForFixture(fx)
+	ctx := context.Background()
+
+	parent := fx.outsider
+	links := store.NewParentLinkStore(fx.db)
+	_, err := links.CreateLink(ctx, parent.ID, fx.student.ID, fx.admin.ID)
+	require.NoError(t, err)
+
+	// Child joined, then left.
+	_, err = fx.h.Sessions.JoinSession(ctx, fx.sessionID, fx.student.ID)
+	require.NoError(t, err)
+	_, err = fx.h.Sessions.UpdateParticipantStatus(ctx, fx.sessionID, fx.student.ID, "left")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		fx.db.ExecContext(ctx, "DELETE FROM parent_links WHERE parent_user_id = $1 OR child_user_id = $1", parent.ID)
+		fx.db.ExecContext(ctx, "DELETE FROM session_participants WHERE session_id = $1", fx.sessionID)
+	})
+
+	h.ParentLinks = links
+
+	docName := "session:" + fx.sessionID + ":user:" + fx.student.ID
+	code, _ := callMintToken(t, h, docName, &auth.Claims{UserID: parent.ID})
+	assert.Equal(t, http.StatusForbidden, code,
+		"parent must NOT mint tokens after the child has LEFT the session")
+}
+
+// Privacy guard: a parent of one child must NOT mint tokens for an
+// unrelated child's session doc, even if the unrelated child is a
+// participant in some session. Both checks (IsParentOf AND child-
+// in-session) must hold.
+func TestMintToken_SessionDoc_ParentOfDifferentChild_403(t *testing.T) {
+	fx := newSessionPageFixture(t, "rt-sess-other-parent")
+	h := newRealtimeHandlerForFixture(fx)
+	ctx := context.Background()
+
+	// Outsider is a parent of someone — but NOT of fx.student.
+	parent := fx.outsider
+	users := store.NewUserStore(fx.db)
+	otherChild, err := users.RegisterUser(ctx, store.RegisterInput{
+		Name: "Other Child", Email: "other-child-" + fx.sessionID[:8] + "@example.com", Password: "testpassword123",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		fx.db.ExecContext(ctx, "DELETE FROM parent_links WHERE child_user_id = $1", otherChild.ID)
+		fx.db.ExecContext(ctx, "DELETE FROM auth_providers WHERE user_id = $1", otherChild.ID)
+		fx.db.ExecContext(ctx, "DELETE FROM users WHERE id = $1", otherChild.ID)
+	})
+
+	links := store.NewParentLinkStore(fx.db)
+	_, err = links.CreateLink(ctx, parent.ID, otherChild.ID, fx.admin.ID)
+	require.NoError(t, err)
+	_, err = fx.h.Sessions.JoinSession(ctx, fx.sessionID, fx.student.ID)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		fx.db.ExecContext(ctx, "DELETE FROM parent_links WHERE parent_user_id = $1", parent.ID)
+		fx.db.ExecContext(ctx, "DELETE FROM session_participants WHERE session_id = $1", fx.sessionID)
+	})
+
+	h.ParentLinks = links
+
+	// Try to open fx.student's doc — parent has no parent_link to
+	// fx.student, so the IsParentOf check fails.
+	docName := "session:" + fx.sessionID + ":user:" + fx.student.ID
+	code, _ := callMintToken(t, h, docName, &auth.Claims{UserID: parent.ID})
+	assert.Equal(t, http.StatusForbidden, code,
+		"parent of one child must NOT mint tokens for another child's session doc")
 }
 
 func TestMintToken_UnitDoc_OrgTeacherOK_StudentDenied(t *testing.T) {

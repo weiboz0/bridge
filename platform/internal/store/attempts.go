@@ -164,3 +164,79 @@ func (s *AttemptStore) CountAttemptsByProblem(ctx context.Context, problemID str
 		`SELECT COUNT(*) FROM attempts WHERE problem_id = $1`, problemID).Scan(&n)
 	return n, err
 }
+
+// IsTeacherOfAttempt — plan 053b Phase 1.
+//
+// Reports whether `teacherID` has an instructor-or-TA
+// class_membership in ANY class where (a) the class's course owns
+// a topic linking to the attempt's problem AND (b) the attempt's
+// owner is also a class_membership in the SAME class.
+//
+// Both constraints in one SQL EXISTS — critical: a teacher of
+// Class A must NOT get tokens for a student in Class B even if
+// both classes use the same problem (popular-problem leak Codex
+// caught at Phase 0).
+func (s *AttemptStore) IsTeacherOfAttempt(ctx context.Context, teacherID, attemptID string) (bool, error) {
+	if teacherID == "" || attemptID == "" {
+		return false, nil
+	}
+	var ok bool
+	err := s.db.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM attempts a
+			INNER JOIN topic_problems tp ON tp.problem_id = a.problem_id
+			INNER JOIN topics t          ON t.id = tp.topic_id
+			INNER JOIN courses co        ON co.id = t.course_id
+			INNER JOIN classes c         ON c.course_id = co.id
+			INNER JOIN class_memberships cm_t
+				ON cm_t.class_id = c.id
+				AND cm_t.user_id = $1
+				AND cm_t.role IN ('instructor', 'ta')
+			INNER JOIN class_memberships cm_s
+				ON cm_s.class_id = c.id
+				AND cm_s.user_id = a.user_id
+			WHERE a.id = $2
+		)`, teacherID, attemptID).Scan(&ok)
+	if err != nil {
+		return false, err
+	}
+	return ok, nil
+}
+
+// IsOrgAdminOfAttempt — plan 053b Phase 1.
+//
+// Reports whether `userID` is an active org_admin for the org that
+// owns the course of the attempt's problem AND the attempt owner
+// is enrolled in SOME class for that course. The attempt-owner
+// constraint preserves the same privacy boundary as
+// IsTeacherOfAttempt — an org_admin can't peek at attempts of
+// students who happen to be in their org but not in any class for
+// the relevant course.
+func (s *AttemptStore) IsOrgAdminOfAttempt(ctx context.Context, userID, attemptID string) (bool, error) {
+	if userID == "" || attemptID == "" {
+		return false, nil
+	}
+	var ok bool
+	err := s.db.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM attempts a
+			INNER JOIN topic_problems tp ON tp.problem_id = a.problem_id
+			INNER JOIN topics t          ON t.id = tp.topic_id
+			INNER JOIN courses co        ON co.id = t.course_id
+			INNER JOIN org_memberships om
+				ON om.org_id = co.org_id
+				AND om.user_id = $1
+				AND om.role = 'org_admin'
+				AND om.status = 'active'
+			INNER JOIN class_memberships cm_s
+				ON cm_s.class_id IN (SELECT id FROM classes WHERE course_id = co.id)
+				AND cm_s.user_id = a.user_id
+			WHERE a.id = $2
+		)`, userID, attemptID).Scan(&ok)
+	if err != nil {
+		return false, err
+	}
+	return ok, nil
+}

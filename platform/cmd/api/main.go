@@ -138,6 +138,7 @@ func main() {
 		Problems:              stores.Problems,
 		Attempts:              stores.Attempts,
 		Users:                 stores.Users,
+		ParentLinks:           stores.ParentLinks, // plan 053b phase 4
 		HocuspocusTokenSecret: cfg.Realtime.HocuspocusTokenSecret,
 	}
 	realtimeH.InternalRoutes(r)

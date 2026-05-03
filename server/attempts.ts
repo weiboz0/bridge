@@ -20,15 +20,9 @@ const attempts = pgTable("attempts", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
-const problems = pgTable("problems", {
-  id: uuid("id").primaryKey(),
-  topicId: uuid("topic_id").notNull(),
-});
-
-const topics = pgTable("topics", {
-  id: uuid("id").primaryKey(),
-  courseId: uuid("course_id").notNull(),
-});
+// Plan 053b — `problems.topic_id` was dropped in migration 0013;
+// the broken column reference is gone. Topics→problems linking lives
+// in `topic_problems` now (m:n).
 
 export interface AttemptOwner {
   userId: string;
@@ -64,39 +58,48 @@ export async function storeAttemptYjsState(
 }
 
 /**
- * Mirror of `ClassStore.TeacherCanViewStudentInCourse` from the Go side.
- * Single-source-of-truth would be a Go API call, but doing it here avoids
- * a second-hop auth dance for every Hocuspocus connect. Acceptable cost:
- * if the Go policy changes, both sites must update.
+ * Plan 053b Phase 2 — fixed query.
+ *
+ * Mirror of the Go-side `AttemptStore.IsTeacherOfAttempt`. Both sides
+ * MUST stay in sync — single-source-of-truth would be a Go API
+ * call, but doing it here avoids a second-hop auth dance for every
+ * Hocuspocus connect. Pre-053b the query referenced `problems.topic_id`
+ * which was dropped in migration 0013; the helper has been silently
+ * failing for months (teacher-watch broken end-to-end). The new
+ * query joins via `topic_problems` and verifies BOTH the teacher
+ * AND the attempt owner share a class — same privacy boundary as
+ * the Go version (Codex pass-1 catch on plan 053b).
+ *
+ * Note: this TS helper goes away when plan 053 phase 4 retires
+ * the legacy Hocuspocus auth path; the Go side becomes the only
+ * source of truth.
  */
 export async function teacherCanViewAttempt(
   teacherId: string,
   attemptId: string,
 ): Promise<boolean> {
   const result = await serverDb.execute<{ allowed: boolean }>(sql`
-    WITH attempt_course AS (
-      SELECT t.course_id
-      FROM attempts a
-      INNER JOIN problems p ON p.id = a.problem_id
-      INNER JOIN topics t ON t.id = p.topic_id
-      WHERE a.id = ${attemptId}
-    )
     SELECT EXISTS (
       SELECT 1
-      FROM class_memberships cm_t
-      INNER JOIN class_memberships cm_s ON cm_s.class_id = cm_t.class_id
-      INNER JOIN classes c ON c.id = cm_t.class_id
-      INNER JOIN attempts a ON a.id = ${attemptId}
-      INNER JOIN attempt_course ac ON true
-      WHERE cm_t.user_id = ${teacherId}
-        AND cm_t.role = 'instructor'
+      FROM attempts a
+      INNER JOIN topic_problems tp ON tp.problem_id = a.problem_id
+      INNER JOIN topics t          ON t.id = tp.topic_id
+      INNER JOIN courses co        ON co.id = t.course_id
+      INNER JOIN classes c         ON c.course_id = co.id
+      INNER JOIN class_memberships cm_t
+        ON cm_t.class_id = c.id
+        AND cm_t.user_id = ${teacherId}
+        AND cm_t.role IN ('instructor', 'ta')
+      INNER JOIN class_memberships cm_s
+        ON cm_s.class_id = c.id
         AND cm_s.user_id = a.user_id
-        AND c.course_id = ac.course_id
+      WHERE a.id = ${attemptId}
     ) AS allowed
   `);
 
-  // postgres.js returns rows as an array on .rows or directly depending on driver
-  // shape. drizzle's `execute` here returns the underlying client result.
+  // postgres.js returns rows as an array on .rows or directly depending
+  // on driver shape. drizzle's `execute` here returns the underlying
+  // client result.
   const rows = (result as unknown as { allowed: boolean }[]) ?? [];
   return rows[0]?.allowed === true;
 }

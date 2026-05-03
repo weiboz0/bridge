@@ -50,7 +50,6 @@ export default async function ParentLiveViewPage({
         <LiveSessionViewer
           sessionId={activeSession.sessionId}
           studentId={childId}
-          parentId={session!.user.id}
           editorMode="python"
         />
       </div>
