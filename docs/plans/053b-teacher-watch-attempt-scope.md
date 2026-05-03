@@ -303,6 +303,62 @@ attempt-owner-in-class; org_admin path still requires attempt owner
 to be enrolled in some class for the course; Phase 4 prerequisites
 match current state. Plan cleared for implementation.
 
+---
+
+## Phase 1-4 Post-Implementation Review (2026-05-03)
+
+Plan 053b shipped as PR #99 in three commits on `fix/053b-teacher-watch-and-parent-viewer`:
+- `9fd47e7` — main implementation (8 files, 469 insertions)
+- `0803cea` — pass-1 fix for the participant-status leak
+
+### Codex post-impl pass 1 — 1 blocker, fixed
+
+`authorizeSessionDoc` parent branch treated any `session_participants`
+row as "child-in-session", including `status='left'`. A parent kept
+access AFTER the child left the session.
+
+**Fix**: required `existing.Status IN ('invited', 'present')` —
+mirrors the same filter used for the own-doc fall-back later in
+the function. New regression test
+`TestMintToken_SessionDoc_ParentOfChildWhoLeft_403`.
+
+### Codex post-impl pass 2 — **CONCUR**
+
+Codex verified the status-filter applied correctly, confirmed all
+other `session_participants` lookups in `authorizeSessionDoc` use
+the same filter (consistent throughout), and ran the privacy
+endpoint audit — no other surfaces leak.
+
+### Final test count
+
+6 mint integration tests (3 attempt + 3 session). All 6 pass:
+- `_AttemptDoc_OwnerOnly_NoCourseBinding`
+- `_AttemptDoc_TeacherOfAttemptOwnerInSameClass_OK`
+- `_AttemptDoc_PopularProblemLeak_403` (Codex Phase-0 catch)
+- `_SessionDoc_LinkedParent_OK`
+- `_SessionDoc_ParentOfChildWhoLeft_403` (Codex post-impl pass-1 catch)
+- `_SessionDoc_ParentOfDifferentChild_403`
+
+Full Go handler suite: 150s, green.
+
+### Plan 053 phase 4 unblocked
+
+All 6 token construction sites are now on `useRealtimeToken`:
+
+| Callsite | Status |
+|---|---|
+| `teacher-dashboard.tsx` | shipped (053 phase 3) |
+| `student-session.tsx` | shipped (053 phase 3) |
+| `live-session-viewer.tsx` | shipped (053b) |
+| `problem-shell.tsx` | shipped (053 phase 3) |
+| `teacher-watch-shell.tsx` | shipped (053b) |
+| `use-yjs-tiptap.ts` | shipped (053 phase 3) |
+
+Phase 4 of plan 053 (HOCUSPOCUS_REQUIRE_SIGNED_TOKEN=1 flag flip
+in dev → staging → prod, then legacy-fallback removal) is now
+operationally clear. See plan 053 §Phase 4 for the rollout
+sequence.
+
 ## Risks
 
 - **Cross-class teachers**: a teacher who instructs across orgs sees

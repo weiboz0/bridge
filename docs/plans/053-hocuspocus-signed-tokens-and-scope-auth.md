@@ -120,10 +120,58 @@ Dispatch `codex:codex-rescue` on this plan focusing on (a) the JWT claim shape's
 
 ### Phase 4: enable the flag in dev → staging → prod, retire the legacy path
 
-- Soak in dev for 24h with `HOCUSPOCUS_REQUIRE_SIGNED_TOKEN=1`.
-- Enable in staging.
-- After a clean week in staging, enable in prod.
-- Remove the unsigned fallback parser branch (and the `ey`-prefix sniffing) in a follow-up commit. Bump the e2e spec to assert unsigned tokens are unconditionally rejected.
+**Status as of 2026-05-03: READY** — all 6 token construction sites
+are migrated to `useRealtimeToken` (4 in plan 053 phase 3 + 2 in
+plan 053b). Phase 4 is mostly operational (env flag flip + soak)
+with one code-side cleanup at the end.
+
+Pre-flight checklist (already shipped):
+- [x] Go mint endpoint behind `HOCUSPOCUS_TOKEN_SECRET` (phase 1).
+- [x] Hocuspocus verifies signed JWTs + DB recheck (phase 2).
+- [x] Client mint helper + 4 callsite migrations (phase 3).
+- [x] Plan 064 — parent-child linking schema + IsParentOf helper.
+- [x] Plan 053b — teacher-watch + parent-viewer migrated; broadened
+      `authorizeAttemptDoc` and `authorizeSessionDoc`.
+- [x] Backward-compat parser sniffs `ey` prefix in
+      `server/hocuspocus.ts` (legacy `userId:role` path stays
+      active when `HOCUSPOCUS_REQUIRE_SIGNED_TOKEN` is unset).
+
+Operational rollout (needs real-time soak — NOT autonomously
+deliverable):
+
+1. **Set `HOCUSPOCUS_TOKEN_SECRET` in dev** (if not already). Verify
+   the mint endpoint returns 200 and Hocuspocus accepts the JWT.
+2. **Set `HOCUSPOCUS_REQUIRE_SIGNED_TOKEN=1` in dev**. Soak for at
+   least 24h. Watch error rates on the Hocuspocus side; failure
+   modes look like "auth failed" and connection drops.
+3. **Set the same in staging.** Soak for at least 7 days. Monitor:
+   - Error rate on `/api/realtime/token` and Hocuspocus connect.
+   - Any reports of teacher-watch / parent-viewer / unit-editor
+     failures.
+4. **Set the same in prod.** Watch the dashboards.
+
+Code cleanup (queued for AFTER prod is stable, e.g. 7+ days post-
+flip):
+
+- Remove the unsigned fallback parser branch in
+  `server/hocuspocus.ts::onAuthenticate` (the `else` after
+  `isLikelyJwt(token)` check) and the `HOCUSPOCUS_REQUIRE_SIGNED_TOKEN`
+  flag itself — once the legacy path is gone, the flag becomes
+  vestigial.
+- Delete the `ey`-prefix sniff (`isLikelyJwt`) and `tokenKind:
+  "legacy"` paths.
+- Update `e2e/hocuspocus-auth.spec.ts` to assert unsigned tokens
+  are UNCONDITIONALLY rejected (currently the spec gates on
+  `HOCUSPOCUS_TOKEN_SECRET` being set; post-cleanup it should also
+  gate on the flag being ON in the test env, OR drop the gate
+  entirely if cleanup happens after prod flip).
+- Delete `server/attempts.ts::teacherCanViewAttempt` — only the
+  legacy auth path called it; once the legacy path is gone, this
+  TS helper has no caller. The Go-side
+  `AttemptStore.IsTeacherOfAttempt` becomes the single source of
+  truth.
+
+This cleanup is its own PR, filed when prod is stable.
 
 ## Codex Review of This Plan
 
