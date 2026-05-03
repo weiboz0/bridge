@@ -100,7 +100,11 @@ YAML files, run the importer, and the changes propagate. See
 2. Create a new project (or select existing)
 3. Navigate to **APIs & Services > Credentials**
 4. Create an **OAuth 2.0 Client ID** (Web application)
-5. Add authorized redirect URI: `http://localhost:3000/api/auth/callback/google`
+5. Add authorized redirect URIs:
+   - `http://localhost:3003/api/auth/callback/google` — Bridge's dev port (matches `PORT=3003 bun run dev` in `CLAUDE.md`).
+   - Add `http://localhost:<PORT>/api/auth/callback/google` for any other port you actually run on. NextAuth derives the redirect URI from the request's host:port, so `:3000` doesn't work if your dev server is on `:3003`.
+
+   The mismatch shows up as `Error 400: redirect_uri_mismatch` from Google during sign-in.
 6. Copy the Client ID and Client Secret to your `.env` file
 
 ## Auth.js Secret
