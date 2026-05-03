@@ -54,6 +54,7 @@ func newSessionPageFixture(t *testing.T, suffix string) *sessionPageFixture {
 		Topics:        topics,
 		TeachingUnits: units,
 		Orgs:          orgs,
+		ParentLinks:   store.NewParentLinkStore(db), // Plan 064.
 		Broadcaster:   events.NewBroadcaster(),
 	}
 

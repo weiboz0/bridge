@@ -253,6 +253,51 @@ func TestGetSessionTopics_Outsider_404(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, w.Code)
 }
 
+// Plan 064 Phase 5 — parent of a session participant should be
+// able to read the agenda. Pre-064 this was 404 because parents
+// have no class_membership.
+func TestGetSessionTopics_ParentOfParticipant_Allowed(t *testing.T) {
+	fx := newSessionPageFixture(t, "gst-parent")
+	ctx := context.Background()
+
+	// outsider (no class membership) becomes the "parent" — fixture
+	// only pre-builds outsider/student/teacher/admin/orgAdmin, no
+	// dedicated parent user.
+	parent := fx.outsider
+
+	// Joining the student as a session participant + active
+	// parent_link from outsider → student.
+	_, err := fx.h.Sessions.JoinSession(ctx, fx.sessionID, fx.student.ID)
+	require.NoError(t, err)
+	links := store.NewParentLinkStore(fx.db)
+	_, err = links.CreateLink(ctx, parent.ID, fx.student.ID, fx.admin.ID)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		fx.db.ExecContext(ctx, "DELETE FROM parent_links WHERE parent_user_id = $1 OR child_user_id = $1", parent.ID)
+		fx.db.ExecContext(ctx, "DELETE FROM session_participants WHERE session_id = $1", fx.sessionID)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/sessions/"+fx.sessionID+"/topics", nil)
+	req = withChiParams(withClaims(req, &auth.Claims{UserID: parent.ID}),
+		map[string]string{"id": fx.sessionID})
+	w := httptest.NewRecorder()
+	fx.h.GetSessionTopics(w, req)
+	assert.Equal(t, http.StatusOK, w.Code, "parent-of-participant must read the agenda")
+}
+
+// Belt-and-suspenders: an outsider WITHOUT a parent_link is still
+// denied (covers the "fall-back didn't accidentally weaken the
+// gate" case).
+func TestGetSessionTopics_OutsiderWithoutParentLink_StillDenied(t *testing.T) {
+	fx := newSessionPageFixture(t, "gst-noparent")
+	req := httptest.NewRequest(http.MethodGet, "/api/sessions/"+fx.sessionID+"/topics", nil)
+	req = withChiParams(withClaims(req, &auth.Claims{UserID: fx.outsider.ID}),
+		map[string]string{"id": fx.sessionID})
+	w := httptest.NewRecorder()
+	fx.h.GetSessionTopics(w, req)
+	assert.Equal(t, http.StatusNotFound, w.Code, "outsider without parent_link still gets 404")
+}
+
 func TestGetSessionTopics_ClassMember_Allowed(t *testing.T) {
 	fx := newSessionPageFixture(t, "gst-member")
 	req := httptest.NewRequest(http.MethodGet, "/api/sessions/"+fx.sessionID+"/topics", nil)

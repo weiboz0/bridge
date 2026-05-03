@@ -3,6 +3,7 @@ package handlers
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/url"
 
@@ -14,10 +15,11 @@ import (
 
 // AdminHandler handles admin-only endpoints.
 type AdminHandler struct {
-	Orgs  *store.OrgStore
-	Users *store.UserStore
-	Stats *store.StatsStore
-	DB    *sql.DB
+	Orgs        *store.OrgStore
+	Users       *store.UserStore
+	Stats       *store.StatsStore
+	ParentLinks *store.ParentLinkStore
+	DB          *sql.DB
 }
 
 // Routes registers admin routes (all require platform admin).
@@ -33,6 +35,16 @@ func (h *AdminHandler) Routes(r chi.Router) {
 		r.Post("/impersonate", h.StartImpersonate)
 		r.Get("/impersonate/status", h.ImpersonateStatus)
 		r.Delete("/impersonate", h.StopImpersonate)
+
+		// Plan 064 — parent-link CRUD (platform admin only).
+		r.Route("/parent-links", func(r chi.Router) {
+			r.Get("/", h.ListParentLinks)
+			r.Post("/", h.CreateParentLink)
+			r.Route("/{linkID}", func(r chi.Router) {
+				r.Use(ValidateUUIDParam("linkID"))
+				r.Delete("/", h.RevokeParentLink)
+			})
+		})
 	})
 }
 
@@ -219,4 +231,103 @@ func (h *AdminHandler) StopImpersonate(w http.ResponseWriter, r *http.Request) {
 		SameSite: http.SameSiteLaxMode,
 	})
 	writeJSON(w, http.StatusOK, map[string]bool{"stopped": true})
+}
+
+// --- Plan 064 — parent-link CRUD (platform admin only) ---
+
+// ListParentLinks handles GET /api/admin/parent-links?parent={uid}|child={uid}.
+// Exactly one of `parent` or `child` query params must be set.
+// Returns ALL links for that user (active + revoked) ordered by
+// created_at DESC.
+func (h *AdminHandler) ListParentLinks(w http.ResponseWriter, r *http.Request) {
+	if h.ParentLinks == nil {
+		writeError(w, http.StatusInternalServerError, "ParentLinks store unavailable")
+		return
+	}
+	parentID := r.URL.Query().Get("parent")
+	childID := r.URL.Query().Get("child")
+	if (parentID == "") == (childID == "") {
+		writeError(w, http.StatusBadRequest, "exactly one of `parent` or `child` query params is required")
+		return
+	}
+	var links []store.ParentLink
+	var err error
+	if parentID != "" {
+		links, err = h.ParentLinks.ListByParent(r.Context(), parentID)
+	} else {
+		links, err = h.ParentLinks.ListByChild(r.Context(), childID)
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	writeJSON(w, http.StatusOK, links)
+}
+
+// CreateParentLink handles POST /api/admin/parent-links. Body:
+//
+//	{ "parentUserId": "...", "childUserId": "..." }
+//
+// Returns 201 + the created link, or 409 if an active link already
+// exists for the pair, or 400 on validation errors (missing/equal
+// IDs).
+func (h *AdminHandler) CreateParentLink(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	if h.ParentLinks == nil {
+		writeError(w, http.StatusInternalServerError, "ParentLinks store unavailable")
+		return
+	}
+
+	var body struct {
+		ParentUserID string `json:"parentUserId"`
+		ChildUserID  string `json:"childUserId"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	if body.ParentUserID == "" || body.ChildUserID == "" {
+		writeError(w, http.StatusBadRequest, "parentUserId and childUserId are required")
+		return
+	}
+	if body.ParentUserID == body.ChildUserID {
+		writeError(w, http.StatusBadRequest, "parent and child must be different users")
+		return
+	}
+
+	link, err := h.ParentLinks.CreateLink(r.Context(), body.ParentUserID, body.ChildUserID, claims.UserID)
+	if err != nil {
+		if errors.Is(err, store.ErrParentLinkExists) {
+			writeError(w, http.StatusConflict, "an active parent_link already exists for this pair")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "Failed to create parent_link")
+		return
+	}
+	writeJSON(w, http.StatusCreated, link)
+}
+
+// RevokeParentLink handles DELETE /api/admin/parent-links/{linkID}.
+// Soft-revoke: flips status to 'revoked' + sets revoked_at. The
+// row stays for audit. Re-linking the same pair is supported via
+// a fresh CreateLink call (partial-unique allows it).
+func (h *AdminHandler) RevokeParentLink(w http.ResponseWriter, r *http.Request) {
+	if h.ParentLinks == nil {
+		writeError(w, http.StatusInternalServerError, "ParentLinks store unavailable")
+		return
+	}
+	linkID := chi.URLParam(r, "linkID")
+	revoked, err := h.ParentLinks.RevokeLink(r.Context(), linkID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if revoked == nil {
+		writeError(w, http.StatusNotFound, "Not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, revoked)
 }

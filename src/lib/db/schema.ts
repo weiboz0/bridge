@@ -828,6 +828,46 @@ export const unitCollectionItems = pgTable(
   })
 );
 
+// --- Parent Links (plan 064) ---
+//
+// Replaces the implicit `class_memberships role="parent"` model
+// (which leaked: any parent in a class could see all students in
+// the class, not just their child). Status enum: 'active' grants
+// access; 'revoked' stays in the table for audit. The partial
+// unique index supports re-linking after revoke.
+
+export const parentLinks = pgTable(
+  "parent_links",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    parentUserId: uuid("parent_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    childUserId: uuid("child_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    status: varchar("status", { length: 16 })
+      .$type<"active" | "revoked">()
+      .notNull()
+      .default("active"),
+    createdBy: uuid("created_by")
+      .notNull()
+      .references(() => users.id),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  },
+  (t) => ({
+    parentIdx: index("parent_links_parent_idx").on(t.parentUserId),
+    childIdx: index("parent_links_child_idx").on(t.childUserId),
+    // Partial unique: at most one ACTIVE link per (parent, child).
+    activeUniq: uniqueIndex("parent_links_active_uniq")
+      .on(t.parentUserId, t.childUserId)
+      .where(sql`${t.status} = 'active'`),
+  })
+);
+
 // --- Parent Reports ---
 
 export const parentReports = pgTable(

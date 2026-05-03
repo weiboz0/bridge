@@ -28,6 +28,7 @@ type Stores struct {
 	TopicProblems *store.TopicProblemStore
 	TeachingUnits   *store.TeachingUnitStore
 	UnitCollections *store.UnitCollectionStore
+	ParentLinks     *store.ParentLinkStore
 }
 
 // NewStores creates all stores from a database connection.
@@ -53,5 +54,6 @@ func NewStores(db *sql.DB) *Stores {
 		TopicProblems: store.NewTopicProblemStore(db),
 		TeachingUnits:   store.NewTeachingUnitStore(db),
 		UnitCollections: store.NewUnitCollectionStore(db),
+		ParentLinks:     store.NewParentLinkStore(db),
 	}
 }

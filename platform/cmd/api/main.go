@@ -189,7 +189,7 @@ func main() {
 		classH := &handlers.ClassHandler{Classes: stores.Classes, Orgs: stores.Orgs, Users: stores.Users}
 		classH.Routes(r)
 
-		sessionH := &handlers.SessionHandler{Sessions: stores.Sessions, Schedules: stores.Schedules, Classes: stores.Classes, Courses: stores.Courses, Topics: stores.Topics, TeachingUnits: stores.TeachingUnits, Orgs: stores.Orgs, Broadcaster: broadcaster}
+		sessionH := &handlers.SessionHandler{Sessions: stores.Sessions, Schedules: stores.Schedules, Classes: stores.Classes, Courses: stores.Courses, Topics: stores.Topics, TeachingUnits: stores.TeachingUnits, Orgs: stores.Orgs, ParentLinks: stores.ParentLinks, Broadcaster: broadcaster}
 		sessionH.Routes(r)
 
 		scheduleH := &handlers.ScheduleHandler{
@@ -227,7 +227,10 @@ func main() {
 			aiH.Routes(r)
 		}
 
-		parentH := &handlers.ParentHandler{Reports: stores.Reports}
+		parentH := &handlers.ParentHandler{
+			Reports:     stores.Reports,
+			ParentLinks: stores.ParentLinks,
+		}
 		parentH.Routes(r)
 
 		meH.Routes(r)
@@ -260,7 +263,13 @@ func main() {
 		orgDashH := &handlers.OrgDashboardHandler{Orgs: stores.Orgs, Courses: stores.Courses, Classes: stores.Classes, Stats: stores.Stats}
 		orgDashH.Routes(r)
 
-		adminH := &handlers.AdminHandler{Orgs: stores.Orgs, Users: stores.Users, Stats: stores.Stats, DB: database}
+		adminH := &handlers.AdminHandler{
+			Orgs:        stores.Orgs,
+			Users:       stores.Users,
+			Stats:       stores.Stats,
+			ParentLinks: stores.ParentLinks,
+			DB:          database,
+		}
 		adminH.Routes(r)
 
 		unitH := &handlers.TeachingUnitHandler{

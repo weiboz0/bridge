@@ -11,6 +11,7 @@ export const testDb = drizzle(testClient, { schema });
 
 export async function cleanupDatabase() {
   await testDb.delete(schema.parentReports);
+  await testDb.delete(schema.parentLinks);
   await testDb.delete(schema.submissions);
   await testDb.delete(schema.assignments);
   await testDb.delete(schema.documents);
