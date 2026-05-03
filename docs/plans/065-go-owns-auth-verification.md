@@ -1048,9 +1048,14 @@ Confirmed by Codex (pass-4):
 - No interaction issue between secret rotation and AdminChecker
   cache.
 
-### Pass 5 — pending re-dispatch (final convergence pass)
+### Pass 5 — 2026-05-03: CONCUR
 
-After the pass-4 fixes commit lands, dispatch Codex one more time
-to confirm the convergence. Expected outcome: CONCUR with no
-further blockers. If CONCUR, plan is cleared for Phase 1
-implementation per CLAUDE.md plan-review gate.
+Codex confirmed both pass-4 fixes correctly applied (stale §Approach
+sentence rewritten, Phase 3 impersonation ordering stated explicitly)
+with no new issues introduced. No blockers, no important non-blocking
+concerns.
+
+**Plan is cleared for Phase 1 implementation per CLAUDE.md plan-review
+gate.** Both Claude and Codex concur on the architecture, decisions,
+phasing, and risk mitigations. The first commit of Phase 1 implementation
+should reference this plan file with the agreed verdict embedded.
