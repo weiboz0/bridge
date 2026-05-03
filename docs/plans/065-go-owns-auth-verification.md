@@ -190,6 +190,34 @@ secret is distinct from `NEXTAUTH_SECRET`, `HOCUSPOCUS_TOKEN_SECRET`,
 and `BRIDGE_INTERNAL_SECRET` so each compromise is independently
 contained.
 
+### Secret rotation (multi-secret verification)
+
+Codex pass-3 flagged that a single HS256 secret + the
+"invalid → 401" rule means a secret rotation immediately
+invalidates every active session, producing a 401 storm. To enable
+zero-downtime rotation, `BRIDGE_SESSION_SECRET` is parsed as a
+comma-separated list (or read from a sibling
+`BRIDGE_SESSION_SECRETS` env var when more than one is set).
+**Sign with the first entry; verify against any entry.** Rotation
+procedure:
+
+1. Deploy with the new secret prepended:
+   `BRIDGE_SESSION_SECRETS=new,old`.
+2. New mints use `new`. Existing cookies signed with `old` still
+   verify.
+3. After 7 days (the cookie TTL), every active session has been
+   re-minted with `new`.
+4. Deploy with just the new secret: `BRIDGE_SESSION_SECRETS=new`.
+   Drops the dual-verifier window.
+
+Phase 1 implements this from the start so we never have to
+retrofit. `auth.SignBridgeSession(secret, ...)` takes the primary
+secret; `auth.VerifyBridgeSession(secrets []string, ...)` tries
+each in order. `BRIDGE_INTERNAL_SECRET` and `HOCUSPOCUS_TOKEN_SECRET`
+keep their single-string semantics — they don't have the same
+"break sessions on rotation" failure mode (server-to-server only,
+no user-impact on rotation).
+
 ### Why behind a flag
 
 Auth changes that ship in a single commit are how outages happen. The
@@ -287,20 +315,20 @@ type Middleware struct {
 Inside `RequireAuth`, after token verification produces `claims`:
 
 ```go
-// Always do the live-admin DB lookup for any authenticated request.
+// Always do the live-admin lookup for any authenticated request.
 // Codex pass-2 audit confirmed claims.IsPlatformAdmin is read across
 // virtually every handler file (~80 sites in classes, sessions,
 // courses, problems, attempts, units, collections, documents,
 // annotations, ai, parent, teacher, me, etc.) — a path-based skip
 // list would be impossible to keep in sync. The unconditional
-// lookup is cheap (indexed PK) and matches plan 050's
+// lookup is cheap (indexed PK + 60s LRU cache) and matches plan 050's
 // always-refresh model.
 isAdmin, err := m.AdminChecker.IsAdmin(r.Context(), claims.UserID)
 if err != nil {
-    // Log and fail-closed: claims.IsPlatformAdmin = false. We
-    // would rather temporarily 403 a real admin than silently
-    // grant admin to a stale JWT during a DB hiccup. Real admin
-    // gates pages re-render anyway; this is a transient inconvenience.
+    // Cache miss + DB error. Log and fail-closed: claims.IsPlatformAdmin
+    // = false. We would rather temporarily 403 a real admin than
+    // silently grant admin to a stale JWT during a DB outage. The
+    // 60s cache absorbs transient hiccups without surfacing here.
     slog.Warn("admin check DB lookup failed, fail-closing IsPlatformAdmin",
         "err", err, "userID", claims.UserID)
     claims.IsPlatformAdmin = false
@@ -346,19 +374,30 @@ change beyond DI. Phase 3 enumerates the callsites.
 
 **Add:**
 - `platform/internal/auth/bridge_session.go` — `BridgeSessionClaims`,
-  `SignBridgeSession`, `VerifyBridgeSession`. Mirrors
-  `realtime_jwt.go`'s shape; HS256, issuer `bridge-platform`, 7-day
-  TTL clamp, 30s NBF skew.
+  `SignBridgeSession(primarySecret, ...) (string, error)`,
+  `VerifyBridgeSession(secrets []string, token) (*BridgeSessionClaims, error)`.
+  Mirrors `realtime_jwt.go`'s shape; HS256, issuer `bridge-platform`,
+  7-day TTL clamp, 30s NBF skew. Verify tries each secret in order
+  (first match wins) so secret rotation has a 7-day overlap window.
+  Sign uses the first (primary) secret.
 - `platform/internal/auth/bridge_session_test.go` — sign+verify round
   trip, expired token, wrong secret, wrong issuer, missing claims,
-  TTL clamp.
+  TTL clamp, **multi-secret rotation** (sign with old, verify with
+  list containing both → succeeds; sign with new, verify with list
+  containing only old → fails).
 - `platform/internal/auth/admin_check.go` — `AdminChecker` interface
   + a default impl backed by `*store.UserStore` that does
-  `SELECT is_platform_admin FROM users WHERE id = $1`. Trivial
-  delegation; one method.
+  `SELECT is_platform_admin FROM users WHERE id = $1`. Wrapped in
+  a 60-second in-process LRU cache (size 1024 entries) to absorb
+  bursts and protect Postgres during DB brownouts. Cache is keyed
+  on user id. The cache is intentionally short-lived so admin
+  promote/demote propagates within a minute even at peak load —
+  the value of "live admin" is preserved while still adding a
+  defense-in-depth circuit against DB-connection-pool exhaustion
+  (Codex pass-3 important #4).
 - `platform/internal/auth/admin_check_test.go` — happy path, missing
   user (returns false + nil error so middleware doesn't 500), DB
-  error.
+  error, cache hit, cache TTL expiry, cache eviction at capacity.
 - `platform/internal/handlers/internal_sessions.go` — exposes
   `POST /api/internal/sessions`. Bearer-protected via
   `BRIDGE_INTERNAL_SECRET`. Body validation (email + name required,
@@ -376,18 +415,24 @@ change beyond DI. Phase 3 enumerates the callsites.
   `AdminChecker` into the middleware constructor. Remove any
   `auth.RequireAdmin` package-level references — they all become
   method calls on the middleware instance (`mw.RequireAdmin`).
-- `platform/internal/config/config.go` — add `BridgeSessionSecret`,
-  `BridgeInternalSecret`, and `BridgeSessionAuth` fields to the
-  `Config` struct. Read from env in the same loader that already
-  reads `NEXTAUTH_SECRET` (`config.go:78-80`) and
-  `HOCUSPOCUS_TOKEN_SECRET` (`config.go:94-96`). All three default
-  empty in dev; production startup guard rejects empty for the two
-  secrets when `BRIDGE_SESSION_AUTH=1`.
-- `.env.example` — add `BRIDGE_SESSION_SECRET=` and
-  `BRIDGE_INTERNAL_SECRET=` with comments explaining they are
-  distinct from `NEXTAUTH_SECRET` and `HOCUSPOCUS_TOKEN_SECRET`.
-  Also add `BRIDGE_SESSION_AUTH=` (default off, set to 1 to enable
-  bridge.session reading in Go middleware).
+- `platform/internal/config/config.go` — add `BridgeSessionSecrets`
+  (`[]string`), `BridgeInternalSecret` (`string`), and
+  `BridgeSessionAuth` (`bool`) fields to the `Config` struct. Read
+  `BRIDGE_SESSION_SECRETS` from env (comma-separated; trim
+  whitespace; reject empty entries); fall back to legacy single-name
+  `BRIDGE_SESSION_SECRET` if the plural is unset. Read in the same
+  loader that already reads `NEXTAUTH_SECRET` (`config.go:78-80`)
+  and `HOCUSPOCUS_TOKEN_SECRET` (`config.go:94-96`). All three
+  default empty in dev; production startup guard rejects empty
+  `BridgeSessionSecrets` and `BridgeInternalSecret` when
+  `BRIDGE_SESSION_AUTH=1`.
+- `.env.example` — add `BRIDGE_SESSION_SECRETS=` (comma-separated
+  list; first entry signs, all entries verify — see §"Secret
+  rotation") and `BRIDGE_INTERNAL_SECRET=` with comments explaining
+  they are distinct from `NEXTAUTH_SECRET` and
+  `HOCUSPOCUS_TOKEN_SECRET`. Also add `BRIDGE_SESSION_AUTH=`
+  (default off, set to 1 to enable bridge.session reading in Go
+  middleware).
 - `next.config.ts` — verify `/api/internal/*` is NOT in
   `GO_PROXY_ROUTES` (it isn't today — confirmed at
   `next.config.ts:10-43`). Add an explanatory comment near
@@ -667,7 +712,9 @@ external verifiers come online.
 | Lazy mint adds latency to authenticated requests | low | Mint is a single localhost HTTP call (~5ms in dev, similar in prod when Next and Go are colocated). Only fires when cookie is missing or within 24h of expiry — at most once per 6 days for steady-state users. |
 | Edge runtime restrictions break the mint | low | The mint helper uses only `fetch()` and base64 decoding — both fully Edge-supported. No DB calls, no Node-specific APIs. The Go mint endpoint runs in Node where DB access is fine. |
 | Live admin DB lookup hammers Postgres | low | Same indexed PK lookup plan 050 already does on every authenticated request. The path-based skip removes the cost from non-admin-related traffic. Add a basic load test in Phase 3 that confirms p99 latency is unchanged. |
-| Live-admin DB lookup adds latency to every authenticated request | low | Same indexed PK lookup plan 050 already does. Sub-millisecond. Add a basic load test in Phase 3 that confirms p99 latency is unchanged. |
+| Live-admin DB lookup adds latency to every authenticated request | low | Same indexed PK lookup plan 050 already does. Sub-millisecond. AdminChecker has a 60s in-process LRU cache to absorb bursts and protect against DB-connection-pool exhaustion. Phase 3 includes a basic load test confirming p99 latency is unchanged at 10× steady-state RPS. Acceptance: <1ms median admin-check latency under cache hit; <10ms p99 under cache miss; pool not saturated at 10× RPS. |
+| Secret rotation invalidates active sessions | medium | `BRIDGE_SESSION_SECRETS` is a comma-separated list. Sign with first; verify against any. Rotation procedure in §"Secret rotation" gives a 7-day overlap window before old secret is dropped, matching cookie TTL — no user-visible 401 storm. |
+| AdminChecker DB error = self-DDOS via fail-closed admin gate | low | The 60s LRU cache means a transient DB error doesn't fan out to every admin request; recently-cached values keep the gate working. Hard fail-closed (no cached value AND DB down) reverts to non-admin claims, which is the safer default than silently allowing admin during an outage. |
 | Auth.js v5 `req.auth` semantics in Edge | low | Verified by Codex pass-1: `req.auth` is the Edge-safe surface Auth.js v5 documents and uses internally. Phase 2's middleware integration test exercises this directly. |
 | Mint failure on first request after sign-in | medium | Helper fails closed: if Go is unreachable, no cookie is set and Go middleware falls back to JWE (legacy path is still active during rollout). User experience identical to today. |
 | Cross-domain cookies in prod | medium | If Bridge ever splits Next and Go onto different hostnames, `bridge.session` would need a `Domain=` attribute. Today Bridge runs on a single domain via Next's proxy; verified in `next.config.ts` rewrites. Document this as a Future Work note. |
@@ -741,15 +788,26 @@ big six):
 - Add `tests/unit/middleware-proxy-parity.test.ts` parity test
   asserting middleware matcher is a strict superset of
   `next.config.ts:GO_PROXY_ROUTES`.
-- **Auth.js cookie-attach integration test** (Codex pass-2 mandate
-  for Q1): add `e2e/bridge-session-mint.spec.ts` that drives a
-  real OAuth callback (via the Auth.js test stub or a mocked
-  provider) and asserts the response back to the browser carries
-  BOTH `authjs.session-token` AND `bridge.session` Set-Cookie
-  headers. This proves that `NextResponse.cookies.set` from the
-  `auth(...)`-wrapped middleware reliably attaches Set-Cookie even
-  on the first post-OAuth response. If this test cannot pass, the
-  whole approach pivots — without it, Q1 remains unproven.
+- **Cookie-attach integration test** (Codex pass-2 mandate for Q1,
+  pass-3 narrowed scope): add
+  `e2e/bridge-session-mint.spec.ts` that uses Bridge's existing
+  **credentials-provider** sign-in flow (eve@demo.edu / bridge123,
+  same fixture as `e2e/auth.setup.ts:6-7`) — NOT a real Google OAuth
+  flow, which Codex pass-3 confirmed isn't driveable in CI without
+  out-of-band secret allowlisting. The test:
+  1. Sign in via the credentials form.
+  2. Navigate to a portal page (`/teacher`).
+  3. Assert the response carries `bridge.session` as a Set-Cookie
+     header AND that the cookie is present in `context.cookies()`.
+  4. Make a follow-up authenticated API request (e.g., `/api/me/identity`)
+     and assert it succeeds (proves the cookie is being sent + read).
+
+  This proves that `NextResponse.cookies.set` from the
+  `auth(...)`-wrapped middleware reliably attaches Set-Cookie on
+  authenticated responses. The mechanism is identical for OAuth
+  callbacks (the lazy mint runs on EVERY authenticated middleware
+  invocation, not just sign-in). If this test cannot pass, the
+  whole approach pivots.
 - `bun run test` + `bun run test:e2e` (the new spec) clean.
 - Self-review.
 - Codex post-impl review of phase 2.
@@ -902,10 +960,59 @@ Confirmed by Codex (no resolution needed):
 - `BRIDGE_INTERNAL_SECRET` doesn't conflict with existing env vars
   (pass-2 Section 2 #3 confirmed).
 
-### Pass 3 — pending re-dispatch
+### Pass 3 — 2026-05-03: BLOCKED → 2 blockers + 3 important folded in
 
-Will dispatch after this commit lands. Pass-3 questions: confirm
-the always-DB-lookup approach is actually safe for production load,
-confirm the absent-vs-invalid `bridge.session` distinction in Phase 3
-is robust, confirm the e2e test approach is feasible given Auth.js
-v5's test stubbing surface.
+Codex pass-3 returned BLOCKED with two real issues. Both addressed:
+
+1. **Single HS256 secret + invalid → 401 = rotation 401 storm.**
+   A `BRIDGE_SESSION_SECRET` rotation invalidates every active
+   session because the plan forbids JWE fallback for invalid
+   `bridge.session`. Resolution: support a list of secrets via
+   `BRIDGE_SESSION_SECRETS` (comma-separated). Sign with the first;
+   verify against any. 7-day overlap window during rotation
+   (matches cookie TTL). New §"Secret rotation" documents the
+   procedure. `bridge_session.go` API updated so `VerifyBridgeSession`
+   takes `[]string`.
+
+2. **e2e test for "real Google OAuth callback" infeasible in CI.**
+   Codex confirmed Bridge's existing Playwright suite uses
+   credentials-provider login; real Google OAuth requires
+   out-of-band secret allowlisting. Resolution: Phase 2 e2e test
+   uses the credentials-provider sign-in flow (eve@demo.edu /
+   bridge123, same fixture as `e2e/auth.setup.ts:6-7`). The lazy
+   mint runs on EVERY authenticated middleware invocation, so the
+   credentials path proves the same Set-Cookie reliability the
+   plan needs.
+
+Important non-blocking concerns folded in:
+
+3. **Risk table stale** — "path-based skip removes the cost" row
+   replaced with a real acceptance-criteria row including p99
+   latency and pool-saturation expectations.
+
+4. **AdminChecker self-DDOS during DB brownout** — added a 60s
+   in-process LRU cache (1024 entries) wrapping the AdminChecker
+   default impl. Absorbs bursts; recently-cached values keep the
+   gate working through transient hiccups. Hard fail-closed
+   (cache miss + DB down) reverts to non-admin claims, the safer
+   default.
+
+5. **e2e wiring needs explicit stub** — already addressed by switching
+   to credentials-provider; no real-OAuth interception layer needed.
+
+Confirmed by Codex (no resolution needed):
+
+- Store lookup shape matches plan's premise (sub-millisecond
+  indexed PK query).
+- Plan 050 DB-read pattern is the right analogue.
+- Auth middleware structure supports the injection point.
+- Absent-vs-invalid `bridge.session` split is correctly planned.
+- Cookie attributes (httpOnly/sameSite=lax/secure-in-prod) are
+  correct.
+- Clock-skew handling (NBF -30s) mirrors existing realtime JWT.
+
+### Pass 4 — pending re-dispatch
+
+Will dispatch after this commit lands. Pass-4 should confirm the
+multi-secret rotation API + the AdminChecker LRU cache shape are
+sound, and surface any remaining surprises.
