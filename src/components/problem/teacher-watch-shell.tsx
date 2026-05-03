@@ -12,6 +12,7 @@ import { ProblemDescription } from "@/components/problem/problem-description";
 import { AttemptCardsRow } from "@/components/problem/attempt-cards-row";
 import { CodeEditor } from "@/components/editor/code-editor";
 import { useYjsProvider } from "@/lib/yjs/use-yjs-provider";
+import { useRealtimeToken } from "@/lib/realtime/use-realtime-token";
 import {
   TestResultsCard,
   type TestRunSummary,
@@ -47,30 +48,21 @@ export function TeacherWatchShell({
     [attempts, activeAttemptId]
   );
 
-  // Connect read-only to the active attempt's Yjs room. Hocuspocus enforces
-  // read-only on the teacher side via teacherCanViewAttempt; CodeEditor
-  // additionally renders Monaco with readOnly=true.
-  //
-  // Plan 053 phase 3 — DELIBERATELY NOT migrated to useRealtimeToken.
-  // Reasons:
-  //   1. Phase 1 narrowed `attempt:{aid}` mint scope to OWNER-ONLY.
-  //      A teacher minting for a student's attempt would get 403.
-  //   2. The TS-side `teacherCanViewAttempt` helper at
-  //      server/attempts.ts:72 is itself broken — it queries
-  //      `problems.topic_id` which was dropped in migration 0013
-  //      (problem bank rework). Teacher-watch via legacy auth has
-  //      been silently failing since then.
-  //
-  // Tracked in plan 053b (filed as a follow-up): expand the Go
-  // `authorizeAttemptDoc` to include class-staff via a fixed
-  // attempt → topic_problems → topic → course → class join, and
-  // migrate this callsite. Until 053b ships, teacher-watch keeps the
-  // legacy `${teacherId}:teacher` token. With HOCUSPOCUS_REQUIRE_SIGNED_TOKEN=1
-  // (phase 4 cutover), this view will fail until 053b lands — DO
-  // NOT flip the flag in prod before 053b is shipped.
+  // Connect read-only to the active attempt's Yjs room. Plan 053b
+  // unblocked this — Go's authorizeAttemptDoc now allows class-staff
+  // who share a class with the attempt owner (single-EXISTS via the
+  // new IsTeacherOfAttempt store helper that enforces both
+  // constraints). The TS-side teacherCanViewAttempt was also fixed
+  // in plan 053b Phase 2 (was querying the dropped problems.topic_id
+  // column since migration 0013). Hocuspocus still renders the
+  // editor with readOnly=true via the role claim.
+  const documentName = teacherId && activeAttemptId
+    ? `attempt:${activeAttemptId}`
+    : "noop";
+  const realtimeToken = useRealtimeToken(documentName);
   const { yText, provider, connected } = useYjsProvider({
-    documentName: teacherId && activeAttemptId ? `attempt:${activeAttemptId}` : "noop",
-    token: teacherId ? `${teacherId}:teacher` : "",
+    documentName,
+    token: realtimeToken,
   });
 
   // Editor remounts on attempt switch.

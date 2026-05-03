@@ -36,6 +36,7 @@ type RealtimeHandler struct {
 	Problems      *store.ProblemStore
 	Attempts      *store.AttemptStore
 	Users         *store.UserStore
+	ParentLinks   *store.ParentLinkStore // Plan 053b Phase 4 — parent-of-doc-owner gate.
 	// HocuspocusTokenSecret is the HMAC key shared between the Go API
 	// and the Hocuspocus Node process. Empty = realtime endpoints
 	// return 503 (server misconfigured).
@@ -297,6 +298,22 @@ func (h *RealtimeHandler) authorizeSessionDoc(ctx context.Context, claims *auth.
 		}
 	}
 
+	// Plan 053b Phase 4 — parent of the doc-owning student. Two
+	// constraints:
+	//   1. Caller has an ACTIVE parent_link to studentID.
+	//   2. studentID is a participant in THIS session (so a parent
+	//      of one student can't mint tokens for unrelated sessions
+	//      whose docName happens to mention their child's id).
+	// (1) is IsParentOf; (2) is the GetSessionParticipant lookup
+	// already used below for the session-participant fall-back.
+	if h.ParentLinks != nil {
+		if isParent, err := h.ParentLinks.IsParentOf(ctx, claims.UserID, studentID); err == nil && isParent {
+			if existing, perr := h.Sessions.GetSessionParticipant(ctx, sessionID, studentID); perr == nil && existing != nil {
+				return "parent", nil
+			}
+		}
+	}
+
 	// Otherwise: caller is opening THEIR OWN doc. sub must match
 	// studentId AND they must be a class member or session
 	// participant.
@@ -371,16 +388,24 @@ func (h *RealtimeHandler) authorizeBroadcastDoc(ctx context.Context, claims *aut
 	return "", &authDecision{Status: http.StatusForbidden, Message: "broadcast: not a member or teacher of this session"}
 }
 
-// attempt:{attemptId} — Phase 1 narrow rule: ATTEMPT OWNER ONLY.
-// No admin bypass, no impersonator bypass, no class-staff. The
-// teacher-watch shell currently constructs `${teacherId}:teacher`
-// for the attempt doc; after Phase 1 ships, teacher-watch with a
-// forged token still fails (good) but teacher-watch with a real
-// token won't work either until Phase 2/3 wires up the class-staff
-// path. The plumbing requires resolving attempt → problem →
-// topic_problems → topic → course → class, which is its own
-// dependency graph. Tracked as a Phase 2 follow-up; Phase 1 is
-// intentionally narrow to ship.
+// attempt:{attemptId} — plan 053b broadens the Phase 1 narrow rule.
+//
+// Authorization paths:
+//
+//	Owner               → role="user"
+//	Platform admin      → role="teacher"
+//	Impersonator        → role="teacher" (admin-driven)
+//	Class instructor/TA where attempt-owner is in the SAME class
+//	                    → role="teacher"
+//	Org_admin where attempt-owner is in some class for that course
+//	                    → role="teacher"
+//	Anyone else         → 403
+//
+// Both class-staff and org_admin checks REQUIRE that the attempt
+// owner shares a class with the caller — Codex caught the
+// popular-problem leak: a teacher of Class A could otherwise mint
+// tokens for a student in Class B if both classes use the same
+// problem. The single-EXISTS store helpers carry both constraints.
 func (h *RealtimeHandler) authorizeAttemptDoc(ctx context.Context, claims *auth.Claims, attemptID string) (string, *authDecision) {
 	if h.Attempts == nil {
 		return "", &authDecision{Status: http.StatusInternalServerError, Message: "Attempts store unavailable"}
@@ -392,10 +417,41 @@ func (h *RealtimeHandler) authorizeAttemptDoc(ctx context.Context, claims *auth.
 	if attempt == nil {
 		return "", &authDecision{Status: http.StatusNotFound, Message: "Attempt not found"}
 	}
+
+	// Owner.
 	if attempt.UserID == claims.UserID {
 		return "user", nil
 	}
-	return "", &authDecision{Status: http.StatusForbidden, Message: "Not authorized (Phase 1 owner-only; teacher-watch deferred to phase-2)"}
+
+	// Platform admin / impersonator bypass — admins need oversight
+	// that crosses class membership. Plan 053 Phase 1 deliberately
+	// withheld this; plan 053b lifts it.
+	if claims.IsPlatformAdmin || claims.ImpersonatedBy != "" {
+		return "teacher", nil
+	}
+
+	// Class instructor / TA. Single EXISTS verifies both that the
+	// caller is class-staff AND the attempt owner is in the same
+	// class. Closes the popular-problem leak.
+	ok, err := h.Attempts.IsTeacherOfAttempt(ctx, claims.UserID, attempt.ID)
+	if err != nil {
+		return "", &authDecision{Status: http.StatusInternalServerError, Message: "Database error"}
+	}
+	if ok {
+		return "teacher", nil
+	}
+
+	// Org admin oversight — same privacy boundary (attempt owner
+	// must be enrolled in some class for the relevant course).
+	ok, err = h.Attempts.IsOrgAdminOfAttempt(ctx, claims.UserID, attempt.ID)
+	if err != nil {
+		return "", &authDecision{Status: http.StatusInternalServerError, Message: "Database error"}
+	}
+	if ok {
+		return "teacher", nil
+	}
+
+	return "", &authDecision{Status: http.StatusForbidden, Message: "Not authorized to watch this attempt"}
 }
 
 // unit:{unitId} — caller may EDIT the unit (CanEditUnit semantics).

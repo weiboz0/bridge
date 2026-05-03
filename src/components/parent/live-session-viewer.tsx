@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useState, useEffect } from "react";
 import { useYjsProvider } from "@/lib/yjs/use-yjs-provider";
+import { useRealtimeToken } from "@/lib/realtime/use-realtime-token";
 import { CodeEditor } from "@/components/editor/code-editor";
 
 interface SessionTopic {
@@ -17,40 +18,35 @@ interface SessionTopic {
 interface LiveSessionViewerProps {
   sessionId: string;
   studentId: string;
-  parentId: string;
+  /**
+   * @deprecated Plan 053b dropped the legacy `${parentId}:parent`
+   * token construction. The mint endpoint now signs tokens server-
+   * side after verifying the parent_link. Kept on the props
+   * interface for backward-compat with existing callers; remove
+   * after consumers stop passing it.
+   */
+  parentId?: string;
   editorMode: string;
 }
 
 export function LiveSessionViewer({
   sessionId,
   studentId,
-  parentId,
   editorMode,
 }: LiveSessionViewerProps) {
   const [topics, setTopics] = useState<SessionTopic[]>([]);
+  // Plan 053b Phase 4 — migrated to useRealtimeToken. The Go
+  // `authorizeSessionDoc` now has a parent path that requires:
+  //   1. Active parent_link from caller → studentId, AND
+  //   2. studentId is a participant in THIS session (so a parent
+  //      of one student can't mint tokens for unrelated sessions).
+  // Both gates ship in plan 064 (parent_links table) + this PR.
   const documentName = `session:${sessionId}:user:${studentId}`;
-  // Plan 053 phase 3 — DELIBERATELY NOT migrated to useRealtimeToken.
-  //
-  // The Go `authorizeSessionDoc` has no parent path: there is no
-  // parent-child link in the DB to verify against. Plan 049 was
-  // scheduled to add parent-child linking but didn't ship; today
-  // parent reports return 501 (see `platform/internal/handlers/parent.go`).
-  // The legacy Hocuspocus auth (`server/hocuspocus.ts:46-52`) accepts
-  // role==="parent" without further checks — that's the only reason
-  // this view works today, and it's also a security hole the plan-053
-  // rework is closing.
-  //
-  // Migrating here would require either (a) plan 049's parent-child
-  // linking AND a new authorizeSessionDoc parent path, or (b) a
-  // separate parent-viewer doc-name that the existing
-  // canViewParentSession helper can gate. Tracked in plan 053b.
-  // HOCUSPOCUS_REQUIRE_SIGNED_TOKEN=1 (phase 4 cutover) MUST NOT flip
-  // in prod until 053b ships, or parent-viewer breaks.
-  const token = `${parentId}:parent`;
+  const realtimeToken = useRealtimeToken(documentName);
 
   const { yText, provider, connected } = useYjsProvider({
     documentName,
-    token,
+    token: realtimeToken,
   });
 
   useEffect(() => {
