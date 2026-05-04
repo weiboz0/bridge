@@ -335,6 +335,10 @@ func (h *ProblemHandler) CreateProblem(w http.ResponseWriter, r *http.Request) {
 		CreatedBy:     claims.UserID,
 	})
 	if err != nil {
+		if errors.Is(err, store.ErrSlugConflict) {
+			writeFieldError(w, http.StatusConflict, "Slug already taken in this scope", "slug")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "Failed to create problem")
 		return
 	}
@@ -409,6 +413,10 @@ func (h *ProblemHandler) UpdateProblem(w http.ResponseWriter, r *http.Request) {
 
 	updated, err := h.Problems.UpdateProblem(r.Context(), problemID, body)
 	if err != nil {
+		if errors.Is(err, store.ErrSlugConflict) {
+			writeFieldError(w, http.StatusConflict, "Slug already taken in this scope", "slug")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
 	}

@@ -669,3 +669,26 @@ func TestProblemHandler_ListByTopic_NonMember404(t *testing.T) {
 	// The topic and course both exist, so no 404 case here; 403 is the answer.
 	assert.Equal(t, http.StatusForbidden, w.Code)
 }
+
+// Plan 071 phase 1 — slug unique-violation maps to 409 with field metadata
+// so the form can pin the error inline.
+func TestProblemHandler_CreateProblem_Returns409OnSlugConflict(t *testing.T) {
+	fx := newProblemFixture(t, t.Name())
+	teacherID := fx.teacher1.ID
+
+	body := map[string]any{
+		"scope": "personal", "scopeId": teacherID,
+		"title": "Two Sum A", "slug": "two-sum",
+	}
+	w1 := doPostJSON(t, fx.h.CreateProblem, "/api/problems", body, nil, fx.claims(fx.teacher1, false))
+	require.Equal(t, http.StatusCreated, w1.Code, "first create should succeed")
+
+	body["title"] = "Two Sum B"
+	w2 := doPostJSON(t, fx.h.CreateProblem, "/api/problems", body, nil, fx.claims(fx.teacher1, false))
+	assert.Equal(t, http.StatusConflict, w2.Code)
+
+	var errBody map[string]string
+	require.NoError(t, json.NewDecoder(w2.Body).Decode(&errBody))
+	assert.Equal(t, "slug", errBody["field"], "field metadata must point at slug")
+	assert.NotEmpty(t, errBody["error"], "error message must be present")
+}
