@@ -1,6 +1,7 @@
 import { api, ApiError } from "@/lib/api-client";
 import { getPortalConfig } from "@/lib/portal/nav-config";
 import { Sidebar } from "./sidebar";
+import { IdentityDriftBanner } from "./identity-drift-banner";
 import { redirect } from "next/navigation";
 import type { PortalRole, UserRole } from "@/lib/portal/types";
 
@@ -57,6 +58,7 @@ export async function PortalShell({ portalRole, children }: PortalShellProps) {
         currentRole={portalRole}
       />
       <main className="flex-1 min-h-screen pb-16 md:pb-0">
+        <IdentityDriftBanner />
         {children}
       </main>
     </div>
