@@ -19,7 +19,8 @@ Concrete missing flows:
 |---|---|---|
 | Invite/add a teacher to the org | ✅ `POST /api/orgs/{id}/members` | ❌ no form |
 | Invite/add a student to the org | ✅ same endpoint | ❌ no form |
-| Update teacher/student's role within the org | ✅ `PATCH /api/orgs/{id}/members/{memberId}` | ❌ no UI |
+| Update teacher/student's STATUS within the org | ✅ `PATCH /api/orgs/{id}/members/{memberId}` (accepts `{status}` only) | ❌ no UI |
+| Update teacher/student's ROLE within the org | ❌ endpoint doesn't exist (deferred to plan 069b) | ❌ no UI |
 | Remove a member | ✅ `DELETE /api/orgs/{id}/members/{memberId}` | ❌ no UI |
 | Drill into a class to see its roster + instructor | ✅ `GET /api/classes/{id}` + `/api/classes/{id}/members` | ❌ from `/org/classes`, no clickable rows |
 | Update org contact email / domain | ✅ `PATCH /api/orgs/{id}` | ❌ "coming later" |
@@ -93,10 +94,10 @@ When the org has a `domain` set, the invite forms (§1) check the email's domain
 
 1. **No email-token invites in v1.** The current `AddMember` requires the user to already exist. Token invites are a meaningful schema addition (token table, expiry, single-use enforcement); plan 069b owns that.
 2. **Server components for read; client components only for forms.** Same precedent as plan 066. Mutations go through `<form action={serverAction}>` where possible, otherwise `useState` + `onSubmit`.
-3. **Role escalation gating: stays at the API layer.** UI doesn't pre-check if the org admin can promote someone to `org_admin` — backend rejects with 403. UI surfaces the rejection.
+3. **Role changes are out of scope for v1** (Codex pass-2). The backend's PATCH endpoint accepts `{status}` only. Role-change UI defers to plan 069b which would add the missing backend endpoint. The "promote to org_admin" path the original plan mentioned is a 069b concern; this plan ships status-only quick-actions.
 4. **Class-drill-down is read-only with the "open in teacher portal" escape hatch.** Org admins are operators, not instructors. If they need to mutate class state (assignments, sessions, etc.), they sign in as a teacher in that class. No duplicate UIs.
 5. **Settings edit auto-saves on blur for low-stakes fields (contact name, domain), explicit Save for high-stakes (email).** Pulling back from this — too clever. Single Save button at the bottom; whole form is one PATCH. Reviewer didn't ask for granular saves.
-6. **Audit "last updated by" is OPTIONAL for v1.** If the schema doesn't have `updated_by` on `organizations`, just show `updated_at`. Adding the column is a 5-minute migration if/when product asks for it.
+6. **Audit "last updated by" is DEFERRED for v1.** Codex pass-1 confirmed `organizations` has no `updated_by` column. Settings UI shows only `updated_at` ("Last updated {timestamp}"). Adding `updated_by` is a 5-minute migration if/when product asks; not in this plan.
 
 ## Files
 
@@ -112,10 +113,7 @@ When the org has a `domain` set, the invite forms (§1) check the email's domain
 ### Phase 2 — Class drill-down
 
 **Add:**
-- `src/app/(portal)/org/classes/[classId]/page.tsx` — server component. Fetches class + members. Codex pass-1 important #3: `GET /api/classes/{id}` returns `courseId` but NOT `courseTitle`; the org-classes-list endpoint (`/api/org/classes`) DOES include the title. The detail page either:
-  - **A**: makes a second `GET /api/courses/{courseId}` fetch to pull the title (one extra round-trip).
-  - **B**: extends `GET /api/classes/{id}` to include `courseTitle` (small backend change).
-  Going with A for v1 — keeps the backend untouched.
+- `src/app/(portal)/org/classes/[classId]/page.tsx` — server component. Fetches class + members. Codex pass-1 noted `GET /api/classes/{id}` returns `courseId` but NOT `courseTitle`. Pass-2 caught a real auth gap with the original "two-fetch" approach: `GET /api/courses/{courseId}` is gated to creator/platform-admin/class-member only (`platform/internal/handlers/courses.go:141-172`). An org admin who isn't enrolled in the class would 403 on the second fetch. Resolution (option B from pass-1, now required not optional): **extend `GET /api/classes/{id}` to also return `courseTitle`**. Single backend change adds an inline join in the existing class query. Phase 2 includes the backend change explicitly.
 - `src/components/org/archive-class-button.tsx` — client component. Confirmation dialog → empty-body PATCH → refresh. Codex pass-1 confirmed `PATCH /api/classes/{id}` takes NO request body — `ArchiveClass` unconditionally sets `status='archived'`. The fetch sends `{ method: 'PATCH' }` with no body.
 
 **Modify:**
@@ -150,7 +148,7 @@ When the org has a `domain` set, the invite forms (§1) check the email's domain
 | 404-on-AddMember UX is awkward (have to ask invitee to register first) | medium | Surface the registration link prominently, with copy-to-clipboard. Document the limitation in the form's help text. v2 / plan 069b adds token invites. |
 | Class archive is irreversible from this UI | medium | Confirmation dialog is required. Backend's archive is reversible (`classes.is_archived` is a column flip), but UI doesn't expose un-archive in v1. Add an "Archived classes" filter on `/org/classes` if needed. |
 | Settings edit could orphan org if email is invalid | low | zod validation client-side + backend re-validation. The org's `contact_email` field is informational; not used for sign-in. |
-| Org admin removes themselves from their own org | medium | API doesn't currently prevent this. Add UI-side guard: if `memberId === currentUserId`, disable the Remove button with tooltip "Use the org transfer flow to leave an org." (No transfer flow exists; treat this as documentation that the path is blocked at v1.) |
+| Org admin removes themselves from their own org | medium | API doesn't currently prevent this. Add UI-side guard: compare the row's `userId` field to `identity.userId` (NOT membership `id` — Codex pass-2 caught the original guard compared the wrong fields). If equal, disable the Remove button with tooltip "Use the org transfer flow to leave an org." (No transfer flow exists; treat this as documentation that the path is blocked at v1.) |
 | Cross-org member adds (teacher already in another org) | low | Backend allows; UI doesn't need to special-case. Role list shows both org memberships independently. |
 | Inviting an existing user to an org they're already in | low | Backend should be checked — if it returns 409, UI maps to "Already a member of this org." |
 
@@ -199,7 +197,7 @@ Specific questions:
 
 - Implement actions menu component.
 - Wire into both pages.
-- Smoke test: change a teacher's role, verify; remove a student, verify.
+- Smoke test: change a teacher's status (active → suspended → active), verify; remove a student, verify.
 - Codex post-impl review.
 - PR + merge.
 
@@ -209,6 +207,18 @@ Specific questions:
 - Smoke test: invite a same-domain email (no warning); invite a different-domain email (confirmation dialog).
 
 ## Codex Review of This Plan
+
+### Pass 2 — 2026-05-03: BLOCKED → 1 auth blocker + 3 cleanup items folded
+
+Codex pass-2 confirmed pass-1 fixes are clean. Two new findings folded:
+
+1. **Course-title auth gap (BLOCKER)** — original Phase 2 said "make a second `GET /api/courses/{courseId}` fetch", but that endpoint requires the caller to be the creator, platform admin, or class member. An org admin not enrolled would 403. Resolved: Phase 2 now extends `GET /api/classes/{id}` to include `courseTitle` via inline join — single backend change, accessible to any caller authorized for the class.
+
+2. **Self-remove guard compared wrong field** — original mitigation checked `memberId === currentUserId`, but membership row has separate `id` and `userId` fields. Resolved: Risks-table mitigation now compares `member.userId === identity.userId`.
+
+3. **Stale role-change language** — Problem table row, Decision §3, smoke-test language all updated to status-only.
+
+4. **Stale `updated_by` references** — Decision §6 cleaned up; settings UI is `updated_at` only (no "by").
 
 ### Pass 1 — 2026-05-03: BLOCKED → 2 blockers + 3 important folded in
 

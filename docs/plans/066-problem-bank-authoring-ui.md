@@ -202,7 +202,7 @@ Go endpoints via the `api()` helper. No backend changes.
 - `src/components/problem/problem-detail.tsx` — pure presentation: metadata header, markdown description, starter-code Monaco (read-only), test-cases card list, action buttons, **focus-area attachments panel** (see below).
 - `src/components/problem/test-case-list.tsx` — read-only display with example/hidden split.
 - `src/components/problem/problem-actions.tsx` — client component with Publish/Archive/Unarchive/Fork/Delete buttons. Each posts and triggers `router.refresh()`.
-- `src/components/problem/focus-area-attach.tsx` — client component for the attach-to-focus-area flow. Renders the existing attachments list (one row per `topic_problems` entry, with a Detach button) and an "Attach to focus area" button. Clicking opens a modal listing the teacher's courses (each expandable to its focus areas); selecting one POSTs `/api/topics/{topicId}/problems` with `{ problemId }` (the existing endpoint at `platform/internal/handlers/topic_problems.go:40` infers sort_order). Detach POSTs `DELETE /api/topics/{topicId}/problems/{problemId}` (`platform/internal/handlers/topic_problems.go:44`). Surfaces 403/409 inline.
+- `src/components/problem/focus-area-attach.tsx` — client component for the attach-to-focus-area flow. Renders the existing attachments list (one row per `topic_problems` entry, with a Detach button) and an "Attach to focus area" button. Clicking opens a modal listing the teacher's courses (each expandable to its focus areas); selecting one POSTs `/api/topics/{topicId}/problems` with `{ problemId, sortOrder }` (`platform/internal/handlers/topic_problems.go:40`). The client computes `sortOrder = max(existing sort_order) + 1` from a fetch of the focus-area's current `topic_problems` list — see §Approach §7 for why (the backend defaults to 0 and would shove existing entries). Detach POSTs `DELETE /api/topics/{topicId}/problems/{problemId}` (`platform/internal/handlers/topic_problems.go:44`). Surfaces 403/409 inline.
 
 Required new fetch:
 - `GET /api/problems/{id}/topics` — list focus-area attachments for this problem. **Need to verify this endpoint exists** (Phase 0 question for Codex). If it doesn't, list is computed client-side by walking the teacher's courses + filtering attachments — slower, but no backend change needed for v1.
@@ -341,11 +341,17 @@ the larger pages.
 
 ### Phase 5: Polish (PR 5, optional)
 
-- "View as student" button.
 - Empty-state link to `/teacher/problems/new`.
 - Optional: markdown preview in description field.
+- ("View as student" stays deferred — see §Files Phase 5 for why.)
 
 ## Codex Review of This Plan
+
+### Pass 3 — 2026-05-03: CONCUR-WITH-CHANGES → 2 stale-text fixes folded
+
+Codex pass-3 confirmed convergence on substance but caught two stale-text artifacts from pass-2 that survived the fold-in:
+1. Phase 5 polish bullet still listed "View as student" button (line 344) — removed; the deferral in Files §Phase 5 is the canonical record.
+2. Phase 2 file stub for `focus-area-attach.tsx` (line 205) still said `{ problemId }` and "infers sort_order", contradicting §Approach §7 — rewritten to match (`{ problemId, sortOrder }` with explicit max+1 client computation).
 
 ### Pass 2 — 2026-05-03: CONCUR-WITH-CHANGES → 4 items folded in
 

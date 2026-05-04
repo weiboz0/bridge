@@ -211,7 +211,7 @@ role. The sidebar will now auto-expand the Admin group instead.
     - For non-org-scoped roles (`admin`, `teacher`, `student`, `parent`): match by `basePath` only.
     - For `org_admin`: match by `basePath === "/org"` AND the role's `orgId` equals `searchParams.get("orgId")`. If the URL has no `orgId` and the user has multiple `org_admin` memberships, no `org_admin` section is auto-expanded (the user is presumed to be on a non-org-specific page).
   - Persist non-active group expansion state in localStorage keyed on `bridge.sidebar.expanded` — same composite-key shape (`${role}:${orgId ?? "none"}`) so localStorage and the active-section logic line up.
-  - The Phase 1 PR ALSO wires `localStorage.removeItem("bridge.sidebar.expanded")` into `src/components/portal/sidebar-footer.tsx` (and any other sign-out paths) — Codex pass-2 flagged the persistence-without-cleanup window as a non-blocking concern; resolving it in the same PR avoids the gap entirely. (The `sign-out-button.tsx` wiring stays in Phase 3 since Phase 1 doesn't touch that file.)
+  - The Phase 1 PR wires `localStorage.removeItem("bridge.sidebar.expanded")` into BOTH sign-out paths — `src/components/portal/sidebar-footer.tsx` AND `src/components/sign-out-button.tsx`. Codex pass-3 flagged that wiring only one path in PR 1 leaves a window where some sign-out flows clear the key and others don't. Both clears are 1-line additions; ship them together.
 - `src/components/portal/sidebar-nav.tsx`: rename to
   `sidebar-section-items.tsx` OR keep as-is and have
   `sidebar-section.tsx` reuse it. The latter is simpler — no
@@ -339,14 +339,17 @@ Specific questions:
   orgId composite-key + orgId-URL assertions.
 - Add additional `<SidebarSection>` unit test cases per Phase 4.
 - Add e2e smoke for the sectioned nav.
-- Wire `localStorage.removeItem("bridge.sidebar.expanded")`
-  into both signout paths (`sidebar-footer.tsx`,
-  `sign-out-button.tsx`).
 - Delete `src/components/portal/role-switcher.tsx`.
+- (LocalStorage `removeItem` for both sign-out paths landed in
+  Phase 1 per Codex pass-3 — not in this phase.)
 - Codex post-impl review.
 - PR + merge.
 
 ## Codex Review of This Plan
+
+### Pass 3 — 2026-05-03: CONCUR-WITH-CHANGES → localStorage convergence
+
+Codex pass-3 confirmed the stub contradiction is fully resolved. One remaining concern: the `sign-out-button.tsx` localStorage clear was scheduled for Phase 3 but the `sidebar-footer.tsx` clear was already in Phase 1, creating a window between PR 1 and PR 3 where one sign-out flow clears the key and the other doesn't. Folded: both clears now ship in Phase 1 (1-line additions to both files).
 
 ### Pass 2 — 2026-05-03: BLOCKED → 1 stub-contradiction folded in
 

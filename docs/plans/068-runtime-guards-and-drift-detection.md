@@ -44,7 +44,7 @@ Four small, independent additions:
 
 2. **Identity-drift warning banner.** Add a small client component that fires `/api/auth/debug` on every portal page mount and renders a red banner if `match === false` AND `goClaimsUserId === devUserPlaceholderId`. The endpoint already exists (`src/app/api/auth/debug/route.ts`) and returns 404 in production builds — banner only ever shows in dev/staging where the mismatch could happen. Visible to all users (so a teacher hitting weirdness can flag it), not just operators.
 
-3. **Migration health check at startup.** Codex pass-1 confirmed the actual table is `drizzle.__drizzle_migrations` with columns `id, hash, created_at` — there is NO `version` column, and `_journal.json` covers only entries 0000-0002 while the codebase has 0000-0024 SQL files. The original plan's `SELECT MAX(version)` would not work. Revised approach: at boot, count rows in `drizzle.__drizzle_migrations` and compare against the count of `drizzle/*.sql` files baked in at build time as `ExpectedMigrationCount` (a Go const). Count-vs-count mismatch → `slog.Error` + refuse to start. The const is bumped manually in the same PR as a new migration; a CI-side parity test (Phase 3) confirms the count matches the file glob. Counting is robust to journal staleness AND avoids parsing migration filenames.
+3. **Migration health check at startup.** Codex pass-2 caught a deeper issue with the original COUNT(*) approach: per `TODO.md:10`, Bridge applies migrations 0003+ via `psql -f` (not drizzle-kit migrate), so those migrations leave NO row in `drizzle.__drizzle_migrations`. Counting tracking-table rows would refuse a fully-migrated production DB. Revised approach (Codex's Option (a)): instead of counting, **probe for the existence of a known late-migration schema object**. The latest schema-affecting migration was `drizzle/0024_parent_links.sql` which creates the `parent_links` table; the boot check verifies `to_regclass('public.parent_links') IS NOT NULL`. On a freshly-migrated DB this passes; on a stale DB (missing the latest migration) it fails. The constant is `ExpectedSchemaProbe = "parent_links"` and is bumped manually in any PR that adds a new schema-affecting migration. A CI-side parity test (Phase 3) confirms the constant references a table that actually exists in the latest .sql files. This approach is robust to the hand-apply workflow because it checks the END STATE of the schema, not the audit-log entries.
 
 4. **Realtime-config banner for live sessions.** When `/api/realtime/token` returns 503 ("Realtime tokens not configured"), the existing `useRealtimeToken` helper at `src/lib/realtime/get-token.ts:65-83` throws and the failure surfaces as a console error. Instead, render a small in-page banner on session/teacher-watch/parent-viewer pages: "Realtime is not configured for this environment. Live collaboration is unavailable. [retry]". The banner replaces the silent console drop and gives end users an actionable message.
 
@@ -85,21 +85,20 @@ Four small, independent additions:
 **Modify:**
 - `src/components/portal/portal-shell.tsx` — render `<IdentityDriftBanner />` at the top of the shell, inside the main content area. Stays out of the sidebar so it doesn't shift navigation.
 
-### Phase 3 — Migration-count startup check
+### Phase 3 — Schema-probe startup check
 
 **Add:**
-- `platform/internal/db/migrations.go` — exports `ExpectedMigrationCount` int constant (current value: count of `drizzle/*.sql` files at the time of writing). Includes a comment with bump procedure ("when adding a migration, increment this constant in the same PR").
-- `platform/internal/db/migrations_check.go` — `func CheckMigrationCount(ctx context.Context, db *sql.DB) error`. Queries `SELECT COUNT(*) FROM drizzle.__drizzle_migrations`, compares against `ExpectedMigrationCount`. Returns:
-  - `nil` on match
-  - Descriptive error on mismatch ("expected N migrations applied, found M; run `bun run db:migrate`")
-  - "DB never initialized" error if the `drizzle.__drizzle_migrations` table doesn't exist
-- `platform/internal/db/migrations_check_test.go` — happy-path matches, mismatch returns clear error, missing tracking table returns init error.
+- `platform/internal/db/migrations.go` — exports `ExpectedSchemaProbe = "parent_links"` (current latest schema-affecting migration). Comment documents the bump procedure: "when adding a NEW table or schema-affecting migration, update this constant to the new table name in the same PR. The constant must reference a table that exists in the schema after the latest .sql migration is applied."
+- `platform/internal/db/schema_probe.go` — `func CheckSchemaProbe(ctx context.Context, db *sql.DB) error`. Queries `SELECT to_regclass($1) IS NOT NULL` with the probe table name. Returns:
+  - `nil` when the table exists.
+  - Descriptive error when missing: "expected table `{name}` is not present; the database is missing migration `{file}`. Run `psql ... -f drizzle/{file}` to apply it (see TODO.md for the manual-apply workflow)."
+- `platform/internal/db/schema_probe_test.go` — happy-path (probe table exists), missing-table error, malformed input.
 
 **Modify:**
-- `platform/cmd/api/main.go` — call `db.CheckMigrationCount` after `db.Open` succeeds. On error: `slog.Error` + `os.Exit(1)`. New behavior: refuses to start against a stale DB.
+- `platform/cmd/api/main.go` — call `db.CheckSchemaProbe` after `db.Open` succeeds. On error: `slog.Error` + `os.Exit(1)`. New behavior: refuses to start against a stale schema.
 
 **CI parity test:**
-- `platform/internal/db/migrations_parity_test.go` — at test time, count `drizzle/*.sql` files via `filepath.Glob` and assert `len(files) == ExpectedMigrationCount`. Fails any PR that adds a migration without bumping the const, OR bumps the const without adding the file.
+- `platform/internal/db/schema_probe_parity_test.go` — at test time, scan `drizzle/*.sql` for the latest `CREATE TABLE` statement; assert that the table name appears in the `ExpectedSchemaProbe` const. Fails any PR that adds a new schema migration without bumping the constant, OR bumps the constant without adding a corresponding `CREATE TABLE` in the .sql files.
 
 ### Phase 4 — Realtime-config banner
 
@@ -107,7 +106,7 @@ Codex pass-1 confirmed `getRealtimeToken` already differentiates 503 (`src/lib/r
 
 **Modify:**
 - `src/lib/realtime/use-realtime-token.ts` — extend the hook's return shape to expose `unavailable: boolean` (true when the most recent fetch failed with 503). Keeps the rest of the hook's contract identical.
-- `src/components/session/teacher/teacher-dashboard.tsx`, `src/components/session/student/student-session.tsx`, `src/components/parent/live-session-viewer.tsx`, `src/components/problem/teacher-watch-shell.tsx`, `src/components/problem/problem-shell.tsx`, `src/components/session/broadcast-controls.tsx`, `src/components/session/student-tile.tsx` (Codex pass-1 audit — original 4 callers was incomplete; full set is 7) — read `unavailable` from `useRealtimeToken` and render the new banner when true.
+- `src/components/session/teacher/teacher-dashboard.tsx`, `src/components/session/student/student-session.tsx`, `src/components/parent/live-session-viewer.tsx`, `src/components/problem/teacher-watch-shell.tsx`, `src/components/problem/problem-shell.tsx`, `src/components/session/broadcast-controls.tsx`, `src/components/session/student-tile.tsx`, `src/lib/yjs/use-yjs-tiptap.ts` (consumed indirectly via `src/components/editor/tiptap/teaching-unit-editor.tsx`) — Codex pass-2 audit caught the missing `use-yjs-tiptap` chain; the actual surface is 8 direct/indirect consumers, not 7. All read `unavailable` from `useRealtimeToken` (or its wrapper for the Yjs case) and render the new banner when true.
 
 **Add:**
 - `src/components/realtime/realtime-config-banner.tsx` — pure presentation. Banner copy: "Live collaboration is unavailable in this environment. The realtime token service is not configured. Static viewing still works; reload the page after the operator sets `HOCUSPOCUS_TOKEN_SECRET`."
@@ -175,6 +174,14 @@ Specific questions:
 - PR + merge.
 
 ## Codex Review of This Plan
+
+### Pass 2 — 2026-05-03: BLOCKED → 2 new blockers folded
+
+Codex pass-2 confirmed the BRIDGE_HOST_EXPOSURE pivot is sound and the validateDevAuthEnv ordering issue is resolved. Two new blockers caught:
+
+1. **COUNT(*) approach incompatible with hand-applied migration workflow** — TODO.md:10 confirms migrations 0003+ are applied via `psql -f`, not drizzle-kit migrate, so they leave NO row in `__drizzle_migrations`. Counting tracking-table rows would refuse a fully-migrated DB. Resolved: switched from COUNT(*) to a schema-probe approach — `to_regclass('public.parent_links') IS NOT NULL` checks the END STATE of the schema, robust to the hand-apply workflow. Constant is now `ExpectedSchemaProbe = "parent_links"` (the latest CREATE TABLE migration's target). CI parity test compares against the latest `CREATE TABLE` in .sql files.
+
+2. **Realtime callsite list missed `use-yjs-tiptap`** — Codex pass-2 found that `src/lib/yjs/use-yjs-tiptap.ts` calls `useRealtimeToken` and is consumed by `teaching-unit-editor.tsx`. Phase 4 callsite list expanded from 7 to 8.
 
 ### Pass 1 — 2026-05-03: BLOCKED → 3 blockers + 2 important folded in
 

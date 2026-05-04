@@ -61,8 +61,10 @@ The platform-admin endpoints are intentionally global — they can list every li
 ## Decisions to lock in
 
 1. **v1 is org-admin-managed.** Teachers see (read-only) but don't write. Token-based parent-claim flow is plan 070b. Captured here so the product decision doesn't get re-litigated mid-implementation.
-2. **Children scoped by org via class membership.** Authorization rule: `child_user_id` must be a member (any role) of at least one class belonging to a course in the calling org_admin's org. Same query shape as the existing `IsTeacherOfAttempt` from plan 053b — reuse the join logic.
-3. **Parent DOES need an `org_memberships` row** (Codex pass-1 finding — original plan said the opposite). Bridge's portal-access logic at `src/components/portal/portal-shell.tsx:37-44` and `platform/internal/handlers/me.go:117-124` derives the user's accessible portals from their `org_memberships` rows. A parent without an org_membership row cannot reach `/parent` at all — they'd land on `/onboarding` indefinitely. Resolution: when an org-admin creates a parent link, the `CreateLink` endpoint ALSO upserts an `org_memberships` row with `role='parent'` for the parent in the calling org if one doesn't already exist. The role is correctly modeled (`parent` is a valid `org_memberships.role` value), and the parent then has `/parent` access. Decisions §6 spells out the invariant: every active `parent_links` row implies a corresponding `org_memberships{role:'parent'}` row in the org of at least one of the parent's children. Revoking a parent link does NOT remove the org membership (that membership might be needed for other children); cleanup is manual or via a separate admin action.
+2. **Children scoped by org via class membership.** Authorization rule: `child_user_id` must be a member with `role='student'` of at least one ACTIVE class in the calling org_admin's org. The EXISTS query (Codex pass-1 §Q1): `SELECT 1 FROM class_memberships cm JOIN classes c ON c.id = cm.class_id WHERE cm.user_id = $1 AND cm.role = 'student' AND c.org_id = $2 AND c.status = 'active'`. `classes.org_id` exists directly — no course join needed. (The "any role" wording earlier was wrong; only students should be linkable as children.)
+3. **Parent DOES need an `org_memberships` row** (Codex pass-1 finding — original plan said the opposite). Bridge's portal-access logic at `src/components/portal/portal-shell.tsx:37-44` and `platform/internal/handlers/me.go:117-124` derives the user's accessible portals from their `org_memberships` rows. A parent without an org_membership row cannot reach `/parent` at all — they'd land on `/onboarding` indefinitely. Resolution: when an org-admin creates a parent link, the `CreateLink` endpoint ALSO upserts an `org_memberships` row with `role='parent'`, `status='active'` for the parent in the calling org. The upsert MUST be `DO UPDATE SET status='active'` (not the existing `DO NOTHING` from `AddOrgMember`) so a previously-suspended parent membership reactivates — see Phase 1 §`CreateLink` for the new `UpsertActiveMembership` store method. Decisions §6 spells out the invariant: every active `parent_links` row implies a corresponding `org_memberships{role:'parent', status:'active'}` row in the org of at least one of the parent's children.
+
+    **Revoke does NOT remove the org membership** (Codex pass-2 confirmed the design is sound but flagged a subtlety): a parent might have multiple children in the same org, so revoking one link mustn't break access to the others. The trade-off is that a revoked parent retains `/parent` portal access, but the parent dashboard will show "no children linked yet" because the data layer queries `parent_links` (not org_memberships). For v1 we accept this — it's "stale portal access without data leak". A separate admin action (or a follow-up plan) can sweep org_memberships for parents with no active links if/when product asks.
 4. **Idempotent re-link** (matches existing platform-admin behavior at `admin.go:307`). If an active link already exists for the (parent, child) pair, return 409 — UI maps to "Already linked, no action needed."
 5. **Revoke is soft-delete.** The schema flips status to `revoked` + sets `revoked_at` (plan 064 §"Soft-revoke"). Re-creating later is allowed (partial-unique index).
 6. **List filters: by parent email OR by child name OR by class.** Three independent filters; org admin picks whichever scope they're investigating.
@@ -76,7 +78,11 @@ The platform-admin endpoints are intentionally global — they can list every li
 **Add:**
 - `platform/internal/handlers/org_parent_links.go` — handler holding `OrgParentLinksHandler` with three methods:
   - `ListByOrg(w, r)` — `GET /api/orgs/{orgId}/parent-links?status=active|revoked|all&parent={email?}&child={uid?}&class={uid?}`. Returns links scoped to children in the org. Filtering composable. Codex pass-1 important: `ParentLinkStore` returns IDs/status/timestamps only — needs an enriched query method or per-row JOINs to surface parent email + child name + class. Plan 070 Phase 1 includes that enrichment as a small store-layer addition.
-  - `CreateLink(w, r)` — `POST /api/orgs/{orgId}/parent-links` with body `{ parentEmail, childUserId }`. Resolves parent by email (404 if missing — UI surfaces "ask parent to register"), validates child is in the org via `EXISTS (SELECT 1 FROM class_memberships cm JOIN classes c ON c.id = cm.class_id WHERE cm.user_id = $1 AND cm.role = 'student' AND c.org_id = $2 AND c.status = 'active')` (Codex pass-1 §Q1 — `classes.org_id` exists directly, no course join needed), calls `parentLinks.CreateLink(ctx, parentId, childId, callerId)`, **AND upserts `org_memberships{user_id: parentId, org_id: orgId, role: 'parent', status: 'active'}` if not present** (Decisions §3 — without this, the parent can't reach `/parent`). Returns 201 + the link, 409 if already active.
+  - `CreateLink(w, r)` — `POST /api/orgs/{orgId}/parent-links` with body `{ parentEmail, childUserId }`. Resolves parent by email (404 if missing — UI surfaces "ask parent to register"), validates child is in the org via `EXISTS (SELECT 1 FROM class_memberships cm JOIN classes c ON c.id = cm.class_id WHERE cm.user_id = $1 AND cm.role = 'student' AND c.org_id = $2 AND c.status = 'active')` (Codex pass-1 §Q1 — `classes.org_id` exists directly, no course join needed), calls `parentLinks.CreateLink(ctx, parentId, childId, callerId)`, **AND upserts `org_memberships{user_id: parentId, org_id: orgId, role: 'parent', status: 'active'}` (Decisions §3 — without this, the parent can't reach `/parent`).**
+
+    Codex pass-2 caught a subtlety: the existing `OrgStore.AddOrgMember` uses `ON CONFLICT (org_id, user_id, role) DO NOTHING` (`platform/internal/store/orgs.go:275, :284`), which would silently keep a suspended/pending parent membership inactive at link time. Plan 070 needs a NEW store method that does `ON CONFLICT (org_id, user_id, role) DO UPDATE SET status='active'` so a previously-suspended membership reactivates. Add `OrgStore.UpsertActiveMembership(ctx, orgId, userId, role)` for this. Phase 1 includes the new store method + an integration test for the reactivation case.
+
+    Returns 201 + the link, 409 if already active.
   - `RevokeLink(w, r)` — `DELETE /api/orgs/{orgId}/parent-links/{linkId}`. Validates the link's child belongs to the org; reuses `parentLinks.RevokeLink(ctx, linkId)`. Does NOT remove the org_memberships row (might be needed for other children — see Decisions §3).
 - `platform/internal/handlers/org_parent_links_test.go` — table-driven tests covering: list happy path, list filtered, create happy, create-with-unknown-parent (404), create-with-cross-org-child (403), revoke happy, revoke-cross-org-link (403), unauthorized (no org_admin role).
 
@@ -165,7 +171,7 @@ Specific questions:
 
 ### Phase 3 — Teacher read-only view (PR 3)
 
-- Implement (or extend) the student detail page with the Parents card.
+- Implement the Parents popover on the existing class-detail page (`src/app/(portal)/teacher/classes/[id]/page.tsx`). The original "student detail page" framing was abandoned in Phase 3 (no such page exists; pivoted to a popover affordance instead).
 - Smoke test: as `eve@demo.edu` (teacher), view a student page, see linked parents.
 - Codex post-impl review.
 - PR + merge.
@@ -174,10 +180,20 @@ Specific questions:
 
 - Sweep onboarding flow for parent-facing copy.
 - Update wording per Decisions §8.
-- Smoke test: register a fresh parent account, walk through `/register?intendedRole=parent` → `/onboarding` → `/parent`, confirm new copy reads correctly.
+- Smoke test: register a fresh user (no role intent — register page doesn't read `?intendedRole=parent`), have an org admin link them via Phase 2 UI, verify the user can now reach `/parent` and sees their child(ren). Confirm onboarding copy reads correctly.
 - PR + merge (no Codex needed for copy-only changes; flag this as a deviation in the PR description).
 
 ## Codex Review of This Plan
+
+### Pass 2 — 2026-05-04: CONCUR-WITH-CHANGES → 3 cleanup items folded
+
+Codex pass-2 confirmed pass-1's substantive direction (org_memberships upsert at link time, child-belongs-to-org EXISTS query, Phase 3 popover pivot). Three cleanup items folded:
+
+1. **Stale "any role" wording** — Decisions §2 said "any role" but the EXISTS query and intent are `role='student'` only. Decisions §2 rewritten with the explicit query.
+2. **Stale "student detail page" reference** in Phase 3 — pivoted in pass-1 to a popover on the existing class-detail page. Phase 3 checklist updated to match.
+3. **`ON CONFLICT DO NOTHING` upsert gap** — `OrgStore.AddOrgMember` uses `DO NOTHING`, which would silently keep a suspended/pending parent membership inactive at link time. Phase 1 now adds a NEW `OrgStore.UpsertActiveMembership` method with `DO UPDATE SET status='active'` plus an integration test for the reactivation case.
+4. **Revoke retains stale portal access** — Decisions §3 now documents this trade-off explicitly (no data leak; parent dashboard shows "no children linked yet" because data layer queries `parent_links`, not `org_memberships`). Sweep-stale-memberships is a follow-up if product asks.
+5. **Stale `/register?intendedRole=parent` references** in smoke-test text — rewritten to reflect the no-role-intent registration flow.
 
 ### Pass 1 — 2026-05-03: BLOCKED → 2 blockers + 4 important folded in
 
