@@ -11,6 +11,10 @@ import (
 	"strings"
 )
 
+// BridgeSessionCookie is the cookie name Phase 2's Edge middleware
+// sets and Phase 3's Go middleware reads when BRIDGE_SESSION_AUTH=1.
+const BridgeSessionCookie = "bridge.session"
+
 // canonicalCookieName returns the single Auth.js session cookie name for the
 // request's scheme. It does NOT fall back to the other variant — falling back
 // re-injects stale identity when a previous deployment left a different
@@ -31,6 +35,16 @@ func canonicalCookieName(r *http.Request) string {
 		return CookieNameHTTPS
 	}
 	return CookieNameHTTP
+}
+
+// readBridgeSessionToken returns the bridge.session cookie value, or
+// "" if absent. Plan 065 — single name, no scheme-variant logic;
+// the Edge middleware that sets it always uses the same attributes.
+func readBridgeSessionToken(r *http.Request) string {
+	if c, err := r.Cookie(BridgeSessionCookie); err == nil {
+		return c.Value
+	}
+	return ""
 }
 
 // readCanonicalCookieToken returns the token from the canonical cookie for
@@ -102,6 +116,23 @@ func (m *Middleware) WithBridgeSession(secrets []string, internalAuthFlagOn bool
 // When DEV_SKIP_AUTH is set, auth is bypassed and a dev user is injected.
 // The env var value is the user ID to impersonate; set to "admin" for a
 // platform admin, or a UUID for a specific user.
+//
+// Plan 065 phase 3 — verification path:
+//
+//  1. If BRIDGE_SESSION_AUTH=1 and bridge.session cookie is PRESENT,
+//     verify it (HS256 against m.BridgeSecrets). PRESENT-AND-VALID
+//     wins; PRESENT-AND-INVALID returns 401 unconditionally
+//     (downgrade-attack defense — see plan §"RequireAuth logic").
+//  2. Otherwise (flag off, OR bridge.session ABSENT), fall back to
+//     the legacy Auth.js JWE / Bearer path. Absent ≠ invalid: this
+//     covers the rollout race (Edge mint hasn't fired yet) and
+//     non-browser direct-to-Go clients.
+//  3. After token verification, AdminChecker overwrites
+//     claims.IsPlatformAdmin from a live DB lookup. This MUST run
+//     before the impersonation overlay (which gates on the live
+//     admin status to decide whether to apply impersonation).
+//  4. The impersonation overlay applies bridge-impersonate cookie
+//     mutations as before.
 func (m *Middleware) RequireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Dev auth bypass — never use in production. Plan 050: the
@@ -130,82 +161,180 @@ func (m *Middleware) RequireAuth(next http.Handler) http.Handler {
 			return
 		}
 
-		// Authorization header is the canonical proxy path; cookies are only
-		// for direct browser hits (no proxy). Never combine — falling back to
-		// cookies after a header was sent would mask api-client bugs and
-		// potentially re-inject a stale identity from the browser jar.
-		tokenStr := ""
-		if authHeader := r.Header.Get("Authorization"); strings.HasPrefix(authHeader, "Bearer ") {
-			tokenStr = strings.TrimPrefix(authHeader, "Bearer ")
-		} else {
-			tokenStr = readCanonicalCookieToken(r)
-		}
-
-		if tokenStr == "" {
-			writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
-			return
-		}
-		claims, err := VerifyToken(tokenStr, m.Secret)
-		if err != nil {
-			writeJSONError(w, http.StatusUnauthorized, "Invalid token")
+		claims, status := m.resolveClaims(r)
+		if status != 0 {
+			writeJSONError(w, status, claimsErrorMessage(status))
 			return
 		}
 
-		// Check impersonation cookie
-		if cookie, err := r.Cookie("bridge-impersonate"); err == nil && claims.IsPlatformAdmin {
-			cookieVal := cookie.Value
-			if decoded, err := url.QueryUnescape(cookieVal); err == nil {
-				cookieVal = decoded
-			}
-			var impData ImpersonationData
-			if json.Unmarshal([]byte(cookieVal), &impData) == nil && impData.OriginalUserID == claims.UserID {
-				claims = &Claims{
-					UserID:          impData.TargetUserID,
-					Email:           impData.TargetEmail,
-					Name:            impData.TargetName,
-					IsPlatformAdmin: false,
-					ImpersonatedBy:  impData.OriginalUserID,
-				}
-			}
-		}
+		// Plan 065 §"Live admin via middleware injection" — overwrite
+		// claims.IsPlatformAdmin from DB before any handler (or the
+		// impersonation overlay) reads it. ~80 handler sites read
+		// this field; the middleware-layer overwrite makes them all
+		// automatically live without per-handler changes.
+		m.injectLiveAdmin(r.Context(), claims)
+
+		// Impersonation overlay runs AFTER live-admin injection so
+		// the gate (claims.IsPlatformAdmin) reflects the live DB
+		// value, not the JWT-carried hint.
+		claims = applyImpersonationOverlay(r, claims)
 
 		ctx := ContextWithClaims(r.Context(), claims)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
-// OptionalAuth validates the JWT if present but does not reject requests without one.
-// If a valid token is found, claims are injected into context. Otherwise, claims are nil.
+// resolveClaims is the shared token-verification path used by
+// RequireAuth and OptionalAuth. Returns (claims, 0) on success,
+// or (nil, status) when the request must be rejected with the
+// given HTTP status. Status 0 means "no token present" — caller
+// decides whether that's 401 or pass-through.
+//
+// Phase 3 verification order:
+//   - If BRIDGE_SESSION_AUTH=1 AND bridge.session is present, that
+//     cookie is authoritative. Valid → claims; invalid → 401.
+//   - Otherwise fall back to legacy Authorization-header / Auth.js
+//     cookie path.
+func (m *Middleware) resolveClaims(r *http.Request) (*Claims, int) {
+	if m.BridgeAuthOn && len(m.BridgeSecrets) > 0 {
+		if bridgeTok := readBridgeSessionToken(r); bridgeTok != "" {
+			bsClaims, err := VerifyBridgeSession(m.BridgeSecrets, bridgeTok)
+			if err != nil {
+				// Present-but-invalid → 401 unconditionally. NO JWE
+				// fallback (plan §"RequireAuth logic"): allowing it
+				// would create a downgrade attack surface once Bridge
+				// sessions become authoritative for revocation.
+				slog.Warn("bridge.session present but invalid, rejecting",
+					"err", err, "path", r.URL.Path)
+				return nil, http.StatusUnauthorized
+			}
+			return bridgeClaimsToCanonical(bsClaims), 0
+		}
+		// Absent bridge.session → fall through to legacy path.
+		// Covers rollout race (Edge mint hasn't fired) + non-browser
+		// direct-to-Go clients.
+	}
+
+	// Legacy Auth.js JWE path. Authorization header is the canonical
+	// proxy path; cookies are only for direct browser hits (no
+	// proxy). Never combine — falling back to cookies after a header
+	// was sent would mask api-client bugs and potentially re-inject
+	// a stale identity from the browser jar.
+	tokenStr := ""
+	if authHeader := r.Header.Get("Authorization"); strings.HasPrefix(authHeader, "Bearer ") {
+		tokenStr = strings.TrimPrefix(authHeader, "Bearer ")
+	} else {
+		tokenStr = readCanonicalCookieToken(r)
+	}
+	if tokenStr == "" {
+		return nil, http.StatusUnauthorized
+	}
+	claims, err := VerifyToken(tokenStr, m.Secret)
+	if err != nil {
+		return nil, http.StatusUnauthorized
+	}
+	return claims, 0
+}
+
+// claimsErrorMessage maps the resolveClaims status to a JSON error
+// message. Keeping the wording stable matches what callers and
+// tests already expect.
+func claimsErrorMessage(status int) string {
+	if status == http.StatusUnauthorized {
+		return "Unauthorized"
+	}
+	return http.StatusText(status)
+}
+
+// bridgeClaimsToCanonical converts a verified BridgeSessionClaims
+// into the canonical Claims shape handlers consume. The cosmetic
+// IsPlatformAdmin from the JWT is preserved here as the initial
+// value — the live-admin injection below will overwrite it.
+func bridgeClaimsToCanonical(c *BridgeSessionClaims) *Claims {
+	return &Claims{
+		UserID:          c.Sub,
+		Email:           c.Email,
+		Name:            c.Name,
+		IsPlatformAdmin: c.IsPlatformAdmin,
+	}
+}
+
+// injectLiveAdmin overwrites claims.IsPlatformAdmin with the live
+// value from the DB (cached for 60s by CachedAdminChecker). On any
+// error or absence of an AdminChecker, falls CLOSED — sets the
+// claim to false. We would rather temporarily 403 a real admin
+// during a DB hiccup than silently grant admin to a stale JWT.
+//
+// Mutates *claims in place; safe because each request gets its
+// own claims instance from VerifyToken/VerifyBridgeSession.
+func (m *Middleware) injectLiveAdmin(ctx context.Context, claims *Claims) {
+	if m.AdminChecker == nil || claims == nil || claims.UserID == "" {
+		return
+	}
+	isAdmin, err := m.AdminChecker.IsAdmin(ctx, claims.UserID)
+	if err != nil {
+		slog.Warn("live admin lookup failed, fail-closing IsPlatformAdmin",
+			"err", err, "userID", claims.UserID)
+		claims.IsPlatformAdmin = false
+		return
+	}
+	claims.IsPlatformAdmin = isAdmin
+}
+
+// applyImpersonationOverlay returns either `claims` unchanged or a
+// new Claims representing the impersonated target. The overlay
+// gate reads claims.IsPlatformAdmin (which by Phase 3 is the live
+// DB value), so a non-admin token can never trigger impersonation.
+func applyImpersonationOverlay(r *http.Request, claims *Claims) *Claims {
+	if claims == nil || !claims.IsPlatformAdmin {
+		return claims
+	}
+	cookie, err := r.Cookie("bridge-impersonate")
+	if err != nil {
+		return claims
+	}
+	cookieVal := cookie.Value
+	if decoded, err := url.QueryUnescape(cookieVal); err == nil {
+		cookieVal = decoded
+	}
+	var impData ImpersonationData
+	if json.Unmarshal([]byte(cookieVal), &impData) != nil {
+		return claims
+	}
+	if impData.OriginalUserID != claims.UserID {
+		return claims
+	}
+	return &Claims{
+		UserID:          impData.TargetUserID,
+		Email:           impData.TargetEmail,
+		Name:            impData.TargetName,
+		IsPlatformAdmin: false,
+		ImpersonatedBy:  impData.OriginalUserID,
+	}
+}
+
+// OptionalAuth validates the JWT if present but does not reject
+// requests without one. If a valid token is found, claims are
+// injected into context. Otherwise, claims are nil.
+//
+// Plan 065 phase 3 — shares the same verification path as
+// RequireAuth. A present-but-invalid bridge.session is silently
+// dropped here (no claims) rather than 401'd, since OptionalAuth's
+// contract is "best effort" — handlers that mount under it are
+// expected to handle missing claims.
 func (m *Middleware) OptionalAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		tokenStr := ""
-		if authHeader := r.Header.Get("Authorization"); strings.HasPrefix(authHeader, "Bearer ") {
-			tokenStr = strings.TrimPrefix(authHeader, "Bearer ")
-		} else {
-			tokenStr = readCanonicalCookieToken(r)
+		claims, status := m.resolveClaims(r)
+		if status != 0 || claims == nil {
+			// No-op: any error is just "no claims"; OptionalAuth
+			// passes through. (RequireAuth would 401 on the same
+			// path; the contract divergence is by design.)
+			next.ServeHTTP(w, r)
+			return
 		}
-		if tokenStr != "" {
-			if claims, err := VerifyToken(tokenStr, m.Secret); err == nil {
-				// Check impersonation
-				if cookie, err := r.Cookie("bridge-impersonate"); err == nil && claims.IsPlatformAdmin {
-					cookieVal := cookie.Value
-					if decoded, err := url.QueryUnescape(cookieVal); err == nil {
-						cookieVal = decoded
-					}
-					var impData ImpersonationData
-					if json.Unmarshal([]byte(cookieVal), &impData) == nil && impData.OriginalUserID == claims.UserID {
-						claims = &Claims{
-							UserID:          impData.TargetUserID,
-							Email:           impData.TargetEmail,
-							Name:            impData.TargetName,
-							IsPlatformAdmin: false,
-							ImpersonatedBy:  impData.OriginalUserID,
-						}
-					}
-				}
-				r = r.WithContext(ContextWithClaims(r.Context(), claims))
-			}
-		}
+		m.injectLiveAdmin(r.Context(), claims)
+		claims = applyImpersonationOverlay(r, claims)
+		r = r.WithContext(ContextWithClaims(r.Context(), claims))
 		next.ServeHTTP(w, r)
 	})
 }
