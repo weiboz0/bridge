@@ -37,14 +37,25 @@ func canonicalCookieName(r *http.Request) string {
 	return CookieNameHTTP
 }
 
-// readBridgeSessionToken returns the bridge.session cookie value, or
-// "" if absent. Plan 065 — single name, no scheme-variant logic;
-// the Edge middleware that sets it always uses the same attributes.
-func readBridgeSessionToken(r *http.Request) string {
+// readBridgeSessionToken returns the bridge.session cookie value
+// AND a presence bool indicating whether the cookie was sent at
+// all (regardless of value). Plan 065 — single name, no
+// scheme-variant logic; the Edge middleware that sets it always
+// uses the same attributes.
+//
+// Codex Phase-3 review: the present-vs-absent distinction matters
+// because plan §"RequireAuth logic" treats them differently.
+// "Cookie absent" → fall back to JWE (covers rollout race +
+// non-browser direct-to-Go clients). "Cookie present but
+// empty/invalid" → 401 unconditionally (downgrade-attack defense).
+// Returning just `c.Value` conflated the two cases — a
+// `bridge.session=` (empty value) cookie planted by an attacker
+// next to a valid JWE would have downgraded to JWE.
+func readBridgeSessionToken(r *http.Request) (string, bool) {
 	if c, err := r.Cookie(BridgeSessionCookie); err == nil {
-		return c.Value
+		return c.Value, true
 	}
-	return ""
+	return "", false
 }
 
 // readCanonicalCookieToken returns the token from the canonical cookie for
@@ -187,17 +198,25 @@ func (m *Middleware) RequireAuth(next http.Handler) http.Handler {
 // resolveClaims is the shared token-verification path used by
 // RequireAuth and OptionalAuth. Returns (claims, 0) on success,
 // or (nil, status) when the request must be rejected with the
-// given HTTP status. Status 0 means "no token present" — caller
-// decides whether that's 401 or pass-through.
+// given HTTP status. The only non-zero status this currently
+// returns is http.StatusUnauthorized — for both "no token at all"
+// (caller decides 401 vs pass-through) and "present-but-invalid
+// bridge.session" (always reject).
 //
 // Phase 3 verification order:
-//   - If BRIDGE_SESSION_AUTH=1 AND bridge.session is present, that
-//     cookie is authoritative. Valid → claims; invalid → 401.
-//   - Otherwise fall back to legacy Authorization-header / Auth.js
-//     cookie path.
+//   - If BRIDGE_SESSION_AUTH=1 AND bridge.session cookie is PRESENT
+//     (regardless of value), that cookie is authoritative.
+//     Valid → claims; invalid (including empty value) → 401.
+//   - If the bridge.session cookie is ABSENT (no cookie sent at
+//     all), fall back to legacy Authorization-header / Auth.js
+//     cookie path. Covers rollout race + non-browser clients.
 func (m *Middleware) resolveClaims(r *http.Request) (*Claims, int) {
 	if m.BridgeAuthOn && len(m.BridgeSecrets) > 0 {
-		if bridgeTok := readBridgeSessionToken(r); bridgeTok != "" {
+		if bridgeTok, present := readBridgeSessionToken(r); present {
+			// Codex Phase-3 review: present-but-empty must ALSO
+			// 401 (not fall through to JWE). VerifyBridgeSession
+			// rejects an empty token, so this drops into the
+			// invalid-token branch correctly.
 			bsClaims, err := VerifyBridgeSession(m.BridgeSecrets, bridgeTok)
 			if err != nil {
 				// Present-but-invalid → 401 unconditionally. NO JWE

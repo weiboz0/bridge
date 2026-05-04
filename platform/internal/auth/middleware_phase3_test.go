@@ -109,6 +109,33 @@ func TestRequireAuth_BridgeSession_InvalidReturns401_NoJWEFallback(t *testing.T)
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
 }
 
+func TestRequireAuth_BridgeSession_PresentButEmpty_Returns401(t *testing.T) {
+	// Codex Phase-3 review caught this: a `bridge.session=` cookie
+	// (present, empty value) planted by an attacker next to a
+	// valid JWE used to fall through to JWE — the same downgrade
+	// path the present-but-invalid case was supposed to defend
+	// against. Empty value MUST be treated as present-and-invalid
+	// → 401, not as absent → JWE fallback.
+	mw := withBridgeMw(t, []string{testBridgePrimary}, nil)
+	jweTok := makeToken(t, jwt.MapClaims{
+		"id":    "jwe-user",
+		"email": "j@example.com",
+		"exp":   time.Now().Add(time.Hour).Unix(),
+	}, testSecret)
+
+	handler := mw.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("handler must NOT run with present-but-empty bridge.session")
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.AddCookie(&http.Cookie{Name: BridgeSessionCookie, Value: ""})
+	req.AddCookie(&http.Cookie{Name: CookieNameHTTP, Value: jweTok})
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusUnauthorized, w.Code,
+		"empty bridge.session cookie value must 401, not fall back to JWE")
+}
+
 func TestRequireAuth_BridgeSession_AbsentFallsBackToJWE(t *testing.T) {
 	// No bridge.session cookie at all → JWE legacy path runs.
 	// Covers rollout race (Edge mint hasn't fired yet) and
