@@ -34,7 +34,10 @@ export function bridgeSessionExpiringSoon(token: string | undefined): boolean {
     const payload = JSON.parse(decodeBase64Url(parts[1])) as { exp?: number };
     if (typeof payload.exp !== "number") return true;
     const expiresAtMs = payload.exp * 1000;
-    return expiresAtMs - Date.now() < REFRESH_THRESHOLD_MS;
+    // Use <= so exactly-at-the-threshold re-mints. Over-mint by a
+    // hair is preferred over serving a token that flips to expired
+    // between this check and the request reaching Go.
+    return expiresAtMs - Date.now() <= REFRESH_THRESHOLD_MS;
   } catch {
     return true;
   }

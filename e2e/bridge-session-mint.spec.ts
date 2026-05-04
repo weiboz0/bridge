@@ -67,7 +67,7 @@ test("middleware lazy-mint attaches bridge.session on first portal hit", async (
   expect(meResponse.status()).toBe(200);
 });
 
-test("bridge.session is cleared after logout", async ({ page, context }) => {
+test("bridge.session is cleared after logout-cleanup", async ({ page, context }) => {
   await loginWithCredentials(page, ACCOUNTS.teacher.email, ACCOUNTS.teacher.password);
   await page.goto("/teacher");
   await page.waitForLoadState("networkidle");
@@ -76,27 +76,22 @@ test("bridge.session is cleared after logout", async ({ page, context }) => {
   let cookies = await context.cookies();
   expect(cookies.find((c) => c.name === "bridge.session")).toBeTruthy();
 
-  // Sign out — the `signOut` flow clears Auth.js cookies; on the
-  // next middleware invocation, our wrapper detects a missing
-  // session and removes the stale bridge.session cookie too.
-  await page.request.post("/api/auth/signout", {
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    form: {
-      callbackUrl: "/",
-    },
-  });
-
-  // Hit any path covered by the middleware matcher to trigger the
-  // cleanup. Use `/teacher` which is in the portal-tree matcher;
-  // an unauthenticated hit there will be redirected by the
-  // `authorized` callback BUT the middleware wrapper's cleanup
-  // runs before the redirect.
-  await page.goto("/teacher", { waitUntil: "networkidle" });
+  // Bridge's signout flow (see src/components/portal/sidebar-footer.tsx
+  // and src/components/sign-out-button.tsx) calls POST
+  // /api/auth/logout-cleanup BEFORE NextAuth's signOut(). Plan 065
+  // phase 2 added bridge.session to the cleanup list so the cookie
+  // is explicitly expired alongside the Auth.js session cookies —
+  // critical because /api/auth/* routes are outside the middleware
+  // matcher, so the wrapper's null-session cleanup path doesn't
+  // run for the signout request itself.
+  const cleanup = await page.request.post("/api/auth/logout-cleanup");
+  expect(cleanup.status()).toBe(200);
 
   cookies = await context.cookies();
   const bridgeCookie = cookies.find((c) => c.name === "bridge.session");
   expect(
     bridgeCookie,
-    "bridge.session should be cleared once Auth.js session is gone"
+    "bridge.session must be cleared by /api/auth/logout-cleanup so the " +
+      "Bridge-issued cookie doesn't outlive the Auth.js session it pairs with"
   ).toBeFalsy();
 });

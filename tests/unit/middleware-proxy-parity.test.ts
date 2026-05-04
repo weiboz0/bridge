@@ -23,7 +23,12 @@ describe("middleware matcher is a strict superset of next.config.ts:GO_PROXY_ROU
     expect(start).toBeGreaterThanOrEqual(0);
     const end = source.indexOf("];", start);
     expect(end).toBeGreaterThan(start);
-    const block = source.slice(start, end);
+    let block = source.slice(start, end);
+    // Strip // line comments so a quoted path mentioned in a comment
+    // (e.g., a deprecation note that references "/api/internal/..." )
+    // doesn't get treated as a real route. Plan-065 review-2 caught
+    // this fragility.
+    block = block.replace(/\/\/[^\n]*/g, "");
 
     const proxyRoutes = [...block.matchAll(/"(\/[^"]+)"/g)].map((m) => m[1]);
     expect(proxyRoutes.length).toBeGreaterThan(0);
