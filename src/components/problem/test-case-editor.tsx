@@ -45,6 +45,14 @@ type EditorRow = RowFields & {
   key: string;
 };
 
+type RowResult =
+  | { kind: "delete-ok"; key: string }
+  | { kind: "delete-fail"; key: string; msg: string }
+  | { kind: "create-ok"; key: string; serverId: string }
+  | { kind: "create-fail"; key: string; msg: string }
+  | { kind: "update-ok"; key: string }
+  | { kind: "update-fail"; key: string; msg: string };
+
 interface Props {
   problemId: string;
   initial: TestCaseData[];
@@ -131,57 +139,74 @@ export function TestCaseEditor({ problemId, initial, onCancel, onSaved }: Props)
 
     setSubmitting(true);
 
-    const requests: Promise<{ ok: true } | { ok: false; msg: string }>[] = [];
+    const tasks: Promise<RowResult>[] = [];
 
     for (const r of toDelete) {
-      requests.push(
-        fetchOk("DELETE", `/api/test-cases/${r.id}`).catch((e) => ({
-          ok: false as const,
-          msg: `Delete failed (${rowLabel(r)}): ${e.message}`,
-        })),
+      tasks.push(
+        fetchTC("DELETE", `/api/test-cases/${r.id}`)
+          .then(() => ({ kind: "delete-ok" as const, key: r.key }))
+          .catch((e: Error) => ({
+            kind: "delete-fail" as const,
+            key: r.key,
+            msg: `Delete failed (${rowLabel(r)}): ${e.message}`,
+          })),
       );
     }
 
     for (const r of toCreate) {
-      requests.push(
-        fetchOk("POST", `/api/problems/${problemId}/test-cases`, {
+      tasks.push(
+        fetchTC<{ id: string }>("POST", `/api/problems/${problemId}/test-cases`, {
           name: r.name,
           stdin: r.stdin,
           expectedStdout: r.expectedStdout === "" ? null : r.expectedStdout,
           isExample: r.isExample,
           order: r.order,
           isCanonical: true,
-        }).catch((e) => ({
-          ok: false as const,
-          msg: `Create failed (${rowLabel(r)}): ${e.message}`,
-        })),
+        })
+          .then((created) => ({
+            kind: "create-ok" as const,
+            key: r.key,
+            serverId: created.id,
+          }))
+          .catch((e: Error) => ({
+            kind: "create-fail" as const,
+            key: r.key,
+            msg: `Create failed (${rowLabel(r)}): ${e.message}`,
+          })),
       );
     }
 
     for (const r of toUpdate) {
-      requests.push(
-        fetchOk("PATCH", `/api/test-cases/${r.id}`, buildPatchBody(r)).catch(
-          (e) => ({
-            ok: false as const,
+      tasks.push(
+        fetchTC("PATCH", `/api/test-cases/${r.id}`, buildPatchBody(r))
+          .then(() => ({ kind: "update-ok" as const, key: r.key }))
+          .catch((e: Error) => ({
+            kind: "update-fail" as const,
+            key: r.key,
             msg: `Update failed (${rowLabel(r)}): ${e.message}`,
-          }),
-        ),
+          })),
       );
     }
 
-    const results = await Promise.all(requests);
+    const results = await Promise.all(tasks);
     setSubmitting(false);
 
-    const failed = results.filter((r) => !r.ok) as {
-      ok: false;
-      msg: string;
-    }[];
+    // Hydrate local state from results — Codex Q5: without this, a
+    // partial-failure retry would re-POST already-created rows
+    // (creating duplicates) and re-PATCH already-saved updates (a
+    // wasted round-trip but not a duplication risk). Successful
+    // creates get their server id; successful updates re-seed
+    // `original` so the diff shrinks to zero on the next pass.
+    setRows((prev) => applyResults(prev, results));
+
+    const failed = results.filter(
+      (r): r is Extract<RowResult, { msg: string }> =>
+        r.kind === "delete-fail" ||
+        r.kind === "create-fail" ||
+        r.kind === "update-fail",
+    );
     if (failed.length > 0) {
       setErrors(failed.map((f) => f.msg));
-      // Keep the editor open so the user can retry. The successful
-      // mutations are already committed server-side; a router refresh
-      // would surface them, but that would also drop unsaved local
-      // edits in a partial-failure scenario. Caller decides via Cancel.
       return;
     }
 
@@ -409,11 +434,11 @@ function rowLabel(row: EditorRow): string {
   return row.isExample ? "example case" : "hidden case";
 }
 
-async function fetchOk(
+async function fetchTC<T = unknown>(
   method: string,
   url: string,
   body?: unknown,
-): Promise<{ ok: true }> {
+): Promise<T> {
   const res = await fetch(url, {
     method,
     credentials: "include",
@@ -426,5 +451,58 @@ async function fetchOk(
       | null;
     throw new Error(errBody?.error ?? `HTTP ${res.status}`);
   }
-  return { ok: true };
+  if (res.status === 204) return undefined as T;
+  return (await res.json().catch(() => undefined)) as T;
+}
+
+function applyResults(rows: EditorRow[], results: RowResult[]): EditorRow[] {
+  // Index successes by row key. Failures don't mutate state — the row
+  // stays as-is so a retry will re-issue the same mutation.
+  const byKey = new Map<string, RowResult>();
+  for (const r of results) {
+    if (r.kind === "delete-ok" || r.kind === "create-ok" || r.kind === "update-ok") {
+      byKey.set(r.key, r);
+    }
+  }
+  const out: EditorRow[] = [];
+  for (const row of rows) {
+    const result = byKey.get(row.key);
+    if (!result) {
+      out.push(row);
+      continue;
+    }
+    if (result.kind === "delete-ok") {
+      // Drop deleted rows from local state. A retry without this
+      // would re-issue the DELETE and 404.
+      continue;
+    }
+    if (result.kind === "create-ok") {
+      // Promote synthetic-key row to server-keyed row. Re-seed
+      // `original` so the next diff pass skips this row in toUpdate.
+      const fields = extractFields(row);
+      out.push({
+        ...row,
+        id: result.serverId,
+        key: result.serverId,
+        original: fields,
+      });
+      continue;
+    }
+    if (result.kind === "update-ok") {
+      // Re-seed original so subsequent saves only PATCH new edits.
+      out.push({ ...row, original: extractFields(row) });
+      continue;
+    }
+  }
+  return out;
+}
+
+function extractFields(row: EditorRow): RowFields {
+  return {
+    name: row.name,
+    stdin: row.stdin,
+    expectedStdout: row.expectedStdout,
+    isExample: row.isExample,
+    order: row.order,
+  };
 }
