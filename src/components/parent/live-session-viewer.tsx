@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useState, useEffect } from "react";
 import { useYjsProvider } from "@/lib/yjs/use-yjs-provider";
 import { useRealtimeToken } from "@/lib/realtime/use-realtime-token";
+import { RealtimeConfigBanner } from "@/components/realtime/realtime-config-banner";
 import { CodeEditor } from "@/components/editor/code-editor";
 
 interface SessionTopic {
@@ -42,7 +43,7 @@ export function LiveSessionViewer({
   //      of one student can't mint tokens for unrelated sessions).
   // Both gates ship in plan 064 (parent_links table) + this PR.
   const documentName = `session:${sessionId}:user:${studentId}`;
-  const realtimeToken = useRealtimeToken(documentName);
+  const { token: realtimeToken, unavailable: realtimeUnavailable } = useRealtimeToken(documentName);
 
   const { yText, provider, connected } = useYjsProvider({
     documentName,
@@ -58,6 +59,8 @@ export function LiveSessionViewer({
   }, [sessionId]);
 
   return (
+    <>
+      <RealtimeConfigBanner unavailable={realtimeUnavailable} />
     <div className="flex h-full">
       {topics.length > 0 && (
         <div className="w-1/3 border-r overflow-auto p-4 space-y-4">
@@ -104,5 +107,6 @@ export function LiveSessionViewer({
         </div>
       </div>
     </div>
+    </>
   );
 }

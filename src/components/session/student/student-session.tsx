@@ -6,6 +6,7 @@ import { useSession } from "next-auth/react";
 import { useStudentLayout } from "@/lib/hooks/use-student-layout";
 import { useYjsProvider } from "@/lib/yjs/use-yjs-provider";
 import { useRealtimeToken } from "@/lib/realtime/use-realtime-token";
+import { RealtimeConfigBanner } from "@/components/realtime/realtime-config-banner";
 import { EditorSwitcher } from "@/components/editor/editor-switcher";
 import { AiChatPanel } from "@/components/ai/ai-chat-panel";
 import { RaiseHandButton } from "@/components/help-queue/raise-hand-button";
@@ -52,7 +53,10 @@ export function StudentSession({
   // Plan 053 phase 3 — per-doc JWT mint. Each doc-name gets its own
   // token; the helper caches by doc-name so this is one round-trip
   // per (doc, tab).
-  const realtimeToken = useRealtimeToken(documentName);
+  // Plan 068 phase 4 — `unavailable` from either mint indicates the
+  // realtime service is misconfigured. Combine both signals so the
+  // banner renders if EITHER fetch hits 503.
+  const { token: realtimeToken, unavailable: ownDocUnavailable } = useRealtimeToken(documentName);
 
   const { yText, provider, connected } = useYjsProvider({
     documentName,
@@ -61,7 +65,8 @@ export function StudentSession({
 
   // Broadcast document
   const broadcastDocName = broadcastActive ? `broadcast:${sessionId}` : "noop";
-  const broadcastToken = useRealtimeToken(broadcastDocName);
+  const { token: broadcastToken, unavailable: broadcastUnavailable } = useRealtimeToken(broadcastDocName);
+  const realtimeUnavailable = ownDocUnavailable || broadcastUnavailable;
   const { yText: broadcastYText, provider: broadcastProvider } = useYjsProvider({
     documentName: broadcastDocName,
     token: broadcastToken,
@@ -129,6 +134,8 @@ export function StudentSession({
   const isStacked = mode === "stacked";
 
   return (
+    <>
+      <RealtimeConfigBanner unavailable={realtimeUnavailable} />
     <div className="flex h-screen">
       <div className={`flex ${isStacked ? "flex-col" : "flex-row"} flex-1 min-h-0`}>
         {/* Broadcast overlay */}
@@ -209,5 +216,6 @@ export function StudentSession({
         </div>
       )}
     </div>
+    </>
   );
 }

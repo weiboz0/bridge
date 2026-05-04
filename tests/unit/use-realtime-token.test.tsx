@@ -11,9 +11,10 @@ function mintResponse(token: string, expiresInMs = 25 * 60 * 1000): Response {
   );
 }
 
-function HookHarness({ docName, onToken }: { docName: string; onToken: (t: string) => void }) {
-  const t = useRealtimeToken(docName);
-  onToken(t);
+function HookHarness({ docName, onToken, onUnavailable }: { docName: string; onToken: (t: string) => void; onUnavailable?: (u: boolean) => void }) {
+  const { token, unavailable } = useRealtimeToken(docName);
+  onToken(token);
+  onUnavailable?.(unavailable);
   return null;
 }
 
@@ -90,6 +91,61 @@ describe("useRealtimeToken", () => {
       rerender(<HookHarness docName="unit:B" onToken={(t) => tokens.push(t)} />);
     });
     expect(tokens.at(-1), "stale tok-A must be cleared during B's mint window").toBe("");
+  });
+
+  it("plan 068 phase 4: surfaces unavailable=true when mint returns 503", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValueOnce(
+        new Response("Realtime tokens not configured", { status: 503 })
+      ),
+    );
+
+    const tokens: string[] = [];
+    const unavailables: boolean[] = [];
+    render(
+      <HookHarness
+        docName="unit:not-configured"
+        onToken={(t) => tokens.push(t)}
+        onUnavailable={(u) => unavailables.push(u)}
+      />,
+    );
+
+    // Suppress the expected console.error from the catch handler.
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    await act(async () => { await Promise.resolve(); });
+    await act(async () => { await Promise.resolve(); });
+    errSpy.mockRestore();
+
+    expect(tokens.at(-1)).toBe("");
+    expect(unavailables.at(-1)).toBe(true);
+  });
+
+  it("plan 068 phase 4: unavailable stays false on non-503 errors (network, 401, 5xx other)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValueOnce(
+        new Response("Server error", { status: 500 })
+      ),
+    );
+
+    const tokens: string[] = [];
+    const unavailables: boolean[] = [];
+    render(
+      <HookHarness
+        docName="unit:server-error"
+        onToken={(t) => tokens.push(t)}
+        onUnavailable={(u) => unavailables.push(u)}
+      />,
+    );
+
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    await act(async () => { await Promise.resolve(); });
+    await act(async () => { await Promise.resolve(); });
+    errSpy.mockRestore();
+
+    expect(tokens.at(-1)).toBe("");
+    expect(unavailables.at(-1)).toBe(false);
   });
 
   it("does not call setToken after unmount (cancelled flag)", async () => {

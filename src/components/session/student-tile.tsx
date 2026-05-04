@@ -32,7 +32,10 @@ export function StudentTile({
   // student's session doc. The cache in `getRealtimeToken` collapses
   // duplicate fetches when many tiles render simultaneously.
   const documentName = `session:${sessionId}:user:${studentId}`;
-  const realtimeToken = useRealtimeToken(documentName);
+  // The banner for "realtime not configured" lives on the parent
+  // teacher-dashboard page, not per-tile (would render 30 banners
+  // on a class with 30 students). Destructure { token } only.
+  const { token: realtimeToken } = useRealtimeToken(documentName);
 
   useEffect(() => {
     if (!realtimeToken) return;

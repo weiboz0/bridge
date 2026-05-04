@@ -20,6 +20,7 @@ import { OutputPanel } from "@/components/editor/output-panel";
 import { AttemptHeader } from "@/components/problem/attempt-header";
 import { useYjsProvider } from "@/lib/yjs/use-yjs-provider";
 import { useRealtimeToken } from "@/lib/realtime/use-realtime-token";
+import { RealtimeConfigBanner } from "@/components/realtime/realtime-config-banner";
 import { usePyodide } from "@/lib/pyodide/use-pyodide";
 import { Button } from "@/components/ui/button";
 import { TestResultsCard, type TestRunSummary } from "@/components/problem/test-results-card";
@@ -63,7 +64,7 @@ export function ProblemShell({
   // Yjs binding for the active attempt. Doc-name change forces reconnect on
   // attempt switch.
   const documentName = userId ? `attempt:${activeAttemptId}` : "noop";
-  const realtimeToken = useRealtimeToken(documentName);
+  const { token: realtimeToken, unavailable: realtimeUnavailable } = useRealtimeToken(documentName);
   const { yText, provider, connected } = useYjsProvider({
     documentName,
     token: realtimeToken,
@@ -205,6 +206,8 @@ export function ProblemShell({
     narrowTab === id ? "flex flex-1 @3xl/shell:flex-initial" : "hidden @3xl/shell:flex";
 
   return (
+    <>
+      <RealtimeConfigBanner unavailable={realtimeUnavailable} />
     <div className="@container/shell flex h-[calc(100vh-var(--portal-header-height,56px))] flex-col overflow-hidden @3xl/shell:flex-row">
       <ResponsiveTabs active={narrowTab} onChange={setNarrowTab} />
 
@@ -356,6 +359,7 @@ export function ProblemShell({
         </div>
       </aside>
     </div>
+    </>
   );
 }
 

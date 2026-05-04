@@ -7,6 +7,7 @@ import { useSession } from "next-auth/react";
 import { usePanelLayout } from "@/lib/hooks/use-panel-layout";
 import { useYjsProvider } from "@/lib/yjs/use-yjs-provider";
 import { useRealtimeToken } from "@/lib/realtime/use-realtime-token";
+import { RealtimeConfigBanner } from "@/components/realtime/realtime-config-banner";
 import { TeacherHeader } from "./teacher-header";
 import { StudentListPanel } from "./student-list-panel";
 import { ModeToolbar, type DashboardMode } from "./mode-toolbar";
@@ -141,7 +142,7 @@ export function TeacherDashboard({
   // Plan 053 phase 3 — mint a JWT for the selected student's doc.
   // The cache in `getRealtimeToken` keeps this to one mint per
   // (doc, tab); switching students re-fetches.
-  const realtimeToken = useRealtimeToken(selectedDocName);
+  const { token: realtimeToken, unavailable: realtimeUnavailable } = useRealtimeToken(selectedDocName);
   const { yText, provider, connected } = useYjsProvider({
     documentName: selectedDocName,
     token: realtimeToken,
@@ -388,6 +389,8 @@ export function TeacherDashboard({
   }
 
   return (
+    <>
+      <RealtimeConfigBanner unavailable={realtimeUnavailable} />
     <div className="flex h-screen flex-col" data-testid="teacher-dashboard">
       <TeacherHeader
         sessionId={sessionId}
@@ -459,5 +462,6 @@ export function TeacherDashboard({
         )}
       </div>
     </div>
+    </>
   );
 }
