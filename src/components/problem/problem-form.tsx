@@ -534,7 +534,10 @@ export function ProblemForm({ mode, identity, initial }: Props) {
         )}
 
         <div className="flex gap-3 pt-2">
-          <Button type="submit" disabled={submitting || orgsLoading}>
+          <Button
+            type="submit"
+            disabled={submitting || (scope === "org" && orgsLoading)}
+          >
             {submitting
               ? mode === "create"
                 ? "Creating…"
