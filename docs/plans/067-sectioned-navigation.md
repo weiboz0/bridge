@@ -155,11 +155,14 @@ role. The sidebar will now auto-expand the Admin group instead.
    `src/lib/hooks/use-panel-layout.ts:24-29`. Storage key:
    `bridge.sidebar.expanded`. The map is keyed on the same
    `${role}:${orgId ?? "none"}` shape as the active-section
-   detection so they line up. Sign-out clearing: Phase 3
+   detection so they line up. Sign-out clearing: Phase 1
    adds `localStorage.removeItem("bridge.sidebar.expanded")`
    to BOTH `src/components/portal/sidebar-footer.tsx:12-18`
    AND `src/components/sign-out-button.tsx:6-15`. Codex pass-1
-   non-blocking #1 caught the unwired clear.
+   caught the unwired clear; pass-3 caught the original
+   "Phase 3 adds" wording (which would have left a window
+   between PR 1 and PR 3 where one signout path cleared the
+   key and the other didn't); both clears now ship in Phase 1.
 3. **Org context preservation.** The current role switcher
    carries `?orgId=` for org-scoped roles. The new sectioned
    nav links keep the same `?orgId=` query param on each item
@@ -346,6 +349,10 @@ Specific questions:
 - PR + merge.
 
 ## Codex Review of This Plan
+
+### Pass 4 — 2026-05-04: line 158 sign-out clear narrative aligned
+
+Codex pass-4 caught a remaining "Phase 3 adds" reference in Decisions §2 narrative (line 158) that contradicted the pass-3 fold-in (which moved both clears to Phase 1). Updated to "Phase 1 adds" with the historical context preserved.
 
 ### Pass 3 — 2026-05-03: CONCUR-WITH-CHANGES → localStorage convergence
 

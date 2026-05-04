@@ -238,20 +238,8 @@ Required new fetch:
 
 ### Phase 5 — minor polish (deferrable, not blocking)
 
-- Markdown preview side-by-side in the description field
-  (`react-markdown` already in deps).
-- Improve the existing `/teacher/problems` empty state to link
-  directly to `/teacher/problems/new` instead of just mentioning
-  the YAML importer.
-- "View as student" button — **deferred** until the design
-  route accepts a real `problemId` (Codex pass-1: today the
-  page renders hardcoded placeholder content, no
-  `searchParams` wiring). Adding `searchParams` support to
-  `src/app/design/problem-student/page.tsx` is one part; the
-  other is fetching the real problem + test cases and feeding
-  them through the existing student shell (currently
-  hardcoded). Track as plan-066 follow-up; not blocking the
-  authoring UI itself.
+- Markdown preview side-by-side in the description field (`react-markdown` already in deps).
+- Improve the existing `/teacher/problems` empty state to link directly to `/teacher/problems/new` instead of just mentioning the YAML importer.
 
 ## Risks
 
@@ -343,9 +331,12 @@ the larger pages.
 
 - Empty-state link to `/teacher/problems/new`.
 - Optional: markdown preview in description field.
-- ("View as student" stays deferred — see §Files Phase 5 for why.)
 
 ## Codex Review of This Plan
+
+### Pass 4 — 2026-05-04: stale "View as student" mentions in Phase 5 deleted
+
+Codex pass-4 flagged that pass-3 only softened the "View as student" mentions to "deferred" rather than removing them. Both the file-stub bullet (Files §Phase 5) and the polish-bullet (Phase 5: Polish narrative) deleted entirely. The §Approach §2 explanation of why no view-as-student in v1 stays — that's load-bearing context, not a stale Phase-5 reference.
 
 ### Pass 3 — 2026-05-03: CONCUR-WITH-CHANGES → 2 stale-text fixes folded
 

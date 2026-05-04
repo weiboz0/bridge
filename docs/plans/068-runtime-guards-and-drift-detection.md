@@ -53,7 +53,7 @@ Four small, independent additions:
 1. **Escape hatch is `ALLOW_DEV_AUTH_OVER_TUNNEL=true`, not `APP_ENV=local`.** Reviewer suggested either; the explicit allowlist env is more searchable and less ambiguous (`APP_ENV` already has prod-vs-not-prod semantics from plan 050). Setting the escape hatch is a deliberate operator decision; defaulting to off catches the foot-gun.
 2. **Exposure declaration via `BRIDGE_HOST_EXPOSURE` env var, not bind-host inference** (Codex pass-1 finding). The Go listener binds `":%d"` (all interfaces) regardless of `cfg.Server.Host`, so inferring "is this localhost-only?" from the host field is unsound. Operators set `BRIDGE_HOST_EXPOSURE=localhost` (default — local dev) or `BRIDGE_HOST_EXPOSURE=exposed` (tunneled / staging / production). The default-to-localhost choice means an operator who forgets the var on a tunneled server STILL hits the guard if `DEV_SKIP_AUTH` is set, because the guard fires conservatively when exposure is `localhost` — actually wait, that's backwards. Re-reading: the guard should fire when `exposed` AND `DEV_SKIP_AUTH != ""`. If exposure isn't set, default to `localhost` (no guard fire — local dev "just works"). The escape hatch `ALLOW_DEV_AUTH_OVER_TUNNEL=true` is the override. Operators on shared/tunneled infra MUST set `BRIDGE_HOST_EXPOSURE=exposed` for the guard to be useful — this is a deliberate ops-discipline requirement, documented in `docs/setup.md`.
 3. **Identity-drift banner is dev/staging only.** It calls `/api/auth/debug` which 404s in production (`src/app/api/auth/debug/route.ts:24-26`). The banner component handles 404 by silently no-op'ing. Production users never see this banner.
-4. **Schema-version constant lives in Go.** `platform/internal/db/version.go` exports `ExpectedSchemaVersion = "0024"` (matching the latest migration filename). Bumped by hand on each migration; a CI test compares against `drizzle/` directory contents.
+4. **Schema-probe constant lives in Go** (Codex pass-2 pivot from "schema-version"). `platform/internal/db/migrations.go` exports `ExpectedSchemaProbe = "parent_links"` (the table created by the latest schema-affecting migration). Bumped by hand on each new schema-affecting migration; a CI test scans `drizzle/*.sql` for the latest `CREATE TABLE` and asserts the constant matches. **Limitation acknowledged**: a single-table presence check can't distinguish "fully migrated" from "every-other-migration applied + this one hotfixed in isolation". This is acceptable for the realistic failure mode (operator forgot to apply migrations → latest table missing → guard fires). If a stronger check is needed later, switch to a multi-sentinel probe (one column from each milestone migration) without changing the constant's semantic role.
 5. **Realtime banner only when 503.** Other failure modes (network, 401, malformed response) keep the existing console-error path — those are bugs in the realtime mint flow, not config issues. The 503-specific banner avoids false positives.
 6. **No retry button on the realtime banner v1.** The user has to refresh the page after the operator fixes the env. Adding a working retry requires re-running the auth check + remounting the WebSocket; defer to v2 if the friction matters.
 
@@ -117,8 +117,8 @@ Codex pass-1 confirmed `getRealtimeToken` already differentiates 503 (`src/lib/r
 |---|---|---|
 | New startup guard breaks existing local dev workflows that bind to 0.0.0.0 | medium | Default behavior change is loud — operator gets a clear refusal-to-start message with the escape-hatch instruction. Document in `docs/setup.md`. |
 | Identity-drift banner false-positives during impersonation | low | Skip banner when `impersonatedBy !== ""` (the live identity *should* differ from the JWT in that case). Codex pass should confirm. |
-| Schema-version constant drifts from actual migrations | medium | Phase 3 includes a CI-side check that compares `ExpectedSchemaVersion` to the highest filename under `drizzle/`. Failing PRs forces operators to update the constant in the migration PR. |
-| Realtime banner appears on pages that don't actually need realtime | low | Only wrap pages that consume realtime tokens. Phase 4 enumerates the four current consumers. |
+| Schema-probe constant drifts from actual migrations | medium | Phase 3 includes a CI-side check that scans `drizzle/*.sql` for the latest `CREATE TABLE` and asserts `ExpectedSchemaProbe` matches. Failing PRs force operators to update the constant in the migration PR. |
+| Realtime banner appears on pages that don't actually need realtime | low | Only wrap pages that consume realtime tokens. Phase 4 enumerates the 8 current consumers (Codex pass-2 expanded the original 4-callsite list). |
 | `/api/auth/debug` removed at some point (it's dev-only and could be deleted) | low | The banner already handles 404 silently. If the endpoint goes away in production builds, banner just doesn't render — no error. |
 | Bind-host detection: `cfg.Server.Host` could be a hostname (e.g., `bridge.example.com`) | low | Resolve via `net.LookupHost`. If any resolved IP is non-loopback, treat as exposed. |
 
@@ -174,6 +174,12 @@ Specific questions:
 - PR + merge.
 
 ## Codex Review of This Plan
+
+### Pass 3 — 2026-05-04: 2 stale-text fixes + schema-probe limitation documented
+
+Codex pass-3 confirmed the schema-probe pivot is sound and the 8-callsite list is complete. Two cleanup items folded:
+1. Decisions §4 still mentioned `ExpectedSchemaVersion = "0024"` from the pre-pivot design; rewritten to `ExpectedSchemaProbe = "parent_links"` with the limitation explicitly acknowledged (single-table check can't distinguish "fully migrated" from "every-other-migration applied + this one hotfixed in isolation"; acceptable for the realistic failure mode).
+2. Risks-table row "four current consumers" updated to "8 current consumers".
 
 ### Pass 2 — 2026-05-03: BLOCKED → 2 new blockers folded
 

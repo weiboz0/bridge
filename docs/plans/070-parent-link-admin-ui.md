@@ -99,18 +99,12 @@ The platform-admin endpoints are intentionally global — they can list every li
 **Modify:**
 - `src/lib/portal/nav-config.ts` — add a `Parent links` nav item to the org_admin portal config, after `Settings`. Icon: `users` or `link` (lucide).
 
-### Phase 3 — Read-only teacher view
+### Phase 3 — Read-only teacher view (popover on class detail page)
 
-Codex pass-1 §Q3 confirmed the page `src/app/(portal)/teacher/classes/[id]/students/[studentId]/page.tsx` does NOT exist. The closest is the problem-specific `src/app/(portal)/teacher/classes/[id]/problems/[problemId]/students/[studentId]/page.tsx`. Phase 3 either:
-
-A. **Adds a new general-purpose student-detail page** at `/teacher/classes/[id]/students/[studentId]/page.tsx`, hosting the Parents card alongside any other future per-student data (attempts overview, progress, etc.). Heavier scope for v1.
-
-B. **Adds a "Parents" affordance to the existing class detail page** (`src/app/(portal)/teacher/classes/[id]/page.tsx` lists students). Each row gets a small "P" badge with parent count + a popover listing linked parents. Lighter scope; sticks v1 close to the reviewer's intent.
-
-Going with B for v1. Phase 3 file list:
+Phase 3 adds a "Parents" popover affordance to the existing class detail page at `src/app/(portal)/teacher/classes/[id]/page.tsx`. Each student row gets a small "P" badge with parent count; clicking opens a popover listing linked parents (read-only). This is a lighter v1 scope than a new student-detail page (no such page exists today).
 
 **Modify:**
-- `src/app/(portal)/teacher/classes/[id]/page.tsx` — add a parent-count badge per student row, plus a popover with parent details. Pulls from a new lightweight teacher-scoped endpoint `GET /api/teacher/classes/{classId}/parent-links` (returns one row per (student, parent) tuple for students in the class). Backend additions in Phase 3 below.
+- `src/app/(portal)/teacher/classes/[id]/page.tsx` — add a parent-count badge per student row, plus a popover with parent details. Pulls from a new lightweight teacher-scoped endpoint `GET /api/teacher/classes/{classId}/parent-links` (returns one row per (student, parent) tuple for students in the class). Backend addition listed below.
 
 **Add:**
 - `platform/internal/handlers/teacher_parent_links.go` — `GET /api/teacher/classes/{classId}/parent-links` handler. Auth: caller is teacher/ta in `classId` OR org_admin in the class's org. Returns `[]{ studentUserId, parentUserId, parentEmail, parentName, linkId, createdAt }` for active links of all students in the class.
@@ -147,9 +141,9 @@ Per CLAUDE.md plan-review gate. Dispatch `codex:codex-rescue` to review against:
 
 Specific questions:
 1. The "child belongs to the org" check (Decisions §2) — what's the simplest SQL? Is there an existing helper in `parent_links.go` or `org_memberships.go` we can reuse?
-2. Parent users typically have NO `org_memberships` rows (they're just Bridge users with `intendedRole=parent`). Does any existing code path assume parents must be in an org?
+2. (Codex pass-1 confirmed: parents DO need `org_memberships` rows — Bridge's portal-access logic derives roles from that table. Decisions §3 added the link-time upsert. Question retained for audit trail.)
 3. Is there an existing teacher-portal page for "students" detail (`/teacher/classes/{id}/students/{studentId}`) or do we need to add it as part of Phase 3?
-4. The onboarding flow: where exactly does the parent-specific copy live? Walk the flow from `/register?intendedRole=parent` through `/onboarding` to `/parent`.
+4. The onboarding flow: where exactly does the parent-specific copy live? Walk the flow from `/register` (no role intent — Codex pass-1 confirmed `?intendedRole=parent` is not supported) through `/onboarding` to `/parent`.
 5. Plan 070b (token-based parent claim) — does the schema (plan 064's `parent_links`) accommodate a "claim_token" column without a migration, or will v2 need its own migration? Want to know if v1 should leave any bread crumbs.
 6. Privacy: should the org-admin's parent-links list mask parent emails by default with a click-to-reveal? Most school admin tools show emails plain; flagging as a question only.
 
@@ -172,7 +166,7 @@ Specific questions:
 ### Phase 3 — Teacher read-only view (PR 3)
 
 - Implement the Parents popover on the existing class-detail page (`src/app/(portal)/teacher/classes/[id]/page.tsx`). The original "student detail page" framing was abandoned in Phase 3 (no such page exists; pivoted to a popover affordance instead).
-- Smoke test: as `eve@demo.edu` (teacher), view a student page, see linked parents.
+- Smoke test: as `eve@demo.edu` (teacher), open the class detail page (`/teacher/classes/{id}`), confirm a "P" badge appears next to each linked student and the popover lists their linked parents.
 - Codex post-impl review.
 - PR + merge.
 
@@ -184,6 +178,14 @@ Specific questions:
 - PR + merge (no Codex needed for copy-only changes; flag this as a deviation in the PR description).
 
 ## Codex Review of This Plan
+
+### Pass 3 — 2026-05-04: 3 stale-text scrubs
+
+Codex pass-3 confirmed the UpsertActiveMembership design and the revoke trade-off are sound but caught remaining stale references. Scrubbed:
+- Phase 3 narrative no longer presents "Option A: new student detail page" — only the popover-on-class-detail design remains (the option-A framing was a pass-2 artifact).
+- Phase 3 smoke test wording changed from "view a student page" to "open the class detail page and confirm the P badge + popover".
+- Phase 0 historical question on line 144 (the "parents typically have NO org_memberships" framing) annotated as superseded by Decisions §3's link-time upsert.
+- Phase 0 historical question on line 152 (`/register?intendedRole=parent`) annotated as superseded.
 
 ### Pass 2 — 2026-05-04: CONCUR-WITH-CHANGES → 3 cleanup items folded
 

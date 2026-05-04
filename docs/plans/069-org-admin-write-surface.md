@@ -19,8 +19,7 @@ Concrete missing flows:
 |---|---|---|
 | Invite/add a teacher to the org | ✅ `POST /api/orgs/{id}/members` | ❌ no form |
 | Invite/add a student to the org | ✅ same endpoint | ❌ no form |
-| Update teacher/student's STATUS within the org | ✅ `PATCH /api/orgs/{id}/members/{memberId}` (accepts `{status}` only) | ❌ no UI |
-| Update teacher/student's ROLE within the org | ❌ endpoint doesn't exist (deferred to plan 069b) | ❌ no UI |
+| Update member's STATUS (pending/active/suspended) within the org | ✅ `PATCH /api/orgs/{id}/members/{memberId}` | ❌ no UI |
 | Remove a member | ✅ `DELETE /api/orgs/{id}/members/{memberId}` | ❌ no UI |
 | Drill into a class to see its roster + instructor | ✅ `GET /api/classes/{id}` + `/api/classes/{id}/members` | ❌ from `/org/classes`, no clickable rows |
 | Update org contact email / domain | ✅ `PATCH /api/orgs/{id}` | ❌ "coming later" |
@@ -94,10 +93,10 @@ When the org has a `domain` set, the invite forms (§1) check the email's domain
 
 1. **No email-token invites in v1.** The current `AddMember` requires the user to already exist. Token invites are a meaningful schema addition (token table, expiry, single-use enforcement); plan 069b owns that.
 2. **Server components for read; client components only for forms.** Same precedent as plan 066. Mutations go through `<form action={serverAction}>` where possible, otherwise `useState` + `onSubmit`.
-3. **Role changes are out of scope for v1** (Codex pass-2). The backend's PATCH endpoint accepts `{status}` only. Role-change UI defers to plan 069b which would add the missing backend endpoint. The "promote to org_admin" path the original plan mentioned is a 069b concern; this plan ships status-only quick-actions.
+3. **Role changes are out of scope for v1.** The backend's PATCH endpoint accepts `{status}` only. Member quick-actions ship as status-update + remove. (Role mutation is a separate scope; revisit when product asks.)
 4. **Class-drill-down is read-only with the "open in teacher portal" escape hatch.** Org admins are operators, not instructors. If they need to mutate class state (assignments, sessions, etc.), they sign in as a teacher in that class. No duplicate UIs.
 5. **Settings edit auto-saves on blur for low-stakes fields (contact name, domain), explicit Save for high-stakes (email).** Pulling back from this — too clever. Single Save button at the bottom; whole form is one PATCH. Reviewer didn't ask for granular saves.
-6. **Audit "last updated by" is DEFERRED for v1.** Codex pass-1 confirmed `organizations` has no `updated_by` column. Settings UI shows only `updated_at` ("Last updated {timestamp}"). Adding `updated_by` is a 5-minute migration if/when product asks; not in this plan.
+6. **Settings audit surface is `updated_at` only.** Settings UI shows "Last updated {timestamp}" — no actor column. (No "by {y}" surface; that requires a schema addition that isn't in v1.)
 
 ## Files
 
@@ -207,6 +206,13 @@ Specific questions:
 - Smoke test: invite a same-domain email (no warning); invite a different-domain email (confirmation dialog).
 
 ## Codex Review of This Plan
+
+### Pass 3 — 2026-05-04: stale role-change + updated_by text scrubbed
+
+Codex pass-3 confirmed the courseTitle backend fix and self-remove guard fix are sound but flagged remaining stale text. Final scrub:
+- §Problem table row "Update teacher/student's ROLE within the org … deferred to plan 069b" deleted entirely (the column now lists status-only).
+- Decisions §3 simplified to "Role changes are out of scope for v1." with no 069b reference.
+- Decisions §6 simplified to "Settings audit surface is `updated_at` only" with no `updated_by` migration discussion.
 
 ### Pass 2 — 2026-05-03: BLOCKED → 1 auth blocker + 3 cleanup items folded
 
