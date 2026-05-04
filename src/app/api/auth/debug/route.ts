@@ -39,12 +39,16 @@ export async function GET() {
     cookieNameUsed === null && cookieStore.get(otherName)?.value ? otherName : null;
 
   let goClaimsUserId: string | null = null;
+  let goClaimsEmail: string | null = null;
+  let goImpersonatedBy: string | null = null;
   let goError: string | null = null;
   try {
-    const identity = await api<{ userId: string; impersonatedBy?: string }>(
+    const identity = await api<{ userId: string; email?: string; impersonatedBy?: string }>(
       "/api/me/identity"
     );
     goClaimsUserId = identity.userId;
+    goClaimsEmail = identity.email ?? null;
+    goImpersonatedBy = identity.impersonatedBy ?? null;
   } catch (err) {
     if (err instanceof ApiError) {
       goError = `${err.status}: ${err.message}`;
@@ -54,6 +58,7 @@ export async function GET() {
   }
 
   const nextAuthUserId = session?.user?.id ?? null;
+  const nextAuthEmail = session?.user?.email ?? null;
   const match =
     goClaimsUserId !== null && nextAuthUserId !== null
       ? goClaimsUserId === nextAuthUserId
@@ -61,7 +66,10 @@ export async function GET() {
 
   return NextResponse.json({
     nextAuthUserId,
+    nextAuthEmail,
     goClaimsUserId,
+    goClaimsEmail,
+    goImpersonatedBy,
     goError,
     cookieNamesPresent: namesPresent,
     cookieNameUsed,
