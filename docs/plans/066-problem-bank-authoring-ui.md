@@ -113,6 +113,12 @@ Go endpoints via the `api()` helper. No backend changes.
    confirm needed on Publish/Archive (reversible). Fork redirects
    to the forked copy's detail page.
 
+7. **Attach-to-Focus-Area action** (review 010 §P2). Detail page exposes "Attach to focus area" → opens a modal listing the teacher's courses and their focus areas; selecting one POSTs `/api/topics/{topicId}/problems` with the problem id (existing endpoint at `platform/internal/handlers/topic_problems.go:40`). The handler picks the next sort_order; UI shows "Attached" with an undo (DETACH) for 10s. Same surface lists EXISTING attachments at the top with detach buttons.
+
+8. **Attach-to-Unit action deferred** (review 010 §P2). Per the recent taxonomy clarification: Units are teaching MATERIAL, Focus Areas are SYLLABUS framing. A problem can be referenced from a Unit's content (e.g., embedded in a markdown lesson) but the canonical "this problem is part of this curriculum slot" relation is the focus-area attachment from §7. Phase 2 of this plan ships only the focus-area attach; Unit-attach is deferred until product confirms the desired UX (markdown shortcode? an ordered list on the Unit edit page? both?). The detail page's "Attached to" panel shows both kinds when the latter ships.
+
+9. **Terminology rename** (review 010 §P2). User-facing strings on `/teacher/problems` and the new detail/create/edit pages use "focus areas" instead of "topics". Schema, URL paths, and field names (`topicId`, `topic_problems`, `/api/topics/...`) stay unchanged — only labels visible to teachers change. The list-page header "Problems you can attach to topics" (`src/app/(portal)/teacher/problems/page.tsx:94`) is the most prominent offender; sweep all other strings on the same surface during Phase 1.
+
 ## Decisions to lock in
 
 1. **Server components by default.** Detail and list pages are
@@ -178,6 +184,7 @@ Go endpoints via the `api()` helper. No backend changes.
   - Add a "Quick actions" trailing column with a 3-dot menu
     that exposes Publish/Archive/Delete inline (defer this to
     Phase 4 if it complicates the row layout).
+  - **Terminology sweep**: replace "topics" with "focus areas" in user-facing copy on this page. Specifically the header line at `src/app/(portal)/teacher/problems/page.tsx:94` ("Problems you can attach to topics" → "Problems you can attach to focus areas"). Audit the rest of the page for any other "topic" mentions in copy (not in URLs / field names).
 
 ### Phase 2 — detail page
 
@@ -193,14 +200,13 @@ Go endpoints via the `api()` helper. No backend changes.
     Defer cross-user activity to a follow-up that adds a new
     teacher-scoped endpoint (`/api/problems/{id}/usage` or
     similar).
-- `src/components/problem/problem-detail.tsx` — pure presentation:
-  metadata header, markdown description, starter-code Monaco
-  (read-only), test-cases card list, action buttons.
-- `src/components/problem/test-case-list.tsx` — read-only display
-  with example/hidden split.
-- `src/components/problem/problem-actions.tsx` — client component
-  with Publish/Archive/Unarchive/Fork/Delete buttons. Each
-  posts and triggers `router.refresh()`.
+- `src/components/problem/problem-detail.tsx` — pure presentation: metadata header, markdown description, starter-code Monaco (read-only), test-cases card list, action buttons, **focus-area attachments panel** (see below).
+- `src/components/problem/test-case-list.tsx` — read-only display with example/hidden split.
+- `src/components/problem/problem-actions.tsx` — client component with Publish/Archive/Unarchive/Fork/Delete buttons. Each posts and triggers `router.refresh()`.
+- `src/components/problem/focus-area-attach.tsx` — client component for the attach-to-focus-area flow. Renders the existing attachments list (one row per `topic_problems` entry, with a Detach button) and an "Attach to focus area" button. Clicking opens a modal listing the teacher's courses (each expandable to its focus areas); selecting one POSTs `/api/topics/{topicId}/problems` with `{ problemId }` (the existing endpoint at `platform/internal/handlers/topic_problems.go:40` infers sort_order). Detach POSTs `DELETE /api/topics/{topicId}/problems/{problemId}` (`platform/internal/handlers/topic_problems.go:44`). Surfaces 403/409 inline.
+
+Required new fetch:
+- `GET /api/problems/{id}/topics` — list focus-area attachments for this problem. **Need to verify this endpoint exists** (Phase 0 question for Codex). If it doesn't, list is computed client-side by walking the teacher's courses + filtering attachments — slower, but no backend change needed for v1.
 
 ### Phase 3 — create + edit pages
 

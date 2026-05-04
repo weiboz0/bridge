@@ -1,0 +1,206 @@
+# Plan 069 — Org-admin write surface (invites, class drill-down, settings edit)
+
+## Status
+
+- **Date:** 2026-05-03
+- **Origin:** Comprehensive browser review 010 §P2 ("Org-admin list pages are useful but remain read-only with no management affordances"). The teacher portal got a lot more capable in the previous cycle, but the org-admin portal renders six list pages (`teachers`, `students`, `courses`, `classes`, `units`, `settings`) with zero write operations. `/org/settings` literally says editing is coming later. Org admins can see who's in their school, but can't invite anyone, can't drill into a class, and can't update the school's contact email.
+- **Scope:** Next portal pages + a small number of new Go endpoints for the invite flow (existing `AddMember` accepts an existing-user email; an "invite by email when user doesn't exist yet" flow needs a new path). No schema changes for the v1 invite — defer email-token invites to a follow-up; v1 invites add an *existing* user by email or send them a `/register` link.
+- **Predecessor context:** The org member CRUD already exists at `platform/internal/handlers/orgs.go:30-34` (`AddMember`, `UpdateMember`, `RemoveMember`). The class CRUD exists at `platform/internal/handlers/classes.go:20-34`. The Org settings update is at `orgs.go:27` (`UpdateOrg`). All the backend pieces are in place; this plan adds the UI.
+
+## Problem
+
+Today, an org admin can do exactly two write actions in the entire portal:
+- The "Add Member" backend exists but no UI exposes it from `/org/teachers` or `/org/students`.
+- The "Update Org" backend exists but `/org/settings` shows "Settings editing coming later" instead of a form.
+
+Concrete missing flows:
+
+| Action | Backend | UI |
+|---|---|---|
+| Invite/add a teacher to the org | ✅ `POST /api/orgs/{id}/members` | ❌ no form |
+| Invite/add a student to the org | ✅ same endpoint | ❌ no form |
+| Update teacher/student's role within the org | ✅ `PATCH /api/orgs/{id}/members/{memberId}` | ❌ no UI |
+| Remove a member | ✅ `DELETE /api/orgs/{id}/members/{memberId}` | ❌ no UI |
+| Drill into a class to see its roster + instructor | ✅ `GET /api/classes/{id}` + `/api/classes/{id}/members` | ❌ from `/org/classes`, no clickable rows |
+| Update org contact email / domain | ✅ `PATCH /api/orgs/{id}` | ❌ "coming later" |
+
+The reviewer's recommended priorities (from review 010 §P2 and the "Recommended Next Cycle"):
+1. Invite teacher/student/member by email.
+2. Class detail read-only drill-down.
+3. Settings edit flow (contact email, contact name, domain) with audit trail.
+4. Parent-child link management — DEFERRED to plan 070, see that plan.
+
+## Out of scope
+
+- Email-token invite flow (where the invitee gets a link with a one-time token that auto-creates their account on click). v1 just requires the invitee to register via `/register` first — the org admin then invites the existing user by email. This matches what the backend supports today; token-based invites are plan 069b material.
+- Bulk import (CSV roster upload, etc.). Single-add forms for v1.
+- Audit-trail log for settings edits. The reviewer recommends one but `org_audit_log` is a new table that warrants its own plan. v1 just persists the change; a simple "last updated by / at" field is enough for the immediate need.
+- Cross-org member moves. Adding a teacher who already belongs to another org is fine (multi-org membership is supported); transferring is not in scope.
+- Class CREATE from `/org/classes`. Teachers create classes from the teacher portal; org admin's role here is read-only with the option to inspect/archive.
+- Class member management from org-admin. Teachers manage their own class roster; org admin sees but doesn't edit.
+- Role escalation to org_admin. The first org_admin is bootstrapped via the platform admin (existing flow); this plan doesn't add a "promote teacher to org_admin" UI. Defer until product confirms desired escalation path.
+
+## Approach
+
+Five UI additions, all calling existing Go endpoints (one new endpoint for invite-via-domain validation; details below).
+
+### 1. `/org/teachers` and `/org/students` get an "Add" form
+
+Each page gets a sticky "+ Invite teacher" / "+ Invite student" button at the top-right. Clicking opens a modal with fields:
+- Email (required, validated via zod `.email()`)
+- Display name (read-only after the user is found by email; editable on the response if they don't have one yet)
+- Role (preselected: `teacher` for `/org/teachers`, `student` for `/org/students`)
+
+Submit POSTs `/api/orgs/{orgId}/members` with `{ email, role }`. The backend already finds the user by email and returns 404 if the user doesn't exist. The form catches the 404 and shows an inline message: "User not found. Send them this registration link: `https://bridge.../register?intendedRole=teacher`". Copy-to-clipboard button.
+
+The "registration link" pre-fills the role intent (existing pattern from plan 043). After registration, the org admin re-submits the form and the user gets added.
+
+### 2. `/org/classes/{classId}` drill-down (read-only)
+
+Server component. Fetches `GET /api/classes/{id}` + `GET /api/classes/{id}/members`. Renders:
+- Class header (title, term, course title, instructor names).
+- Roster table (student name, email, joined date, status). Search bar.
+- "Open in teacher portal" link — for an org admin who is also a teacher in the class, links to `/teacher/classes/{id}`.
+- "Archive class" button at the bottom (POSTs the `PATCH /api/classes/{id}` archive endpoint at `classes.go:27`). Confirmation dialog. Org admins can archive any class in their org.
+
+Wire up by making each row in `/org/classes` a `<Link>` to `/org/classes/{id}`.
+
+### 3. `/org/settings` edit form
+
+Replace the "coming later" message with a form mirroring the read-only fields. Fields:
+- Org name (string, required, 1-255)
+- Contact email (email, required)
+- Contact name (string, required, 1-255)
+- Domain (string, optional, 1-255)
+
+Submit PATCHes `/api/orgs/{orgId}`. On success, refresh the page (server component re-fetches). Backend already supports this (`orgs.go:27` `UpdateOrg`).
+
+For the "audit trail" the reviewer asked for: defer the dedicated table, but persist `updated_at` (already in the schema) and surface "Last updated {x} by {y}" in the UI. The "by" requires either an existing `updated_by` column on `organizations` (verify) or fetching from a new lightweight log. Phase 0 question for Codex.
+
+### 4. `/org/teachers/{userId}` and `/org/students/{userId}` quick-actions menu
+
+Beside each row, a 3-dot menu with:
+- Update role (modal with role select)
+- Remove from org (confirmation dialog)
+
+Update role POSTs `PATCH /api/orgs/{orgId}/members/{memberId}` with `{ role }`. Remove POSTs `DELETE /api/orgs/{orgId}/members/{memberId}`. Both endpoints exist (`orgs.go:33-34`). Surface 403 inline.
+
+### 5. Optional: domain-based hint on `/org/settings`
+
+When the org has a `domain` set, the invite forms (§1) check the email's domain against the org's domain on submit. Same-domain → submit normally. Different-domain → confirmation: "This email's domain doesn't match the org's domain (`{domain}`). Continue anyway?" Catches typos like inviting a Gmail address to a school org. Optional polish; defer to Phase 5 if it's the most-deferrable item.
+
+## Decisions to lock in
+
+1. **No email-token invites in v1.** The current `AddMember` requires the user to already exist. Token invites are a meaningful schema addition (token table, expiry, single-use enforcement); plan 069b owns that.
+2. **Server components for read; client components only for forms.** Same precedent as plan 066. Mutations go through `<form action={serverAction}>` where possible, otherwise `useState` + `onSubmit`.
+3. **Role escalation gating: stays at the API layer.** UI doesn't pre-check if the org admin can promote someone to `org_admin` — backend rejects with 403. UI surfaces the rejection.
+4. **Class-drill-down is read-only with the "open in teacher portal" escape hatch.** Org admins are operators, not instructors. If they need to mutate class state (assignments, sessions, etc.), they sign in as a teacher in that class. No duplicate UIs.
+5. **Settings edit auto-saves on blur for low-stakes fields (contact name, domain), explicit Save for high-stakes (email).** Pulling back from this — too clever. Single Save button at the bottom; whole form is one PATCH. Reviewer didn't ask for granular saves.
+6. **Audit "last updated by" is OPTIONAL for v1.** If the schema doesn't have `updated_by` on `organizations`, just show `updated_at`. Adding the column is a 5-minute migration if/when product asks for it.
+
+## Files
+
+### Phase 1 — `/org/teachers` + `/org/students` invite forms
+
+**Add:**
+- `src/components/org/invite-member-modal.tsx` — client component. Props: `{ orgId, role, onClose, onSuccess }`. Renders the form, handles submit, surfaces 404 with the registration-link copy block.
+
+**Modify:**
+- `src/app/(portal)/org/teachers/page.tsx` — add `+ Invite teacher` button (top-right of header) that opens the modal.
+- `src/app/(portal)/org/students/page.tsx` — same pattern with `role="student"`.
+
+### Phase 2 — Class drill-down
+
+**Add:**
+- `src/app/(portal)/org/classes/[classId]/page.tsx` — server component. Fetches class + members; renders header + roster table + Archive button.
+- `src/components/org/archive-class-button.tsx` — client component. Confirmation dialog → PATCH → refresh.
+
+**Modify:**
+- `src/app/(portal)/org/classes/page.tsx` — wrap each class title in `<Link href={`/org/classes/${cls.id}`}>`.
+
+### Phase 3 — Settings edit form
+
+**Modify:**
+- `src/app/(portal)/org/settings/page.tsx` — replace the "coming later" placeholder with a `<form>` (server action) that PATCHes the org. Show "Last updated {x}" derived from `updated_at`.
+
+### Phase 4 — Member quick-actions
+
+**Add:**
+- `src/components/org/member-row-actions.tsx` — client component. 3-dot menu with Update Role + Remove. Each opens a small confirmation dialog.
+
+**Modify:**
+- `src/app/(portal)/org/teachers/page.tsx` and `src/app/(portal)/org/students/page.tsx` — add the actions column to each row.
+
+### Phase 5 (optional) — Domain hint on invite
+
+**Modify:**
+- `src/components/org/invite-member-modal.tsx` — fetch the org's domain (already on `/api/orgs/{id}` payload); show confirmation when invitee email's domain mismatches.
+
+## Risks
+
+| Risk | Severity | Mitigation |
+|---|---|---|
+| 404-on-AddMember UX is awkward (have to ask invitee to register first) | medium | Surface the registration link prominently, with copy-to-clipboard. Document the limitation in the form's help text. v2 / plan 069b adds token invites. |
+| Class archive is irreversible from this UI | medium | Confirmation dialog is required. Backend's archive is reversible (`classes.is_archived` is a column flip), but UI doesn't expose un-archive in v1. Add an "Archived classes" filter on `/org/classes` if needed. |
+| Settings edit could orphan org if email is invalid | low | zod validation client-side + backend re-validation. The org's `contact_email` field is informational; not used for sign-in. |
+| Org admin removes themselves from their own org | medium | API doesn't currently prevent this. Add UI-side guard: if `memberId === currentUserId`, disable the Remove button with tooltip "Use the org transfer flow to leave an org." (No transfer flow exists; treat this as documentation that the path is blocked at v1.) |
+| Cross-org member adds (teacher already in another org) | low | Backend allows; UI doesn't need to special-case. Role list shows both org memberships independently. |
+| Inviting an existing user to an org they're already in | low | Backend should be checked — if it returns 409, UI maps to "Already a member of this org." |
+
+## Phases
+
+### Phase 0 — Pre-impl Codex review
+
+Per CLAUDE.md plan-review gate. Dispatch `codex:codex-rescue` to review against:
+- `platform/internal/handlers/orgs.go` (the endpoints the UI consumes)
+- `platform/internal/handlers/classes.go` (class drill-down endpoints)
+- `src/app/(portal)/org/teachers/page.tsx`, `students/page.tsx`, `classes/page.tsx`, `settings/page.tsx` (current read-only surface)
+- `src/app/api/auth/register/route.ts` and `src/app/(portal)/onboarding/page.tsx` (the registration flow that the invite-not-found case links to)
+
+Specific questions:
+1. `POST /api/orgs/{id}/members` — does it return 409 when the user is already a member of the org, or does it idempotently re-add? Need to know to size the UI error handling.
+2. Is there an `updated_by` column on `organizations` today? (For the "Last updated by {y}" surface.) If not, this plan should not promise the "by" half.
+3. The "registration link with role intent" pattern — confirm it's `?intendedRole=teacher` and that the `/register` form picks it up. Plan 043 phase 5 added the cookie path; what's the URL surface?
+4. Class archive (`PATCH /api/classes/{id}` per `classes.go:27`) — what's the request body shape? `{ archived: true }`? Need to confirm before writing the button's POST body.
+5. `GET /api/classes/{id}/members` exists at `classes.go:30`; what's the role discrimination in the response (is the instructor distinguished from students)? Drives the roster-table column layout.
+6. Are there any existing form-component patterns in the org portal to mirror, or is this the first write surface?
+
+### Phase 1 — Invite forms (PR 1)
+
+- Implement `<InviteMemberModal>`.
+- Wire into both pages.
+- Smoke test: invite an existing teacher → success; invite a non-existent email → 404 with reg link.
+- Codex post-impl review.
+- PR + merge.
+
+### Phase 2 — Class drill-down (PR 2)
+
+- Implement detail page + Archive button.
+- Wrap rows on `/org/classes` in links.
+- Smoke test: drill into a class, verify roster, archive, confirm removed from active list.
+- Codex post-impl review.
+- PR + merge.
+
+### Phase 3 — Settings edit (PR 3)
+
+- Replace placeholder with form.
+- Smoke test: change name, save, refresh — change persists.
+- Codex post-impl review.
+- PR + merge.
+
+### Phase 4 — Member quick-actions (PR 4)
+
+- Implement actions menu component.
+- Wire into both pages.
+- Smoke test: change a teacher's role, verify; remove a student, verify.
+- Codex post-impl review.
+- PR + merge.
+
+### Phase 5 (optional) — Domain hint (PR 5)
+
+- Add domain check to invite modal.
+- Smoke test: invite a same-domain email (no warning); invite a different-domain email (confirmation dialog).
+
+## Codex Review of This Plan
+
+_(To be populated by Codex pass — see Phase 0.)_
