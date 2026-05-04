@@ -334,6 +334,16 @@ the larger pages.
 
 ## Code Review
 
+### Phase 4 post-impl — 2026-05-04: 1 BLOCKER fixed, 1 NIT noted
+
+Codex post-impl review of `feat/066-phase-4-test-case-editor` (commit 7eb890f, fix at 36484f3).
+
+BLOCKER (FIXED in 36484f3): Partial-failure retry was an idempotency hazard. On a save batch where some mutations succeeded and others failed, the editor stayed open and the failed ones could be retried — but the local row state still showed successful creates as `id: null` (synthetic key) and successful updates as "edited". A retry would re-POST the already-created rows (producing duplicates) and re-PATCH already-saved updates. Fix: each mutation now returns a typed `RowResult`; after the batch settles, `applyResults` updates rows in place — successful creates get their server id and re-seeded `original`, successful updates re-seed `original` so the diff shrinks, successful deletes drop the row entirely. Failures leave the row untouched so the next click only retries what actually failed.
+
+CONCUR: Q1 (canonical-create auth gate), Q2 (expected-stdout normalization round-trip), Q3 (POST `null` vs `""`), Q4 (delete-then-create id collision), Q6 (duplicate order falls back to created_at tiebreak in store) — all PASS.
+
+NIT (DEFERRED — backend gap): The Go handler doesn't enforce non-empty stdin on CreateTestCase / UpdateTestCase. The form validates client-side, but a direct API caller can bypass. Filing as a follow-up: backend should reject empty stdin with 400, since a test case with no input fails the executor anyway. Not blocking — UI is the only entry point for v1.
+
 ### Phase 3 post-impl — 2026-05-04: NITS only, 1 fixed, 1 deferred
 
 Codex post-impl review of `feat/066-phase-3-create-edit-forms` (commit accf287). Verdict: NITS. No blockers.
