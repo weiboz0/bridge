@@ -44,7 +44,7 @@ Add an org-admin-managed flow as v1:
 
 2. **New org-admin page** `/org/parent-links`: lists active links for students in the org, supports create + revoke. The create form takes parent email + child email (or child id from a picker); backend resolves both, validates both belong to the org's classes, and creates the link.
 
-3. **Update parent-onboarding copy** (`src/app/(portal)/onboarding/page.tsx` or wherever the parent-flow text lives) to match: "Your school administrator will link your account to your child's. Reach out to your child's teacher or your school's admin if you don't see your child within 24 hours."
+3. **Update parent-onboarding copy** (`src/app/onboarding/page.tsx` or wherever the parent-flow text lives) to match: "Your school administrator will link your account to your child's. Reach out to your child's teacher or your school's admin if you don't see your child within 24 hours."
 
 4. **Optional read-only teacher view**: `/teacher/classes/{id}/students/{studentId}` adds a "Parents" section listing the linked parents (with no actions). This gives teachers visibility without write access — they can see who to contact about a linkage problem.
 
@@ -62,7 +62,7 @@ The platform-admin endpoints are intentionally global — they can list every li
 
 1. **v1 is org-admin-managed.** Teachers see (read-only) but don't write. Token-based parent-claim flow is plan 070b. Captured here so the product decision doesn't get re-litigated mid-implementation.
 2. **Children scoped by org via class membership.** Authorization rule: `child_user_id` must be a member (any role) of at least one class belonging to a course in the calling org_admin's org. Same query shape as the existing `IsTeacherOfAttempt` from plan 053b — reuse the join logic.
-3. **Parent doesn't need org membership.** Parents are typically NOT members of any org (their account is just a Bridge user). The org-admin can link any parent email to any child in their org. Trust model: school administrators know who the parents are.
+3. **Parent DOES need an `org_memberships` row** (Codex pass-1 finding — original plan said the opposite). Bridge's portal-access logic at `src/components/portal/portal-shell.tsx:37-44` and `platform/internal/handlers/me.go:117-124` derives the user's accessible portals from their `org_memberships` rows. A parent without an org_membership row cannot reach `/parent` at all — they'd land on `/onboarding` indefinitely. Resolution: when an org-admin creates a parent link, the `CreateLink` endpoint ALSO upserts an `org_memberships` row with `role='parent'` for the parent in the calling org if one doesn't already exist. The role is correctly modeled (`parent` is a valid `org_memberships.role` value), and the parent then has `/parent` access. Decisions §6 spells out the invariant: every active `parent_links` row implies a corresponding `org_memberships{role:'parent'}` row in the org of at least one of the parent's children. Revoking a parent link does NOT remove the org membership (that membership might be needed for other children); cleanup is manual or via a separate admin action.
 4. **Idempotent re-link** (matches existing platform-admin behavior at `admin.go:307`). If an active link already exists for the (parent, child) pair, return 409 — UI maps to "Already linked, no action needed."
 5. **Revoke is soft-delete.** The schema flips status to `revoked` + sets `revoked_at` (plan 064 §"Soft-revoke"). Re-creating later is allowed (partial-unique index).
 6. **List filters: by parent email OR by child name OR by class.** Three independent filters; org admin picks whichever scope they're investigating.
@@ -75,9 +75,9 @@ The platform-admin endpoints are intentionally global — they can list every li
 
 **Add:**
 - `platform/internal/handlers/org_parent_links.go` — handler holding `OrgParentLinksHandler` with three methods:
-  - `ListByOrg(w, r)` — `GET /api/orgs/{orgId}/parent-links?status=active|revoked|all&parent={email?}&child={uid?}&class={uid?}`. Returns links scoped to children in the org. Filtering composable.
-  - `CreateLink(w, r)` — `POST /api/orgs/{orgId}/parent-links` with body `{ parentEmail, childUserId }`. Resolves parent by email (404 if missing — UI surfaces "ask parent to register"), validates child is in the org, calls `parentLinks.CreateLink(ctx, parentId, childId, callerId)`. Returns 201 + the link, 409 if already active.
-  - `RevokeLink(w, r)` — `DELETE /api/orgs/{orgId}/parent-links/{linkId}`. Validates the link's child belongs to the org; reuses `parentLinks.RevokeLink(ctx, linkId)`.
+  - `ListByOrg(w, r)` — `GET /api/orgs/{orgId}/parent-links?status=active|revoked|all&parent={email?}&child={uid?}&class={uid?}`. Returns links scoped to children in the org. Filtering composable. Codex pass-1 important: `ParentLinkStore` returns IDs/status/timestamps only — needs an enriched query method or per-row JOINs to surface parent email + child name + class. Plan 070 Phase 1 includes that enrichment as a small store-layer addition.
+  - `CreateLink(w, r)` — `POST /api/orgs/{orgId}/parent-links` with body `{ parentEmail, childUserId }`. Resolves parent by email (404 if missing — UI surfaces "ask parent to register"), validates child is in the org via `EXISTS (SELECT 1 FROM class_memberships cm JOIN classes c ON c.id = cm.class_id WHERE cm.user_id = $1 AND cm.role = 'student' AND c.org_id = $2 AND c.status = 'active')` (Codex pass-1 §Q1 — `classes.org_id` exists directly, no course join needed), calls `parentLinks.CreateLink(ctx, parentId, childId, callerId)`, **AND upserts `org_memberships{user_id: parentId, org_id: orgId, role: 'parent', status: 'active'}` if not present** (Decisions §3 — without this, the parent can't reach `/parent`). Returns 201 + the link, 409 if already active.
+  - `RevokeLink(w, r)` — `DELETE /api/orgs/{orgId}/parent-links/{linkId}`. Validates the link's child belongs to the org; reuses `parentLinks.RevokeLink(ctx, linkId)`. Does NOT remove the org_memberships row (might be needed for other children — see Decisions §3).
 - `platform/internal/handlers/org_parent_links_test.go` — table-driven tests covering: list happy path, list filtered, create happy, create-with-unknown-parent (404), create-with-cross-org-child (403), revoke happy, revoke-cross-org-link (403), unauthorized (no org_admin role).
 
 **Modify:**
@@ -95,13 +95,24 @@ The platform-admin endpoints are intentionally global — they can list every li
 
 ### Phase 3 — Read-only teacher view
 
+Codex pass-1 §Q3 confirmed the page `src/app/(portal)/teacher/classes/[id]/students/[studentId]/page.tsx` does NOT exist. The closest is the problem-specific `src/app/(portal)/teacher/classes/[id]/problems/[problemId]/students/[studentId]/page.tsx`. Phase 3 either:
+
+A. **Adds a new general-purpose student-detail page** at `/teacher/classes/[id]/students/[studentId]/page.tsx`, hosting the Parents card alongside any other future per-student data (attempts overview, progress, etc.). Heavier scope for v1.
+
+B. **Adds a "Parents" affordance to the existing class detail page** (`src/app/(portal)/teacher/classes/[id]/page.tsx` lists students). Each row gets a small "P" badge with parent count + a popover listing linked parents. Lighter scope; sticks v1 close to the reviewer's intent.
+
+Going with B for v1. Phase 3 file list:
+
 **Modify:**
-- `src/app/(portal)/teacher/classes/[id]/students/[studentId]/page.tsx` (verify path; if it doesn't exist, this becomes "Add" instead). Adds a "Parents" card section listing linked parents (read-only). Pulls from the new `GET /api/orgs/{orgId}/parent-links?child={studentId}` endpoint OR a new `/api/teacher/students/{id}/parents` if cross-org-call is awkward (Phase 0 question for Codex).
+- `src/app/(portal)/teacher/classes/[id]/page.tsx` — add a parent-count badge per student row, plus a popover with parent details. Pulls from a new lightweight teacher-scoped endpoint `GET /api/teacher/classes/{classId}/parent-links` (returns one row per (student, parent) tuple for students in the class). Backend additions in Phase 3 below.
+
+**Add:**
+- `platform/internal/handlers/teacher_parent_links.go` — `GET /api/teacher/classes/{classId}/parent-links` handler. Auth: caller is teacher/ta in `classId` OR org_admin in the class's org. Returns `[]{ studentUserId, parentUserId, parentEmail, parentName, linkId, createdAt }` for active links of all students in the class.
 
 ### Phase 4 — Onboarding copy
 
 **Modify:**
-- `src/app/(portal)/onboarding/page.tsx` — find the "Your child's teacher will link your account" string and rewrite. New copy: "Ask your child's teacher or school administrator to link your account so you can see {child}'s class progress. The link usually appears within 24 hours of joining."
+- `src/app/onboarding/page.tsx` — find the "Your child's teacher will link your account" string and rewrite. New copy: "Ask your child's teacher or school administrator to link your account so you can see {child}'s class progress. The link usually appears within 24 hours of joining."
 - Sweep for any other parent-onboarding copy (registration page, parent dashboard empty state) and align the wording.
 
 ## Risks
@@ -111,7 +122,7 @@ The platform-admin endpoints are intentionally global — they can list every li
 | Cross-org parent (one parent, two children at two schools) — both org admins create links independently | low | Schema supports it; multiple links per parent are fine. UI lists them as expected. |
 | Org admin links a child outside their org by typing the child's id | medium | Backend validates child belongs to the org's classes (Decisions §2). Returns 403 if not. UI maps to "Student not in this organization." |
 | Org admin revokes a link by mistake | low | Revoke is soft (Decisions §5). Re-creating restores the relationship. Confirmation dialog catches accidents. |
-| Parent registers AFTER the org admin tries to link them | medium | UI's create-with-unknown-parent path (returns 404) shows a copy-link helper: "Send the parent this registration link." Same pattern as plan 069's invite. |
+| Parent registers AFTER the org admin tries to link them | medium | UI's create-with-unknown-parent path (returns 404) shows a copy-link helper with plain `/register` link (NOT `?intendedRole=parent` — Codex pass-1: register page only reads `?invite=`, and the Go register handler at `platform/internal/handlers/auth.go:21-27` doesn't accept `parent` as `intendedRole` today). The parent registers with no role intent; the admin then links them via Phase 2 UI; the link-time `org_memberships{role:'parent'}` upsert (Decisions §3) grants `/parent` portal access on next sign-in. Same pattern as plan 069's invite. |
 | Privacy: org admin sees ALL parent emails for their org | low | This is an intentional admin power. School data governance accepts this; parents who don't want their email visible would not link. |
 | Schema-drift surface: we now have org-scoped + platform-scoped CRUD | low | Both share the same store layer. No data divergence. |
 | Onboarding copy wording change introduces a translation-string break | low | Bridge has no i18n today; single English string. Rewrite-in-place is safe. |
@@ -124,7 +135,7 @@ Per CLAUDE.md plan-review gate. Dispatch `codex:codex-rescue` to review against:
 - `platform/internal/handlers/admin.go` (existing platform-admin parent-link handlers — pattern to mirror)
 - `platform/internal/store/parent_links.go` (the store layer the new handler reuses)
 - `platform/internal/handlers/orgs.go` (the existing org route group the new endpoints mount under)
-- `src/app/(portal)/onboarding/page.tsx` (copy to update)
+- `src/app/onboarding/page.tsx` (copy to update)
 - `src/app/(portal)/parent/page.tsx` (parent dashboard that shows "No children linked yet")
 - The reviewer's recommendation in `docs/reviews/010-comprehensive-browser-review-2026-05-03.md` §"Parent onboarding copy promises teacher-driven linking"
 
@@ -168,4 +179,27 @@ Specific questions:
 
 ## Codex Review of This Plan
 
-_(To be populated by Codex pass — see Phase 0.)_
+### Pass 1 — 2026-05-03: BLOCKED → 2 blockers + 4 important folded in
+
+Codex pass-1 returned BLOCKED with two blockers, both addressed:
+
+1. **Parent portal access derives from `org_memberships`, not `parent_links`** — original plan's "parents typically don't need org_memberships" assumption was wrong. Without an `org_memberships{role:'parent'}` row, a linked parent can't reach `/parent`. Resolved: Decisions §3 rewritten — `CreateLink` upserts the org_membership at link time. The invariant is now: every active `parent_links` row implies a corresponding `org_memberships{role:'parent'}` row in at least one of the parent's children's orgs.
+
+2. **`/register?intendedRole=parent` doesn't exist** — register page only reads `?invite=`, and Go's register handler doesn't accept `parent` as an intendedRole. Resolved: invite-not-found copy uses plain `/register`. The link-time `org_memberships` upsert (per #1) means the parent doesn't need to declare the role at registration; the admin's link grants the role retroactively.
+
+Important non-blocking, all folded:
+
+3. **Onboarding file path was wrong** — `src/app/onboarding/page.tsx`, NOT `src/app/(portal)/onboarding/page.tsx`. All references updated.
+4. **`ParentLinkStore` returns IDs/timestamps only** — needs an enriched query method to surface parent email + child name + class. Phase 1 includes the store-layer addition.
+5. **No teacher student-detail page exists** — Phase 3 pivots from "add new student-detail page" to "add affordance to existing class-detail page" (the lighter v1 scope).
+6. **Child-belongs-to-org SQL is direct** — `classes.org_id` exists; no course join needed. CreateLink validation uses the simpler EXISTS query Codex pass-1 §Q1 spelled out.
+
+CONFIRMED by Codex (no changes):
+- Plan-064 platform-admin parent-link CRUD exists at `/api/admin/parent-links`.
+- Duplicate active link returns 409 via `ErrParentLinkExists`.
+- Revoke is soft-delete via `status='revoked'` + `revoked_at`.
+- `parent_links` schema has no `claim_token` — plan 070b token-based claim flow needs its own migration.
+- Parent dashboard currently shows "No children linked yet" with teacher-linking copy.
+- Review-010 file IS present in the repo (Codex's "not found" was a fetch glitch — verified locally).
+
+Verdict: **BLOCKED → all blockers resolved → ready for Phase 1** pending pass-2.

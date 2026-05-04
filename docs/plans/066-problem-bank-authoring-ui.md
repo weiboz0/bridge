@@ -74,19 +74,13 @@ Go endpoints via the `api()` helper. No backend changes.
    add a row hover state. Add an "Add problem" button at the
    top-right that links to `/teacher/problems/new`.
 
-2. **Detail page** at `/teacher/problems/[problemId]/page.tsx`. Server
-   component that fetches the problem + its test cases + recent
-   attempts (the latter for "is this problem getting used"). Layout:
-   - Problem metadata header (title, slug, scope, difficulty, tags,
-     status, gradeLevel) with **Edit / Publish / Archive / Fork /
-     Delete** action buttons (per current claims/scope).
+2. **Detail page** at `/teacher/problems/[problemId]/page.tsx`. Server component that fetches the problem + its test cases + its focus-area attachments (NOT attempts — see Phase 2 §"NOT /attempts" note for why). Layout:
+   - Problem metadata header (title, slug, scope, difficulty, tags, status, gradeLevel) with **Edit / Publish / Archive / Fork / Delete** action buttons (per current claims/scope).
    - Description rendered with `react-markdown`.
    - Starter code in a read-only Monaco panel.
-   - Test cases as a card list — example cases shown inline,
-     hidden cases collapsed (count visible, body hidden).
-   - "View as student" link to `/design/problem-student?problemId={id}`
-     (uses the existing design-route shell — closes
-     `docs/design-gaps-problem-workflow.md` §8).
+   - Test cases as a card list — example cases shown inline, hidden cases collapsed (count visible, body hidden).
+   - Focus-area attachments panel via `<focus-area-attach>` (see §7).
+   - **No "View as student" link in v1.** The design route at `/design/problem-student` is hardcoded placeholder content with no `searchParams` support; the link would not resolve to the real problem (Codex pass-1). Defer until that route is wired to a real fetch.
 
 3. **Create page** at `/teacher/problems/new/page.tsx`. Renders the
    shared `<ProblemForm>` in "create" mode. POSTs to
@@ -113,7 +107,12 @@ Go endpoints via the `api()` helper. No backend changes.
    confirm needed on Publish/Archive (reversible). Fork redirects
    to the forked copy's detail page.
 
-7. **Attach-to-Focus-Area action** (review 010 §P2). Detail page exposes "Attach to focus area" → opens a modal listing the teacher's courses and their focus areas; selecting one POSTs `/api/topics/{topicId}/problems` with the problem id (existing endpoint at `platform/internal/handlers/topic_problems.go:40`). The handler picks the next sort_order; UI shows "Attached" with an undo (DETACH) for 10s. Same surface lists EXISTING attachments at the top with detach buttons.
+7. **Attach-to-Focus-Area action** (review 010 §P2). Detail page exposes "Attach to focus area" → opens a modal listing the teacher's courses (one fetch per the user's `org_memberships` orgs — `GET /api/courses?orgId={orgId}`) and their focus areas (per-course `GET /api/courses/{courseId}/topics`); selecting one POSTs `/api/topics/{topicId}/problems` with `{ problemId, sortOrder }` (`platform/internal/handlers/topic_problems.go:40`). **The handler does NOT auto-infer sort_order** — Codex pass-2 caught the original assumption: omitted `sortOrder` defaults to `0`, which drops the new attachment to the top of the list and shoves any existing 0-sorted entry. The modal's submit therefore reads the focus-area's current `topic_problems` list first and submits `sortOrder = (max existing sort_order) + 1` so the new attachment lands at the bottom by default. Users can drag-reorder later (separate UI; not in this plan). Same surface lists EXISTING attachments at the top with detach buttons. Errors:
+   - 409 (already attached) → modal closes with "Already in this focus area."
+   - 404 on detach (already removed) → silently treat as success + refresh the list.
+   - 403 (caller lost teacher/org_admin in the focus-area's org) → inline banner.
+
+   **No 10-second undo affordance** — Codex pass-2 noted this contradicts the plan's "no optimistic UI" rule (Decisions §3) and adds state-tracking complexity. Detach is a one-click action with a confirmation dialog instead.
 
 8. **Attach-to-Unit action deferred** (review 010 §P2). Per the recent taxonomy clarification: Units are teaching MATERIAL, Focus Areas are SYLLABUS framing. A problem can be referenced from a Unit's content (e.g., embedded in a markdown lesson) but the canonical "this problem is part of this curriculum slot" relation is the focus-area attachment from §7. Phase 2 of this plan ships only the focus-area attach; Unit-attach is deferred until product confirms the desired UX (markdown shortcode? an ordered list on the Unit edit page? both?). The detail page's "Attached to" panel shows both kinds when the latter ships.
 
@@ -263,7 +262,7 @@ Required new fetch:
 | `scope=platform` problems can be edited by non-platform-admins via the form | low | Backend rejects with 403 (`UpdateProblem` checks ownership). Form should disable scope selector when editing if user can't change scope, or surface 403 cleanly. |
 | Slug uniqueness collisions surface mid-form | low | Backend returns 409 on conflict; form maps to inline error on the slug field. |
 | Tags are a free-text array; users invent new tags constantly | low | For v1 just allow free input. Tag-suggestion / autocomplete is a follow-up. |
-| Delete cascades may surprise teachers (kills test-cases + attempts) | medium | Backend actually GUARDS rather than cascades (Codex pass-1): `DeleteProblem` returns 409 if the problem is attached to topics OR has any attempts (`platform/internal/handlers/problems.go:414, :443, :452`). Confirm dialog should warn the user; if 409 returned, surface "remove from topics + clear attempts before deleting" with no fallback delete. |
+| Delete cascades may surprise teachers (kills test-cases + attempts) | medium | Backend actually GUARDS rather than cascades (Codex pass-1): `DeleteProblem` returns 409 if the problem is attached to topics OR has any attempts (`platform/internal/handlers/problems.go:414, :443, :452`). Confirm dialog should warn the user; if 409 returned, surface **"remove from focus areas + clear attempts before deleting"** (terminology rename per §9 — backend's "topics" message gets re-mapped to "focus areas" in the user-facing error string). No fallback delete. |
 
 ## Phases
 
@@ -347,6 +346,16 @@ the larger pages.
 - Optional: markdown preview in description field.
 
 ## Codex Review of This Plan
+
+### Pass 2 — 2026-05-03: CONCUR-WITH-CHANGES → 4 items folded in
+
+Codex pass-2 confirmed pass-1 fixes are clean (scopeId required, isCanonical default, attempts removed) but caught four follow-on issues from the attach-action expansion:
+
+1. **Stale Approach text** — §Approach §2 still mentioned fetching "recent attempts" + "View as student" link, contradicting Phase 2 + Phase 5 deferral. Rewritten to match.
+2. **sort_order is NOT inferred** — Codex confirmed `topic_problems.go:137-141` defaults to `0`, which would shove any existing 0-sorted entry. Decisions §7 now reads max existing `sortOrder` + 1 client-side and passes it explicitly.
+3. **10-second undo affordance contradicted "no optimistic UI"** — replaced with a one-click detach + confirmation dialog (matches Decisions §3).
+4. **Backend's "topics" error message** at delete-conflict path was leaking through the terminology rename. Risks-table mitigation now explicitly remaps "topics" → "focus areas" in the user-facing error.
+5. **"List teacher's courses" was ambiguous** — courses require `orgId`. §Approach §7 now spells out the per-org-membership fetch shape.
 
 ### Pass 1 — 2026-05-03: CONCUR-WITH-CHANGES → 4 items folded in
 

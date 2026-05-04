@@ -206,14 +206,12 @@ role. The sidebar will now auto-expand the Admin group instead.
 **Modify:**
 - `src/components/portal/sidebar.tsx`:
   - Drop `<RoleSwitcher />`.
-  - For each role in `roles` (the `UserRole[]` already passed
-    in), build that role's `PortalConfig` via `getPortalConfig`,
-    then render a `<SidebarSection>` per role.
-  - Active section determination via `usePathname()` — match
-    against `basePath` (`/teacher`, `/admin`, etc.).
-  - Persist non-active group expansion state in localStorage
-    keyed on `bridge.sidebar.expanded` (a `Record<string, boolean>`
-    keyed by `${role}:${orgId ?? "none"}`).
+  - For each role in `roles` (the `UserRole[]` already passed in), build that role's `PortalConfig` via `getPortalConfig`, then render a `<SidebarSection>` per role.
+  - **Active section determination** uses `usePathname()` AND `useSearchParams().get("orgId")` to compute the composite key `${role}:${orgId ?? "none"}` per Decisions §1. Codex pass-2 caught the original stub here (basePath-only) contradicting Decisions §1; the two now match. The matching rule:
+    - For non-org-scoped roles (`admin`, `teacher`, `student`, `parent`): match by `basePath` only.
+    - For `org_admin`: match by `basePath === "/org"` AND the role's `orgId` equals `searchParams.get("orgId")`. If the URL has no `orgId` and the user has multiple `org_admin` memberships, no `org_admin` section is auto-expanded (the user is presumed to be on a non-org-specific page).
+  - Persist non-active group expansion state in localStorage keyed on `bridge.sidebar.expanded` — same composite-key shape (`${role}:${orgId ?? "none"}`) so localStorage and the active-section logic line up.
+  - The Phase 1 PR ALSO wires `localStorage.removeItem("bridge.sidebar.expanded")` into `src/components/portal/sidebar-footer.tsx` (and any other sign-out paths) — Codex pass-2 flagged the persistence-without-cleanup window as a non-blocking concern; resolving it in the same PR avoids the gap entirely. (The `sign-out-button.tsx` wiring stays in Phase 3 since Phase 1 doesn't touch that file.)
 - `src/components/portal/sidebar-nav.tsx`: rename to
   `sidebar-section-items.tsx` OR keep as-is and have
   `sidebar-section.tsx` reuse it. The latter is simpler — no
@@ -349,6 +347,10 @@ Specific questions:
 - PR + merge.
 
 ## Codex Review of This Plan
+
+### Pass 2 — 2026-05-03: BLOCKED → 1 stub-contradiction folded in
+
+Codex pass-2 confirmed pass-1 fixes are clean (orgId composite key in Decisions §1, localStorage clear wiring, prop naming guidance, test rewrite plan). One BLOCKER: Phase 1 file stub for `sidebar.tsx` still said "basePath only" for active-section determination, contradicting Decisions §1's composite-key rule. Folded: stub now mirrors §1's rule explicitly with the matching-rule sub-bullets for non-org-scoped vs `org_admin` roles. Phase 1 also pulls forward the `sidebar-footer.tsx` localStorage clear so there's no persistence-without-cleanup window between PR 1 and PR 3 (Codex pass-2 non-blocking concern).
 
 ### Pass 1 — 2026-05-03: BLOCKED → 1 blocker + 3 non-blocking folded in
 

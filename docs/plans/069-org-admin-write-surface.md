@@ -51,9 +51,9 @@ Each page gets a sticky "+ Invite teacher" / "+ Invite student" button at the to
 - Display name (read-only after the user is found by email; editable on the response if they don't have one yet)
 - Role (preselected: `teacher` for `/org/teachers`, `student` for `/org/students`)
 
-Submit POSTs `/api/orgs/{orgId}/members` with `{ email, role }`. The backend already finds the user by email and returns 404 if the user doesn't exist. The form catches the 404 and shows an inline message: "User not found. Send them this registration link: `https://bridge.../register?intendedRole=teacher`". Copy-to-clipboard button.
+Submit POSTs `/api/orgs/{orgId}/members` with `{ email, role }`. The backend already finds the user by email and returns 404 if the user doesn't exist. The form catches the 404 and shows an inline message: "User not found. Send them this registration link: `https://bridge.../register`. After they register, return here and try the invite again." Copy-to-clipboard button.
 
-The "registration link" pre-fills the role intent (existing pattern from plan 043). After registration, the org admin re-submits the form and the user gets added.
+**The link is plain `/register`, NOT `/register?intendedRole=teacher`** (Codex pass-1 caught this). The register page only reads `?invite=` today, not `?intendedRole=`. The role-intent URL pattern is plan 043's signup-flow concept but doesn't have URL wiring. v1 of the invite ships without role-prefill on the registration link; the invitee picks their role on the registration form. Plan 069b can add role-prefill if/when the register page learns to read it.
 
 ### 2. `/org/classes/{classId}` drill-down (read-only)
 
@@ -75,15 +75,15 @@ Replace the "coming later" message with a form mirroring the read-only fields. F
 
 Submit PATCHes `/api/orgs/{orgId}`. On success, refresh the page (server component re-fetches). Backend already supports this (`orgs.go:27` `UpdateOrg`).
 
-For the "audit trail" the reviewer asked for: defer the dedicated table, but persist `updated_at` (already in the schema) and surface "Last updated {x} by {y}" in the UI. The "by" requires either an existing `updated_by` column on `organizations` (verify) or fetching from a new lightweight log. Phase 0 question for Codex.
+For the "audit trail" the reviewer asked for: defer the dedicated table, but persist `updated_at` (already in the schema) and surface "Last updated {x}" in the UI. **Codex pass-1 confirmed there is NO `updated_by` column on `organizations`.** Drop the "by {y}" half — show only `updated_at`. Adding `updated_by` is a 5-minute migration if/when product asks; not in v1.
 
 ### 4. `/org/teachers/{userId}` and `/org/students/{userId}` quick-actions menu
 
 Beside each row, a 3-dot menu with:
-- Update role (modal with role select)
+- **Update STATUS** (modal with status select: `pending` / `active` / `suspended`) — Codex pass-1 caught that the existing `PATCH /api/orgs/{orgID}/members/{memberID}` accepts `{status}` not `{role}`. Role-update is NOT currently a backend operation; would need a new endpoint. v1 ships status-change only; "Promote to org_admin" / role changes are deferred to plan 069b.
 - Remove from org (confirmation dialog)
 
-Update role POSTs `PATCH /api/orgs/{orgId}/members/{memberId}` with `{ role }`. Remove POSTs `DELETE /api/orgs/{orgId}/members/{memberId}`. Both endpoints exist (`orgs.go:33-34`). Surface 403 inline.
+Update status POSTs `PATCH /api/orgs/{orgId}/members/{memberId}` with `{ status }`. Remove POSTs `DELETE /api/orgs/{orgId}/members/{memberId}`. Both endpoints exist (`orgs.go:33-34`). Surface 403 inline.
 
 ### 5. Optional: domain-based hint on `/org/settings`
 
@@ -112,8 +112,11 @@ When the org has a `domain` set, the invite forms (§1) check the email's domain
 ### Phase 2 — Class drill-down
 
 **Add:**
-- `src/app/(portal)/org/classes/[classId]/page.tsx` — server component. Fetches class + members; renders header + roster table + Archive button.
-- `src/components/org/archive-class-button.tsx` — client component. Confirmation dialog → PATCH → refresh.
+- `src/app/(portal)/org/classes/[classId]/page.tsx` — server component. Fetches class + members. Codex pass-1 important #3: `GET /api/classes/{id}` returns `courseId` but NOT `courseTitle`; the org-classes-list endpoint (`/api/org/classes`) DOES include the title. The detail page either:
+  - **A**: makes a second `GET /api/courses/{courseId}` fetch to pull the title (one extra round-trip).
+  - **B**: extends `GET /api/classes/{id}` to include `courseTitle` (small backend change).
+  Going with A for v1 — keeps the backend untouched.
+- `src/components/org/archive-class-button.tsx` — client component. Confirmation dialog → empty-body PATCH → refresh. Codex pass-1 confirmed `PATCH /api/classes/{id}` takes NO request body — `ArchiveClass` unconditionally sets `status='archived'`. The fetch sends `{ method: 'PATCH' }` with no body.
 
 **Modify:**
 - `src/app/(portal)/org/classes/page.tsx` — wrap each class title in `<Link href={`/org/classes/${cls.id}`}>`.
@@ -126,10 +129,14 @@ When the org has a `domain` set, the invite forms (§1) check the email's domain
 ### Phase 4 — Member quick-actions
 
 **Add:**
-- `src/components/org/member-row-actions.tsx` — client component. 3-dot menu with Update Role + Remove. Each opens a small confirmation dialog.
+- `src/components/org/member-row-actions.tsx` — client component. 3-dot menu with Update Status + Remove. Each opens a small confirmation dialog. (Role updates deferred — see §"4. Quick-actions menu" above.)
 
 **Modify:**
 - `src/app/(portal)/org/teachers/page.tsx` and `src/app/(portal)/org/students/page.tsx` — add the actions column to each row.
+- **Backend response shape change required** (Codex pass-1 important #1): the existing `/api/org/teachers` + `/api/org/students` dashboard responses (`platform/internal/handlers/org_dashboard.go:115-145`) return `userId, name, email, role, joinedAt` — no membership `id`. Phase 4 actions need the membership id to call `PATCH/DELETE /api/orgs/{orgId}/members/{memberId}`. Two options:
+  - **A**: extend the dashboard response to include `membershipId`. Single backend change; UI consumes directly. Preferred.
+  - **B**: switch the UI to fetch from the canonical `GET /api/orgs/{orgId}/members` endpoint (which returns the full member shape including id). Bigger UI change but no backend response shape change.
+  Going with A for v1 — single small response addition. Add a Phase 0 question for Codex pass-2 to confirm the dashboard response is safe to extend.
 
 ### Phase 5 (optional) — Domain hint on invite
 
@@ -203,4 +210,25 @@ Specific questions:
 
 ## Codex Review of This Plan
 
-_(To be populated by Codex pass — see Phase 0.)_
+### Pass 1 — 2026-05-03: BLOCKED → 2 blockers + 3 important folded in
+
+Codex pass-1 returned BLOCKED with two blockers, both addressed:
+
+1. **Member role-update endpoint doesn't exist** — `PATCH /api/orgs/{orgId}/members/{memberId}` accepts `{status}` (active/pending/suspended), not `{role}`. Resolved: Phase 4 quick-actions menu now offers Update Status + Remove only. Role changes deferred to plan 069b which would add the missing endpoint.
+2. **`?intendedRole=` URL param not read by register page** — only `?invite=` is parsed today. Resolved: invite-not-found copy uses plain `/register` link instead of `/register?intendedRole=teacher`. The invitee picks their role on the registration form. Plan 069b can add role-prefill if the register page learns to read it.
+
+Important non-blocking, all folded:
+
+3. **Member-list dashboard responses don't include membership id** — needed for PATCH/DELETE actions. Phase 4 includes a small backend response extension to add `membershipId`.
+4. **No `updated_by` column on `organizations`** — settings UI shows only `updated_at`, drops the "by {y}" half.
+5. **`GET /api/classes/{id}` doesn't include `courseTitle`** — Phase 2 detail page makes a second `GET /api/courses/{courseId}` fetch.
+
+CONFIRMED by Codex (no changes):
+- Existing-user invite by email returns 404 when user doesn't exist.
+- Settings update accepts partial `{name, contactEmail, contactName, domain}`.
+- Org admins can archive classes via `RequireClassAuthority(..., AccessMutate)`.
+- `PATCH /api/classes/{id}` takes NO request body (empty PATCH archives).
+- `GET /api/classes/{id}/members` returns role per member with values `instructor|ta|student|observer|guest|parent`.
+- Existing client-component pattern to mirror: `src/components/teacher/create-class-form.tsx`.
+
+Verdict: **BLOCKED → all blockers resolved → ready for Phase 1** pending pass-2.

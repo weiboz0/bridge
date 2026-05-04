@@ -40,18 +40,18 @@ All four are operator UX improvements that turn silent misconfigurations into lo
 
 Four small, independent additions:
 
-1. **Stronger `DEV_SKIP_AUTH` startup guard.** Extend `validateDevAuthEnv` (currently in `platform/cmd/api/main.go:372-386`) to also refuse start when `DEV_SKIP_AUTH != ""` AND the bind address resolves to a non-localhost interface AND the new escape-hatch env `ALLOW_DEV_AUTH_OVER_TUNNEL=true` is unset. Localhost-bound dev servers stay unaffected; tunneled / shared servers fail loud.
+1. **Stronger `DEV_SKIP_AUTH` startup guard.** Codex pass-1 caught the original "use cfg.Server.Host" approach as unsound: the listener binds `":%d"` (all interfaces) regardless of `cfg.Server.Host`, and `validateDevAuthEnv` runs BEFORE config loading. Revised approach: introduce a NEW dedicated env var `BRIDGE_HOST_EXPOSURE` with values `localhost` (default — guard fires when DEV_SKIP_AUTH is set) or `exposed` (operator's explicit declaration that this server is on a tunnel/LAN/public address). The guard refuses to start when `DEV_SKIP_AUTH != ""` AND `BRIDGE_HOST_EXPOSURE == "exposed"` AND `ALLOW_DEV_AUTH_OVER_TUNNEL != "true"`. Operators set `BRIDGE_HOST_EXPOSURE=exposed` in any deployment that's reachable from outside the local machine; the default-localhost-bias keeps friction-free local development. The check stays in `validateDevAuthEnv(getEnv)` — no config-load reordering needed, just a new env var.
 
 2. **Identity-drift warning banner.** Add a small client component that fires `/api/auth/debug` on every portal page mount and renders a red banner if `match === false` AND `goClaimsUserId === devUserPlaceholderId`. The endpoint already exists (`src/app/api/auth/debug/route.ts`) and returns 404 in production builds — banner only ever shows in dev/staging where the mismatch could happen. Visible to all users (so a teacher hitting weirdness can flag it), not just operators.
 
-3. **Migration health check at startup.** Extend the Go startup sequence with a check that the latest expected migration has been applied. The simplest mechanism: at boot, query `SELECT MAX(version) FROM migrations_log` (or whatever Drizzle's schema-tracking table is) and compare against a baked-in `expectedSchemaVersion` constant. Mismatch → `slog.Error` + refuse to start. The constant is bumped manually each migration release; CI-side enforcement that the constant stays in sync with `drizzle/*.sql` is a Phase-3 follow-up.
+3. **Migration health check at startup.** Codex pass-1 confirmed the actual table is `drizzle.__drizzle_migrations` with columns `id, hash, created_at` — there is NO `version` column, and `_journal.json` covers only entries 0000-0002 while the codebase has 0000-0024 SQL files. The original plan's `SELECT MAX(version)` would not work. Revised approach: at boot, count rows in `drizzle.__drizzle_migrations` and compare against the count of `drizzle/*.sql` files baked in at build time as `ExpectedMigrationCount` (a Go const). Count-vs-count mismatch → `slog.Error` + refuse to start. The const is bumped manually in the same PR as a new migration; a CI-side parity test (Phase 3) confirms the count matches the file glob. Counting is robust to journal staleness AND avoids parsing migration filenames.
 
 4. **Realtime-config banner for live sessions.** When `/api/realtime/token` returns 503 ("Realtime tokens not configured"), the existing `useRealtimeToken` helper at `src/lib/realtime/get-token.ts:65-83` throws and the failure surfaces as a console error. Instead, render a small in-page banner on session/teacher-watch/parent-viewer pages: "Realtime is not configured for this environment. Live collaboration is unavailable. [retry]". The banner replaces the silent console drop and gives end users an actionable message.
 
 ## Decisions to lock in
 
 1. **Escape hatch is `ALLOW_DEV_AUTH_OVER_TUNNEL=true`, not `APP_ENV=local`.** Reviewer suggested either; the explicit allowlist env is more searchable and less ambiguous (`APP_ENV` already has prod-vs-not-prod semantics from plan 050). Setting the escape hatch is a deliberate operator decision; defaulting to off catches the foot-gun.
-2. **Bind-address detection: parse `cfg.Server.Host`.** If host is `127.0.0.1`, `::1`, or `localhost`, treat as localhost-only. If `0.0.0.0` or any explicit non-loopback address, treat as exposed. Unset host (which today defaults to `0.0.0.0` per `platform/internal/config/config.go:62`) counts as exposed — safer default.
+2. **Exposure declaration via `BRIDGE_HOST_EXPOSURE` env var, not bind-host inference** (Codex pass-1 finding). The Go listener binds `":%d"` (all interfaces) regardless of `cfg.Server.Host`, so inferring "is this localhost-only?" from the host field is unsound. Operators set `BRIDGE_HOST_EXPOSURE=localhost` (default — local dev) or `BRIDGE_HOST_EXPOSURE=exposed` (tunneled / staging / production). The default-to-localhost choice means an operator who forgets the var on a tunneled server STILL hits the guard if `DEV_SKIP_AUTH` is set, because the guard fires conservatively when exposure is `localhost` — actually wait, that's backwards. Re-reading: the guard should fire when `exposed` AND `DEV_SKIP_AUTH != ""`. If exposure isn't set, default to `localhost` (no guard fire — local dev "just works"). The escape hatch `ALLOW_DEV_AUTH_OVER_TUNNEL=true` is the override. Operators on shared/tunneled infra MUST set `BRIDGE_HOST_EXPOSURE=exposed` for the guard to be useful — this is a deliberate ops-discipline requirement, documented in `docs/setup.md`.
 3. **Identity-drift banner is dev/staging only.** It calls `/api/auth/debug` which 404s in production (`src/app/api/auth/debug/route.ts:24-26`). The banner component handles 404 by silently no-op'ing. Production users never see this banner.
 4. **Schema-version constant lives in Go.** `platform/internal/db/version.go` exports `ExpectedSchemaVersion = "0024"` (matching the latest migration filename). Bumped by hand on each migration; a CI test compares against `drizzle/` directory contents.
 5. **Realtime banner only when 503.** Other failure modes (network, 401, malformed response) keep the existing console-error path — those are bugs in the realtime mint flow, not config issues. The 503-specific banner avoids false positives.
@@ -62,9 +62,14 @@ Four small, independent additions:
 ### Phase 1 — `DEV_SKIP_AUTH` non-localhost guard
 
 **Modify:**
-- `platform/cmd/api/main.go` — extend `validateDevAuthEnv(getEnv)` to also take the bind host (or call into a separate validator). New logic: if `DEV_SKIP_AUTH != ""` AND host is non-localhost AND `ALLOW_DEV_AUTH_OVER_TUNNEL` is not `"true"`, return an error. Existing prod-guard logic stays. Wire the bind host through (cfg.Server.Host is loaded by line 36 of main.go).
-- `platform/cmd/api/main_test.go` — extend `TestValidateDevAuthEnv` with table cases for the new combinations: localhost+DEV_SKIP_AUTH (allowed), 0.0.0.0+DEV_SKIP_AUTH (rejected), 0.0.0.0+DEV_SKIP_AUTH+escape hatch (allowed).
-- `.env.example` — add `ALLOW_DEV_AUTH_OVER_TUNNEL=` with a comment explaining the escape hatch and warning against using it in shared/staging environments.
+- `platform/cmd/api/main.go` — extend `validateDevAuthEnv(getEnv)` to also check `BRIDGE_HOST_EXPOSURE` and `ALLOW_DEV_AUTH_OVER_TUNNEL`. New logic: if `DEV_SKIP_AUTH != ""` AND `BRIDGE_HOST_EXPOSURE == "exposed"` AND `ALLOW_DEV_AUTH_OVER_TUNNEL != "true"`, return an error. Existing prod-guard logic stays. **No config-load reordering needed** — both new vars are env vars read via `getEnv`, same path as `DEV_SKIP_AUTH` and `APP_ENV`. (Codex pass-1 caught the original "use cfg.Server.Host" approach that would have required reordering.)
+- `platform/cmd/api/main_test.go` — extend `TestValidateDevAuthEnv` with table cases:
+  - `DEV_SKIP_AUTH=admin`, `BRIDGE_HOST_EXPOSURE=` (empty/default = localhost) → allowed (local dev)
+  - `DEV_SKIP_AUTH=admin`, `BRIDGE_HOST_EXPOSURE=localhost` → allowed
+  - `DEV_SKIP_AUTH=admin`, `BRIDGE_HOST_EXPOSURE=exposed` → ERROR
+  - `DEV_SKIP_AUTH=admin`, `BRIDGE_HOST_EXPOSURE=exposed`, `ALLOW_DEV_AUTH_OVER_TUNNEL=true` → allowed (escape hatch)
+  - `DEV_SKIP_AUTH=`, `BRIDGE_HOST_EXPOSURE=exposed` → allowed (no dev bypass to guard)
+- `.env.example` — add both vars with a comment explaining the contract: set `BRIDGE_HOST_EXPOSURE=exposed` on any deployment reachable from outside localhost; set `ALLOW_DEV_AUTH_OVER_TUNNEL=true` only as a deliberate, time-boxed escape hatch.
 - `docs/setup.md` — document the guard alongside the existing `APP_ENV=production` guard description.
 
 ### Phase 2 — Identity-drift warning banner
@@ -80,25 +85,32 @@ Four small, independent additions:
 **Modify:**
 - `src/components/portal/portal-shell.tsx` — render `<IdentityDriftBanner />` at the top of the shell, inside the main content area. Stays out of the sidebar so it doesn't shift navigation.
 
-### Phase 3 — Schema-version startup check
+### Phase 3 — Migration-count startup check
 
 **Add:**
-- `platform/internal/db/version.go` — exports `ExpectedSchemaVersion` constant (current value: highest migration number under `drizzle/`). Includes a comment with bump procedure ("when adding a migration, update this constant in the same PR").
-- `platform/internal/db/version_check.go` — `func CheckSchemaVersion(ctx context.Context, db *sql.DB) error`. Queries Drizzle's tracking table (verify name during impl — `__drizzle_migrations` or similar), reads the latest applied version, compares against `ExpectedSchemaVersion`. Returns descriptive error on mismatch.
-- `platform/internal/db/version_check_test.go` — happy-path matches, mismatch returns clear error, missing tracking table returns "DB never initialized" error.
+- `platform/internal/db/migrations.go` — exports `ExpectedMigrationCount` int constant (current value: count of `drizzle/*.sql` files at the time of writing). Includes a comment with bump procedure ("when adding a migration, increment this constant in the same PR").
+- `platform/internal/db/migrations_check.go` — `func CheckMigrationCount(ctx context.Context, db *sql.DB) error`. Queries `SELECT COUNT(*) FROM drizzle.__drizzle_migrations`, compares against `ExpectedMigrationCount`. Returns:
+  - `nil` on match
+  - Descriptive error on mismatch ("expected N migrations applied, found M; run `bun run db:migrate`")
+  - "DB never initialized" error if the `drizzle.__drizzle_migrations` table doesn't exist
+- `platform/internal/db/migrations_check_test.go` — happy-path matches, mismatch returns clear error, missing tracking table returns init error.
 
 **Modify:**
-- `platform/cmd/api/main.go` — call `db.CheckSchemaVersion` after `db.Open` succeeds. On error: `slog.Error` + `os.Exit(1)`. New behavior: refuses to start against a stale DB.
+- `platform/cmd/api/main.go` — call `db.CheckMigrationCount` after `db.Open` succeeds. On error: `slog.Error` + `os.Exit(1)`. New behavior: refuses to start against a stale DB.
+
+**CI parity test:**
+- `platform/internal/db/migrations_parity_test.go` — at test time, count `drizzle/*.sql` files via `filepath.Glob` and assert `len(files) == ExpectedMigrationCount`. Fails any PR that adds a migration without bumping the const, OR bumps the const without adding the file.
 
 ### Phase 4 — Realtime-config banner
 
-**Add:**
-- `src/components/realtime/realtime-config-banner.tsx` — client component. Wrapped by any session/teacher-watch/parent-viewer page that today uses `useRealtimeToken`. Catches the `RealtimeMintError` with `status === 503` and renders an in-page banner instead of letting the error bubble to the console.
-
-  Banner copy: "Live collaboration is unavailable in this environment. The realtime token service is not configured. Static viewing still works; reload the page after the operator sets `HOCUSPOCUS_TOKEN_SECRET`."
+Codex pass-1 confirmed `getRealtimeToken` already differentiates 503 (`src/lib/realtime/get-token.ts:79` throws `RealtimeMintError` with `status: 503`) but `useRealtimeToken` itself catches all failures identically (`src/lib/realtime/use-realtime-token.ts:38`). The banner needs to either pierce through `useRealtimeToken` to get the discrimination back OR `useRealtimeToken` itself surfaces the 503 specifically.
 
 **Modify:**
-- `src/components/session/teacher/teacher-dashboard.tsx`, `src/components/session/student/student-session.tsx`, `src/components/parent/live-session-viewer.tsx`, `src/components/problem/teacher-watch-shell.tsx` — wrap the realtime-token consumer with `<RealtimeConfigBanner>`. The banner falls through to the children when the token mints OK; renders the banner instead when 503.
+- `src/lib/realtime/use-realtime-token.ts` — extend the hook's return shape to expose `unavailable: boolean` (true when the most recent fetch failed with 503). Keeps the rest of the hook's contract identical.
+- `src/components/session/teacher/teacher-dashboard.tsx`, `src/components/session/student/student-session.tsx`, `src/components/parent/live-session-viewer.tsx`, `src/components/problem/teacher-watch-shell.tsx`, `src/components/problem/problem-shell.tsx`, `src/components/session/broadcast-controls.tsx`, `src/components/session/student-tile.tsx` (Codex pass-1 audit — original 4 callers was incomplete; full set is 7) — read `unavailable` from `useRealtimeToken` and render the new banner when true.
+
+**Add:**
+- `src/components/realtime/realtime-config-banner.tsx` — pure presentation. Banner copy: "Live collaboration is unavailable in this environment. The realtime token service is not configured. Static viewing still works; reload the page after the operator sets `HOCUSPOCUS_TOKEN_SECRET`."
 
 ## Risks
 
@@ -164,4 +176,24 @@ Specific questions:
 
 ## Codex Review of This Plan
 
-_(To be populated by Codex pass — see Phase 0.)_
+### Pass 1 — 2026-05-03: BLOCKED → 3 blockers + 2 important folded in
+
+Codex pass-1 returned BLOCKED with three blockers, all addressed:
+
+1. **Bind-host detection unsound** — `cfg.Server.Host` is populated but the listener binds `":%d"` (all interfaces) regardless. Inferring "is this localhost-only?" from the host field doesn't reflect actual network exposure. Resolved: replace host-inference with explicit `BRIDGE_HOST_EXPOSURE` env var (operator declaration). Approach §1, Decisions §2, Phase 1 Files all rewritten.
+2. **`validateDevAuthEnv` runs before config load** — the original plan's approach would have required reordering. Resolved: with `BRIDGE_HOST_EXPOSURE` as an env var, the check stays in the existing `getEnv`-based validator. No reordering needed.
+3. **Migration table name + columns wrong** — actual table is `drizzle.__drizzle_migrations` with `id, hash, created_at` (no `version`). `_journal.json` covers only 0000-0002 while codebase has 0000-0024 .sql files. Resolved: switch to `COUNT(*)`-vs-`ExpectedMigrationCount` comparison (count is robust to journal staleness). Phase 3 Files rewritten with correct query + count constant + CI parity test.
+
+Important non-blocking, both folded:
+
+4. **Realtime token consumer count was 4, actual is 7** — Codex audit found three more callsites (`problem-shell.tsx`, `broadcast-controls.tsx`, `student-tile.tsx`). Phase 4 Files updated with the full enumeration.
+5. **`useRealtimeToken` catches all failures identically** — needs to surface the 503 discrimination to the new banner. Phase 4 now extends the hook's return shape with `unavailable: boolean`.
+
+CONFIRMED by Codex (no changes needed):
+- `/api/auth/debug` 404s in production (banner safe to mount unconditionally).
+- The well-known dev-user UUID `00000000-0000-0000-0000-000000000001` is NEVER a real user.
+- `getRealtimeToken` already throws `RealtimeMintError{status: 503}` for the 503 case.
+- Existing identity-drift helpers (`src/lib/identity-assert.ts`, `src/app/api/auth/debug/route.ts`) are reusable.
+- Plan-050 production guard's premise (only fires on `APP_ENV=production`) is correct.
+
+Verdict: **BLOCKED → all blockers resolved → ready for Phase 1** pending pass-2 convergence check.
