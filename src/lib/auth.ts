@@ -111,10 +111,13 @@ export const authConfig = {
     //     (review-002 P2 #7 fix).
     authorized({ request, auth: sessionAuth }) {
       const { pathname, search } = request.nextUrl;
-      const isApiPath =
-        pathname.startsWith("/api/orgs") || pathname.startsWith("/api/admin");
-      if (isApiPath) {
-        // Preserve the legacy pass-through contract — handlers enforce auth.
+      // Any /api/* path is pass-through. The route handler / Go
+      // backend enforces auth and returns 401 on its own. This is
+      // the legacy contract for /api/orgs and /api/admin (preserved
+      // since plan 040), and plan 065 phase 2 extended it to every
+      // proxied API path so unauth XHR/fetch calls don't get a
+      // 307 redirect to /login when the matcher catches them.
+      if (pathname.startsWith("/api/")) {
         return true;
       }
 
@@ -191,6 +194,35 @@ export const authConfig = {
         session.user.isPlatformAdmin = token.isPlatformAdmin as boolean;
       }
       return session;
+    },
+  },
+  events: {
+    // Plan 065 phase 2 — clear bridge.session on signout.
+    //
+    // The signout endpoint (`/api/auth/signout`) is OUTSIDE the
+    // middleware matcher, so the wrapper's stale-cookie cleanup
+    // never runs for the request that triggers signout. Without
+    // this event handler the cookie persists for its full 7-day
+    // TTL, which would let a signed-out user retain a valid
+    // bridge.session — a real security issue once Phase 3 makes
+    // Go trust this cookie. (Codex pass-1 of Phase-2 caught this.)
+    //
+    // events.signOut runs server-side as part of the signout HTTP
+    // handler, so cookies().delete() reliably attaches a
+    // Set-Cookie with Max-Age=0 to the response Auth.js sends
+    // back to the browser.
+    async signOut() {
+      try {
+        const cookieStore = await cookies();
+        cookieStore.delete("bridge.session");
+      } catch {
+        // cookies().delete() can throw in edge cases (e.g., a
+        // signOut called from a context where setting cookies
+        // isn't allowed). The middleware wrapper's null-session
+        // path is the safety net — eventually some authenticated
+        // request will arrive and the cookie will be cleared
+        // there. The 7-day TTL caps the worst-case window.
+      }
     },
   },
   pages: {
