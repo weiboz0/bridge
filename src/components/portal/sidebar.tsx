@@ -10,6 +10,7 @@ import { SidebarFooter } from "./sidebar-footer";
 import { getIconChar } from "@/lib/portal/icons";
 import { getPortalConfig } from "@/lib/portal/nav-config";
 import { getPrimaryRole } from "@/lib/portal/roles";
+import { findActiveIndex } from "@/lib/portal/active-match";
 import type { UserRole } from "@/lib/portal/types";
 
 interface SidebarProps {
@@ -68,6 +69,7 @@ export function Sidebar({ userName, roles, currentRole: _currentRole }: SidebarP
   const primary = getPrimaryRole(roles);
   const primaryConfig = primary ? getPortalConfig(primary.role) : null;
   const mobileItems = primaryConfig?.navItems.slice(0, 4) ?? [];
+  const mobileActiveIndex = findActiveIndex(pathname, mobileItems);
 
   return (
     <>
@@ -99,14 +101,11 @@ export function Sidebar({ userName, roles, currentRole: _currentRole }: SidebarP
       </aside>
 
       {/* Mobile bottom nav — uses primary role's nav items uniformly.
-          Active item highlighted via the same pathname-prefix match as
-          the desktop sidebar so users can locate themselves at a
-          glance on small screens. */}
+          Active item highlighted via longest-match (so /teacher/units
+          highlights "Units", not "Dashboard"). */}
       <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-background border-t border-border z-40 flex justify-around py-2">
-        {mobileItems.map((item) => {
-          const itemPath = item.href.split("?")[0];
-          const isActive =
-            pathname === itemPath || pathname.startsWith(itemPath + "/");
+        {mobileItems.map((item, i) => {
+          const isActive = i === mobileActiveIndex;
           return (
             <Link
               key={item.href}

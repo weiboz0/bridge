@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { NavItem, UserRole } from "@/lib/portal/types";
 import { getIconChar } from "@/lib/portal/icons";
+import { findActiveIndex } from "@/lib/portal/active-match";
 
 interface SidebarSectionProps {
   role: UserRole;
@@ -92,20 +93,20 @@ interface SectionItemsProps {
 // Inline replacement for SidebarNav — same render shape, but as an
 // internal helper so the section can wrap it without an extra div.
 function SectionItems({ items, collapsed, pathname }: SectionItemsProps) {
+  // Longest-match wins (Codex review of plan 067 phases 2+3): the
+  // naive `startsWith(itemPath + "/")` check would highlight both
+  // "Dashboard" (/teacher) and "Units" (/teacher/units) on
+  // /teacher/units. Compute a single active index per render.
+  const activeIndex = findActiveIndex(pathname, items);
   return (
     <nav className="py-1">
-      {items.map((item) => {
-        // Active match: pathname equals the item's href ignoring query
-        // string, OR pathname starts with `${href}/`. Stripping the
-        // query before comparison so the orgId param doesn't break
-        // the match against the actual URL.
-        const itemPath = item.href.split("?")[0];
-        const isActive = pathname === itemPath || pathname.startsWith(itemPath + "/");
-
+      {items.map((item, i) => {
+        const isActive = i === activeIndex;
         return (
           <Link
             key={item.href}
             href={item.href}
+            aria-current={isActive ? "page" : undefined}
             className={`flex items-center gap-3 px-4 py-2 text-sm transition-colors ${
               isActive
                 ? "bg-primary/10 text-primary font-medium"

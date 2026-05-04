@@ -348,6 +348,22 @@ Specific questions:
 - Codex post-impl review.
 - PR + merge.
 
+## Code Review
+
+### Phases 2+3 post-impl — 2026-05-04: 2 BLOCKERS fixed
+
+Phase 2's substantive primary-role mobile-nav unification was actually merged inside Phase 1 PR #110 — the mobile-bottom-nav block already derives from `getPrimaryRole(roles)` since 2026-05-04. Phases 2+3 ship as a single bundled PR (`feat/067-phases-2-3-mobile-nav-tests-cleanup`) covering the residual polish + cleanup:
+
+- Active-state highlight on the mobile bottom-nav
+- E2E smoke (`e2e/sectioned-nav.spec.ts`)
+- Delete the orphan `role-switcher.tsx` + its now-redundant unit test (assertions live in `tests/unit/sidebar-section.test.tsx` from Phase 1)
+
+Codex post-impl review verdict: 2 BLOCKERS (both fixed inline). Plus a plan-compliance note: no fresh phone-viewport smoke was run in this PR — Phase 2's mobile work was verified in Phase 1's stack.
+
+BLOCKER 1 (FIXED): Active-match prefix collision. The naive `pathname.startsWith(itemPath + "/")` rule was already in `sidebar-section.tsx` (Phase 1) and I propagated it to the mobile bottom-nav. On `/teacher/units` it would highlight BOTH "Dashboard" (`/teacher`) and "Units" (`/teacher/units`). Fix: extracted `findActiveIndex` in `src/lib/portal/active-match.ts` — longest-match wins. Both desktop sidebar and mobile bottom-nav now use the helper. Regression locked with `tests/unit/active-match.test.ts` (6 cases including the prefix-collision and the partial-segment guard `/admin` vs `/admins`).
+
+BLOCKER 2 (FIXED): The e2e originally asserted `count() > 1` SidebarSection headers for `admin@e2e.test`, but `e2e/helpers.ts` documents that account as `is_platform_admin=true` only with no org memberships. Multi-section is unit-test territory (`sidebar-section.test.tsx` covers it with controlled seed data); the e2e's substantive contract is "no role-switcher button" + "sidebar renders + clickable", which is what it now asserts.
+
 ## Codex Review of This Plan
 
 ### Pass 4 — 2026-05-04: line 158 sign-out clear narrative aligned
