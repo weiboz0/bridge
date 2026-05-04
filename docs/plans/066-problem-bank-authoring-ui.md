@@ -138,6 +138,31 @@ Go endpoints via the `api()` helper. No backend changes.
    markdown; preview is a follow-up. The detail page DOES render
    the description as markdown, so authors can save + click
    "preview" via reload as a workaround.
+8. **`scopeId` is REQUIRED on every create** (Codex pass-1).
+   `personal` scope requires `scopeId === claims.UserID`
+   (`platform/internal/handlers/problem_access.go:44`); `org`
+   requires `scopeId === orgId` of an org where caller is
+   teacher/org_admin; `platform` requires
+   `IsPlatformAdmin && scopeId === platformId`. The form fills
+   `scopeId` automatically based on the selected scope:
+   - `personal` → `identity.userId`.
+   - `org` → the org dropdown lets the user pick from their
+     teacher/org_admin memberships; preselect the only one if
+     they have just one.
+   - `platform` → only shown to platform admins; `scopeId` =
+     the canonical platform-org id (read from `/api/me/identity`
+     or `/api/me/portal-access`).
+9. **`tags` is `[]string` with a 64-char per-tag limit** (Codex
+   pass-1). Backend does no normalization — UI should trim and
+   reject empty entries client-side; let the user choose
+   case freely.
+10. **Test cases default to `isCanonical: true`** in the editor
+    (Codex pass-1). Non-canonical cases create user-owned
+    private cases instead of problem-owned canonical cases —
+    that's the student "My cases" surface, not authoring. The
+    field stays hidden in the test-case editor (always true);
+    expose it only if/when an "import canonical → personal"
+    flow is needed.
 
 ## Files
 
@@ -161,8 +186,13 @@ Go endpoints via the `api()` helper. No backend changes.
   server component. Fetches:
   - `GET /api/problems/{id}` (problem body + metadata)
   - `GET /api/problems/{id}/test-cases` (case list)
-  - `GET /api/problems/{id}/attempts?limit=10` (recent activity,
-    nice-to-have; if endpoint requires class scoping, drop)
+  - **NOT `/attempts`** (Codex pass-1): the existing endpoint
+    returns the *caller's own* attempts only, not a cross-user
+    activity feed. A teacher viewing a problem they authored
+    would see "you have 0 attempts" which is misleading.
+    Defer cross-user activity to a follow-up that adds a new
+    teacher-scoped endpoint (`/api/problems/{id}/usage` or
+    similar).
 - `src/components/problem/problem-detail.tsx` — pure presentation:
   metadata header, markdown description, starter-code Monaco
   (read-only), test-cases card list, action buttons.
@@ -203,13 +233,20 @@ Go endpoints via the `api()` helper. No backend changes.
 
 ### Phase 5 — minor polish (deferrable, not blocking)
 
-- "View as student" button on detail page that opens
-  `/design/problem-student?problemId={id}` in a new tab.
 - Markdown preview side-by-side in the description field
   (`react-markdown` already in deps).
 - Improve the existing `/teacher/problems` empty state to link
   directly to `/teacher/problems/new` instead of just mentioning
   the YAML importer.
+- "View as student" button — **deferred** until the design
+  route accepts a real `problemId` (Codex pass-1: today the
+  page renders hardcoded placeholder content, no
+  `searchParams` wiring). Adding `searchParams` support to
+  `src/app/design/problem-student/page.tsx` is one part; the
+  other is fetching the real problem + test cases and feeding
+  them through the existing student shell (currently
+  hardcoded). Track as plan-066 follow-up; not blocking the
+  authoring UI itself.
 
 ## Risks
 
@@ -220,7 +257,7 @@ Go endpoints via the `api()` helper. No backend changes.
 | `scope=platform` problems can be edited by non-platform-admins via the form | low | Backend rejects with 403 (`UpdateProblem` checks ownership). Form should disable scope selector when editing if user can't change scope, or surface 403 cleanly. |
 | Slug uniqueness collisions surface mid-form | low | Backend returns 409 on conflict; form maps to inline error on the slug field. |
 | Tags are a free-text array; users invent new tags constantly | low | For v1 just allow free input. Tag-suggestion / autocomplete is a follow-up. |
-| Delete cascades may surprise teachers (kills test-cases + attempts) | medium | Confirm dialog with explicit "this will delete N test cases and M attempts" preview. |
+| Delete cascades may surprise teachers (kills test-cases + attempts) | medium | Backend actually GUARDS rather than cascades (Codex pass-1): `DeleteProblem` returns 409 if the problem is attached to topics OR has any attempts (`platform/internal/handlers/problems.go:414, :443, :452`). Confirm dialog should warn the user; if 409 returned, surface "remove from topics + clear attempts before deleting" with no fallback delete. |
 
 ## Phases
 
@@ -305,4 +342,38 @@ the larger pages.
 
 ## Codex Review of This Plan
 
-_(To be populated by Codex pass — see Phase 0.)_
+### Pass 1 — 2026-05-03: CONCUR-WITH-CHANGES → 4 items folded in
+
+Codex returned CONCUR with 3 BLOCKERS for Phase 3 (create form)
+plus 1 IMPORTANT-non-blocking. All folded:
+
+1. **scopeId is required** — `personal` requires `scopeId === claims.UserID`,
+   `org` requires scopeId equal to an org where the caller is
+   teacher/org_admin, `platform` requires the canonical platform
+   scopeId. Decisions §8 added with the form's auto-fill rules.
+
+2. **Recent-attempts panel mis-scoped** — `GET /api/problems/{id}/attempts`
+   returns the caller's own attempts, not cross-user. Removed
+   from Phase 2 detail page; deferred to a follow-up plan that
+   adds a teacher-scoped usage endpoint.
+
+3. **Test-case editor must default `isCanonical: true`** — non-canonical
+   cases are user-owned private cases, not authored content.
+   Decisions §10 added; the field stays hidden in the editor.
+
+4. **`tags` has no backend normalization** — UI must trim and
+   reject empty entries client-side; 64-char per-tag limit.
+   Decisions §9 added.
+
+5. **"View as student" button deferred** — `/design/problem-student`
+   is hardcoded placeholder content with no `searchParams`
+   support. Moved out of Phase 5 polish into a follow-up.
+
+Confirmed by Codex (no resolution needed):
+- All Go routes the plan consumes exist (`platform/internal/handlers/problems.go:50-83`).
+- `/teacher/problems` list page handles 401/403 correctly.
+- Existing units/new form is the right pattern to mirror.
+- No "must have example case" constraint blocks Publish.
+
+Verdict: **CONCUR-WITH-CHANGES** → all changes folded → ready
+for Phase 1.

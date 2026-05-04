@@ -136,13 +136,30 @@ role. The sidebar will now auto-expand the Admin group instead.
 ## Decisions to lock in
 
 1. **Auto-expand the section that matches the current URL.**
-   Use `usePathname()` to detect the active basePath and
-   default to that group expanded; the others collapsed.
+   Use `usePathname()` + `useSearchParams()` to detect the
+   active section. For non-org-scoped roles (`admin`, `teacher`,
+   `student`, `parent`): match by `basePath` (`/admin`,
+   `/teacher`, etc.). For `org_admin`: match by both
+   `basePath === "/org"` AND `searchParams.get("orgId")` —
+   without this, a user with two `org_admin` memberships
+   couldn't distinguish which section is "active" since both
+   share `basePath: "/org"` (`src/lib/portal/nav-config.ts:20`).
+   The active key is therefore `${role}:${orgId ?? "none"}`,
+   matching the same shape as `RoleSwitcher::rowKey`
+   (`src/components/portal/role-switcher.tsx:24-26`). Codex
+   pass-1 caught this as a blocker.
 2. **Persist user-toggled expansion state in localStorage.**
    If a user manually expands "Admin" while on a Teacher page,
    that stays expanded across renders within the same session.
-   Cleared when the user signs out (alongside other client
-   state).
+   Reuse the JSON-parse-with-try/catch pattern from
+   `src/lib/hooks/use-panel-layout.ts:24-29`. Storage key:
+   `bridge.sidebar.expanded`. The map is keyed on the same
+   `${role}:${orgId ?? "none"}` shape as the active-section
+   detection so they line up. Sign-out clearing: Phase 3
+   adds `localStorage.removeItem("bridge.sidebar.expanded")`
+   to BOTH `src/components/portal/sidebar-footer.tsx:12-18`
+   AND `src/components/sign-out-button.tsx:6-15`. Codex pass-1
+   non-blocking #1 caught the unwired clear.
 3. **Org context preservation.** The current role switcher
    carries `?orgId=` for org-scoped roles. The new sectioned
    nav links keep the same `?orgId=` query param on each item
@@ -157,11 +174,16 @@ role. The sidebar will now auto-expand the Admin group instead.
    is a desktop-only refinement.
 5. **Drop `<RoleSwitcher />` entirely.** No back-compat shim —
    it was the symptom we're treating, not a useful primitive.
-6. **`PortalShell` props simplify to `currentRole` only** (no
-   change). The shell still receives the role for theming /
-   breadcrumb context; the sidebar gets ALL roles directly
-   from `/api/me/portal-access` (the same payload it already
-   consumes).
+6. **`PortalShell` keeps its existing `portalRole` prop** (no
+   change). Codex pass-1 non-blocking #2 caught a naming-drift
+   risk: the plan originally referenced "currentRole" in both
+   contexts, but `PortalShell` actually uses `portalRole`
+   (`src/components/portal/portal-shell.tsx:13-14`) and only
+   `Sidebar` uses `currentRole` (`src/components/portal/sidebar.tsx:12, 16`).
+   Implementers must NOT rename `portalRole` to `currentRole`
+   — keep the existing names. The shell still receives the
+   role for theming / breadcrumb context; the sidebar gets
+   ALL roles directly from `/api/me/portal-access`.
 7. **No "all roles" landing page.** When a user signs in, they
    land on their primary role's dashboard (today's behavior,
    unchanged). The sectioned sidebar simply gives them
@@ -231,15 +253,18 @@ unchanged for non-org-scoped roles.
 ### Phase 4 — Tests
 
 **Modify:**
-- Any existing tests referencing `<RoleSwitcher>` — delete
-  those test cases (or rewrite to assert sidebar sections).
-  Audit:
-  ```bash
-  grep -rn "RoleSwitcher\|role-switcher" tests/ e2e/
-  ```
-- Add a unit test for `<SidebarSection>` covering: collapsed/
-  expanded toggle, active-item highlight, persist-to-localStorage,
-  org-id query-param injection.
+- `tests/unit/role-switcher.test.tsx` (the only existing test —
+  Codex pass-1 confirmed there's no e2e referencing
+  RoleSwitcher). Codex pass-1 non-blocking #3: do NOT just
+  delete the file. Carry over the orgId-related assertions:
+  - Composite key on `(role, orgId)` for users with the same
+    role in two different orgs (`tests/unit/role-switcher.test.tsx:29, 34-35, 42`).
+  - orgId-encoded destination URL for org-scoped roles
+    (`tests/unit/role-switcher.test.tsx:46, 60`).
+  Rewrite as `tests/unit/sidebar-section.test.tsx`.
+- Add `<SidebarSection>` unit test cases covering: collapsed/
+  expanded toggle, active-item highlight, persist-to-localStorage
+  (mock storage), org-id query-param injection on item links.
 - Add an e2e smoke (`e2e/sectioned-nav.spec.ts`) — sign in as
   the platform admin (`admin@e2e.test` per `e2e/helpers.ts`),
   verify multiple sections render, click into Admin section,
@@ -311,13 +336,57 @@ Specific questions:
 
 ### Phase 3: Tests + cleanup (PR 3)
 
-- Audit and update any tests referencing RoleSwitcher.
-- Add `<SidebarSection>` unit tests.
+- Rewrite `tests/unit/role-switcher.test.tsx` →
+  `tests/unit/sidebar-section.test.tsx` carrying over the
+  orgId composite-key + orgId-URL assertions.
+- Add additional `<SidebarSection>` unit test cases per Phase 4.
 - Add e2e smoke for the sectioned nav.
+- Wire `localStorage.removeItem("bridge.sidebar.expanded")`
+  into both signout paths (`sidebar-footer.tsx`,
+  `sign-out-button.tsx`).
 - Delete `src/components/portal/role-switcher.tsx`.
 - Codex post-impl review.
 - PR + merge.
 
 ## Codex Review of This Plan
 
-_(To be populated by Codex pass — see Phase 0.)_
+### Pass 1 — 2026-05-03: BLOCKED → 1 blocker + 3 non-blocking folded in
+
+Codex returned BLOCKED with one blocker plus three important
+non-blocking concerns. All folded:
+
+1. **Multi-org `org_admin` section activation under-specified**
+   (BLOCKER) — every `org_admin` section shares
+   `basePath: "/org"`, so `usePathname()` alone can't tell
+   them apart for the auto-expand logic. Resolution: active
+   key is `${role}:${orgId ?? "none"}` and uses
+   `useSearchParams().get("orgId")` for org-scoped roles.
+   Decisions §1 updated with the explicit detection rule.
+
+2. **Sign-out localStorage clear unwired** (non-blocking #1)
+   — the plan promised it but neither sign-out path actually
+   removes the storage key. Phase 3 now explicitly adds
+   `localStorage.removeItem` to both `sidebar-footer.tsx` and
+   `sign-out-button.tsx`.
+
+3. **Prop naming drift risk** (non-blocking #2) — `PortalShell`
+   uses `portalRole`, `Sidebar` uses `currentRole`. Decisions
+   §6 calls this out; implementers must NOT rename either.
+
+4. **RoleSwitcher tests should be rewritten, not deleted**
+   (non-blocking #3) — the orgId-related assertions are
+   load-bearing. Phase 4 (tests) now specifies a
+   rewrite-to-`sidebar-section.test.tsx` flow that carries
+   over the composite-key + orgId-URL assertions.
+
+Confirmed by Codex (no resolution needed):
+- Single-source canonical role priority lives in
+  `src/lib/portal/roles.ts:3,50-55`.
+- `PortalShell.hasRole` gating remains correct as defense in
+  depth against deep-linking to a portal a user lacks.
+- `useSidebar` localStorage pattern is established (`bridge-sidebar-collapsed`).
+- No e2e currently references RoleSwitcher (only unit test).
+- No server components import RoleSwitcher directly.
+
+Verdict: **BLOCKED → CHANGES FOLDED → ready for Phase 1**
+pending one more Codex pass to confirm convergence.
