@@ -22,23 +22,28 @@ import { middlewareMatcher } from "@/lib/portal/middleware-matcher";
 describe("middleware.ts matcher parity with middleware-matcher.ts", () => {
   it("inline matcher in middleware.ts equals middlewareMatcher", () => {
     const source = readFileSync("src/middleware.ts", "utf8");
-    const matches = source.matchAll(
-      /"(\/(?:api|teacher|student|parent|org|admin)\/[^"]+)"/g
-    );
+    // Plan 065 Phase 2 expanded the matcher to cover every API path
+    // that proxies to Go. The regex now matches any quoted path
+    // beginning with "/" — broad enough to catch the API list, the
+    // portal trees, AND non-:path* paths like "/api/auth/register".
+    // The `inMatcherBlock` filter scopes the search to the matcher
+    // array so the comment block at the top of middleware.ts (which
+    // also contains slash-paths) doesn't pollute the comparison.
+    const matcherStart = source.indexOf("matcher: [");
+    const matcherEnd = source.indexOf("]", matcherStart);
+    const matcherBlock = source.slice(matcherStart, matcherEnd);
+    const matches = matcherBlock.matchAll(/"(\/[^"]+)"/g);
     const inline = [...matches].map((m) => m[1]).sort();
     const expected = [...middlewareMatcher].sort();
     expect(inline).toEqual(expected);
   });
 
-  it("middlewareMatcher only contains paths covered by the test regex", () => {
-    // If a new prefix ever lands in the canonical list, this test
-    // fails first and the parity test above is updated alongside.
-    const allowedPrefixes = ["/api/", "/teacher/", "/student/", "/parent/", "/org/", "/admin/"];
+  it("middlewareMatcher entries all begin with a leading slash", () => {
+    // Loud-fail if a future addition forgets the leading slash —
+    // Next.js silently no-ops on malformed matcher entries, so a
+    // missing slash would create an invisible coverage gap.
     for (const path of middlewareMatcher) {
-      expect(
-        allowedPrefixes.some((p) => path.startsWith(p)),
-        `matcher path "${path}" doesn't match any test-regex prefix; update both this file and the parity test above`
-      ).toBe(true);
+      expect(path.startsWith("/"), `matcher path "${path}" must start with /`).toBe(true);
     }
   });
 });

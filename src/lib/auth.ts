@@ -111,10 +111,13 @@ export const authConfig = {
     //     (review-002 P2 #7 fix).
     authorized({ request, auth: sessionAuth }) {
       const { pathname, search } = request.nextUrl;
-      const isApiPath =
-        pathname.startsWith("/api/orgs") || pathname.startsWith("/api/admin");
-      if (isApiPath) {
-        // Preserve the legacy pass-through contract — handlers enforce auth.
+      // Any /api/* path is pass-through. The route handler / Go
+      // backend enforces auth and returns 401 on its own. This is
+      // the legacy contract for /api/orgs and /api/admin (preserved
+      // since plan 040), and plan 065 phase 2 extended it to every
+      // proxied API path so unauth XHR/fetch calls don't get a
+      // 307 redirect to /login when the matcher catches them.
+      if (pathname.startsWith("/api/")) {
         return true;
       }
 
