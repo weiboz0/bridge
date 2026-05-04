@@ -332,6 +332,23 @@ the larger pages.
 - Empty-state link to `/teacher/problems/new`.
 - Optional: markdown preview in description field.
 
+## Code Review
+
+### Phase 3 post-impl — 2026-05-04: NITS only, 1 fixed, 1 deferred
+
+Codex post-impl review of `feat/066-phase-3-create-edit-forms` (commit accf287). Verdict: NITS. No blockers.
+
+Codex confirmed (PASS) all seven targeted questions:
+1. `scopeId: null` for `platform` scope decodes cleanly to `*string=nil` and `authorizedForScope` returns `c.IsPlatformAdmin` without dereferencing — no crash, no extra check needed.
+2. PATCH body shape matches `UpdateProblemInput`: scope/scopeId aren't in the struct at all, so the form physically cannot leak a scope-change attempt through edit.
+3. Tags client-side trim + dedupe matches backend (only constraint is 64-char per-tag; no lowercase / URL-safe normalization).
+4. Empty starter-code tabs are correctly stripped; the store treats non-nil map as full replacement so absent keys remove languages while empty strings would persist (we intentionally strip empties).
+5. No backend slug regex / length validation. The form's 80-char auto-suggest cap is the only constraint.
+
+NIT-1 (FIXED in 237c79d): Submit button was gated on `orgsLoading` for every scope. Personal scope only needs `identity.userId` (already available at mount), so the gate now triggers only when `scope === "org"`.
+
+NIT-2 (DEFERRED — backend gap): Slug uniqueness collisions surface as opaque "Database error" / 500 because the Go handler returns `http.StatusInternalServerError` on any store error rather than mapping unique-constraint violations to 409. The form's `readError` can't tell a slug collision from any other DB failure. Filing as a follow-up: backend must classify pgx unique-violation errors (SQLSTATE 23505) on the `slug` constraint as 409 with a structured `{ "field": "slug" }` body, then the form can pin it inline. Acceptable for v1 — slug collisions are rare in practice (auto-suggest is title-derived) and the generic banner still tells the user the save failed.
+
 ## Codex Review of This Plan
 
 ### Pass 4 — 2026-05-04: stale "View as student" mentions in Phase 5 deleted
