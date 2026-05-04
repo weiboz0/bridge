@@ -3,18 +3,20 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 	"github.com/joho/godotenv"
 )
 
 type Config struct {
-	Server   ServerConfig   `toml:"server"`
-	Database DatabaseConfig `toml:"database"`
-	Auth     AuthConfig     `toml:"auth"`
-	LLM      LLMConfig      `toml:"llm"`
-	Sandbox  SandboxConfig  `toml:"sandbox"`
-	Realtime RealtimeConfig `toml:"realtime"`
+	Server        ServerConfig        `toml:"server"`
+	Database      DatabaseConfig      `toml:"database"`
+	Auth          AuthConfig          `toml:"auth"`
+	LLM           LLMConfig           `toml:"llm"`
+	Sandbox       SandboxConfig       `toml:"sandbox"`
+	Realtime      RealtimeConfig      `toml:"realtime"`
+	BridgeSession BridgeSessionConfig `toml:"bridge_session"`
 }
 
 type ServerConfig struct {
@@ -49,6 +51,30 @@ type SandboxConfig struct {
 // HOCUSPOCUS_TOKEN_SECRET; never lives in the TOML config file.
 type RealtimeConfig struct {
 	HocuspocusTokenSecret string `toml:"-"`
+}
+
+// BridgeSessionConfig — plan 065. Bridge-issued HS256 session
+// tokens that Auth.js mints via POST /api/internal/sessions and
+// the Go middleware verifies in place of decrypting the Auth.js
+// JWE. Three separate values, each with a distinct blast radius:
+//
+//   - Secrets: the rotation list. First entry signs; any entry
+//     verifies. Comma-separated in BRIDGE_SESSION_SECRETS, with
+//     legacy single-name BRIDGE_SESSION_SECRET as a fallback so
+//     dev environments don't have to learn the plural.
+//   - InternalBearer: shared with Auth.js's mint helper to gate
+//     POST /api/internal/sessions. Distinct from
+//     HOCUSPOCUS_TOKEN_SECRET so a leak of the realtime callback
+//     bearer cannot forge session cookies.
+//   - AuthFlag: feature flag for the Phase-3 cutover. With OFF
+//     (default), Go middleware reads bridge.session opportunistically
+//     but still treats Auth.js JWE as primary. With ON, bridge.session
+//     becomes the authoritative cookie and absent-but-not-invalid
+//     falls back to JWE during rollout.
+type BridgeSessionConfig struct {
+	Secrets        []string `toml:"-"`
+	InternalBearer string   `toml:"-"`
+	AuthFlag       bool     `toml:"-"`
 }
 
 func Load(path string) (*Config, error) {
@@ -97,6 +123,23 @@ func Load(path string) (*Config, error) {
 		cfg.Realtime.HocuspocusTokenSecret = v
 	}
 
+	// Plan 065 — Bridge session secrets. Prefer the plural
+	// (rotation-aware) BRIDGE_SESSION_SECRETS; fall back to the
+	// singular for environments still using the simpler form.
+	if v := os.Getenv("BRIDGE_SESSION_SECRETS"); v != "" {
+		cfg.BridgeSession.Secrets = parseSecretList(v)
+	} else if v := os.Getenv("BRIDGE_SESSION_SECRET"); v != "" {
+		cfg.BridgeSession.Secrets = []string{v}
+	}
+	if v := os.Getenv("BRIDGE_INTERNAL_SECRET"); v != "" {
+		cfg.BridgeSession.InternalBearer = v
+	}
+	if v := os.Getenv("BRIDGE_SESSION_AUTH"); v != "" {
+		// Treat any of "1", "true", "TRUE", "yes" as ON. Anything
+		// else (including empty) is OFF.
+		cfg.BridgeSession.AuthFlag = v == "1" || strings.EqualFold(v, "true") || strings.EqualFold(v, "yes")
+	}
+
 	// Resolve LLM API key from provider-specific env var
 	cfg.LLM.APIKey = resolveLLMAPIKey(cfg.LLM.Backend)
 	if v := os.Getenv("GO_PORT"); v != "" {
@@ -104,6 +147,20 @@ func Load(path string) (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// parseSecretList splits a comma-separated env value into a list of
+// trimmed, non-empty entries. Plan 065's BRIDGE_SESSION_SECRETS uses
+// this so operators can rotate by prepending the new secret.
+func parseSecretList(raw string) []string {
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if trimmed := strings.TrimSpace(p); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
 }
 
 // resolveLLMAPIKey maps backend names to their environment variable for API keys.

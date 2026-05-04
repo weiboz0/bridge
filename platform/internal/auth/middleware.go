@@ -71,10 +71,29 @@ const claimsKey contextKey = "claims"
 
 type Middleware struct {
 	Secret string
+
+	// Plan 065 phase 1 — fields wired in for the AuthFlag-gated
+	// bridge.session reader and the live-admin lookup. Unused
+	// until Phase 3 changes RequireAuth to consume them; Phase 1
+	// just plumbs the construction surface so cmd/api/main.go
+	// is stable across phases.
+	BridgeSecrets []string
+	BridgeAuthOn  bool
+	AdminChecker  AdminChecker
 }
 
 func NewMiddleware(secret string) *Middleware {
 	return &Middleware{Secret: secret}
+}
+
+// WithBridgeSession sets the plan-065 fields on an existing
+// Middleware. Returns the receiver for chaining. Safe to call
+// once at startup; not safe to mutate concurrently.
+func (m *Middleware) WithBridgeSession(secrets []string, internalAuthFlagOn bool, checker AdminChecker) *Middleware {
+	m.BridgeSecrets = secrets
+	m.BridgeAuthOn = internalAuthFlagOn
+	m.AdminChecker = checker
+	return m
 }
 
 // RequireAuth validates the JWT and injects claims into context.
@@ -192,13 +211,37 @@ func (m *Middleware) OptionalAuth(next http.Handler) http.Handler {
 }
 
 // RequireAdminMiddleware is a method-based admin check middleware.
+//
+// Deprecated: use (m *Middleware).RequireAdmin directly. Kept for
+// the existing wrapper-call ergonomics.
 func (m *Middleware) RequireAdminMiddleware(next http.Handler) http.Handler {
-	return RequireAdmin(next)
+	return m.RequireAdmin(next)
 }
 
-// RequireAdmin checks that the user is a platform admin.
-// Admins who are impersonating a non-admin user retain admin access.
+// RequireAdmin checks that the user is a platform admin (method
+// version, Plan 065). Once Phase 3 lands, claims.IsPlatformAdmin
+// is the live DB value because RequireAuth overwrote it before
+// chaining here.
+//
+// Admins who are impersonating a non-admin user retain admin access
+// (impersonation overlay sets ImpersonatedBy on the claims; we
+// honor either signal).
+func (m *Middleware) RequireAdmin(next http.Handler) http.Handler {
+	return requireAdminHandler(next)
+}
+
+// RequireAdmin is the package-level alias retained for any
+// external/test callsites that haven't migrated to the method
+// version. Behaves identically.
+//
+// Deprecated: use (m *Middleware).RequireAdmin so future Phase-3+
+// changes (live-admin DB lookup wiring) flow through one path.
 func RequireAdmin(next http.Handler) http.Handler {
+	return requireAdminHandler(next)
+}
+
+// requireAdminHandler is the shared inner implementation.
+func requireAdminHandler(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		claims := GetClaims(r.Context())
 		if claims == nil {

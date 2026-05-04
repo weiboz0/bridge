@@ -39,6 +39,16 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Plan 065 — fail fast at boot when BRIDGE_SESSION_AUTH=1 but
+	// the supporting secrets are unset. Otherwise the flag-on
+	// production deployment would silently 503 every authenticated
+	// request to /api/internal/sessions, which is much harder to
+	// notice than a refused boot.
+	if err := validateBridgeSessionEnv(cfg); err != nil {
+		slog.Error(err.Error())
+		os.Exit(1)
+	}
+
 	// Initialize database
 	database, err := db.Open(cfg.Database.URL)
 	if err != nil {
@@ -48,6 +58,12 @@ func main() {
 	defer database.Close()
 	slog.Info("Database connected", "url", maskURL(cfg.Database.URL))
 
+	// Build stores BEFORE auth middleware so the AdminChecker
+	// (plan 065 phase 1) can be wired into the middleware at
+	// construction time. The pre-065 order (middleware before
+	// stores) didn't allow DI of the store-backed lookup.
+	stores := handlers.NewStores(database)
+
 	// Set up auth middleware
 	jwtSecret := cfg.Auth.NextAuthSecret
 	if jwtSecret == "" {
@@ -55,9 +71,16 @@ func main() {
 		os.Exit(1)
 	}
 	authMw := auth.NewMiddleware(jwtSecret)
-
-	// Build stores
-	stores := handlers.NewStores(database)
+	// Plan 065: plumb the bridge.session reader + live-admin
+	// AdminChecker onto the middleware now so Phase 3 can flip
+	// RequireAuth to consume them without touching this file.
+	// Phase 1 builds the wiring; Phase 3 starts using it.
+	adminChecker := auth.NewCachedAdminChecker(&auth.SQLAdminLookup{DB: database})
+	authMw.WithBridgeSession(
+		cfg.BridgeSession.Secrets,
+		cfg.BridgeSession.AuthFlag,
+		adminChecker,
+	)
 
 	// Build LLM backend
 	llmBackend, err := llm.CreateBackend(llm.LLMConfig{
@@ -142,6 +165,21 @@ func main() {
 		HocuspocusTokenSecret: cfg.Realtime.HocuspocusTokenSecret,
 	}
 	realtimeH.InternalRoutes(r)
+
+	// Plan 065 Phase 1 — Bridge session mint endpoint. Like the
+	// realtime internal callback, this is server-to-server only
+	// (Auth.js's mint helper sends BRIDGE_INTERNAL_SECRET as a
+	// bearer). Mounted OUTSIDE the user-auth group so the bearer
+	// check runs first; under RequireAuth the unauthenticated
+	// caller would be 401'd before our bearer was inspected.
+	internalSessionsH := &handlers.InternalSessionsHandler{
+		Users: stores.Users,
+		// Sign with the FIRST secret in the rotation list. Phase 3
+		// uses the full list for verification.
+		PrimarySigningSecret: firstOrEmpty(cfg.BridgeSession.Secrets),
+		InternalBearer:       cfg.BridgeSession.InternalBearer,
+	}
+	internalSessionsH.Routes(r)
 
 	// Authenticated routes
 	r.Group(func(r chi.Router) {
@@ -270,6 +308,7 @@ func main() {
 			Stats:       stores.Stats,
 			ParentLinks: stores.ParentLinks,
 			DB:          database,
+			Mw:          authMw,
 		}
 		adminH.Routes(r)
 
@@ -358,6 +397,43 @@ func maskURL(url string) string {
 		return url[:30] + "..."
 	}
 	return url
+}
+
+// firstOrEmpty returns the first element of a string slice, or empty
+// when the slice is nil/empty. Used for the bridge.session signing
+// path: the rotation list verifies against any entry, but the mint
+// always uses the first.
+func firstOrEmpty(ss []string) string {
+	if len(ss) == 0 {
+		return ""
+	}
+	return ss[0]
+}
+
+// validateBridgeSessionEnv refuses to start when the operator has
+// turned on plan 065's bridge.session reader (BRIDGE_SESSION_AUTH=1)
+// without configuring the secrets it needs.
+//
+// Why a startup guard instead of just letting the request-time 503
+// fire? A silent 503 on every authenticated request looks like a
+// generic upstream outage in dashboards; a refused boot fails loudly
+// in the deploy pipeline and rolls back. This mirrors plan 050's
+// DEV_SKIP_AUTH-in-production guard.
+//
+// The guard only fires when the flag is ON. With the flag off
+// (default), missing secrets are fine — the mint endpoint is
+// dormant and the legacy JWE path still works.
+func validateBridgeSessionEnv(cfg *config.Config) error {
+	if !cfg.BridgeSession.AuthFlag {
+		return nil
+	}
+	if len(cfg.BridgeSession.Secrets) == 0 {
+		return fmt.Errorf("refusing to start: BRIDGE_SESSION_AUTH=1 but BRIDGE_SESSION_SECRETS (or BRIDGE_SESSION_SECRET) is empty. Set the signing secret(s) before enabling the flag")
+	}
+	if cfg.BridgeSession.InternalBearer == "" {
+		return fmt.Errorf("refusing to start: BRIDGE_SESSION_AUTH=1 but BRIDGE_INTERNAL_SECRET is empty. The mint endpoint is unreachable without the bearer token")
+	}
+	return nil
 }
 
 // Plan 050: refuse to start when DEV_SKIP_AUTH is set with
