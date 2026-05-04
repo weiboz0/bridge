@@ -90,15 +90,26 @@ function computeCanAuthor(
   identity: IdentityShape | null,
 ): boolean {
   if (!identity) return false;
+  // Platform admins can author at any scope.
   if (identity.isPlatformAdmin) return true;
-  // Personal scope: only the owner (scopeId = creator user id) can
-  // author. Org/platform scope: deferred — the backend's check is
-  // org_admin/teacher in scope or platform admin; UI just optimistically
-  // shows the buttons and lets the backend reject if the user isn't
-  // authorized. (Wrong-positive: user clicks Edit, gets 403 inline.
-  // Better than wrong-negative which hides legitimate authorship.)
+  // Personal-scope: only the owner.
   if (problem.scope === "personal") {
     return problem.scopeId === identity.userId;
   }
-  return true;
+  // Codex pass-1: original heuristic returned true for any non-personal
+  // problem regardless of viewer role. Too broad — affects hidden-case
+  // visibility, not just button enablement. The backend's
+  // `authorizedForScope` requires platform-admin for `platform` scope
+  // and active org_admin/teacher membership for `org` scope.
+  //
+  // We don't have the viewer's org memberships in `Identity` (would
+  // require a /api/me/memberships fetch), so be CONSERVATIVE: hide
+  // Edit/Publish/Archive/Delete affordances by default for org/
+  // platform-scope viewers who aren't admins. Fork stays visible
+  // (everyone with read access can clone). A legitimate org-scoped
+  // teacher can navigate to /teacher/problems/{id}/edit directly —
+  // the backend will accept the request. Wiring the org-membership
+  // check is a Phase-2-follow-up that adds /api/me/memberships to
+  // the identity helper.
+  return false;
 }

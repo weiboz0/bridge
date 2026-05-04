@@ -22,7 +22,12 @@ export function ProblemActions({ problem, canAuthor }: Props) {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Helper to POST to a path (no body) and refresh on success.
+  // Helper to POST to a path and refresh on success. Sends an empty
+  // JSON object body — Codex pass-1 caught that the Fork handler
+  // (and likely future handlers) call decodeJSON unconditionally,
+  // which 400s on a missing/empty body. `{}` is parsed as zero-value
+  // for the body struct (the handler then applies defaults), so the
+  // body stays minimal but the JSON parse always succeeds.
   async function postAction(action: string, path: string) {
     setBusy(action);
     setError(null);
@@ -30,6 +35,8 @@ export function ProblemActions({ problem, canAuthor }: Props) {
       const res = await fetch(path, {
         method: "POST",
         credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
       });
       if (!res.ok) {
         const body = (await res.json().catch(() => null)) as { error?: string } | null;
