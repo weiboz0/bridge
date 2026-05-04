@@ -40,6 +40,7 @@ export async function GET() {
 
   let goClaimsUserId: string | null = null;
   let goClaimsEmail: string | null = null;
+  let goImpersonatedBy: string | null = null;
   let goError: string | null = null;
   try {
     const identity = await api<{ userId: string; email?: string; impersonatedBy?: string }>(
@@ -47,6 +48,7 @@ export async function GET() {
     );
     goClaimsUserId = identity.userId;
     goClaimsEmail = identity.email ?? null;
+    goImpersonatedBy = identity.impersonatedBy ?? null;
   } catch (err) {
     if (err instanceof ApiError) {
       goError = `${err.status}: ${err.message}`;
@@ -67,6 +69,7 @@ export async function GET() {
     nextAuthEmail,
     goClaimsUserId,
     goClaimsEmail,
+    goImpersonatedBy,
     goError,
     cookieNamesPresent: namesPresent,
     cookieNameUsed,

@@ -13,18 +13,31 @@ import { useEffect, useState } from "react";
 //
 // `/api/auth/debug` returns 404 in production (`src/app/api/auth/debug/route.ts:24-26`)
 // — the banner silently no-ops on 404 so it never renders in prod
-// builds. In dev/staging where the endpoint is live, the banner only
-// renders when:
-//   - `match === false` AND
-//   - the Next-side session is NOT null (drift is meaningful only when
-//     SOME identity exists on at least one side; both-null is a clean
-//     unauthenticated state, not drift).
+// builds. In dev/staging where the endpoint is live, the banner is
+// scoped narrowly: it only renders when Go is running in
+// `DEV_SKIP_AUTH=admin` mode (recognized by the well-known dev-user
+// placeholder UUID below) AND the Next side has a real session AND
+// the user is NOT legitimately impersonating someone (Codex pass-1
+// flagged that during impersonation the live identity legitimately
+// differs from the JWT — that's not drift, that's the feature).
+//
+// Other drift modes (Go unreachable, mismatched real users) are
+// observable via /api/auth/debug directly but don't trigger the
+// banner — the banner copy specifically points at DEV_SKIP_AUTH so
+// it would mislead operators on those other failure modes.
+
+// Well-known dev-user placeholder injected by middleware.go when
+// DEV_SKIP_AUTH=admin. Matching this exact UUID (rather than just
+// "any drift") narrows false positives to the specific ops-discipline
+// failure plan 068 was designed around.
+const DEV_USER_PLACEHOLDER = "00000000-0000-0000-0000-000000000001";
 
 interface DebugResponse {
   nextAuthUserId: string | null;
   nextAuthEmail: string | null;
   goClaimsUserId: string | null;
   goClaimsEmail: string | null;
+  goImpersonatedBy: string | null;
   goError: string | null;
   match: boolean;
 }
@@ -44,7 +57,12 @@ export function IdentityDriftBanner() {
         if (!res.ok) return;
         const body = (await res.json()) as DebugResponse;
         if (cancelled) return;
-        if (!body.match && body.nextAuthUserId !== null) {
+        if (
+          !body.match &&
+          body.nextAuthUserId !== null &&
+          body.goClaimsUserId === DEV_USER_PLACEHOLDER &&
+          !body.goImpersonatedBy
+        ) {
           setDrift(body);
         }
       } catch {

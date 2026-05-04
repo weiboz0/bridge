@@ -48,7 +48,7 @@ describe("IdentityDriftBanner (plan 068 phase 2)", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it("renders banner with both emails when drift detected", async () => {
+  it("renders banner with both emails when DEV_SKIP_AUTH placeholder detected", async () => {
     mockFetch({
       status: 200,
       body: {
@@ -57,6 +57,7 @@ describe("IdentityDriftBanner (plan 068 phase 2)", () => {
         nextAuthEmail: "real@example.com",
         goClaimsUserId: "00000000-0000-0000-0000-000000000001",
         goClaimsEmail: "dev@localhost",
+        goImpersonatedBy: null,
         goError: null,
       },
     });
@@ -67,6 +68,45 @@ describe("IdentityDriftBanner (plan 068 phase 2)", () => {
     expect(screen.getByText(/Auth identity mismatch detected/)).toBeInTheDocument();
     expect(screen.getByText("real@example.com")).toBeInTheDocument();
     expect(screen.getByText("dev@localhost")).toBeInTheDocument();
+  });
+
+  it("does NOT render when impersonating (legit drift between JWT and live claims)", async () => {
+    mockFetch({
+      status: 200,
+      body: {
+        match: false,
+        nextAuthUserId: "admin-uid",
+        nextAuthEmail: "admin@example.com",
+        goClaimsUserId: "target-uid",
+        goClaimsEmail: "target@example.com",
+        goImpersonatedBy: "admin-uid", // ← impersonation in flight
+        goError: null,
+      },
+    });
+    const { container } = render(<IdentityDriftBanner />);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it("does NOT render when goClaimsUserId is some other UUID (not the dev placeholder)", async () => {
+    // Real user-id mismatch (e.g., stale cookie, real bug) — banner stays
+    // silent because it's specifically scoped to DEV_SKIP_AUTH, not
+    // general drift. Operators check /api/auth/debug directly for those.
+    mockFetch({
+      status: 200,
+      body: {
+        match: false,
+        nextAuthUserId: "user-a",
+        nextAuthEmail: "a@example.com",
+        goClaimsUserId: "user-b",
+        goClaimsEmail: "b@example.com",
+        goImpersonatedBy: null,
+        goError: null,
+      },
+    });
+    const { container } = render(<IdentityDriftBanner />);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(container).toBeEmptyDOMElement();
   });
 
   it("renders nothing when both sides are null (clean unauth, not drift)", async () => {
@@ -112,6 +152,7 @@ describe("IdentityDriftBanner (plan 068 phase 2)", () => {
         nextAuthEmail: null,
         goClaimsUserId: "00000000-0000-0000-0000-000000000001",
         goClaimsEmail: null,
+        goImpersonatedBy: null,
         goError: null,
       },
     });
@@ -132,7 +173,11 @@ describe("IdentityDriftBanner (plan 068 phase 2)", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it("surfaces goError when no goClaimsUserId/email available", async () => {
+  it("does NOT render when Go is unreachable (goClaimsUserId null, goError set)", async () => {
+    // The original Phase-2 implementation rendered the banner with
+    // "error: <goError>" copy; Codex pass-1 caught that the banner copy
+    // says "DEV_SKIP_AUTH" specifically, which would mislead operators
+    // when Go is just down. Banner now stays silent on this path.
     mockFetch({
       status: 200,
       body: {
@@ -141,13 +186,12 @@ describe("IdentityDriftBanner (plan 068 phase 2)", () => {
         nextAuthEmail: "real@example.com",
         goClaimsUserId: null,
         goClaimsEmail: null,
-        goError: "401: Unauthorized",
+        goImpersonatedBy: null,
+        goError: "500: Server Error",
       },
     });
-    render(<IdentityDriftBanner />);
-    await waitFor(() => {
-      expect(screen.getByRole("alert")).toBeInTheDocument();
-    });
-    expect(screen.getByText(/error: 401: Unauthorized/)).toBeInTheDocument();
+    const { container } = render(<IdentityDriftBanner />);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(container).toBeEmptyDOMElement();
   });
 });
