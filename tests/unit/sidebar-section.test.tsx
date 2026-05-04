@@ -176,4 +176,30 @@ describe("localStorage persistence", () => {
   it("uses the canonical key", () => {
     expect(SIDEBAR_EXPANDED_STORAGE_KEY).toBe("bridge.sidebar.expanded");
   });
+
+  it("toggling a section writes the override to localStorage and survives re-render", async () => {
+    // Multi-role user, two sections; toggle the (non-active) admin
+    // section and confirm the override persists.
+    const roles: UserRole[] = [
+      { role: "teacher" },
+      { role: "admin" },
+    ];
+    const { unmount } = render(<Sidebar userName="Test" roles={roles} currentRole="teacher" />);
+
+    const adminHeader = screen.getByRole("button", { name: /Platform Admin/ });
+    expect(adminHeader.getAttribute("aria-expanded")).toBe("false");
+
+    fireEvent.click(adminHeader);
+
+    const stored = localStorage.getItem(SIDEBAR_EXPANDED_STORAGE_KEY);
+    expect(stored).toBeTruthy();
+    const parsed = JSON.parse(stored!) as Record<string, boolean>;
+    expect(parsed[sectionKey("admin")]).toBe(true);
+
+    // Re-mount and verify the override loads from localStorage on init.
+    unmount();
+    render(<Sidebar userName="Test" roles={roles} currentRole="teacher" />);
+    const reMountedAdminHeader = screen.getByRole("button", { name: /Platform Admin/ });
+    expect(reMountedAdminHeader.getAttribute("aria-expanded")).toBe("true");
+  });
 });

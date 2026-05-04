@@ -129,15 +129,15 @@ function computeActiveKey(pathname: string, urlOrgId: string | null, roles: User
     if (!onPortalPath) continue;
 
     if (role.role === "org_admin") {
-      // Multi-org disambiguation: the active org_admin section is the
-      // one whose orgId matches the URL's `?orgId=`. Without a URL
-      // orgId, no org_admin section is auto-expanded (user is on a
-      // non-org-specific page).
+      // Multi-org disambiguation. Plan 067 Decisions §1 says: with no
+      // URL orgId, no org_admin section auto-expands. Practical
+      // refinement: when the user has only ONE org_admin membership,
+      // the disambiguation isn't needed and not auto-expanding feels
+      // broken (the section just sits collapsed on the org's own
+      // pages). For the multi-org case the strict rule still holds.
       if (urlOrgId && role.orgId === urlOrgId) {
         return sectionKey(role.role, role.orgId);
       }
-      // If the user has only ONE org_admin section, fall through and
-      // claim it as active even without orgId in the URL.
       const orgAdminCount = roles.filter((r) => r.role === "org_admin").length;
       if (orgAdminCount === 1) {
         return sectionKey(role.role, role.orgId);
