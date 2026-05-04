@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import dynamic from "next/dynamic";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -69,6 +71,7 @@ export function ProblemForm({ mode, identity, initial }: Props) {
   const [slug, setSlug] = useState(initial?.slug ?? "");
   const [slugTouched, setSlugTouched] = useState(Boolean(initial?.slug));
   const [description, setDescription] = useState(initial?.description ?? "");
+  const [descriptionPreview, setDescriptionPreview] = useState(false);
   const [difficulty, setDifficulty] = useState(initial?.difficulty || "easy");
   const [gradeLevel, setGradeLevel] = useState(initial?.gradeLevel ?? "");
   const [scope, setScope] = useState<FormScope>(
@@ -423,17 +426,44 @@ export function ProblemForm({ mode, identity, initial }: Props) {
 
         {/* Description (markdown) */}
         <div className="space-y-1.5">
-          <Label htmlFor="description">Description (markdown)</Label>
-          <textarea
-            id="description"
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            rows={10}
-            placeholder={"## Problem\n\nDescribe the problem, input/output format, constraints, and examples."}
-            className="flex w-full rounded-lg border border-input bg-transparent px-3 py-2 font-mono text-sm leading-relaxed outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 resize-y"
-          />
+          <div className="flex items-center justify-between">
+            <Label htmlFor="description">Description (markdown)</Label>
+            <button
+              type="button"
+              onClick={() => setDescriptionPreview((v) => !v)}
+              className="text-xs text-muted-foreground hover:text-foreground"
+              aria-pressed={descriptionPreview}
+            >
+              {descriptionPreview ? "Edit" : "Preview"}
+            </button>
+          </div>
+          {descriptionPreview ? (
+            <div className="min-h-[16rem] w-full rounded-lg border border-input bg-zinc-50/50 px-3 py-2">
+              {description.trim() ? (
+                <div className="prose prose-sm max-w-none">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                    {description}
+                  </ReactMarkdown>
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground italic">
+                  Nothing to preview yet — write some markdown above.
+                </p>
+              )}
+            </div>
+          ) : (
+            <textarea
+              id="description"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              rows={10}
+              placeholder={"## Problem\n\nDescribe the problem, input/output format, constraints, and examples."}
+              className="flex w-full rounded-lg border border-input bg-transparent px-3 py-2 font-mono text-sm leading-relaxed outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 resize-y"
+            />
+          )}
           <p className="text-xs text-muted-foreground">
-            Markdown is rendered on the detail page. Save and reload to preview.
+            Toggle Preview to see the rendered markdown. The detail page uses
+            the same renderer.
           </p>
         </div>
 
