@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { getIdentity } from "@/lib/identity";
 import { getAssignment, updateAssignment, deleteAssignment } from "@/lib/assignments";
 import { listClassMembers } from "@/lib/class-memberships";
 
@@ -25,8 +25,8 @@ export async function GET(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const session = await auth();
-  if (!session?.user?.id) {
+  const identity = await getIdentity();
+  if (!identity?.userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -42,8 +42,8 @@ export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const session = await auth();
-  if (!session?.user?.id) {
+  const identity = await getIdentity();
+  if (!identity?.userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -53,7 +53,8 @@ export async function PATCH(
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  if (!await verifyInstructor(assignment.classId, session.user.id, session.user.isPlatformAdmin)) {
+  // Plan 065 phase 4 — admin status from /api/me/identity (live DB).
+  if (!await verifyInstructor(assignment.classId, identity.userId, identity.isPlatformAdmin)) {
     return NextResponse.json({ error: "Only instructors can update assignments" }, { status: 403 });
   }
 
@@ -78,8 +79,8 @@ export async function DELETE(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const session = await auth();
-  if (!session?.user?.id) {
+  const identity = await getIdentity();
+  if (!identity?.userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -89,7 +90,7 @@ export async function DELETE(
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  if (!await verifyInstructor(assignment.classId, session.user.id, session.user.isPlatformAdmin)) {
+  if (!await verifyInstructor(assignment.classId, identity.userId, identity.isPlatformAdmin)) {
     return NextResponse.json({ error: "Only instructors can delete assignments" }, { status: 403 });
   }
 

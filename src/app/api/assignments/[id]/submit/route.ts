@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { getIdentity } from "@/lib/identity";
 import { getAssignment } from "@/lib/assignments";
 import { createSubmission } from "@/lib/submissions";
 import { listClassMembers } from "@/lib/class-memberships";
@@ -9,8 +9,8 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const session = await auth();
-  if (!session?.user?.id) {
+  const identity = await getIdentity();
+  if (!identity?.userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -22,8 +22,9 @@ export async function POST(
 
   // Verify user is a student in the class
   const members = await listClassMembers(db, assignment.classId);
-  const isMember = members.some((m) => m.userId === session.user.id);
-  if (!isMember && !session.user.isPlatformAdmin) {
+  const isMember = members.some((m) => m.userId === identity.userId);
+  // Plan 065 phase 4 — admin status from /api/me/identity (live DB).
+  if (!isMember && !identity.isPlatformAdmin) {
     return NextResponse.json({ error: "Not a member of this class" }, { status: 403 });
   }
 
@@ -32,7 +33,7 @@ export async function POST(
 
   const submission = await createSubmission(db, {
     assignmentId: id,
-    studentId: session.user.id,
+    studentId: identity.userId,
     documentId,
   });
 

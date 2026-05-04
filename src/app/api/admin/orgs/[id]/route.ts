@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { requireAdmin } from "@/lib/identity";
 import { getOrganization, updateOrgStatus } from "@/lib/organizations";
 
 const updateSchema = z.object({
@@ -12,8 +12,8 @@ export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const session = await auth();
-  if (!session?.user?.id || !session.user.isPlatformAdmin) {
+  // Plan 065 phase 4 — live admin via /api/me/identity.
+  if (!(await requireAdmin())) {
     return NextResponse.json({ error: "Platform admin required" }, { status: 403 });
   }
 

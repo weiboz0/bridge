@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { getIdentity } from "@/lib/identity";
 import { getSession } from "@/lib/sessions";
 import { sessionEventBus } from "@/lib/sse";
 
@@ -13,8 +13,8 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const session = await auth();
-  if (!session?.user?.id) {
+  const identity = await getIdentity();
+  if (!identity?.userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -25,7 +25,8 @@ export async function POST(
   if (!liveSession) {
     return NextResponse.json({ error: "Session not found" }, { status: 404 });
   }
-  if (liveSession.teacherId !== session.user.id && !session.user.isPlatformAdmin) {
+  // Plan 065 phase 4 — admin status from /api/me/identity (live DB).
+  if (liveSession.teacherId !== identity.userId && !identity.isPlatformAdmin) {
     return NextResponse.json({ error: "Only the teacher can broadcast" }, { status: 403 });
   }
 
@@ -37,7 +38,7 @@ export async function POST(
   }
 
   const event = parsed.data.active ? "broadcast_started" : "broadcast_ended";
-  sessionEventBus.emit(id, event, { teacherId: session.user.id });
+  sessionEventBus.emit(id, event, { teacherId: identity.userId });
 
   return NextResponse.json({ active: parsed.data.active });
 }

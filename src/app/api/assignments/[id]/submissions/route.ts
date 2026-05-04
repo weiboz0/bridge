@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { getIdentity } from "@/lib/identity";
 import { getAssignment } from "@/lib/assignments";
 import { listSubmissionsByAssignment } from "@/lib/submissions";
 import { listClassMembers } from "@/lib/class-memberships";
@@ -9,8 +9,8 @@ export async function GET(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const session = await auth();
-  if (!session?.user?.id) {
+  const identity = await getIdentity();
+  if (!identity?.userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -23,9 +23,10 @@ export async function GET(
   // Only instructors can view all submissions
   const members = await listClassMembers(db, assignment.classId);
   const isInstructor = members.some(
-    (m) => m.userId === session.user.id && (m.role === "instructor" || m.role === "ta")
+    (m) => m.userId === identity.userId && (m.role === "instructor" || m.role === "ta")
   );
-  if (!isInstructor && !session.user.isPlatformAdmin) {
+  // Plan 065 phase 4 — admin status from /api/me/identity (live DB).
+  if (!isInstructor && !identity.isPlatformAdmin) {
     return NextResponse.json({ error: "Only instructors can view submissions" }, { status: 403 });
   }
 

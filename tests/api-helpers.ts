@@ -12,6 +12,12 @@ interface MockUser {
   name: string;
   email: string;
   isPlatformAdmin?: boolean;
+  // Plan 065 phase 4 — when set, simulates "Go middleware applied
+  // the impersonation overlay": getIdentity returns this user's
+  // (target's) data with impersonatedBy = admin's id. Auth.js mock
+  // continues to return the actual MockUser id (which the impersonation
+  // test treats as the admin's id during the impersonating render).
+  impersonatedBy?: string;
 }
 
 let mockUser: MockUser | null = null;
@@ -40,6 +46,33 @@ vi.mock("@/lib/auth", () => ({
   handlers: { GET: vi.fn(), POST: vi.fn() },
   signIn: vi.fn(),
   signOut: vi.fn(),
+}));
+
+// Plan 065 phase 4 — route handlers now read identity via the new
+// helper rather than session.user.isPlatformAdmin. The helper hits
+// /api/me/identity in production; in unit-test env we mock it to
+// return the same MockUser data setMockUser planted.
+vi.mock("@/lib/identity", () => ({
+  getIdentity: vi.fn(async () => {
+    if (!mockUser) return null;
+    return {
+      userId: mockUser.id,
+      email: mockUser.email,
+      name: mockUser.name,
+      isPlatformAdmin: mockUser.isPlatformAdmin || false,
+      impersonatedBy: mockUser.impersonatedBy || "",
+    };
+  }),
+  requireAdmin: vi.fn(async () => {
+    if (!mockUser?.isPlatformAdmin) return null;
+    return {
+      userId: mockUser.id,
+      email: mockUser.email,
+      name: mockUser.name,
+      isPlatformAdmin: true,
+      impersonatedBy: "",
+    };
+  }),
 }));
 
 // Mock the db module to use the test database

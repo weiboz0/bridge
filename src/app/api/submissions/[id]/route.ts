@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { getIdentity } from "@/lib/identity";
 import { getSubmission, gradeSubmission } from "@/lib/submissions";
 import { getAssignment } from "@/lib/assignments";
 import { listClassMembers } from "@/lib/class-memberships";
@@ -15,8 +15,8 @@ export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const session = await auth();
-  if (!session?.user?.id) {
+  const identity = await getIdentity();
+  if (!identity?.userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -34,9 +34,10 @@ export async function PATCH(
 
   const members = await listClassMembers(db, assignment.classId);
   const isInstructor = members.some(
-    (m) => m.userId === session.user.id && (m.role === "instructor" || m.role === "ta")
+    (m) => m.userId === identity.userId && (m.role === "instructor" || m.role === "ta")
   );
-  if (!isInstructor && !session.user.isPlatformAdmin) {
+  // Plan 065 phase 4 — admin status from /api/me/identity (live DB).
+  if (!isInstructor && !identity.isPlatformAdmin) {
     return NextResponse.json({ error: "Only instructors can grade" }, { status: 403 });
   }
 
