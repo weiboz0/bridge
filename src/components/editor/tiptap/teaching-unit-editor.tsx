@@ -13,6 +13,7 @@ import { EditorToolbar } from "./editor-toolbar"
 import { BlockHandle } from "./block-handle"
 import { ContextMenu } from "./context-menu"
 import { useYjsTiptap } from "@/lib/yjs/use-yjs-tiptap"
+import { RealtimeConfigBanner } from "@/components/realtime/realtime-config-banner"
 import { uploadFile } from "./media-embed-node"
 import { HelpOverlay, shouldShowHelp } from "./help-overlay"
 import { TableToolbar } from "./table-toolbar"
@@ -537,7 +538,7 @@ function TeachingUnitEditor({ initialDoc, onSave, onDirty, unitId, collaborative
   // Collaborative mode: set up Yjs binding when `collaborative` is provided.
   // The hook is always called (Rules of Hooks) but does nothing when
   // `unitId` or `userId` are empty strings.
-  const { extensions: yjsExtensions, connected } = useYjsTiptap({
+  const { extensions: yjsExtensions, connected, realtimeUnavailable } = useYjsTiptap({
     unitId: collaborative?.unitId ?? "",
     userId: collaborative?.userId ?? "",
     userName: collaborative?.userName ?? "",
@@ -797,6 +798,8 @@ function TeachingUnitEditor({ initialDoc, onSave, onDirty, unitId, collaborative
   }
 
   return (
+    <>
+      <RealtimeConfigBanner unavailable={realtimeUnavailable} />
     <div className="flex gap-4">
     <div className="min-w-0 flex-1 space-y-0">
       {/* Help overlay (first visit + re-openable) */}
@@ -861,6 +864,7 @@ function TeachingUnitEditor({ initialDoc, onSave, onDirty, unitId, collaborative
     {/* Sticky TOC sidebar (Gap 4) — only visible on xl+ screens */}
     {editor && !presentationMode && <TocSidebar editor={editor} />}
     </div>
+    </>
   )
 })
 TeachingUnitEditor.displayName = "TeachingUnitEditor"

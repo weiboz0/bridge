@@ -47,6 +47,13 @@ export interface UseYjsTiptapReturn {
   /** Tiptap extensions to spread into the editor's `extensions` array. */
   extensions: AnyExtension[];
   connected: boolean;
+  /**
+   * Plan 068 phase 4 — true when the realtime token mint failed with HTTP 503
+   * (HOCUSPOCUS_TOKEN_SECRET unset on the Go API). Consuming components
+   * should render the RealtimeConfigBanner instead of letting the editor
+   * silently fail to connect.
+   */
+  realtimeUnavailable: boolean;
   destroy: () => void;
 }
 
@@ -79,8 +86,11 @@ export function useYjsTiptap({
   // constructing the legacy `${userId}:teacher` string. The hook
   // returns "" while the mint is in flight; useEffect re-runs once
   // the token resolves.
+  // Plan 068 phase 4 — `unavailable` is forwarded to the caller so
+  // the consuming component (e.g., teaching-unit-editor) can render
+  // the realtime-config banner at page level.
   const documentName = unitId && unitId !== "noop" ? `unit:${unitId}` : "noop";
-  const realtimeToken = useRealtimeToken(documentName);
+  const { token: realtimeToken, unavailable: realtimeUnavailable } = useRealtimeToken(documentName);
 
   const shouldConnect =
     Boolean(unitId) &&
@@ -164,6 +174,7 @@ export function useYjsTiptap({
     ydoc,
     extensions,
     connected,
+    realtimeUnavailable,
     destroy: () => {
       providerRef.current?.destroy();
       ydocRef.current?.destroy();

@@ -7,6 +7,7 @@ import { useSession } from "next-auth/react";
 import { usePanelLayout } from "@/lib/hooks/use-panel-layout";
 import { useYjsProvider } from "@/lib/yjs/use-yjs-provider";
 import { useRealtimeToken } from "@/lib/realtime/use-realtime-token";
+import { RealtimeConfigBanner } from "@/components/realtime/realtime-config-banner";
 import { TeacherHeader } from "./teacher-header";
 import { StudentListPanel } from "./student-list-panel";
 import { ModeToolbar, type DashboardMode } from "./mode-toolbar";
@@ -141,7 +142,20 @@ export function TeacherDashboard({
   // Plan 053 phase 3 — mint a JWT for the selected student's doc.
   // The cache in `getRealtimeToken` keeps this to one mint per
   // (doc, tab); switching students re-fetches.
-  const realtimeToken = useRealtimeToken(selectedDocName);
+  const { token: realtimeToken, unavailable: selectedUnavailable } = useRealtimeToken(selectedDocName);
+
+  // Plan 068 phase 4 — sentinel probe. Codex pass-1 caught that
+  // selectedDocName is "noop" until a teacher clicks a student tile,
+  // which means the realtime banner would never fire on the initial
+  // dashboard load even if HOCUSPOCUS_TOKEN_SECRET is unset. The
+  // 503 path in realtime_token.go fires BEFORE any document-level
+  // checks, so any non-noop doc-name reveals the misconfiguration.
+  // Probe the teacher's own session doc — always real, always
+  // mountable, doubles as a cache pre-warm for if the teacher later
+  // wants to view their own typing.
+  const sentinelDocName = userId ? `session:${sessionId}:user:${userId}` : "noop";
+  const { unavailable: sentinelUnavailable } = useRealtimeToken(sentinelDocName);
+  const realtimeUnavailable = selectedUnavailable || sentinelUnavailable;
   const { yText, provider, connected } = useYjsProvider({
     documentName: selectedDocName,
     token: realtimeToken,
@@ -388,6 +402,8 @@ export function TeacherDashboard({
   }
 
   return (
+    <>
+      <RealtimeConfigBanner unavailable={realtimeUnavailable} />
     <div className="flex h-screen flex-col" data-testid="teacher-dashboard">
       <TeacherHeader
         sessionId={sessionId}
@@ -459,5 +475,6 @@ export function TeacherDashboard({
         )}
       </div>
     </div>
+    </>
   );
 }

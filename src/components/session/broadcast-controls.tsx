@@ -17,7 +17,10 @@ export function BroadcastControls({ sessionId }: BroadcastControlsProps) {
   // Plan 053 phase 3 — JWT minted per-doc; helper returns "" until
   // the mint resolves. useYjsProvider's shouldConnect guard handles
   // empty-token by skipping the WS open.
-  const realtimeToken = useRealtimeToken(documentName);
+  // Plan 068 phase 4 — banner lives on teacher-dashboard parent page,
+  // not per-control (BroadcastControls is part of the dashboard
+  // toolbar). Destructure { token } only.
+  const { token: realtimeToken } = useRealtimeToken(documentName);
   const { yText, provider, connected } = useYjsProvider({
     documentName,
     token: realtimeToken,

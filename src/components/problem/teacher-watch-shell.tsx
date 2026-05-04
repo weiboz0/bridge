@@ -13,6 +13,7 @@ import { AttemptCardsRow } from "@/components/problem/attempt-cards-row";
 import { CodeEditor } from "@/components/editor/code-editor";
 import { useYjsProvider } from "@/lib/yjs/use-yjs-provider";
 import { useRealtimeToken } from "@/lib/realtime/use-realtime-token";
+import { RealtimeConfigBanner } from "@/components/realtime/realtime-config-banner";
 import {
   TestResultsCard,
   type TestRunSummary,
@@ -59,7 +60,7 @@ export function TeacherWatchShell({
   const documentName = teacherId && activeAttemptId
     ? `attempt:${activeAttemptId}`
     : "noop";
-  const realtimeToken = useRealtimeToken(documentName);
+  const { token: realtimeToken, unavailable: realtimeUnavailable } = useRealtimeToken(documentName);
   const { yText, provider, connected } = useYjsProvider({
     documentName,
     token: realtimeToken,
@@ -114,6 +115,8 @@ export function TeacherWatchShell({
   }, [testCases]);
 
   return (
+    <>
+      <RealtimeConfigBanner unavailable={realtimeUnavailable} />
     <div className="flex h-[calc(100vh-var(--portal-header-height,56px))] overflow-hidden">
       {/* LEFT — brief problem + watching card */}
       <aside className="flex w-[26%] min-w-[300px] flex-col border-r border-zinc-200 bg-white">
@@ -236,6 +239,7 @@ export function TeacherWatchShell({
         </div>
       </aside>
     </div>
+    </>
   );
 }
 
