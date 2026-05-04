@@ -4,6 +4,7 @@ import remarkGfm from "remark-gfm";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ProblemActions } from "./problem-actions";
+import { TestCasesCard } from "./test-cases-card";
 
 // Plan 066 phase 2 — read-only detail page for a single problem in
 // the teacher's bank. Server component (fetches via api()), passes
@@ -74,11 +75,10 @@ interface Props {
 }
 
 export function TeacherProblemDetail({ problem, testCases, canAuthor }: Props) {
-  // Split canonical (problem-owned) cases from user-owned. The detail
-  // page focuses on canonical cases — those are the authored content.
+  // Filter to canonical (problem-owned) cases — the authored content
+  // shown on this page. User-private cases live in the student "My
+  // cases" surface and are intentionally hidden here.
   const canonicalCases = testCases.filter((c) => c.ownerId === null);
-  const exampleCases = canonicalCases.filter((c) => c.isExample);
-  const hiddenCases = canonicalCases.filter((c) => !c.isExample);
 
   const starterLanguages = Object.keys(problem.starterCode || {});
 
@@ -170,46 +170,11 @@ export function TeacherProblemDetail({ problem, testCases, canAuthor }: Props) {
       </Card>
 
       {/* Test cases */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
-            Test Cases ({canonicalCases.length})
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          {canonicalCases.length === 0 ? (
-            <p className="text-sm text-muted-foreground italic">
-              No test cases yet. Phase 4 of plan 066 adds the inline editor.
-            </p>
-          ) : (
-            <div className="space-y-3">
-              {exampleCases.map((c, i) => (
-                <TestCaseRow key={c.id} testCase={c} index={i} />
-              ))}
-              {hiddenCases.length > 0 && (
-                <div className="pt-2 border-t border-zinc-200">
-                  <p className="text-xs font-mono uppercase tracking-wider text-zinc-500 mb-2">
-                    Hidden cases ({hiddenCases.length})
-                  </p>
-                  {canAuthor ? (
-                    <div className="space-y-3">
-                      {hiddenCases.map((c, i) => (
-                        <TestCaseRow key={c.id} testCase={c} index={i} hidden />
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="text-xs text-muted-foreground">
-                      {hiddenCases.length} hidden case
-                      {hiddenCases.length === 1 ? "" : "s"} run during Test
-                      execution but aren&apos;t visible to non-authors.
-                    </p>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
-        </CardContent>
-      </Card>
+      <TestCasesCard
+        problemId={problem.id}
+        canonicalCases={canonicalCases}
+        canAuthor={canAuthor}
+      />
 
       {/* Metadata footer */}
       <div className="text-xs text-muted-foreground">
@@ -232,44 +197,3 @@ export function TeacherProblemDetail({ problem, testCases, canAuthor }: Props) {
   );
 }
 
-function TestCaseRow({
-  testCase,
-  index,
-  hidden,
-}: {
-  testCase: TestCaseData;
-  index: number;
-  hidden?: boolean;
-}) {
-  const label = testCase.name || `${hidden ? "Hidden" : "Example"} ${index + 1}`;
-  return (
-    <div className="overflow-hidden rounded-lg border border-zinc-200">
-      <div className="flex items-center justify-between border-b border-zinc-200 bg-zinc-50/70 px-2.5 py-1">
-        <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-600">
-          {label}
-        </span>
-        <Badge className={hidden ? "bg-zinc-100 text-zinc-700 border-zinc-200" : "bg-emerald-50 text-emerald-700 border-emerald-200"}>
-          {hidden ? "Hidden" : "Example"}
-        </Badge>
-      </div>
-      <div className="grid grid-cols-2 divide-x divide-zinc-200">
-        <div className="p-2.5">
-          <p className="mb-1 font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-400">
-            Input
-          </p>
-          <pre className="whitespace-pre-wrap font-mono text-[12px] leading-[1.55] text-zinc-800">
-            {testCase.stdin || <span className="text-zinc-400">(empty)</span>}
-          </pre>
-        </div>
-        <div className="p-2.5">
-          <p className="mb-1 font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-400">
-            Expected Output
-          </p>
-          <pre className="whitespace-pre-wrap font-mono text-[12px] leading-[1.55] text-zinc-800">
-            {testCase.expectedStdout ?? <span className="text-zinc-400">(any)</span>}
-          </pre>
-        </div>
-      </div>
-    </div>
-  );
-}
