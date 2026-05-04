@@ -59,6 +59,19 @@ func main() {
 	defer database.Close()
 	slog.Info("Database connected", "url", maskURL(cfg.Database.URL))
 
+	// Plan 068 phase 3 — refuse to start if the latest schema-affecting
+	// migration hasn't been applied. Bridge applies 0003+ via psql -f
+	// (TODO.md:10) so Drizzle's tracking table is incomplete; this
+	// probe checks the actual end-state schema instead. Browser review
+	// 010 §P0 #2 caught a tunneled review env serving the parent
+	// dashboard against a DB missing parent_links — the page hard-
+	// crashed at first request. This guard turns that runtime crash
+	// into a startup refusal with a clear remediation message.
+	if err := db.CheckSchemaProbe(context.Background(), database); err != nil {
+		slog.Error("Schema probe failed", "error", err.Error())
+		os.Exit(1)
+	}
+
 	// Build stores BEFORE auth middleware so the AdminChecker
 	// (plan 065 phase 1) can be wired into the middleware at
 	// construction time. The pre-065 order (middleware before
