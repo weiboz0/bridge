@@ -48,6 +48,64 @@ func TestValidateDevAuthEnv(t *testing.T) {
 			expectError: true,
 			errSubstr:   "DEV_SKIP_AUTH",
 		},
+		// Plan 068 phase 1 — BRIDGE_HOST_EXPOSURE guard for tunneled hosts.
+		{
+			name: "DEV_SKIP_AUTH set + BRIDGE_HOST_EXPOSURE unset → no error (default localhost)",
+			env: map[string]string{
+				"DEV_SKIP_AUTH": "admin",
+			},
+		},
+		{
+			name: "DEV_SKIP_AUTH set + BRIDGE_HOST_EXPOSURE=localhost → no error (explicit localhost)",
+			env: map[string]string{
+				"DEV_SKIP_AUTH":         "admin",
+				"BRIDGE_HOST_EXPOSURE":  "localhost",
+			},
+		},
+		{
+			name: "DEV_SKIP_AUTH set + BRIDGE_HOST_EXPOSURE=exposed → ERROR",
+			env: map[string]string{
+				"DEV_SKIP_AUTH":         "admin",
+				"BRIDGE_HOST_EXPOSURE":  "exposed",
+			},
+			expectError: true,
+			errSubstr:   "BRIDGE_HOST_EXPOSURE=exposed",
+		},
+		{
+			name: "DEV_SKIP_AUTH set + BRIDGE_HOST_EXPOSURE=exposed + ALLOW_DEV_AUTH_OVER_TUNNEL=true → no error (escape hatch)",
+			env: map[string]string{
+				"DEV_SKIP_AUTH":              "admin",
+				"BRIDGE_HOST_EXPOSURE":       "exposed",
+				"ALLOW_DEV_AUTH_OVER_TUNNEL": "true",
+			},
+		},
+		{
+			name: "DEV_SKIP_AUTH unset + BRIDGE_HOST_EXPOSURE=exposed → no error (no bypass to guard)",
+			env: map[string]string{
+				"BRIDGE_HOST_EXPOSURE": "exposed",
+			},
+		},
+		{
+			name: "DEV_SKIP_AUTH set + BRIDGE_HOST_EXPOSURE=exposed + ALLOW_DEV_AUTH_OVER_TUNNEL=anything-else → ERROR (only 'true' opens the hatch)",
+			env: map[string]string{
+				"DEV_SKIP_AUTH":              "admin",
+				"BRIDGE_HOST_EXPOSURE":       "exposed",
+				"ALLOW_DEV_AUTH_OVER_TUNNEL": "yes",
+			},
+			expectError: true,
+			errSubstr:   "BRIDGE_HOST_EXPOSURE=exposed",
+		},
+		{
+			name: "APP_ENV=production guard wins over BRIDGE_HOST_EXPOSURE escape hatch",
+			env: map[string]string{
+				"DEV_SKIP_AUTH":              "admin",
+				"APP_ENV":                    "production",
+				"BRIDGE_HOST_EXPOSURE":       "exposed",
+				"ALLOW_DEV_AUTH_OVER_TUNNEL": "true",
+			},
+			expectError: true,
+			errSubstr:   "APP_ENV=production",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

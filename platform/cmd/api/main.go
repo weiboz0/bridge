@@ -443,6 +443,19 @@ func validateBridgeSessionEnv(cfg *config.Config) error {
 // every request becomes admin. Absence-of-APP_ENV is treated as "not
 // production" (safe default for dev).
 //
+// Plan 068 phase 1 — additional layer of defense for tunneled /
+// non-localhost dev environments. Browser review 010 §P0 #1 caught a
+// tunneled review server running with DEV_SKIP_AUTH=admin and
+// APP_ENV=development; the prod-only guard didn't fire because APP_ENV
+// wasn't "production". Bridge now ALSO refuses to start when
+// DEV_SKIP_AUTH is set AND the operator has declared the host as
+// "exposed" via BRIDGE_HOST_EXPOSURE=exposed. The escape hatch
+// ALLOW_DEV_AUTH_OVER_TUNNEL=true is for the rare case the operator
+// explicitly wants the bypass on a tunneled host (e.g., a private
+// demo machine). Defaulting BRIDGE_HOST_EXPOSURE to "localhost" keeps
+// local dev friction-free; ops discipline (set "exposed" on shared
+// servers) is the gate.
+//
 // Extracted as a function (taking a getEnv closure) so the guard is
 // unit-testable without invoking os.Exit.
 func validateDevAuthEnv(getEnv func(string) string) error {
@@ -455,6 +468,17 @@ func validateDevAuthEnv(getEnv func(string) string) error {
 			"refusing to start: DEV_SKIP_AUTH=%q is set with APP_ENV=production. Unset DEV_SKIP_AUTH or set APP_ENV != production",
 			devSkipAuth,
 		)
+	}
+	if exposure := getEnv("BRIDGE_HOST_EXPOSURE"); exposure == "exposed" {
+		if escape := getEnv("ALLOW_DEV_AUTH_OVER_TUNNEL"); escape != "true" {
+			return fmt.Errorf(
+				"refusing to start: DEV_SKIP_AUTH=%q is set with BRIDGE_HOST_EXPOSURE=exposed. Either unset DEV_SKIP_AUTH (recommended), set BRIDGE_HOST_EXPOSURE=localhost (only when bound to loopback), or set ALLOW_DEV_AUTH_OVER_TUNNEL=true (deliberate escape hatch — use sparingly)",
+				devSkipAuth,
+			)
+		}
+		slog.Warn("DEV_SKIP_AUTH is active on an EXPOSED host. ALLOW_DEV_AUTH_OVER_TUNNEL escape hatch is engaged. Identity bypass is reachable from any client that can connect to this server.",
+			"DEV_SKIP_AUTH", devSkipAuth)
+		return nil
 	}
 	slog.Warn("DEV_SKIP_AUTH is active — all requests bypass authentication. NEVER use in production.",
 		"DEV_SKIP_AUTH", devSkipAuth)

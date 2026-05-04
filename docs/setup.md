@@ -129,6 +129,34 @@ Go API uses it to gate the `DEV_SKIP_AUTH` safety check:
 - Absence of `APP_ENV` is treated as "not production" (safe default
   for dev). Set `APP_ENV=production` in production deployments.
 
+## Host Exposure Declaration (plan 068)
+
+The `APP_ENV=production` guard above only catches a leak into the
+production environment classification. Browser review 010 §P0 #1 caught
+a tunneled review server running with `DEV_SKIP_AUTH=admin` and
+`APP_ENV=development` — the prod-only guard didn't fire because the
+host wasn't classified as production, even though the server was
+reachable from another machine and the dev-bypass identity was
+leaking into authenticated requests from real users.
+
+`BRIDGE_HOST_EXPOSURE` is the second layer of defense. Set it on every
+Go API deployment:
+
+- `localhost` (default) — server is bound to loopback / only reachable
+  from the local machine. `DEV_SKIP_AUTH` is allowed.
+- `exposed` — server is reachable from outside the local machine
+  (tunneled via SSH, on a LAN, behind a public ingress, etc.). If
+  `DEV_SKIP_AUTH` is also set, the server refuses to start.
+
+The simplest test: if `curl http://<server-host>:8002/healthz` works
+from any other machine, the host is `exposed`.
+
+For the rare case you genuinely want `DEV_SKIP_AUTH` active on a
+tunneled host (e.g., a private demo machine where you've fully
+internalized the trade-off), set `ALLOW_DEV_AUTH_OVER_TUNNEL=true` to
+open the escape hatch. The startup logs a loud warning when this is
+engaged. Any value other than the literal `true` is treated as unset.
+
 ## Hocuspocus Token Secret (plan 053)
 
 The Go API mints short-lived HMAC-SHA256 JWTs that the browser presents to the
