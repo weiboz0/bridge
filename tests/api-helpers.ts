@@ -12,6 +12,12 @@ interface MockUser {
   name: string;
   email: string;
   isPlatformAdmin?: boolean;
+  // Plan 065 phase 4 — when set, simulates "Go middleware applied
+  // the impersonation overlay": getIdentity returns this user's
+  // (target's) data with impersonatedBy = admin's id. Auth.js mock
+  // continues to return the actual MockUser id (which the impersonation
+  // test treats as the admin's id during the impersonating render).
+  impersonatedBy?: string;
 }
 
 let mockUser: MockUser | null = null;
@@ -54,7 +60,7 @@ vi.mock("@/lib/identity", () => ({
       email: mockUser.email,
       name: mockUser.name,
       isPlatformAdmin: mockUser.isPlatformAdmin || false,
-      impersonatedBy: "",
+      impersonatedBy: mockUser.impersonatedBy || "",
     };
   }),
   requireAdmin: vi.fn(async () => {
