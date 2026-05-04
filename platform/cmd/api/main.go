@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -469,8 +470,15 @@ func validateDevAuthEnv(getEnv func(string) string) error {
 			devSkipAuth,
 		)
 	}
-	if exposure := getEnv("BRIDGE_HOST_EXPOSURE"); exposure == "exposed" {
-		if escape := getEnv("ALLOW_DEV_AUTH_OVER_TUNNEL"); escape != "true" {
+	exposure := strings.ToLower(strings.TrimSpace(getEnv("BRIDGE_HOST_EXPOSURE")))
+	switch exposure {
+	case "", "localhost":
+		// Default / explicit localhost — guard does not fire; fall through
+		// to the generic dev-bypass warning below.
+	case "exposed":
+		// Tunneled / shared host. Refuse unless escape hatch is engaged.
+		escape := strings.ToLower(strings.TrimSpace(getEnv("ALLOW_DEV_AUTH_OVER_TUNNEL")))
+		if escape != "true" {
 			return fmt.Errorf(
 				"refusing to start: DEV_SKIP_AUTH=%q is set with BRIDGE_HOST_EXPOSURE=exposed. Either unset DEV_SKIP_AUTH (recommended), set BRIDGE_HOST_EXPOSURE=localhost (only when bound to loopback), or set ALLOW_DEV_AUTH_OVER_TUNNEL=true (deliberate escape hatch — use sparingly)",
 				devSkipAuth,
@@ -479,7 +487,18 @@ func validateDevAuthEnv(getEnv func(string) string) error {
 		slog.Warn("DEV_SKIP_AUTH is active on an EXPOSED host. ALLOW_DEV_AUTH_OVER_TUNNEL escape hatch is engaged. Identity bypass is reachable from any client that can connect to this server.",
 			"DEV_SKIP_AUTH", devSkipAuth)
 		return nil
+	default:
+		// Unknown value (typo, e.g., "EXPOSED" with stray prefix, or
+		// an entirely different word). Refuse rather than silently
+		// fall through to the generic warning — the operator clearly
+		// intended SOMETHING and we don't want a typo to defang the
+		// guard. (Codex pass-1 of phase-1 caught the silent-bypass risk.)
+		return fmt.Errorf(
+			"refusing to start: DEV_SKIP_AUTH=%q is set with BRIDGE_HOST_EXPOSURE=%q (unrecognized). Allowed values are 'localhost' (default) and 'exposed'",
+			devSkipAuth, exposure,
+		)
 	}
+
 	slog.Warn("DEV_SKIP_AUTH is active — all requests bypass authentication. NEVER use in production.",
 		"DEV_SKIP_AUTH", devSkipAuth)
 	return nil

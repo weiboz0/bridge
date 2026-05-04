@@ -155,7 +155,16 @@ For the rare case you genuinely want `DEV_SKIP_AUTH` active on a
 tunneled host (e.g., a private demo machine where you've fully
 internalized the trade-off), set `ALLOW_DEV_AUTH_OVER_TUNNEL=true` to
 open the escape hatch. The startup logs a loud warning when this is
-engaged. Any value other than the literal `true` is treated as unset.
+engaged. Both env var values are case-insensitive and trimmed —
+`localhost`, `Localhost`, and `LOCALHOST` all work the same way; same
+for `exposed` / `Exposed` / `EXPOSED`. The escape hatch opens on
+literal `true`/`TRUE` only; `1`, `yes`, or any other truthy-looking
+value is treated as unset.
+
+**Unrecognized exposure values fail loud** rather than silently
+falling through. `BRIDGE_HOST_EXPOSURE=public` (or any other unknown
+string) refuses startup with a clear "unrecognized" error so a typo
+can't accidentally defang the guard.
 
 ## Hocuspocus Token Secret (plan 053)
 

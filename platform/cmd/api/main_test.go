@@ -106,6 +106,68 @@ func TestValidateDevAuthEnv(t *testing.T) {
 			expectError: true,
 			errSubstr:   "APP_ENV=production",
 		},
+		// Plan 068 phase 1 — typo tolerance (Codex post-impl pass-1).
+		{
+			name: "BRIDGE_HOST_EXPOSURE=EXPOSED (uppercase) → still triggers ERROR (case-insensitive normalization)",
+			env: map[string]string{
+				"DEV_SKIP_AUTH":        "admin",
+				"BRIDGE_HOST_EXPOSURE": "EXPOSED",
+			},
+			expectError: true,
+			errSubstr:   "BRIDGE_HOST_EXPOSURE=exposed",
+		},
+		{
+			name: "BRIDGE_HOST_EXPOSURE=' exposed ' (whitespace) → still triggers ERROR (trim + normalize)",
+			env: map[string]string{
+				"DEV_SKIP_AUTH":        "admin",
+				"BRIDGE_HOST_EXPOSURE": "  exposed  ",
+			},
+			expectError: true,
+			errSubstr:   "BRIDGE_HOST_EXPOSURE=exposed",
+		},
+		{
+			name: "BRIDGE_HOST_EXPOSURE=Localhost (mixed case) → no error (normalizes to localhost)",
+			env: map[string]string{
+				"DEV_SKIP_AUTH":        "admin",
+				"BRIDGE_HOST_EXPOSURE": "Localhost",
+			},
+		},
+		{
+			name: "BRIDGE_HOST_EXPOSURE=public (unknown value) → ERROR rather than silent pass-through",
+			env: map[string]string{
+				"DEV_SKIP_AUTH":        "admin",
+				"BRIDGE_HOST_EXPOSURE": "public",
+			},
+			expectError: true,
+			errSubstr:   "unrecognized",
+		},
+		{
+			name: "BRIDGE_HOST_EXPOSURE=tunneled (typo for 'exposed') → ERROR (typo doesn't silently bypass)",
+			env: map[string]string{
+				"DEV_SKIP_AUTH":        "admin",
+				"BRIDGE_HOST_EXPOSURE": "tunneled",
+			},
+			expectError: true,
+			errSubstr:   "unrecognized",
+		},
+		{
+			name: "ALLOW_DEV_AUTH_OVER_TUNNEL=TRUE (uppercase) → opens hatch (case-insensitive)",
+			env: map[string]string{
+				"DEV_SKIP_AUTH":              "admin",
+				"BRIDGE_HOST_EXPOSURE":       "exposed",
+				"ALLOW_DEV_AUTH_OVER_TUNNEL": "TRUE",
+			},
+		},
+		{
+			name: "ALLOW_DEV_AUTH_OVER_TUNNEL='1' → does NOT open hatch (only literal 'true' / 'TRUE' allowed)",
+			env: map[string]string{
+				"DEV_SKIP_AUTH":              "admin",
+				"BRIDGE_HOST_EXPOSURE":       "exposed",
+				"ALLOW_DEV_AUTH_OVER_TUNNEL": "1",
+			},
+			expectError: true,
+			errSubstr:   "BRIDGE_HOST_EXPOSURE=exposed",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
