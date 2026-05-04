@@ -137,6 +137,12 @@ Specific questions:
 - Codex post-impl review.
 - PR + merge.
 
+## Code Review
+
+### Phase 1+2 post-impl — 2026-05-04: CONCUR (no findings)
+
+Codex post-impl review of both phases on `feat/071-problem-bank-backend-error-shaping` (commits d35f014 + bb32f63). Verdict: **CONCUR** with no blockers, nits, or follow-ups. Sentinel wrapping correct, partial-index constraint name surfaces through both driver shapes, `writeFieldError` body shape additive without breaking existing 4xx consumers, empty-stdin gate placement correct (canonical-auth runs before `decodeJSON` in `CreateTestCase`), `UpdateTestCase` gate matches the store's nil-vs-empty contract.
+
 ## Codex Review of This Plan
 
 ### Pass 1 — 2026-05-04: CONCUR-WITH-CHANGES → 5 items folded in
