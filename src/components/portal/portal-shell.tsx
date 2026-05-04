@@ -52,7 +52,6 @@ export async function PortalShell({ portalRole, children }: PortalShellProps) {
   return (
     <div className="flex min-h-screen">
       <Sidebar
-        navItems={config.navItems}
         userName={data.userName || "User"}
         roles={data.roles}
         currentRole={portalRole}
