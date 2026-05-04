@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { api, ApiError } from "@/lib/api-client";
+import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 interface Problem {
@@ -88,13 +89,18 @@ export default async function TeacherProblemsPage({
 
   return (
     <div className="p-6 space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">Problem Bank</h1>
-        <p className="text-sm text-muted-foreground">
-          Problems you can attach to topics. Platform-scope problems are part
-          of the Bridge HQ library; org-scope live within your school; personal
-          problems are your own.
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold">Problem Bank</h1>
+          <p className="text-sm text-muted-foreground">
+            Problems you can attach to focus areas. Platform-scope problems are
+            part of the Bridge HQ library; org-scope live within your school;
+            personal problems are your own.
+          </p>
+        </div>
+        <Link href="/teacher/problems/new" className={buttonVariants()}>
+          + Add problem
+        </Link>
       </div>
 
       <div className="flex items-center gap-4 text-sm">
@@ -133,9 +139,15 @@ export default async function TeacherProblemsPage({
 
       {items.length === 0 ? (
         <Card>
-          <CardContent className="py-8 text-center text-sm text-muted-foreground">
-            No problems match. Try a broader filter, or import the Python 101
-            curriculum from <code>content/python-101/</code>.
+          <CardContent className="py-8 text-center text-sm text-muted-foreground space-y-3">
+            <p>No problems match.</p>
+            <p>
+              <Link href="/teacher/problems/new" className="underline text-primary">
+                Author a new problem
+              </Link>{" "}
+              or import the Python 101 curriculum from{" "}
+              <code>content/python-101/</code>.
+            </p>
           </CardContent>
         </Card>
       ) : (
@@ -154,8 +166,15 @@ export default async function TeacherProblemsPage({
             </thead>
             <tbody>
               {items.map((p) => (
-                <tr key={p.id} className="border-t">
-                  <td className="px-4 py-2 font-medium">{p.title}</td>
+                <tr key={p.id} className="border-t hover:bg-muted/30 transition-colors">
+                  <td className="px-4 py-2 font-medium">
+                    <Link
+                      href={`/teacher/problems/${p.id}`}
+                      className="text-primary hover:underline"
+                    >
+                      {p.title}
+                    </Link>
+                  </td>
                   <td className="px-4 py-2 text-xs text-muted-foreground font-mono">
                     {p.slug ?? "—"}
                   </td>
