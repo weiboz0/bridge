@@ -88,11 +88,20 @@ func SignBridgeSession(primarySecret string, sub, email, name string, isPlatform
 // trying each secret in `secrets` in order. The first secret that
 // produces a valid signature wins; this is the rotation primitive.
 //
+// Empty token strings are rejected with an explicit error so
+// callers (e.g., Phase 3 middleware) can distinguish "cookie was
+// present but had an empty value" — which must 401 — from
+// "cookie absent" — which the middleware handles before calling
+// here.
+//
 // Caller must additionally reject claims with an unexpected
 // `Sub` shape, but that's a domain concern outside JWT verification.
 func VerifyBridgeSession(secrets []string, tokenString string) (*BridgeSessionClaims, error) {
 	if len(secrets) == 0 {
 		return nil, errors.New("auth.VerifyBridgeSession: no secrets configured")
+	}
+	if tokenString == "" {
+		return nil, errors.New("auth.VerifyBridgeSession: empty token")
 	}
 
 	var lastErr error
