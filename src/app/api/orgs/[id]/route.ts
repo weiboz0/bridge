@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { auth } from "@/lib/auth";
+import { getIdentity } from "@/lib/identity";
 import { db } from "@/lib/db";
 import { organizations } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
@@ -11,8 +11,8 @@ export async function GET(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const session = await auth();
-  if (!session?.user?.id) {
+  const identity = await getIdentity();
+  if (!identity?.userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -23,9 +23,10 @@ export async function GET(
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
+  // Plan 065 phase 4 — admin status from /api/me/identity (live DB).
   // Check user has membership in this org (or is platform admin)
-  if (!session.user.isPlatformAdmin) {
-    const roles = await getUserRoleInOrg(db, id, session.user.id);
+  if (!identity.isPlatformAdmin) {
+    const roles = await getUserRoleInOrg(db, id, identity.userId);
     if (roles.length === 0) {
       return NextResponse.json({ error: "Not a member" }, { status: 403 });
     }
@@ -45,16 +46,16 @@ export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const session = await auth();
-  if (!session?.user?.id) {
+  const identity = await getIdentity();
+  if (!identity?.userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const { id } = await params;
 
-  // Only org_admin or platform admin can update
-  if (!session.user.isPlatformAdmin) {
-    const roles = await getUserRoleInOrg(db, id, session.user.id);
+  // Only org_admin or live platform admin can update
+  if (!identity.isPlatformAdmin) {
+    const roles = await getUserRoleInOrg(db, id, identity.userId);
     const isOrgAdmin = roles.some((r) => r.role === "org_admin");
     if (!isOrgAdmin) {
       return NextResponse.json({ error: "Only org admins can update" }, { status: 403 });

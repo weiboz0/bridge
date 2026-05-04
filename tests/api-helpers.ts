@@ -42,6 +42,33 @@ vi.mock("@/lib/auth", () => ({
   signOut: vi.fn(),
 }));
 
+// Plan 065 phase 4 — route handlers now read identity via the new
+// helper rather than session.user.isPlatformAdmin. The helper hits
+// /api/me/identity in production; in unit-test env we mock it to
+// return the same MockUser data setMockUser planted.
+vi.mock("@/lib/identity", () => ({
+  getIdentity: vi.fn(async () => {
+    if (!mockUser) return null;
+    return {
+      userId: mockUser.id,
+      email: mockUser.email,
+      name: mockUser.name,
+      isPlatformAdmin: mockUser.isPlatformAdmin || false,
+      impersonatedBy: "",
+    };
+  }),
+  requireAdmin: vi.fn(async () => {
+    if (!mockUser?.isPlatformAdmin) return null;
+    return {
+      userId: mockUser.id,
+      email: mockUser.email,
+      name: mockUser.name,
+      isPlatformAdmin: true,
+      impersonatedBy: "",
+    };
+  }),
+}));
+
 // Mock the db module to use the test database
 vi.mock("@/lib/db", async () => {
   const { drizzle } = await import("drizzle-orm/postgres-js");

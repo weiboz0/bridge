@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { auth } from "@/lib/auth";
+import { getIdentity } from "@/lib/identity";
 import { db } from "@/lib/db";
 import { getUserRoleInOrg, getOrgMembership, updateMemberStatus, removeOrgMember } from "@/lib/org-memberships";
 
@@ -7,16 +7,17 @@ export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string; memberId: string }> }
 ) {
-  const session = await auth();
-  if (!session?.user?.id) {
+  const identity = await getIdentity();
+  if (!identity?.userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const { id: orgId, memberId } = await params;
 
-  const callerRoles = await getUserRoleInOrg(db, orgId, session.user.id);
+  // Plan 065 phase 4 — admin status from /api/me/identity (live DB).
+  const callerRoles = await getUserRoleInOrg(db, orgId, identity.userId);
   const isOrgAdmin = callerRoles.some((r) => r.role === "org_admin");
-  if (!isOrgAdmin && !session.user.isPlatformAdmin) {
+  if (!isOrgAdmin && !identity.isPlatformAdmin) {
     return NextResponse.json({ error: "Only org admins can update members" }, { status: 403 });
   }
 
@@ -41,16 +42,17 @@ export async function DELETE(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string; memberId: string }> }
 ) {
-  const session = await auth();
-  if (!session?.user?.id) {
+  const identity = await getIdentity();
+  if (!identity?.userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const { id: orgId, memberId } = await params;
 
-  const callerRoles = await getUserRoleInOrg(db, orgId, session.user.id);
+  // Plan 065 phase 4 — admin status from /api/me/identity (live DB).
+  const callerRoles = await getUserRoleInOrg(db, orgId, identity.userId);
   const isOrgAdmin = callerRoles.some((r) => r.role === "org_admin");
-  if (!isOrgAdmin && !session.user.isPlatformAdmin) {
+  if (!isOrgAdmin && !identity.isPlatformAdmin) {
     return NextResponse.json({ error: "Only org admins can remove members" }, { status: 403 });
   }
 

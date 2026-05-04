@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { getIdentity } from "@/lib/identity";
 import { getCourse } from "@/lib/courses";
 import { getTopic, updateTopic, deleteTopic } from "@/lib/topics";
 
@@ -23,14 +23,15 @@ export async function GET(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string; topicId: string }> }
 ) {
-  const session = await auth();
-  if (!session?.user?.id) {
+  const identity = await getIdentity();
+  if (!identity?.userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const { id: courseId, topicId } = await params;
 
-  if (!await verifyCourseOwnership(courseId, session.user.id, session.user.isPlatformAdmin)) {
+  // Plan 065 phase 4 — admin status from /api/me/identity (live DB).
+  if (!await verifyCourseOwnership(courseId, identity.userId, identity.isPlatformAdmin)) {
     return NextResponse.json({ error: "Access denied" }, { status: 403 });
   }
 
@@ -46,14 +47,14 @@ export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string; topicId: string }> }
 ) {
-  const session = await auth();
-  if (!session?.user?.id) {
+  const identity = await getIdentity();
+  if (!identity?.userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const { id: courseId, topicId } = await params;
 
-  if (!await verifyCourseOwnership(courseId, session.user.id, session.user.isPlatformAdmin)) {
+  if (!await verifyCourseOwnership(courseId, identity.userId, identity.isPlatformAdmin)) {
     return NextResponse.json({ error: "Access denied" }, { status: 403 });
   }
 
@@ -79,14 +80,14 @@ export async function DELETE(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string; topicId: string }> }
 ) {
-  const session = await auth();
-  if (!session?.user?.id) {
+  const identity = await getIdentity();
+  if (!identity?.userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const { id: courseId, topicId } = await params;
 
-  if (!await verifyCourseOwnership(courseId, session.user.id, session.user.isPlatformAdmin)) {
+  if (!await verifyCourseOwnership(courseId, identity.userId, identity.isPlatformAdmin)) {
     return NextResponse.json({ error: "Access denied" }, { status: 403 });
   }
 

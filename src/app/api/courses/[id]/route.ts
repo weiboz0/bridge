@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { getIdentity } from "@/lib/identity";
 import { getCourse, updateCourse, deleteCourse } from "@/lib/courses";
 
 const updateSchema = z.object({
@@ -16,8 +16,8 @@ export async function GET(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const session = await auth();
-  if (!session?.user?.id) {
+  const identity = await getIdentity();
+  if (!identity?.userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -35,8 +35,8 @@ export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const session = await auth();
-  if (!session?.user?.id) {
+  const identity = await getIdentity();
+  if (!identity?.userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -47,8 +47,8 @@ export async function PATCH(
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  // Only creator can update
-  if (course.createdBy !== session.user.id && !session.user.isPlatformAdmin) {
+  // Plan 065 phase 4 — admin status from /api/me/identity (live DB).
+  if (course.createdBy !== identity.userId && !identity.isPlatformAdmin) {
     return NextResponse.json({ error: "Only the course creator can update" }, { status: 403 });
   }
 
@@ -70,8 +70,8 @@ export async function DELETE(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const session = await auth();
-  if (!session?.user?.id) {
+  const identity = await getIdentity();
+  if (!identity?.userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -82,7 +82,7 @@ export async function DELETE(
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  if (course.createdBy !== session.user.id && !session.user.isPlatformAdmin) {
+  if (course.createdBy !== identity.userId && !identity.isPlatformAdmin) {
     return NextResponse.json({ error: "Only the course creator can delete" }, { status: 403 });
   }
 

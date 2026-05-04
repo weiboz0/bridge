@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { getIdentity } from "@/lib/identity";
 import { createClass, listClassesByOrg } from "@/lib/classes";
 import { getUserRoleInOrg } from "@/lib/org-memberships";
 
@@ -13,8 +13,8 @@ const createSchema = z.object({
 });
 
 export async function POST(request: NextRequest) {
-  const session = await auth();
-  if (!session?.user?.id) {
+  const identity = await getIdentity();
+  if (!identity?.userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -29,23 +29,24 @@ export async function POST(request: NextRequest) {
   }
 
   // Verify user is teacher or org_admin in the org
-  const roles = await getUserRoleInOrg(db, parsed.data.orgId, session.user.id);
+  const roles = await getUserRoleInOrg(db, parsed.data.orgId, identity.userId);
   const canCreate = roles.some((r) => r.role === "teacher" || r.role === "org_admin");
-  if (!canCreate && !session.user.isPlatformAdmin) {
+  // Plan 065 phase 4 — admin status from /api/me/identity (live DB).
+  if (!canCreate && !identity.isPlatformAdmin) {
     return NextResponse.json({ error: "Only teachers can create classes" }, { status: 403 });
   }
 
   const cls = await createClass(db, {
     ...parsed.data,
-    createdBy: session.user.id,
+    createdBy: identity.userId,
   });
 
   return NextResponse.json(cls, { status: 201 });
 }
 
 export async function GET(request: NextRequest) {
-  const session = await auth();
-  if (!session?.user?.id) {
+  const identity = await getIdentity();
+  if (!identity?.userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -54,8 +55,8 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "orgId required" }, { status: 400 });
   }
 
-  const roles = await getUserRoleInOrg(db, orgId, session.user.id);
-  if (roles.length === 0 && !session.user.isPlatformAdmin) {
+  const roles = await getUserRoleInOrg(db, orgId, identity.userId);
+  if (roles.length === 0 && !identity.isPlatformAdmin) {
     return NextResponse.json({ error: "Not a member of this org" }, { status: 403 });
   }
 

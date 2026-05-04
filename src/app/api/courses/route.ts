@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { getIdentity } from "@/lib/identity";
 import { createCourse, listCoursesByOrg } from "@/lib/courses";
 import { getUserRoleInOrg } from "@/lib/org-memberships";
 
@@ -14,8 +14,8 @@ const createSchema = z.object({
 });
 
 export async function POST(request: NextRequest) {
-  const session = await auth();
-  if (!session?.user?.id) {
+  const id = await getIdentity();
+  if (!id?.userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -30,23 +30,24 @@ export async function POST(request: NextRequest) {
   }
 
   // Verify user is teacher or org_admin in the org
-  const roles = await getUserRoleInOrg(db, parsed.data.orgId, session.user.id);
+  const roles = await getUserRoleInOrg(db, parsed.data.orgId, id.userId);
   const canCreate = roles.some((r) => r.role === "teacher" || r.role === "org_admin");
-  if (!canCreate && !session.user.isPlatformAdmin) {
+  // Plan 065 phase 4 — admin status is the live DB value via /api/me/identity.
+  if (!canCreate && !id.isPlatformAdmin) {
     return NextResponse.json({ error: "Only teachers can create courses" }, { status: 403 });
   }
 
   const course = await createCourse(db, {
     ...parsed.data,
-    createdBy: session.user.id,
+    createdBy: id.userId,
   });
 
   return NextResponse.json(course, { status: 201 });
 }
 
 export async function GET(request: NextRequest) {
-  const session = await auth();
-  if (!session?.user?.id) {
+  const id = await getIdentity();
+  if (!id?.userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -56,8 +57,8 @@ export async function GET(request: NextRequest) {
   }
 
   // Verify user is a member of the org
-  const roles = await getUserRoleInOrg(db, orgId, session.user.id);
-  if (roles.length === 0 && !session.user.isPlatformAdmin) {
+  const roles = await getUserRoleInOrg(db, orgId, id.userId);
+  if (roles.length === 0 && !id.isPlatformAdmin) {
     return NextResponse.json({ error: "Not a member of this org" }, { status: 403 });
   }
 

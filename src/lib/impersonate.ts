@@ -1,5 +1,6 @@
 import { cookies } from "next/headers";
 import { auth } from "@/lib/auth";
+import { getIdentity } from "@/lib/identity";
 
 interface ImpersonationData {
   originalUserId: string;
@@ -15,6 +16,11 @@ interface ImpersonationData {
  * session with the target user's identity. The original admin ID is
  * preserved in the `impersonating` field.
  *
+ * Plan 065 phase 4 — `isPlatformAdmin` is now sourced from
+ * `/api/me/identity` (the live DB value via Phase 3 middleware), not
+ * from the Auth.js JWT-carried claim. A user who was demoted between
+ * sign-in and this call no longer triggers impersonation.
+ *
  * Usage: Replace `auth()` with `getEffectiveSession()` in any page/route
  * that should support impersonation.
  */
@@ -29,8 +35,11 @@ export async function getEffectiveSession() {
     return { ...session, impersonating: null };
   }
 
-  // Only platform admins can impersonate
-  if (!session.user.isPlatformAdmin) {
+  // Only LIVE platform admins can impersonate. The check goes
+  // through the identity helper so a stale JWT-carried admin claim
+  // can't trigger impersonation after the user was demoted.
+  const identity = await getIdentity();
+  if (!identity?.isPlatformAdmin) {
     return { ...session, impersonating: null };
   }
 

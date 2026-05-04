@@ -1,18 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { users } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { cookies } from "next/headers";
+import { requireAdmin } from "@/lib/identity";
 
 const impersonateSchema = z.object({
   userId: z.string().uuid(),
 });
 
 export async function POST(request: NextRequest) {
-  const session = await auth();
-  if (!session?.user?.id || !session.user.isPlatformAdmin) {
+  // Plan 065 phase 4 — live admin via /api/me/identity.
+  const admin = await requireAdmin();
+  if (!admin) {
     return NextResponse.json({ error: "Platform admin required" }, { status: 403 });
   }
 
@@ -35,7 +36,7 @@ export async function POST(request: NextRequest) {
   // Store impersonation in a cookie
   const cookieStore = await cookies();
   cookieStore.set("bridge-impersonate", JSON.stringify({
-    originalUserId: session.user.id,
+    originalUserId: admin.userId,
     targetUserId: targetUser.id,
     targetName: targetUser.name,
     targetEmail: targetUser.email,
