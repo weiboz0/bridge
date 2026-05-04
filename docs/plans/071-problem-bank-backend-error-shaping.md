@@ -1,0 +1,168 @@
+# Plan 071 — Problem-bank backend error shaping
+
+## Status
+Draft. Pending Codex pre-impl review.
+
+Two small, surgical backend changes that close UX gaps Codex flagged during plan 066's post-impl reviews. Both already have `[OPEN]` deferrals recorded in plan 066's §Code Review:
+- Phase 3 NIT-2 (slug 409 mapping)
+- Phase 4 NIT (empty-stdin validation)
+
+This plan ships them as a single tiny PR.
+
+## Problem
+
+### 1. Slug uniqueness collisions surface as opaque 500s
+
+Both `CreateProblem` and `UpdateProblem` in `platform/internal/handlers/problems.go` return `http.StatusInternalServerError` ("Database error" or "Failed to create problem") on any store error. The `problems` table has a partial-unique index on `(scope, COALESCE(scope_id::text, ''), slug)` (`drizzle/0013_problem_bank.sql:171-172`, `problems_scope_slug_uniq`). When a teacher picks a slug that already exists in the same scope, the insert fails with SQLSTATE `23505` against that constraint — but the user sees a generic banner saying "Save failed" with no hint that the slug field is the culprit.
+
+The Next-side form (`src/components/problem/problem-form.tsx`) already has the surfacing wired (`readError` in the same file), but it can't distinguish a slug collision from any other 500 because the response body and status are the same.
+
+### 2. Empty stdin on test cases is accepted server-side
+
+`CreateTestCase` and `UpdateTestCase` (`platform/internal/handlers/problems.go:643, 734`) don't validate that `stdin` is non-empty. The Next-side editor (`src/components/problem/test-case-editor.tsx`) does, but a direct API caller (curl, scripted importer, future client) can write empty-input rows that fail the executor downstream with no useful error.
+
+## Approach
+
+### 1. Slug 409 mapping
+
+Mirror the existing pattern in `platform/internal/store/teaching_units.go:310-328` — its `isUniqueViolationOn(err, constraint)` helper handles both `lib/pq.Error` and `pgx/pgconn.PgError` shapes. Promote that helper into a shared file (`platform/internal/store/dberr.go`) so both `teaching_units.go` and `problems.go` can call it without duplication.
+
+The `problems.go` store wraps the unique-violation case into a typed sentinel error `ErrSlugConflict` (mirroring how `teaching_units.go::LinkUnitToTopic` already wraps its `teaching_units_topic_id_uniq` collision at `platform/internal/store/teaching_units.go:280-294`). Handler `errors.Is`-tests it (sentinels created with `errors.New` use `errors.Is`, not `errors.As` — this matches the existing handler pattern at `platform/internal/handlers/problems.go:489-492`) and returns `409 Conflict` with body `{"error": "Slug already taken in this scope", "field": "slug"}`.
+
+The current `writeError` helper at `platform/internal/handlers/helpers.go:25-30` only emits `{"error": <msg>}`. Phase 1 widens it (or adds a sibling `writeFieldError`) so the 409 path can include the `field` metadata.
+
+The Next form's `readError` types the body as `{error?: string}` today (`src/components/problem/problem-form.tsx:515-532`); Phase 1 widens the type to include the optional `field?: string` and adds a 409+field=="slug" special-case that pins the message inline next to the slug input.
+
+### 2. Empty-stdin validation
+
+Add a `body.Stdin == ""` check in `CreateTestCase` (after `decodeJSON`) and `UpdateTestCase` (when `body.Stdin != nil`, gate `*body.Stdin == ""`). Return `400 Bad Request` with `{"error": "stdin is required"}`.
+
+## Out of scope
+
+- Slug FORMAT validation (regex, length cap). The plan-066 post-impl review confirmed the backend has no slug-format constraint today; if we add one, the error shape needs to grow a separate `slug-format-invalid` 400 distinct from the 409. That's a separate decision and arguably orthogonal to this PR.
+- Stdin LENGTH cap. The store doesn't have one; adding one risks breaking existing canonical cases imported from the Python 101 set.
+- Test-case `expectedStdout` length cap. Same.
+
+## Decisions to lock in
+
+1. **Promote `isUniqueViolationOn` to a shared file** (`platform/internal/store/dberr.go`). Two callers today, more in the future. The function is 18 lines including the dual-driver fallthrough; copy-pasting is worse than the import.
+
+2. **Sentinel error type, not a string check** in the handler. `var ErrSlugConflict = errors.New(...)` so `errors.Is(err, ErrSlugConflict)` works cleanly. (Codex pre-impl review of plan 066 phase 3 NIT-2 explicitly recommended this shape.)
+
+3. **Response body shape on 409**: `{"error": "Slug already taken in this scope", "field": "slug"}`. Mirrors the existing 4xx body convention in the codebase (`{"error": ...}` is the only field used today; we add `field` as additive metadata for the form to consume without breaking existing callers).
+
+4. **Field name is `slug`**, not `request.slug` or `body.slug`. The form already names its inputs by the JSON key.
+
+5. **Empty stdin returns 400, not 422**. The codebase uses 400 for all client validation rejections (see `validProblemScopes`, `validProblemDifficulties` paths). 422 would be a one-off divergence.
+
+6. **Add `writeFieldError` as a sibling helper, don't widen `writeError`**. `writeError` has ~150 callsites across the handlers; widening its signature is a bigger blast radius than the change deserves. `writeFieldError(w, status, msg, field)` keeps the existing helper untouched and the new shape opt-in. Codex pre-impl pass-1 flagged that the current helper doesn't emit field metadata at all (`platform/internal/handlers/helpers.go:25-30`).
+
+## Files
+
+### Phase 1 — slug-409 mapping (ships with its tests)
+
+**Add:**
+- `platform/internal/store/dberr.go` — `IsUniqueViolationOn(err error, constraint string) bool`. Promoted from `teaching_units.go::isUniqueViolationOn` (rename to exported because it's now reused). Same dual-driver implementation.
+- `platform/internal/store/problems.go` — define `ErrSlugConflict` sentinel (`var ErrSlugConflict = errors.New("slug already taken in scope")`) near the top of the file alongside the existing `ErrInvalidStatusTransition` (`platform/internal/store/problems.go:15-17`). In `CreateProblem` and `UpdateProblem`, after the SQL exec/scan, wrap a unique-violation against `problems_scope_slug_uniq` into `ErrSlugConflict`.
+
+**Modify:**
+- `platform/internal/store/teaching_units.go` — replace local `isUniqueViolationOn` calls with the shared `IsUniqueViolationOn`. Delete the local copy.
+- `platform/internal/handlers/helpers.go::writeError` — extend signature to optionally accept field metadata, OR add a sibling `writeFieldError(w, status, msg, field)`. Decision §6 below picks the sibling-helper variant to keep `writeError`'s signature unchanged across ~150 callsites.
+- `platform/internal/handlers/problems.go` — in `CreateProblem` and `UpdateProblem`, after the store call, `errors.Is(err, store.ErrSlugConflict)` → call `writeFieldError(w, 409, "Slug already taken in this scope", "slug")`. Other errors keep the existing 500 mapping. (`errors.Is`, NOT `errors.As` — sentinels created with `errors.New` are value-equality, not type-assertable. See `platform/internal/handlers/problems.go:489-492` for the existing pattern.)
+- `src/components/problem/problem-form.tsx` — widen `ApiError`/`readError` body type from `{error?: string}` to `{error?: string; field?: string}`. Add a 409+field=="slug" special-case in `readError` that returns a typed `ApiError` with the field info. Add a `slugError` state to the form; on 409+slug, set both the inline error AND clear the generic banner so the user sees the message exactly once.
+
+### Phase 2 — empty-stdin validation (ships with its tests)
+
+**Modify:**
+- `platform/internal/handlers/problems.go::CreateTestCase` — add `if body.Stdin == "" { writeError(w, 400, "stdin is required"); return }` after the existing decode + canonical-auth check.
+- `platform/internal/handlers/problems.go::UpdateTestCase` — add `if body.Stdin != nil && *body.Stdin == "" { writeError(w, 400, "stdin is required"); return }` after `decodeJSON`. Note: `nil` (unchanged) is still allowed — the validation only fires if the caller is explicitly trying to set stdin to empty.
+
+### Tests
+
+Tests for behavior changes ship in the SAME PR as the change — Codex pre-impl pass-1 flagged that splitting tests into a separate Phase 3 would leave PR 1 and PR 2 untestable until PR 3 lands.
+
+**Phase 1 PR also adds:**
+- `platform/internal/store/problems_test.go` — `TestCreateProblem_SlugConflict` covering: insert problem A with `slug: "two-sum"`; insert problem B with same `slug` + same scope; verify the second returns `ErrSlugConflict`. Also `TestCreateProblem_SlugAllowedInDifferentScope` to confirm the partial-unique scope still allows the same slug across `personal` users at different scopeIds.
+- `platform/internal/store/problems_test.go` — `TestUpdateProblem_SlugConflict` covering: update an existing problem to a slug owned by another problem in the same scope.
+- `platform/internal/handlers/problems_test.go` — `TestCreateProblem_Returns409OnSlugConflict` (asserts status 409 and the body shape `{"error": ..., "field": "slug"}`).
+- `tests/unit/problem-form.test.tsx` (NEW — no existing form-level test) — covers the 409 → inline-slug-error mapping in `readError`.
+
+**Phase 2 PR also adds:**
+- `platform/internal/handlers/problems_test.go` — `TestCreateTestCase_Returns400OnEmptyStdin`, `TestUpdateTestCase_Returns400OnExplicitEmptyStdin`, `TestUpdateTestCase_AllowsNilStdinUnchanged`.
+
+## Risks
+
+| Risk | Severity | Mitigation |
+|---|---|---|
+| The exported `IsUniqueViolationOn` rename misses a call-site in `teaching_units.go` | low | grep-and-rename across the package; the linter catches the leftover. |
+| 409 mapping accidentally fires for non-slug unique violations | low | Constraint name is checked literally (`problems_scope_slug_uniq`); other unique constraints fall through to 500 unchanged. |
+| Form regression — slug error rendered twice (once inline, once in banner) | low | The 409 handler returns and clears the generic banner state in the same setState. Test in `problem-form.test.tsx` covers it. |
+| Empty-stdin rejection breaks existing canonical-case imports | low | The Python 101 importer always sends non-empty stdin. Spot-check `content/python-101/` test_cases.yaml before merging Phase 2. |
+| Existing unit test reads `Failed to create problem` literal in the response | low | Audit `tests/` and `e2e/` for the substring before changing the 500 → 409 wording. |
+
+## Phases
+
+### Phase 0: Pre-impl Codex review
+
+Per CLAUDE.md plan-review gate. Dispatch `codex:codex-rescue` to review against:
+- `platform/internal/handlers/problems.go` (the routes the changes consume)
+- `platform/internal/store/teaching_units.go:280-328` (the existing unique-violation pattern this plan mirrors)
+- `platform/internal/store/problems.go::CreateProblem` (~line 207), `::UpdateProblem` (~line 401)
+- `drizzle/0013_problem_bank.sql:171-172` (the constraint name)
+
+Specific questions:
+1. Is there a reason the existing `isUniqueViolationOn` in `teaching_units.go` isn't already exported and shared? Was there a deliberate scoping decision I'd be breaking by promoting it?
+2. The handler currently returns `Internal Server Error` (500) for ALL store errors including not-found. With the 409 mapping in place, does anything else change shape? (E.g., does `errors.Is(err, store.ErrNotFound)` exist that I'm missing — should I be wrapping multiple sentinels?)
+3. Does `pgconn.PgError.ConstraintName` always populate when the unique constraint is a partial index? Or only on a regular unique constraint? The slug constraint is a partial index (`WHERE slug IS NOT NULL`) — verify the constraint name surfaces.
+4. Is `{"field": "slug"}` an acceptable additive shape for the 409 body, or does the codebase have a different convention I'm missing?
+5. Empty-stdin gate — anything else I should validate while in there (max length, ASCII-only, line-ending normalization)?
+6. Do existing tests assert the literal "Database error" string for slug conflicts? If so, the 409 mapping breaks them; flag for rewriting.
+
+### Phase 1: Slug 409 mapping + tests (PR 1)
+
+- Promote `IsUniqueViolationOn` to `dberr.go`.
+- Define `ErrSlugConflict`.
+- Wrap CreateProblem + UpdateProblem store paths.
+- Add `writeFieldError` helper.
+- Map 23505 → 409 in the handler with field metadata.
+- Widen `readError` body type and surface inline slug errors in problem-form.tsx.
+- Add store + handler + form tests as listed under §Files §Tests.
+- Codex post-impl review.
+- PR + merge.
+
+### Phase 2: Empty-stdin validation + tests (PR 2)
+
+- Add the 400 check in CreateTestCase + UpdateTestCase.
+- Add the three handler tests.
+- Codex post-impl review.
+- PR + merge.
+
+## Code Review
+
+### Phase 1+2 post-impl — 2026-05-04: CONCUR (no findings)
+
+Codex post-impl review of both phases on `feat/071-problem-bank-backend-error-shaping` (commits d35f014 + bb32f63). Verdict: **CONCUR** with no blockers, nits, or follow-ups. Sentinel wrapping correct, partial-index constraint name surfaces through both driver shapes, `writeFieldError` body shape additive without breaking existing 4xx consumers, empty-stdin gate placement correct (canonical-auth runs before `decodeJSON` in `CreateTestCase`), `UpdateTestCase` gate matches the store's nil-vs-empty contract.
+
+## Codex Review of This Plan
+
+### Pass 1 — 2026-05-04: CONCUR-WITH-CHANGES → 5 items folded in
+
+Codex returned CONCUR-WITH-CHANGES with five concrete fixes. All folded:
+
+1. **Mirror-pattern citation** — plan said `CreateUnit` wraps `teaching_units_topic_id_uniq`; the actual wrapping is in `LinkUnitToTopic` (`platform/internal/store/teaching_units.go:280-294`). Updated in §Approach §1.
+
+2. **errors.Is, not errors.As** — sentinels created with `errors.New` need value-equality (`errors.Is`), not type-assertion (`errors.As`). The codebase already uses `errors.Is` for `ErrInvalidStatusTransition` at `platform/internal/handlers/problems.go:489-492`. Plan now explicitly says `errors.Is` and cites the existing pattern.
+
+3. **`writeError` doesn't accept field metadata** — the helper at `platform/internal/handlers/helpers.go:25-30` emits only `{"error": <msg>}`. Plan now adds Decisions §6 to add a sibling `writeFieldError` helper rather than widening the existing one (which has ~150 callsites). §Files Phase 1 lists the helper change explicitly.
+
+4. **Frontend type widening** — `readError` in `src/components/problem/problem-form.tsx:515-532` types the body as `{error?: string}` only. Plan now §Files Phase 1 widens the type to include `field?: string` and surfaces the inline slug error.
+
+5. **Phase 3 (tests) is unsafe as a separate PR** — splitting tests into a third PR leaves Phases 1 and 2 untestable until Phase 3 lands. Plan §Phases now ships tests in the SAME PR as their change (Phase 1 PR includes store + handler + form tests; Phase 2 PR includes the three handler tests).
+
+Codex confirmed (no resolution needed):
+- `pgconn.PgError.ConstraintName` and `pq.Error.Constraint` both populate for partial unique indexes (the existing `LinkUnitToTopic` wrapping uses the same partial-index pattern at `teaching_units.go:260-266` and works).
+- `ErrSlugConflict` is the only new sentinel that adds value here; not opening a wholesale `errors.Is` audit.
+- No existing tests assert literal "Database error" / "Failed to create problem" for slug conflicts (handler tests only assert status; store tests only assert constraint behavior).
+- "Just non-empty" is the right v1 scope for stdin validation. No length/normalization.
+
+Verdict: **CONCUR-WITH-CHANGES** → all changes folded → ready for Phase 1.

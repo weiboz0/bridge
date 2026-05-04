@@ -267,7 +267,16 @@ export function ProblemForm({ mode, identity, initial }: Props) {
       router.refresh();
     } catch (e) {
       if (e instanceof ApiError) {
-        setError(e.message);
+        // Plan 071 — backend now returns 409 + {"field":"slug"} on slug
+        // unique-violations. Pin those inline instead of the banner so
+        // the user can see exactly which field needs fixing.
+        const apiBody = e.body as { field?: string } | null;
+        if (e.status === 409 && apiBody?.field === "slug") {
+          setFieldErrors((prev) => ({ ...prev, slug: e.message }));
+          setError(null);
+        } else {
+          setError(e.message);
+        }
       } else if (e instanceof Error) {
         setError(e.message);
       } else {
@@ -317,9 +326,20 @@ export function ProblemForm({ mode, identity, initial }: Props) {
             onChange={(e) => {
               setSlugTouched(true);
               setSlug(e.target.value);
+              if (fieldErrors.slug) {
+                setFieldErrors((prev) => {
+                  const next = { ...prev };
+                  delete next.slug;
+                  return next;
+                });
+              }
             }}
             placeholder="auto-generated from title"
+            aria-invalid={Boolean(fieldErrors.slug)}
           />
+          {fieldErrors.slug && (
+            <p className="text-sm text-destructive">{fieldErrors.slug}</p>
+          )}
           <p className="text-xs text-muted-foreground">
             Optional. Used in URLs and search. Lowercase letters, digits, and
             hyphens. Leave blank to auto-generate from the title.
@@ -607,8 +627,11 @@ function slugify(title: string): string {
 }
 
 async function readError(res: Response): Promise<ApiError> {
+  // Plan 071 widened the body shape — the handler may attach a `field`
+  // hint on validation/conflict errors so the form can pin the message
+  // inline (currently only slug-conflict 409 uses this).
   const body = (await res.json().catch(() => null)) as
-    | { error?: string }
+    | { error?: string; field?: string }
     | null;
   // 403 keeps a friendlier message than the raw "not authorized for scope"
   // the Go handler returns; everything else passes through.

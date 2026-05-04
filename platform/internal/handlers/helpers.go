@@ -33,6 +33,16 @@ func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"error": message})
 }
 
+// writeFieldError writes a JSON error response with optional field
+// metadata so clients can pin the error to a specific form input
+// rather than surfacing it as a generic banner. The body shape is a
+// strict superset of writeError's: `{"error": <msg>, "field": <field>}`.
+// Plan 071 introduced this to map slug unique-violations to a 409 the
+// problem-form can show inline next to the slug input.
+func writeFieldError(w http.ResponseWriter, status int, message, field string) {
+	writeJSON(w, status, map[string]string{"error": message, "field": field})
+}
+
 // decodeJSON decodes the request body into dst. Returns false and writes a 400
 // error if decoding fails.
 func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {

@@ -17,6 +17,13 @@ import (
 // archived -> published). Handlers should map this to HTTP 409 Conflict.
 var ErrInvalidTransition = errors.New("invalid status transition")
 
+// ErrSlugConflict is returned by CreateProblem and UpdateProblem when the
+// requested slug is already taken in the same scope (the
+// problems_scope_slug_uniq partial-unique index). Handlers should map this
+// to HTTP 409 Conflict with a {"field": "slug"} body so the form can pin
+// the error inline.
+var ErrSlugConflict = errors.New("slug already taken in scope")
+
 // Problem is the scoped problem-bank row. Scope is "platform" (global),
 // "org" (shared within an org), or "personal" (owned by one user). ScopeID is
 // NULL iff Scope == "platform"; otherwise it points at the owning org or user.
@@ -221,7 +228,7 @@ func (s *ProblemStore) CreateProblem(ctx context.Context, in CreateProblemInput)
 	if err != nil {
 		return nil, fmt.Errorf("encode starter_code: %w", err)
 	}
-	return scanProblem(s.db.QueryRowContext(ctx, `
+	p, err := scanProblem(s.db.QueryRowContext(ctx, `
         INSERT INTO problems (
           scope, scope_id, title, slug, description, starter_code,
           difficulty, grade_level, tags, status, forked_from,
@@ -232,6 +239,16 @@ func (s *ProblemStore) CreateProblem(ctx context.Context, in CreateProblemInput)
 		in.Difficulty, in.GradeLevel, pq.Array(in.Tags), in.Status, in.ForkedFrom,
 		in.TimeLimitMs, in.MemoryLimitMb, in.CreatedBy,
 	))
+	if err != nil {
+		// Wrap unique-violation against the slug partial index into a
+		// typed sentinel so the handler can map it to a clean 409.
+		// Other errors fall through to the existing 500 path.
+		if IsUniqueViolationOn(err, "problems_scope_slug_uniq") {
+			return nil, ErrSlugConflict
+		}
+		return nil, err
+	}
+	return p, nil
 }
 
 // GetProblem returns the problem with the given id, or nil if not found.
@@ -495,7 +512,14 @@ func (s *ProblemStore) UpdateProblem(ctx context.Context, id string, in UpdatePr
 		`UPDATE problems SET %s WHERE id = $%d RETURNING `+problemColumns,
 		strings.Join(setClauses, ", "), argIdx,
 	)
-	return scanProblem(s.db.QueryRowContext(ctx, q, args...))
+	p, err := scanProblem(s.db.QueryRowContext(ctx, q, args...))
+	if err != nil {
+		if IsUniqueViolationOn(err, "problems_scope_slug_uniq") {
+			return nil, ErrSlugConflict
+		}
+		return nil, err
+	}
+	return p, nil
 }
 
 // DeleteProblem removes the problem and returns the deleted row (or nil).

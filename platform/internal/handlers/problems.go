@@ -335,6 +335,10 @@ func (h *ProblemHandler) CreateProblem(w http.ResponseWriter, r *http.Request) {
 		CreatedBy:     claims.UserID,
 	})
 	if err != nil {
+		if errors.Is(err, store.ErrSlugConflict) {
+			writeFieldError(w, http.StatusConflict, "Slug already taken in this scope", "slug")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "Failed to create problem")
 		return
 	}
@@ -409,6 +413,10 @@ func (h *ProblemHandler) UpdateProblem(w http.ResponseWriter, r *http.Request) {
 
 	updated, err := h.Problems.UpdateProblem(r.Context(), problemID, body)
 	if err != nil {
+		if errors.Is(err, store.ErrSlugConflict) {
+			writeFieldError(w, http.StatusConflict, "Slug already taken in this scope", "slug")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
 	}
@@ -667,6 +675,14 @@ func (h *ProblemHandler) CreateTestCase(w http.ResponseWriter, r *http.Request) 
 	if !decodeJSON(w, r, &body) {
 		return
 	}
+	// Plan 071 phase 2 — reject empty stdin server-side. The Next-side
+	// editor validates this client-side, but a direct API caller could
+	// otherwise create a row that fails the executor downstream with
+	// no useful diagnostic.
+	if body.Stdin == "" {
+		writeError(w, http.StatusBadRequest, "stdin is required")
+		return
+	}
 
 	input := store.CreateTestCaseInput{
 		ProblemID:      p.ID,
@@ -743,6 +759,13 @@ func (h *ProblemHandler) UpdateTestCase(w http.ResponseWriter, r *http.Request) 
 	}
 	var body store.UpdateTestCaseInput
 	if !decodeJSON(w, r, &body) {
+		return
+	}
+	// Plan 071 phase 2 — explicit "" on stdin clears it to empty,
+	// which fails the executor. nil means "unchanged" and stays
+	// allowed (the partial-update contract).
+	if body.Stdin != nil && *body.Stdin == "" {
+		writeError(w, http.StatusBadRequest, "stdin is required")
 		return
 	}
 	updated, err := h.TestCases.UpdateTestCase(r.Context(), c.ID, body)

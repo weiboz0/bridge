@@ -669,3 +669,98 @@ func TestProblemHandler_ListByTopic_NonMember404(t *testing.T) {
 	// The topic and course both exist, so no 404 case here; 403 is the answer.
 	assert.Equal(t, http.StatusForbidden, w.Code)
 }
+
+// Plan 071 phase 2 — empty stdin is now rejected at the API layer so a
+// direct caller can't write a row that fails the executor downstream.
+// Three cases: create-empty=400, update-explicit-empty=400, update-nil=allowed.
+func TestProblemHandler_CreateTestCase_Returns400OnEmptyStdin(t *testing.T) {
+	fx := newProblemFixture(t, t.Name())
+	teacherID := fx.teacher1.ID
+	p := fx.mkProblem(t, "personal", &teacherID, "draft", "Empty Stdin Subject")
+
+	body := map[string]any{
+		"name": "edge case", "stdin": "", "expectedStdout": "ok",
+		"isExample": false, "order": 0, "isCanonical": true,
+	}
+	w := doPostJSON(
+		t, fx.h.CreateTestCase,
+		fmt.Sprintf("/api/problems/%s/test-cases", p.ID),
+		body,
+		map[string]string{"id": p.ID},
+		fx.claims(fx.teacher1, false),
+	)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "stdin is required")
+}
+
+func TestProblemHandler_UpdateTestCase_Returns400OnExplicitEmptyStdin(t *testing.T) {
+	fx := newProblemFixture(t, t.Name())
+	ctx := context.Background()
+	teacherID := fx.teacher1.ID
+	p := fx.mkProblem(t, "personal", &teacherID, "draft", "Update Empty")
+
+	tc, err := fx.h.TestCases.CreateTestCase(ctx, store.CreateTestCaseInput{
+		ProblemID: p.ID, Name: "seed", Stdin: "1 2", Order: 0,
+	})
+	require.NoError(t, err)
+
+	empty := ""
+	body := map[string]any{"stdin": empty}
+	w := doPatchJSON(
+		t, fx.h.UpdateTestCase,
+		fmt.Sprintf("/api/test-cases/%s", tc.ID),
+		body,
+		map[string]string{"id": tc.ID},
+		fx.claims(fx.teacher1, false),
+	)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "stdin is required")
+}
+
+func TestProblemHandler_UpdateTestCase_AllowsNilStdinUnchanged(t *testing.T) {
+	// Omitting stdin from the PATCH body must NOT trip the empty-stdin
+	// gate — nil = unchanged is the partial-update contract.
+	fx := newProblemFixture(t, t.Name())
+	ctx := context.Background()
+	teacherID := fx.teacher1.ID
+	p := fx.mkProblem(t, "personal", &teacherID, "draft", "Update Nil Stdin")
+
+	tc, err := fx.h.TestCases.CreateTestCase(ctx, store.CreateTestCaseInput{
+		ProblemID: p.ID, Name: "seed", Stdin: "1 2", Order: 0,
+	})
+	require.NoError(t, err)
+
+	// Only updating the name — stdin omitted entirely.
+	body := map[string]any{"name": "renamed"}
+	w := doPatchJSON(
+		t, fx.h.UpdateTestCase,
+		fmt.Sprintf("/api/test-cases/%s", tc.ID),
+		body,
+		map[string]string{"id": tc.ID},
+		fx.claims(fx.teacher1, false),
+	)
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+// Plan 071 phase 1 — slug unique-violation maps to 409 with field metadata
+// so the form can pin the error inline.
+func TestProblemHandler_CreateProblem_Returns409OnSlugConflict(t *testing.T) {
+	fx := newProblemFixture(t, t.Name())
+	teacherID := fx.teacher1.ID
+
+	body := map[string]any{
+		"scope": "personal", "scopeId": teacherID,
+		"title": "Two Sum A", "slug": "two-sum",
+	}
+	w1 := doPostJSON(t, fx.h.CreateProblem, "/api/problems", body, nil, fx.claims(fx.teacher1, false))
+	require.Equal(t, http.StatusCreated, w1.Code, "first create should succeed")
+
+	body["title"] = "Two Sum B"
+	w2 := doPostJSON(t, fx.h.CreateProblem, "/api/problems", body, nil, fx.claims(fx.teacher1, false))
+	assert.Equal(t, http.StatusConflict, w2.Code)
+
+	var errBody map[string]string
+	require.NoError(t, json.NewDecoder(w2.Body).Decode(&errBody))
+	assert.Equal(t, "slug", errBody["field"], "field metadata must point at slug")
+	assert.NotEmpty(t, errBody["error"], "error message must be present")
+}

@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -1473,4 +1474,100 @@ func TestProblemStore_ScanProblemRow_ForkedFromSet(t *testing.T) {
 	require.NotNil(t, got)
 	require.NotNil(t, got.ForkedFrom)
 	assert.Equal(t, source.ID, *got.ForkedFrom)
+}
+
+// Plan 071 phase 1 — slug unique-violation translates to ErrSlugConflict
+// so the handler can map it to a clean 409.
+func TestProblemStore_CreateProblem_SlugConflict(t *testing.T) {
+	_, problems, _, user := setupProblemEnv(t, t.Name())
+	ctx := context.Background()
+
+	scopeID := user.ID
+	slug := "two-sum"
+	first, err := problems.CreateProblem(ctx, CreateProblemInput{
+		Scope: "personal", ScopeID: &scopeID, Title: "Two Sum A",
+		Slug: &slug, Description: "first", CreatedBy: user.ID,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, first)
+
+	_, err = problems.CreateProblem(ctx, CreateProblemInput{
+		Scope: "personal", ScopeID: &scopeID, Title: "Two Sum B",
+		Slug: &slug, Description: "second", CreatedBy: user.ID,
+	})
+	require.Error(t, err)
+	assert.True(
+		t,
+		errors.Is(err, ErrSlugConflict),
+		"expected ErrSlugConflict, got %v",
+		err,
+	)
+}
+
+// Plan 071 phase 1 — same slug is allowed across different scopeIds because
+// the unique index is partitioned by (scope, COALESCE(scope_id::text, '')).
+// Two personal users may each have a "two-sum" without colliding.
+func TestProblemStore_CreateProblem_SlugAllowedInDifferentScope(t *testing.T) {
+	db, problems, _, userA := setupProblemEnv(t, t.Name())
+	ctx := context.Background()
+
+	// Spin up a second user manually — setupProblemEnv only seeds one.
+	var userB RegisteredUser
+	require.NoError(t, db.QueryRowContext(ctx, `
+        INSERT INTO users (email, name, is_platform_admin)
+        VALUES ($1, $2, false)
+        RETURNING id, email, name
+    `, t.Name()+"-b@test.local", "User B").Scan(&userB.ID, &userB.Email, &userB.Name))
+
+	slug := "two-sum"
+	idA := userA.ID
+	idB := userB.ID
+	_, err := problems.CreateProblem(ctx, CreateProblemInput{
+		Scope: "personal", ScopeID: &idA, Title: "Two Sum A",
+		Slug: &slug, Description: "a", CreatedBy: userA.ID,
+	})
+	require.NoError(t, err)
+
+	// Same slug under userB's personal scope must succeed.
+	_, err = problems.CreateProblem(ctx, CreateProblemInput{
+		Scope: "personal", ScopeID: &idB, Title: "Two Sum B",
+		Slug: &slug, Description: "b", CreatedBy: userB.ID,
+	})
+	require.NoError(t, err, "same slug in different personal scope must not collide")
+}
+
+// Plan 071 phase 1 — UpdateProblem also wraps the unique-violation. Useful
+// in practice when a teacher renames an existing problem to a slug already
+// owned by a sibling problem in the same scope.
+func TestProblemStore_UpdateProblem_SlugConflict(t *testing.T) {
+	_, problems, _, user := setupProblemEnv(t, t.Name())
+	ctx := context.Background()
+
+	scopeID := user.ID
+	slugA := "alpha"
+	slugB := "beta"
+	a, err := problems.CreateProblem(ctx, CreateProblemInput{
+		Scope: "personal", ScopeID: &scopeID, Title: "A",
+		Slug: &slugA, Description: "a", CreatedBy: user.ID,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, a)
+
+	b, err := problems.CreateProblem(ctx, CreateProblemInput{
+		Scope: "personal", ScopeID: &scopeID, Title: "B",
+		Slug: &slugB, Description: "b", CreatedBy: user.ID,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, b)
+
+	// Rename B to A's slug — must fail with ErrSlugConflict.
+	conflictSlug := slugA
+	_, err = problems.UpdateProblem(ctx, b.ID, UpdateProblemInput{Slug: &conflictSlug})
+	require.Error(t, err)
+	assert.True(
+		t,
+		errors.Is(err, ErrSlugConflict),
+		"expected ErrSlugConflict, got %v",
+		err,
+	)
 }
