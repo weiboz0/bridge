@@ -68,7 +68,7 @@ export default async function TeacherProblemsPage({
             <CardContent className="text-sm text-muted-foreground">
               <p>
                 Your account doesn&apos;t have permission to browse the problem
-                bank. Return to <a href="/" className="underline text-primary">your dashboard</a>.
+                bank. Return to <Link href="/" className="underline text-primary">your dashboard</Link>.
               </p>
             </CardContent>
           </Card>
@@ -139,15 +139,41 @@ export default async function TeacherProblemsPage({
 
       {items.length === 0 ? (
         <Card>
-          <CardContent className="py-8 text-center text-sm text-muted-foreground space-y-3">
-            <p>No problems match.</p>
-            <p>
-              <Link href="/teacher/problems/new" className="underline text-primary">
-                Author a new problem
-              </Link>{" "}
-              or import the Python 101 curriculum from{" "}
-              <code>content/python-101/</code>.
-            </p>
+          <CardContent className="py-12 text-center space-y-4">
+            {sp.q || scope ? (
+              <>
+                <p className="text-sm text-muted-foreground">
+                  No problems match this filter.
+                </p>
+                <div className="flex justify-center gap-2">
+                  <Link
+                    href="/teacher/problems"
+                    className={buttonVariants({ variant: "outline", size: "sm" })}
+                  >
+                    Clear filter
+                  </Link>
+                  <Link
+                    href="/teacher/problems/new"
+                    className={buttonVariants({ size: "sm" })}
+                  >
+                    + Add problem
+                  </Link>
+                </div>
+              </>
+            ) : (
+              <>
+                <p className="text-base font-medium">Your problem bank is empty.</p>
+                <p className="text-sm text-muted-foreground max-w-md mx-auto">
+                  Author your first problem from scratch, or import the Python 101
+                  curriculum from <code>content/python-101/</code>.
+                </p>
+                <div className="flex justify-center pt-1">
+                  <Link href="/teacher/problems/new" className={buttonVariants()}>
+                    Create your first problem
+                  </Link>
+                </div>
+              </>
+            )}
           </CardContent>
         </Card>
       ) : (
