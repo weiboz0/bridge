@@ -85,10 +85,17 @@ export function InviteMemberModal({ orgId, role, onClose, onSuccess }: Props) {
 
   function copyRegisterLink() {
     const url = window.location.origin + "/register";
-    navigator.clipboard.writeText(url).catch(() => {
-      // Clipboard write failed silently — the user can still copy manually
-      // from the inline text shown in the error block.
-    });
+    // Codex post-impl BLOCKER: `navigator.clipboard` is undefined in
+    // insecure contexts (HTTP, file://). Without this guard, the
+    // writeText() call throws a TypeError synchronously, before the
+    // .catch() fallback runs. The inline /register URL in the 404
+    // error block remains the manual-copy fallback either way.
+    if (typeof navigator !== "undefined" && navigator.clipboard) {
+      navigator.clipboard.writeText(url).catch(() => {
+        // Clipboard write rejected (permission denied, etc.) — silent fail;
+        // user can still copy manually from the inline text.
+      });
+    }
   }
 
   return (

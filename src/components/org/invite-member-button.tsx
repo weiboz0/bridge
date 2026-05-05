@@ -17,7 +17,9 @@ export function InviteMemberButton({ orgId, role }: Props) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
 
-  const label = role === "teacher" ? "teacher" : "student";
+  // DeepSeek post-impl NIT: button label was lowercase ("teacher" /
+  // "student") while the modal title is capitalized; align both.
+  const label = role === "teacher" ? "Teacher" : "Student";
 
   return (
     <>
