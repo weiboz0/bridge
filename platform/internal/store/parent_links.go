@@ -106,9 +106,76 @@ func (s *ParentLinkStore) IsParentOf(ctx context.Context, parentID, childID stri
 	return exists, nil
 }
 
+// CreateLinkWithMembership atomically inserts a new ACTIVE parent_link
+// AND upserts an active org_memberships{role:'parent'} row for the
+// parent in `linkOrgID`. Both writes run in one transaction; if the
+// membership upsert fails (e.g., FK violation, concurrent org delete),
+// the link is rolled back so we never produce an orphaned link with
+// no membership — Codex post-impl Q7 of plan 070 phase 1.
+//
+// If an active link already exists for the (parent, child) pair,
+// returns ErrParentLinkExists.
+//
+// The reactivation semantic is the same as `OrgStore.UpsertActiveMembership`:
+// `ON CONFLICT (org_id, user_id, role) DO UPDATE SET status='active'`,
+// which flips a previously-suspended membership back to active.
+func (s *ParentLinkStore) CreateLinkWithMembership(
+	ctx context.Context,
+	parentID, childID, createdBy, linkOrgID, role string,
+) (*ParentLink, error) {
+	if parentID == "" || childID == "" || createdBy == "" || linkOrgID == "" || role == "" {
+		return nil, errors.New("parentID, childID, createdBy, linkOrgID, and role are required")
+	}
+	if parentID == childID {
+		return nil, errors.New("parent and child must be different users")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	id := uuid.New().String()
+	link, err := scanParentLink(tx.QueryRowContext(ctx,
+		`INSERT INTO parent_links (id, parent_user_id, child_user_id, status, created_by, created_at)
+		 VALUES ($1, $2, $3, 'active', $4, $5)
+		 RETURNING `+parentLinkColumns,
+		id, parentID, childID, createdBy, time.Now(),
+	))
+	if err != nil {
+		if isUniqueViolation(err) {
+			return nil, ErrParentLinkExists
+		}
+		return nil, err
+	}
+
+	// Upsert membership inside the same tx. If this fails the link
+	// rolls back via deferred Rollback.
+	membershipID := uuid.New().String()
+	_, err = tx.ExecContext(ctx,
+		`INSERT INTO org_memberships (id, org_id, user_id, role, status, created_at)
+		 VALUES ($1, $2, $3, $4, 'active', $5)
+		 ON CONFLICT (org_id, user_id, role)
+		 DO UPDATE SET status = 'active'`,
+		membershipID, linkOrgID, parentID, role, time.Now(),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return link, nil
+}
+
 // CreateLink inserts a new ACTIVE parent_link. If an active link
 // already exists for the pair, returns ErrParentLinkExists. Revoked
 // rows for the same pair don't conflict (partial unique).
+//
+// Prefer CreateLinkWithMembership when called from an org-scoped
+// context (plan 070 phase 1). This naked variant remains for the
+// platform-admin handler which doesn't have an org context.
 func (s *ParentLinkStore) CreateLink(ctx context.Context, parentID, childID, createdBy string) (*ParentLink, error) {
 	if parentID == "" || childID == "" || createdBy == "" {
 		return nil, errors.New("parentUserId, childUserId, and createdBy are required")
@@ -282,11 +349,21 @@ func (s *ParentLinkStore) ListByOrg(ctx context.Context, orgID string, f ListByO
 
 	classFilter := ``
 	if f.ClassID != "" {
+		// Scope the class filter to active classes in THIS org —
+		// defense-in-depth so a stale/cross-org class id doesn't
+		// surface rows. The displayed `classId/className` comes
+		// from the lateral most-recent class, which may differ
+		// from the filter id when a child is in multiple classes
+		// (acceptable for v1 — operator is filtering, not
+		// reporting).
 		classFilter = ` AND EXISTS (
 			SELECT 1 FROM class_memberships cm2
+			JOIN classes c2 ON c2.id = cm2.class_id
 			WHERE cm2.user_id = pl.child_user_id
 			  AND cm2.class_id = $` + sqlIdx(idx) + `
 			  AND cm2.role = 'student'
+			  AND c2.org_id = $1
+			  AND c2.status = 'active'
 		)`
 		args = append(args, f.ClassID)
 		idx++

@@ -236,6 +236,24 @@ func TestOrgParentLinks_List_NonAdminForbidden(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, w.Code)
 }
 
+// Codex post-impl Q1 — coverage gap: an org_admin in a DIFFERENT
+// org should also receive 403 when hitting our org's endpoint.
+// requireOrgAdmin only accepts active org_admin in the targeted org.
+func TestOrgParentLinks_List_CrossOrgAdminForbidden(t *testing.T) {
+	fx := newOrgParentLinksFixture(t, t.Name())
+	ctx := context.Background()
+
+	// Make `other` an org_admin in fx.otherOrgID so they have a real
+	// admin role somewhere — just not in fx.orgID.
+	_, err := fx.orgs.AddOrgMember(ctx, store.AddMemberInput{
+		OrgID: fx.otherOrgID, UserID: fx.parent.ID, Role: "org_admin", Status: "active",
+	})
+	require.NoError(t, err)
+
+	w := fx.doRequest(t, http.MethodGet, "/api/orgs/"+fx.orgID+"/parent-links", nil, fx.claimsFor(fx.parent, false))
+	assert.Equal(t, http.StatusForbidden, w.Code, "cross-org admin must not reach another org's endpoint")
+}
+
 func TestOrgParentLinks_List_PlatformAdminBypass(t *testing.T) {
 	fx := newOrgParentLinksFixture(t, t.Name())
 

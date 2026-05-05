@@ -32,11 +32,20 @@ type OrgParentLinksHandler struct {
 // Routes mounts the org-scoped parent-link CRUD routes. Caller is
 // responsible for placing this inside the auth-required group; the
 // handler does its own org_admin gate inside each method.
+//
+// Path parameters are validated as UUIDs by ValidateUUIDParam — same
+// pattern as orgs.go. Without this, a malformed orgID or linkID
+// would reach SQL comparisons and surface as a 500 instead of a
+// clean 400 (Codex post-impl Q8).
 func (h *OrgParentLinksHandler) Routes(r chi.Router) {
 	r.Route("/api/orgs/{orgID}/parent-links", func(r chi.Router) {
+		r.Use(ValidateUUIDParam("orgID"))
 		r.Get("/", h.ListByOrg)
 		r.Post("/", h.CreateLink)
-		r.Delete("/{linkID}", h.RevokeLink)
+		r.Route("/{linkID}", func(r chi.Router) {
+			r.Use(ValidateUUIDParam("linkID"))
+			r.Delete("/", h.RevokeLink)
+		})
 	})
 }
 
@@ -154,7 +163,15 @@ func (h *OrgParentLinksHandler) CreateLink(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	link, err := h.ParentLinks.CreateLink(r.Context(), parent.ID, body.ChildUserID, claims.UserID)
+	// Codex post-impl Q7 — link insert + membership upsert run in
+	// one tx so a failure between them can't produce an orphaned
+	// link with no membership (which would render as "child shown
+	// but parent can't reach /parent" — confusing and hard to
+	// reconcile). CreateLinkWithMembership rolls back on either
+	// statement's failure.
+	link, err := h.ParentLinks.CreateLinkWithMembership(
+		r.Context(), parent.ID, body.ChildUserID, claims.UserID, orgID, "parent",
+	)
 	if err != nil {
 		if errors.Is(err, store.ErrParentLinkExists) {
 			writeError(w, http.StatusConflict, "An active parent link already exists for this pair")
@@ -163,23 +180,6 @@ func (h *OrgParentLinksHandler) CreateLink(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, "Failed to create parent link")
 		return
 	}
-
-	// Decisions §3 — grant the parent active org membership so they
-	// can reach `/parent`. Failure here is logged but not fatal: the
-	// link itself is still useful (audit trail) and a sweep can
-	// reconcile membership rows. Unrolling the link on failure would
-	// hide the actual error from the operator.
-	if _, mErr := h.Orgs.UpsertActiveMembership(r.Context(), orgID, parent.ID, "parent"); mErr != nil {
-		// Best-effort: log via the standard error response shape but
-		// keep the success status — the link DID land. Return a
-		// composite payload so the caller sees the warning.
-		writeJSON(w, http.StatusCreated, map[string]any{
-			"link":    link,
-			"warning": "link created but parent org-membership upsert failed; parent may not see /parent until reconciled",
-		})
-		return
-	}
-
 	writeJSON(w, http.StatusCreated, link)
 }
 
