@@ -179,6 +179,15 @@ Specific questions:
 
 ## Code Review
 
+### Phase 3 post-impl — 2026-05-04 (in progress)
+
+First post-impl review under the new 4-way policy (CLAUDE.md commit 3e7397b). Self-review committed first; external reviewers dispatched in parallel and verdicts will land here as they arrive.
+
+**Self-review (Opus 4.7) — 1 NIT:**
+- `ListByClass` SQL doesn't filter `classes.status = 'active'`. A parent linked to a student in an archived class would surface if the popover were opened. Acceptable defense (the class-detail page itself usually blocks archived classes), but defense-in-depth would tighten it. Marking as a NIT — not a blocker.
+
+**Codex / DeepSeek V4 Flash / GLM 5.1**: dispatched in parallel; verdicts to follow.
+
 ### Phase 2 post-impl — 2026-05-04: NITS, 2 fixed inline + 1 deferred
 
 Codex post-impl review of `feat/070-phase-2-org-parent-links-ui` (commit 8c57340 + follow-ups). Verdict: NITS only. Three follow-ups; two fixed in-PR, one deferred:
