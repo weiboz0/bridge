@@ -299,6 +299,14 @@ func main() {
 		teacherH := &handlers.TeacherHandler{Courses: stores.Courses, Classes: stores.Classes, Orgs: stores.Orgs}
 		teacherH.Routes(r)
 
+		// Plan 070 phase 3 — teacher's class-detail parent-link popover.
+		teacherParentLinksH := &handlers.TeacherParentLinksHandler{
+			Classes:     stores.Classes,
+			Orgs:        stores.Orgs,
+			ParentLinks: stores.ParentLinks,
+		}
+		teacherParentLinksH.Routes(r)
+
 		teacherProblemH := &handlers.TeacherProblemHandler{
 			Problems:      stores.Problems,
 			Topics:        stores.Topics,

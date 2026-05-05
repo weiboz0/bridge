@@ -1,10 +1,21 @@
 import { notFound } from "next/navigation";
-import { api } from "@/lib/api-client";
+import { api, ApiError } from "@/lib/api-client";
 import { isValidUUID } from "@/lib/utils";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { StartSessionButton } from "@/components/teacher/start-session-button";
 import Link from "next/link";
 import { buttonVariants } from "@/components/ui/button";
+import { ClassStudentsList } from "@/components/teacher/class-students-list";
+
+export interface TeacherParentLinkRow {
+  linkId: string;
+  studentUserId: string;
+  studentName: string;
+  parentUserId: string;
+  parentEmail: string;
+  parentName: string;
+  createdAt: string;
+}
 
 interface ClassDetail {
   id: string;
@@ -47,15 +58,37 @@ export default async function TeacherClassDetailPage({
     notFound();
   }
 
-  const [members, sessions] = await Promise.all([
+  const [members, sessions, parentLinks] = await Promise.all([
     api<ClassMember[]>(`/api/classes/${id}/members`),
     api<SessionItem[]>(`/api/sessions/by-class/${id}`),
+    // Plan 070 phase 3 — class-detail Parents popover. Backend
+    // gates by roster authority (instructor / TA / org_admin /
+    // platform admin); a student viewer wouldn't even reach this
+    // page, but the .catch keeps the rest of the page loading if
+    // the endpoint is missing in older envs.
+    api<TeacherParentLinkRow[]>(`/api/teacher/classes/${id}/parent-links`).catch(
+      (e: unknown) => {
+        if (e instanceof ApiError && (e.status === 404 || e.status === 403)) {
+          return [] as TeacherParentLinkRow[];
+        }
+        throw e;
+      },
+    ),
   ]);
 
   const students = members.filter((m) => m.role === "student");
   const instructors = members.filter((m) => m.role === "instructor" || m.role === "ta");
   const activeSession = sessions.find((s) => s.status === "live");
   const pastSessions = sessions.filter((s) => s.status === "ended");
+
+  // Group parent links by student id so the popover renders the
+  // right rows on each click without an extra round-trip.
+  const parentsByStudent = new Map<string, TeacherParentLinkRow[]>();
+  for (const link of parentLinks) {
+    const list = parentsByStudent.get(link.studentUserId) ?? [];
+    list.push(link);
+    parentsByStudent.set(link.studentUserId, list);
+  }
 
   function formatDuration(start: string, end: string | null) {
     if (!end) return "In progress";
@@ -111,14 +144,15 @@ export default async function TeacherClassDetailPage({
           {students.length === 0 ? (
             <p className="text-sm text-muted-foreground">No students have joined yet.</p>
           ) : (
-            <div className="space-y-2">
-              {students.map((m) => (
-                <div key={m.id} className="flex items-center justify-between py-2 border-b last:border-0">
-                  <span className="text-sm font-medium">{m.name}</span>
-                  <span className="text-xs text-muted-foreground">{m.email}</span>
-                </div>
-              ))}
-            </div>
+            <ClassStudentsList
+              students={students.map((m) => ({
+                id: m.id,
+                userId: m.userId,
+                name: m.name,
+                email: m.email,
+                parents: parentsByStudent.get(m.userId) ?? [],
+              }))}
+            />
           )}
         </div>
 
