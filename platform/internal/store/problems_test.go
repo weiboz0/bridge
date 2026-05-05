@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/lib/pq"
 	"github.com/stretchr/testify/assert"
@@ -1512,12 +1513,19 @@ func TestProblemStore_CreateProblem_SlugAllowedInDifferentScope(t *testing.T) {
 	ctx := context.Background()
 
 	// Spin up a second user manually — setupProblemEnv only seeds one.
+	// Use a fresh suffix per run so the email doesn't collide on
+	// repeat test runs without DB cleanup.
 	var userB RegisteredUser
+	emailB := fmt.Sprintf("%s-b-%d@test.local", t.Name(), time.Now().UnixNano())
 	require.NoError(t, db.QueryRowContext(ctx, `
         INSERT INTO users (email, name, is_platform_admin)
         VALUES ($1, $2, false)
         RETURNING id, email, name
-    `, t.Name()+"-b@test.local", "User B").Scan(&userB.ID, &userB.Email, &userB.Name))
+    `, emailB, "User B").Scan(&userB.ID, &userB.Email, &userB.Name))
+	t.Cleanup(func() {
+		db.ExecContext(ctx, "DELETE FROM problems WHERE created_by = $1", userB.ID)
+		db.ExecContext(ctx, "DELETE FROM users WHERE id = $1", userB.ID)
+	})
 
 	slug := "two-sum"
 	idA := userA.ID

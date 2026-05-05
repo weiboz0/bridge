@@ -177,6 +177,24 @@ Specific questions:
 - Smoke test: register a fresh user (no role intent — register page doesn't read `?intendedRole=parent`), have an org admin link them via Phase 2 UI, verify the user can now reach `/parent` and sees their child(ren). Confirm onboarding copy reads correctly.
 - PR + merge (no Codex needed for copy-only changes; flag this as a deviation in the PR description).
 
+## Code Review
+
+### Phase 1 post-impl — 2026-05-04: 4 NITS, all fixed inline
+
+Codex post-impl review of `feat/070-phase-1-org-parent-links-backend` (commits 571a350 + follow-ups). Verdict: NITS only, no blockers. Four items fixed:
+
+1. **Cross-org-admin test gap (Q1)** — `requireOrgAdmin` correctly 403s an org_admin from a different org, but no explicit test covered that path. Added `TestOrgParentLinks_List_CrossOrgAdminForbidden` that seeds an active org_admin in `otherOrgID` and asserts the same user gets 403 against `orgID`'s endpoint.
+
+2. **Class-filter scoping (Q5)** — the `cm2` EXISTS subquery on class filter didn't join `classes` to assert the filtered class belongs to the org or is active. Added `JOIN classes c2` with `c2.org_id = $1 AND c2.status = 'active'`. The displayed `classId/className` still comes from the lateral most-recent class, which may differ from the filter id when a child is in multiple classes — documented as acceptable v1 behavior.
+
+3. **Link/membership transactionality (Q7)** — link insert + membership upsert ran as two independent statements. Failure between them produced an orphan link with no membership ("child shown in API but parent can't reach /parent"). Fix: new `ParentLinkStore.CreateLinkWithMembership` runs both in a single tx; on either failure, both roll back. Handler swaps in the new method. The naked `CreateLink` stays for the platform-admin handler which has no org context.
+
+4. **UUID validation middleware (Q8)** — routes mounted without `ValidateUUIDParam("orgID")` or `("linkID")`, unlike sibling routes in `orgs.go`. Malformed IDs would surface as 500 instead of 400. Added `r.Use(ValidateUUIDParam("orgID"))` and a nested route group with `ValidateUUIDParam("linkID")`.
+
+Drive-by: fixed a flake in plan-071's `TestProblemStore_CreateProblem_SlugAllowedInDifferentScope` — the test inserted a hardcoded email derived from `t.Name()` that collided on second run without DB cleanup. Added timestamp-suffix + `t.Cleanup`.
+
+Full Go suite passes including all 15 org-parent-link tests.
+
 ## Codex Review of This Plan
 
 ### Pass 3 — 2026-05-04: 3 stale-text scrubs

@@ -297,6 +297,35 @@ func (s *OrgStore) AddOrgMember(ctx context.Context, input AddMemberInput) (*Org
 	return &m, nil
 }
 
+// UpsertActiveMembership inserts a new active membership for
+// (orgId, userId, role), or reactivates an existing one to status='active'.
+//
+// Unlike AddOrgMember (which uses ON CONFLICT DO NOTHING and silently
+// preserves a suspended/pending state), this method's ON CONFLICT
+// DO UPDATE forces the row's status to 'active'. Plan 070 Phase 1
+// requires this for the org-admin parent-link flow: when an admin
+// creates a parent_link, the parent's `org_memberships{role:'parent'}`
+// row must be active so the parent can reach `/parent` next sign-in,
+// even if a previous link cycle suspended that membership.
+//
+// Always returns the resulting row.
+func (s *OrgStore) UpsertActiveMembership(ctx context.Context, orgID, userID, role string) (*OrgMembership, error) {
+	id := uuid.New().String()
+	var m OrgMembership
+	err := s.db.QueryRowContext(ctx,
+		`INSERT INTO org_memberships (id, org_id, user_id, role, status, created_at)
+		 VALUES ($1, $2, $3, $4, 'active', $5)
+		 ON CONFLICT (org_id, user_id, role)
+		 DO UPDATE SET status = 'active'
+		 RETURNING id, org_id, user_id, role, status, invited_by, created_at`,
+		id, orgID, userID, role, time.Now(),
+	).Scan(&m.ID, &m.OrgID, &m.UserID, &m.Role, &m.Status, &m.InvitedBy, &m.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &m, nil
+}
+
 // ListOrgMembers lists all members of an org with user details.
 func (s *OrgStore) ListOrgMembers(ctx context.Context, orgID string) ([]OrgMemberWithUser, error) {
 	// DISTINCT ON keeps one row per (user_id, role) pair — defensive
