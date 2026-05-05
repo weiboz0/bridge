@@ -205,7 +205,18 @@ Specific questions:
 - Add domain check to invite modal.
 - Smoke test: invite a same-domain email (no warning); invite a different-domain email (confirmation dialog).
 
-## Codex Review of This Plan
+## Plan Review
+
+This plan predates the new 4-way review policy (CLAUDE.md commit 3e7397b). Codex passes 1-3 are preserved below as the Codex slot of the 4-way; self-review (Opus 4.7) + DeepSeek V4 Pro + GLM 5.1 added before any implementation.
+
+### Self-review (Opus 4.7) — 4 NITS, no blockers
+
+1. **Pattern reuse**: Plan 070's `src/components/org/create-parent-link-modal.tsx` is a fresh precedent for Phase 1's invite modal (backdrop click-to-close, Escape key, ARIA combobox semantics, focus management — all polished in #127). Phase 1 should mirror that file's structure rather than invent a new modal pattern.
+2. **Backend assumption to verify before Phase 1**: §1 / §Files Phase 1 says POST body is `{ email, role }`. Need to confirm `AddMember` actually accepts `email` (not just `userId`). If it requires `userId`, the modal needs a 2-step flow: lookup email → AddMember(userId). Drop into Phase 0 question.
+3. **Self-suspend gap (Phase 4)**: Risks-table mitigation guards self-Remove via `member.userId === identity.userId`. The same guard is needed on the Update Status path — an org admin could suspend themselves and lose access. Add to Phase 4 §Files: the status modal disables `suspended` when the row is the caller.
+4. **"Open in teacher portal" link (Phase 2)**: Should only render when the caller is an instructor/TA in that class, not just any org_admin. The class members fetch already returns role per member; the page can compute `myRole = members.find(m => m.userId === identity.userId)?.role`. Add to Phase 2 §Files.
+
+### Codex Review of This Plan
 
 ### Pass 3 — 2026-05-04: stale role-change + updated_by text scrubbed
 
