@@ -93,7 +93,7 @@ export default async function OnboardingPage() {
           <div className="border rounded-lg p-4 space-y-2">
             <h3 className="font-medium">I&apos;m a parent</h3>
             <p className="text-sm text-muted-foreground">
-              Your child&apos;s teacher will link your account. Once linked, you&apos;ll see your child&apos;s progress here.
+              Ask your child&apos;s teacher or school administrator to link your account so you can see your child&apos;s class progress. The link usually appears within 24 hours of joining.
             </p>
           </div>
 
