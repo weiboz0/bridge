@@ -200,7 +200,14 @@ Drive-by from DeepSeek's dead-code finding: the page's `.catch` now only handles
 - BLOCKER 2 **FIXED**: observer/guest denial path was implicit (covered only via student-role denial). Added `TestTeacherParentLinks_ObserverAndGuest_Denied` with sub-tests for both roles. Test count: 11 → 13.
 - NIT **DEFERRED**: popover lacks focus-trap (no focus management on open). Consistent with phase 2's deferred ARIA polish — file as a follow-up. Not release-blocking.
 
-**Final verdict**: 4-way review converges to APPROVED with all blockers either fixed inline (Codex archived-class, GLM observer/guest test) or rejected with technical evidence (GLM cm.status). NITs not deferred (DeepSeek dead-code, Codex aria-label) are also fixed.
+**Final verdict (round 1)**: blockers either fixed inline (Codex archived-class, GLM observer/guest test) or rejected with technical evidence (GLM cm.status). NITs not deferred (DeepSeek dead-code, Codex aria-label) also fixed.
+
+#### Round 2 — confirmation pass
+
+Per the policy, round 2 re-dispatches only the reviewers who flagged blockers in round 1.
+
+- **Codex round-2 — CONCUR.** Clean confirmation; both archived-class BLOCKER fix and aria-label NIT fix accepted, no new findings.
+- **GLM 5.1 round-2** — round-1 dispatch used a typo'd identifier (`volcengine/glm-5.1` doesn't exist in opencode's registry; the canonical path is `volcengine-plan/glm-5.1`). Re-dispatched with the correct identifier; verdict pending.
 
 ### Phase 2 post-impl — 2026-05-04: NITS, 2 fixed inline + 1 deferred
 
