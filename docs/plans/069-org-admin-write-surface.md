@@ -247,6 +247,25 @@ Specific questions:
 
 ## Code Review (consolidated PR for phases 2-4)
 
+### Codex — BLOCKERS → both fixed inline + 1 NIT fixed
+
+Codex round-1 returned BLOCKERS with two real findings (and the same self-action backend gap that DeepSeek/GLM both classified as v1-acceptable). Codex was the strict reviewer that called it out as a blocker — and rightly so for a feature with potential self-locking-out.
+
+**Q3 BLOCKER FIXED — backend self-action guard.** UI disabled Suspend/Remove on self, but `UpdateMember` and `RemoveMember` only checked `org_admin` role, never compared `membership.UserID` against `claims.UserID`. A direct PATCH/DELETE bypassed the UI and could lock the caller out. Fix:
+- `UpdateMember` rejects `status='suspended'` when `!claims.IsPlatformAdmin && membership.UserID == claims.UserID`. Self-set-to-active still allowed (harmless no-op when already active).
+- `RemoveMember` rejects when `!claims.IsPlatformAdmin && membership.UserID == claims.UserID`. Platform admins bypass since their org access doesn't depend on the membership row.
+- 4 new tests in `platform/internal/handlers/org_self_action_guard_test.go` lock the regressions: `TestUpdateMember_SelfSuspendForbidden`, `TestUpdateMember_SelfActivateAllowed`, `TestRemoveMember_SelfRemoveForbidden`, `TestRemoveMember_PlatformAdminBypass`.
+
+**Q5 BLOCKER FIXED — orgId resolution before row actions render.** When the URL had no `?orgId=`, the legacy fetch fallback let `/api/org/teachers` auto-resolve, but the row-action props received `orgId ?? ""`, producing `/api/orgs//members/...` URLs in the dropdown. Fix:
+- New `resolveOrgIdServerSide(searchParams)` helper in `src/lib/portal/org-context.ts`. Prefers `?orgId=` if valid; otherwise looks up the caller's first active `org_admin` membership via `/api/orgs`.
+- Both `/org/teachers/page.tsx` and `/org/students/page.tsx` use the helper; render a "no org" state when the helper returns null. Row actions now always receive a real `orgId`.
+
+**Q7 NIT FIXED — UpdateMember nil-race.** When the membership row is deleted between the ownership check and the status update (rare under concurrent ops), `UpdateMemberStatus` returns `(nil, nil)`. The handler used to return `200 null`. Now returns 404.
+
+**Q4 NIT ACKNOWLEDGED — header count divergence.** List page header counts use `data.length` (all statuses now), while the dashboard aggregate counts in `stats.go` remain active-only. Cosmetic UX divergence for orgs with suspended/pending members. Track for a future polish pass — either match the stats endpoint to "all statuses" or add a visible filter label.
+
+**Q1, Q2, Q6 OK** (matches DeepSeek + GLM verdicts).
+
 ### DeepSeek V4 Flash — APPROVED, 2 advisory notes
 
 - Phase 2 GetClass + `,omitempty`: SAFE (`COALESCE` always populates the field; `omitempty` only affects struct-literal encoding).
