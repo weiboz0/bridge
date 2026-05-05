@@ -186,7 +186,15 @@ First post-impl review under the new 4-way policy (CLAUDE.md commit 3e7397b). Se
 **Self-review (Opus 4.7) — 1 NIT:**
 - `ListByClass` SQL doesn't filter `classes.status = 'active'`. A parent linked to a student in an archived class would surface if the popover were opened. Acceptable defense (the class-detail page itself usually blocks archived classes), but defense-in-depth would tighten it. Marking as a NIT — not a blocker.
 
-**Codex / DeepSeek V4 Flash / GLM 5.1**: dispatched in parallel; verdicts to follow.
+**DeepSeek V4 Flash — APPROVED.** Confirmed self-review's archived-class NIT (cross-method consistency: `ListByOrg` filters `classes.status='active'`, `ListByClass` doesn't). Found one harmless dead-code branch: the page's `.catch` handles 403, but the handler actually returns 401 (no claims) or 404 (denied). Test coverage is thorough; outside-click dismissal is correct; type drift is zero (Go JSON ↔ TS field names map 1:1). Acceptable to ship; minor cleanup welcome.
+
+**Codex — CONCUR with 1 BLOCKER + 1 NIT** (both fixed inline):
+- BLOCKER: archived-class query escalated from "NIT" to "BLOCKER". Codex correctly noted that `GetClass` does not gate on `status='active'`, so a teacher navigating directly to an archived class URL CAN reach this endpoint and see parent emails. **FIXED**: `ListByClass` SQL now joins `classes` and filters `c.status = 'active'` (matching `ListByOrg`'s pattern). Regression locked with `TestTeacherParentLinks_ArchivedClass_NotShown`.
+- NIT: the parent-count badge had `title` but no `aria-label`. **FIXED**: added explicit `aria-label` describing the parent-link count + click action for screen readers.
+
+Drive-by from DeepSeek's dead-code finding: the page's `.catch` now only handles 404 (was `404 || 403`); 403 is dead code because the handler emits 401 or 404 only.
+
+**GLM 5.1**: still running.
 
 ### Phase 2 post-impl — 2026-05-04: NITS, 2 fixed inline + 1 deferred
 

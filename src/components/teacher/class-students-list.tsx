@@ -70,6 +70,11 @@ export function ClassStudentsList({ students }: Props) {
                     ? "No parents linked yet"
                     : `${parentCount} parent${parentCount === 1 ? "" : "s"} linked`
                 }
+                aria-label={
+                  parentCount === 0
+                    ? `${s.name} has no linked parents — click to open popover`
+                    : `${s.name} has ${parentCount} linked parent${parentCount === 1 ? "" : "s"} — click to view`
+                }
                 aria-expanded={isOpen}
                 aria-controls={`parents-popover-${s.userId}`}
                 className={`inline-flex h-6 min-w-6 items-center justify-center rounded-full border px-1.5 text-[10px] font-mono uppercase tracking-wider transition-colors ${

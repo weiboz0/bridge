@@ -453,6 +453,11 @@ func (s *ParentLinkStore) ListByClass(ctx context.Context, classID string) ([]Te
 	if classID == "" {
 		return nil, errors.New("classID is required")
 	}
+	// `c.status = 'active'` mirrors the filter on ListByOrg (Codex /
+	// DeepSeek post-impl review of plan 070 phase 3). Even though the
+	// class-detail page itself usually blocks archived classes, the
+	// store query stays defensive so callers reusing this method
+	// can't accidentally surface parents from archived classes.
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT
 			pl.id, pl.child_user_id, cu.name,
@@ -461,10 +466,12 @@ func (s *ParentLinkStore) ListByClass(ctx context.Context, classID string) ([]Te
 		FROM parent_links pl
 		JOIN class_memberships cm
 			ON cm.user_id = pl.child_user_id AND cm.role = 'student'
+		JOIN classes c ON c.id = cm.class_id
 		JOIN users cu ON cu.id = pl.child_user_id
 		JOIN users pu ON pu.id = pl.parent_user_id
 		WHERE cm.class_id = $1
 		  AND pl.status = 'active'
+		  AND c.status = 'active'
 		ORDER BY cu.name, pu.name
 	`, classID)
 	if err != nil {

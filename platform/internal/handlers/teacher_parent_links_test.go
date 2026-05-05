@@ -225,6 +225,33 @@ func TestTeacherParentLinks_EmptyClass_ReturnsEmptyArray(t *testing.T) {
 	assert.Equal(t, 0, len(rows))
 }
 
+// Codex post-impl review (plan 070 phase 3) flagged the
+// archived-class loose query as a blocker. ListByClass now joins
+// `classes` and filters `c.status = 'active'`, mirroring ListByOrg.
+// This test locks the regression: a parent-link to a student in an
+// archived class must NOT surface.
+func TestTeacherParentLinks_ArchivedClass_NotShown(t *testing.T) {
+	fx := newTeacherParentLinksFixture(t, t.Name())
+	ctx := context.Background()
+
+	_, err := fx.parentLinks.CreateLink(ctx, fx.parent.ID, fx.student.ID, fx.instructor.ID)
+	require.NoError(t, err)
+
+	// Archive the class. The teacher remains an instructor on the
+	// row (so the auth gate still passes), but the archived-status
+	// filter on the SQL drops the link from the response.
+	db := integrationDB(t)
+	_, err = db.ExecContext(ctx, `UPDATE classes SET status = 'archived' WHERE id = $1`, fx.classID)
+	require.NoError(t, err)
+
+	w := fx.doGet(t, "/api/teacher/classes/"+fx.classID+"/parent-links", fx.claimsFor(fx.instructor, false))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var rows []store.TeacherParentLinkRow
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &rows))
+	assert.Equal(t, 0, len(rows), "archived-class parent links must not surface")
+}
+
 func TestTeacherParentLinks_RevokedLink_NotShown(t *testing.T) {
 	fx := newTeacherParentLinksFixture(t, t.Name())
 	ctx := context.Background()

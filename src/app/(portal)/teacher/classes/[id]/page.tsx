@@ -61,14 +61,17 @@ export default async function TeacherClassDetailPage({
   const [members, sessions, parentLinks] = await Promise.all([
     api<ClassMember[]>(`/api/classes/${id}/members`),
     api<SessionItem[]>(`/api/sessions/by-class/${id}`),
-    // Plan 070 phase 3 — class-detail Parents popover. Backend
+    // Plan 070 phase 3 — class-detail Parents popover. The handler
     // gates by roster authority (instructor / TA / org_admin /
-    // platform admin); a student viewer wouldn't even reach this
-    // page, but the .catch keeps the rest of the page loading if
-    // the endpoint is missing in older envs.
+    // platform admin); a student viewer wouldn't reach this page,
+    // and unauthorized access surfaces as 404 (deny convention,
+    // see access.go::AccessRoster). The .catch on 404 keeps the
+    // rest of the page loading if the endpoint is missing in
+    // older envs (where the upstream class fetch would not yet
+    // 404). Other status codes propagate.
     api<TeacherParentLinkRow[]>(`/api/teacher/classes/${id}/parent-links`).catch(
       (e: unknown) => {
-        if (e instanceof ApiError && (e.status === 404 || e.status === 403)) {
+        if (e instanceof ApiError && e.status === 404) {
           return [] as TeacherParentLinkRow[];
         }
         throw e;
