@@ -34,6 +34,7 @@ export function CreateParentLinkModal({
   const [childUserId, setChildUserId] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [highlightedIndex, setHighlightedIndex] = useState<number>(-1);
   const backdropRef = useRef<HTMLDivElement | null>(null);
 
   // Autocomplete: case-insensitive match on name OR email.
@@ -49,7 +50,13 @@ export function CreateParentLinkModal({
       .slice(0, 8);
   }, [childQuery, students]);
 
-  // Close on Escape.
+  // Reset highlight when the query changes so new searches start un-highlighted.
+  useEffect(() => {
+    setHighlightedIndex(-1);
+  }, [childQuery]);
+
+  // Close modal on Escape (the input's onKeyDown also handles Escape for
+  // clearing the highlight, but window-level listener closes the dialog).
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") onClose();
@@ -160,10 +167,44 @@ export function CreateParentLinkModal({
             <div className="relative">
               <Input
                 id="childQuery"
+                role="combobox"
+                aria-expanded={suggestions.length > 0 && !childUserId}
+                aria-controls="child-autocomplete-listbox"
+                aria-autocomplete="list"
+                aria-activedescendant={
+                  highlightedIndex >= 0 && suggestions[highlightedIndex]
+                    ? `option-${suggestions[highlightedIndex].userId}`
+                    : undefined
+                }
                 value={childQuery}
                 onChange={(e) => {
                   setChildQuery(e.target.value);
                   if (childUserId) setChildUserId(null);
+                }}
+                onKeyDown={(e) => {
+                  const count = suggestions.length;
+                  if (!childUserId && count > 0) {
+                    if (e.key === "ArrowDown") {
+                      e.preventDefault();
+                      setHighlightedIndex((i) => (i + 1) % count);
+                      return;
+                    }
+                    if (e.key === "ArrowUp") {
+                      e.preventDefault();
+                      setHighlightedIndex((i) => (i <= 0 ? count - 1 : i - 1));
+                      return;
+                    }
+                    if (e.key === "Enter" && highlightedIndex >= 0) {
+                      e.preventDefault();
+                      selectChild(suggestions[highlightedIndex]);
+                      return;
+                    }
+                  }
+                  if (e.key === "Escape") {
+                    // Clear the highlight so the list visually closes; the
+                    // window-level Escape handler will dismiss the whole dialog.
+                    setHighlightedIndex(-1);
+                  }
                 }}
                 placeholder="Search by name or email…"
                 autoComplete="off"
@@ -179,19 +220,32 @@ export function CreateParentLinkModal({
                 </button>
               )}
               {!childUserId && suggestions.length > 0 && (
-                <ul className="absolute z-10 mt-1 w-full max-h-48 overflow-auto rounded-md border border-input bg-background shadow-lg">
-                  {suggestions.map((s) => (
-                    <li key={s.userId}>
-                      <button
-                        type="button"
-                        onClick={() => selectChild(s)}
-                        className="w-full text-left px-3 py-2 text-sm hover:bg-muted"
-                      >
-                        <div className="font-medium">{s.name}</div>
-                        <div className="text-xs text-muted-foreground font-mono">
-                          {s.email}
-                        </div>
-                      </button>
+                <ul
+                  id="child-autocomplete-listbox"
+                  role="listbox"
+                  aria-label="Child suggestions"
+                  className="absolute z-10 mt-1 w-full max-h-48 overflow-auto rounded-md border border-input bg-background shadow-lg"
+                >
+                  {suggestions.map((s, idx) => (
+                    <li
+                      key={s.userId}
+                      id={`option-${s.userId}`}
+                      role="option"
+                      aria-selected={highlightedIndex === idx}
+                      onMouseDown={(e) => {
+                        // Prevent the input from losing focus before the click
+                        // registers so that selectChild fires correctly.
+                        e.preventDefault();
+                        selectChild(s);
+                      }}
+                      className={`cursor-pointer px-3 py-2 text-sm ${
+                        highlightedIndex === idx ? "bg-muted" : "hover:bg-muted"
+                      }`}
+                    >
+                      <div className="font-medium">{s.name}</div>
+                      <div className="text-xs text-muted-foreground font-mono">
+                        {s.email}
+                      </div>
                     </li>
                   ))}
                 </ul>
