@@ -25,6 +25,7 @@ export const portalConfigs: Record<string, PortalConfig> = {
       { label: "Courses", href: "/org/courses", icon: "book-open" },
       { label: "Classes", href: "/org/classes", icon: "school" },
       { label: "Units", href: "/org/units", icon: "file-text" },
+      { label: "Parent links", href: "/org/parent-links", icon: "link" },
       { label: "Settings", href: "/org/settings", icon: "settings" },
     ],
   },

@@ -47,6 +47,30 @@ func (h *OrgParentLinksHandler) Routes(r chi.Router) {
 			r.Delete("/", h.RevokeLink)
 		})
 	})
+	// Phase 2 form — autocomplete child picker.
+	r.Route("/api/orgs/{orgID}/eligible-children", func(r chi.Router) {
+		r.Use(ValidateUUIDParam("orgID"))
+		r.Get("/", h.ListEligibleChildren)
+	})
+}
+
+// ListEligibleChildren handles GET /api/orgs/{orgID}/eligible-children.
+//
+// Used by the org-admin parent-link create modal's child picker
+// (plan 070 phase 2). Returns the distinct set of users who are
+// active students in any active class of the org. Operator power
+// — same auth gate as the rest of the org parent-link endpoints.
+func (h *OrgParentLinksHandler) ListEligibleChildren(w http.ResponseWriter, r *http.Request) {
+	orgID := chi.URLParam(r, "orgID")
+	if _, ok := h.requireOrgAdmin(w, r, orgID); !ok {
+		return
+	}
+	rows, err := h.ParentLinks.ListEligibleChildren(r.Context(), orgID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	writeJSON(w, http.StatusOK, rows)
 }
 
 // requireOrgAdmin verifies the caller is a platform admin OR an
