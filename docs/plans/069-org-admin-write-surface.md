@@ -209,6 +209,16 @@ Specific questions:
 
 This plan predates the new 4-way review policy (CLAUDE.md commit 3e7397b). Codex passes 1-3 are preserved below as the Codex slot of the 4-way; self-review (Opus 4.7) + DeepSeek V4 Pro + GLM 5.1 added before any implementation.
 
+### GLM 5.1 — CONCUR-WITH-CHANGES (3 changes; 1 new substantive finding)
+
+GLM 5.1 confirmed: phase ordering safe; Option A on the membershipId response extension is correct; v1 invite UX (register-link fallback) is acceptable; `updated_at`-only audit is right; AddMember accepts `{email, role}` with internal lookup + 404 (matches our own verification).
+
+Changes required before implementation:
+
+1. **Self-suspend guard on Phase 4** (matches self-review NIT #3) — status modal must disable `suspended` when `member.userId === identity.userId`.
+2. **NEW SUBSTANTIVE FINDING**: `listMembersByRole` (`platform/internal/handlers/org_dashboard.go:147`) filters `m.Status == "active"`. Once an admin suspends a member, the member vanishes from the teachers/students list and becomes unreachable for re-activation via the quick-actions menu. **Without this fix, suspension is effectively irreversible from the UI.** Add to Phase 4: either (a) relax the filter to include non-active members with a status badge column, or (b) add a "Suspended" tab/filter on `/org/teachers` and `/org/students`. Going with (a) — single-list-with-badge is the simpler UX and avoids tab plumbing for a low-frequency state.
+3. **Mirror plan 070 modal pattern** (matches self-review NIT #1).
+
 ### Self-review (Opus 4.7) — 4 NITS, no blockers
 
 1. **Pattern reuse**: Plan 070's `src/components/org/create-parent-link-modal.tsx` is a fresh precedent for Phase 1's invite modal (backdrop click-to-close, Escape key, ARIA combobox semantics, focus management — all polished in #127). Phase 1 should mirror that file's structure rather than invent a new modal pattern.
