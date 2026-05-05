@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { OrgListState, type OrgListError } from "./org-list-state";
 
 export interface OrgClassRow {
@@ -15,9 +16,10 @@ export interface OrgClassRow {
 interface ClassesListProps {
   data: OrgClassRow[] | null;
   error: OrgListError | null;
+  orgId?: string;
 }
 
-export function ClassesList({ data, error }: ClassesListProps) {
+export function ClassesList({ data, error, orgId }: ClassesListProps) {
   return (
     <OrgListState
       data={data}
@@ -40,7 +42,14 @@ export function ClassesList({ data, error }: ClassesListProps) {
           <tbody>
             {(data ?? []).map((row) => (
               <tr key={row.id} className="border-t">
-                <td className="px-4 py-2">{row.title}</td>
+                <td className="px-4 py-2">
+                  <Link
+                    href={`/org/classes/${row.id}${orgId ? `?orgId=${encodeURIComponent(orgId)}` : ""}`}
+                    className="text-primary underline-offset-2 hover:underline"
+                  >
+                    {row.title}
+                  </Link>
+                </td>
                 <td className="px-4 py-2 text-muted-foreground">
                   {row.courseTitle || <span className="italic">unlinked</span>}
                 </td>
