@@ -284,6 +284,43 @@ func TestTeacherParentLinks_Outsider_Denied(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, w.Code)
 }
 
+// GLM 5.1 post-impl review (plan 070 phase 3) noted the
+// observer/guest denial path was implied by the AccessRoster auth
+// rule but had no explicit coverage. The student-denied test
+// covers one "plain class member" role; this test locks the
+// observer + guest cases too.
+func TestTeacherParentLinks_ObserverAndGuest_Denied(t *testing.T) {
+	fx := newTeacherParentLinksFixture(t, t.Name())
+	ctx := context.Background()
+	classes := store.NewClassStore(integrationDB(t))
+	users := store.NewUserStore(integrationDB(t))
+
+	for _, role := range []string{"observer", "guest"} {
+		role := role // capture
+		t.Run(role, func(t *testing.T) {
+			u, err := users.RegisterUser(ctx, store.RegisterInput{
+				Name:     "TPL " + role,
+				Email:    "tpl-" + role + "-" + uuid.NewString()[:8] + "@example.com",
+				Password: "testpassword123",
+			})
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				db := integrationDB(t)
+				db.ExecContext(ctx, "DELETE FROM class_memberships WHERE user_id = $1", u.ID)
+				db.ExecContext(ctx, "DELETE FROM auth_providers WHERE user_id = $1", u.ID)
+				db.ExecContext(ctx, "DELETE FROM users WHERE id = $1", u.ID)
+			})
+			_, err = classes.AddClassMember(ctx, store.AddClassMemberInput{
+				ClassID: fx.classID, UserID: u.ID, Role: role,
+			})
+			require.NoError(t, err)
+
+			w := fx.doGet(t, "/api/teacher/classes/"+fx.classID+"/parent-links", fx.claimsFor(u, false))
+			assert.Equal(t, http.StatusNotFound, w.Code, "%s role must be denied (404 to avoid leaking existence)", role)
+		})
+	}
+}
+
 func TestTeacherParentLinks_NoClaims_401(t *testing.T) {
 	fx := newTeacherParentLinksFixture(t, t.Name())
 	w := fx.doGet(t, "/api/teacher/classes/"+fx.classID+"/parent-links", nil)

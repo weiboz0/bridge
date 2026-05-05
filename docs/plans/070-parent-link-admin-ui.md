@@ -194,7 +194,13 @@ First post-impl review under the new 4-way policy (CLAUDE.md commit 3e7397b). Se
 
 Drive-by from DeepSeek's dead-code finding: the page's `.catch` now only handles 404 (was `404 || 403`); 403 is dead code because the handler emits 401 or 404 only.
 
-**GLM 5.1**: still running.
+**GLM 5.1 — needs-changes (1 BLOCKER REJECTED + 1 BLOCKER FIXED + 1 NIT DEFERRED):**
+
+- BLOCKER 1 **REJECTED**: GLM claimed `ListByClass` SQL must filter `cm.status = 'active'` because deactivated student memberships would leak parent links. False premise — `class_memberships` table has NO `status` column (only `id`, `class_id`, `user_id`, `role`, `joined_at` per `drizzle/0004_course-hierarchy.sql:46-52`). Member removal is DELETE-on-row, not a status flip. The recommended filter would be a SQL error. No change required.
+- BLOCKER 2 **FIXED**: observer/guest denial path was implicit (covered only via student-role denial). Added `TestTeacherParentLinks_ObserverAndGuest_Denied` with sub-tests for both roles. Test count: 11 → 13.
+- NIT **DEFERRED**: popover lacks focus-trap (no focus management on open). Consistent with phase 2's deferred ARIA polish — file as a follow-up. Not release-blocking.
+
+**Final verdict**: 4-way review converges to APPROVED with all blockers either fixed inline (Codex archived-class, GLM observer/guest test) or rejected with technical evidence (GLM cm.status). NITs not deferred (DeepSeek dead-code, Codex aria-label) are also fixed.
 
 ### Phase 2 post-impl — 2026-05-04: NITS, 2 fixed inline + 1 deferred
 
