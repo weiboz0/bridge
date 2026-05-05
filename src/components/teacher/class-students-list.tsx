@@ -23,12 +23,69 @@ interface Props {
 export function ClassStudentsList({ students }: Props) {
   const [openId, setOpenId] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const popoverRef = useRef<HTMLDivElement | null>(null);
+  const closeButtonRef = useRef<HTMLButtonElement | null>(null);
+
+  // Track the previously-open userId so focus can be restored on close.
+  const prevOpenIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (openId !== null) {
+      prevOpenIdRef.current = openId;
+    }
+  }, [openId]);
+
+  // On open: move focus to the close button (deferred one tick so the popover
+  // has rendered).
+  // On close: restore focus to the badge button that triggered the open
+  // (identified via aria-controls="parents-popover-{userId}").
+  useEffect(() => {
+    if (openId) {
+      const timerId = setTimeout(() => {
+        closeButtonRef.current?.focus();
+      }, 0);
+      return () => clearTimeout(timerId);
+    } else if (prevOpenIdRef.current !== null) {
+      const opener = document.querySelector<HTMLElement>(
+        `[aria-controls="parents-popover-${prevOpenIdRef.current}"]`,
+      );
+      opener?.focus();
+    }
+  }, [openId]);
 
   // Close the popover on Escape or when clicking outside the row group.
+  // Also handle Tab / Shift-Tab focus-trap inside the popover.
+  // v1: the popover has only one focusable element (the close button), so
+  // the trap is a no-op in practice — Tab stays on the close button.
+  // The structure is in place for richer popovers in future iterations.
   useEffect(() => {
     if (!openId) return;
     function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") setOpenId(null);
+      if (e.key === "Escape") {
+        setOpenId(null);
+        return;
+      }
+      // Focus trap: cycle focusable elements within the popover.
+      if (e.key === "Tab" && popoverRef.current) {
+        const focusable = Array.from(
+          popoverRef.current.querySelectorAll<HTMLElement>(
+            'a[href], button:not([disabled]), textarea, input, select, [tabindex]:not([tabindex="-1"])',
+          ),
+        );
+        if (focusable.length === 0) return;
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (e.shiftKey) {
+          if (document.activeElement === first) {
+            e.preventDefault();
+            last.focus();
+          }
+        } else {
+          if (document.activeElement === last) {
+            e.preventDefault();
+            first.focus();
+          }
+        }
+      }
     }
     function onClick(e: MouseEvent) {
       if (
@@ -89,6 +146,7 @@ export function ClassStudentsList({ students }: Props) {
 
             {isOpen && (
               <div
+                ref={popoverRef}
                 id={`parents-popover-${s.userId}`}
                 role="dialog"
                 aria-label={`Parents linked to ${s.name}`}
@@ -100,6 +158,7 @@ export function ClassStudentsList({ students }: Props) {
                     Parents · {s.name}
                   </p>
                   <button
+                    ref={closeButtonRef}
                     type="button"
                     onClick={() => setOpenId(null)}
                     className="text-xs text-zinc-500 hover:text-zinc-800"
