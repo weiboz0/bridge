@@ -266,6 +266,8 @@ Codex round-1 returned BLOCKERS with two real findings (and the same self-action
 
 **Q1, Q2, Q6 OK** (matches DeepSeek + GLM verdicts).
 
+**Codex round-2 — CONCUR (1 NIT)**: confirmed both BLOCKERS resolved + nil-race fix correct. New NIT D: `resolveOrgIdServerSide` swallows all API errors (500/403/401) as `null`, so a transient backend failure is indistinguishable from "no org_admin membership". Same pattern as plan 070's `/org/parent-links/page.tsx`; the downstream list fetch surfaces the 500 with `OrgListState`, so user does get a real error eventually. Acknowledged for a future polish pass that introduces a discriminated-union return type or a shared error-boundary component for the org pages. Not release-blocking.
+
 ### DeepSeek V4 Flash — APPROVED, 2 advisory notes
 
 - Phase 2 GetClass + `,omitempty`: SAFE (`COALESCE` always populates the field; `omitempty` only affects struct-literal encoding).
