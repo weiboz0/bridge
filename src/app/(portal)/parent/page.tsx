@@ -28,7 +28,7 @@ export default async function ParentDashboard() {
           <CardContent className="py-8 text-center text-muted-foreground">
             <p>No children linked yet.</p>
             <p className="text-sm mt-2">
-              Your child's teacher will link your account to your child's classes.
+              Ask your child&apos;s teacher or school administrator to link your account. Once linked, your child&apos;s classes will appear here.
             </p>
           </CardContent>
         </Card>
