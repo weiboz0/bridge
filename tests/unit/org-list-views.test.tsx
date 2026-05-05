@@ -1,6 +1,15 @@
 // @vitest-environment jsdom
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
+
+// Plan 069 phase 3 — OrgSettingsCard's happy path now delegates to
+// OrgSettingsForm which calls useRouter(). Without an App Router
+// context the form throws "invariant expected app router to be
+// mounted". Mock useRouter so the read-only assertion still works.
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: vi.fn(), refresh: vi.fn(), back: vi.fn() }),
+}));
+
 import { TeachersList } from "@/components/org/teachers-list";
 import { StudentsList } from "@/components/org/students-list";
 import { CoursesList, type OrgCourseRow } from "@/components/org/courses-list";
@@ -116,12 +125,18 @@ describe("ClassesList", () => {
 
 describe("OrgSettingsCard", () => {
   it("renders the org name + metadata fields", () => {
+    // Plan 069 phase 3 — happy path now delegates to OrgSettingsForm,
+    // which renders the editable fields as <Input> elements. The
+    // read-only fields (Type, Status, Verified) stay as plain text.
     render(<OrgSettingsCard org={settingsData} error={null} />);
-    expect(screen.getByText("Bridge Demo School")).toBeInTheDocument();
+    // Org name is the editable header field — input value
+    expect(screen.getByDisplayValue("Bridge Demo School")).toBeInTheDocument();
+    // Type stays read-only
     expect(screen.getByText("school")).toBeInTheDocument();
-    expect(screen.getByText("admin@demo.edu")).toBeInTheDocument();
-    expect(screen.getByText("Frank OrgAdmin")).toBeInTheDocument();
-    expect(screen.getByText("demo.edu")).toBeInTheDocument();
+    // Editable contact fields — input values
+    expect(screen.getByDisplayValue("admin@demo.edu")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("Frank OrgAdmin")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("demo.edu")).toBeInTheDocument();
   });
 
   it("renders 'no organization' copy when org is null", () => {
