@@ -212,7 +212,7 @@ This plan predates the new 4-way review policy (CLAUDE.md commit 3e7397b). Codex
 ### Self-review (Opus 4.7) — 4 NITS, no blockers
 
 1. **Pattern reuse**: Plan 070's `src/components/org/create-parent-link-modal.tsx` is a fresh precedent for Phase 1's invite modal (backdrop click-to-close, Escape key, ARIA combobox semantics, focus management — all polished in #127). Phase 1 should mirror that file's structure rather than invent a new modal pattern.
-2. **Backend assumption to verify before Phase 1**: §1 / §Files Phase 1 says POST body is `{ email, role }`. Need to confirm `AddMember` actually accepts `email` (not just `userId`). If it requires `userId`, the modal needs a 2-step flow: lookup email → AddMember(userId). Drop into Phase 0 question.
+2. **Backend assumption to verify before Phase 1** [VERIFIED]: §1 says POST body is `{ email, role }`. Confirmed against `platform/internal/handlers/orgs.go:301-327` — `AddMember` reads `{Email, Role}` from the body, calls `GetUserByEmail`, returns 404 with "User not found" when absent. Plan's modal flow as written is correct; no 2-step lookup needed.
 3. **Self-suspend gap (Phase 4)**: Risks-table mitigation guards self-Remove via `member.userId === identity.userId`. The same guard is needed on the Update Status path — an org admin could suspend themselves and lose access. Add to Phase 4 §Files: the status modal disables `suspended` when the row is the caller.
 4. **"Open in teacher portal" link (Phase 2)**: Should only render when the caller is an instructor/TA in that class, not just any org_admin. The class members fetch already returns role per member; the page can compute `myRole = members.find(m => m.userId === identity.userId)?.role`. Add to Phase 2 §Files.
 
