@@ -245,6 +245,34 @@ Specific questions:
 
 **Cross-phase verification**: full Go test suite passes; `tsc --noEmit` baseline of 10 unrelated errors maintained (zero new); `eslint` clean for all modified files; vitest covers Phases 2-4 (27/27 in `org-list-views.test.tsx` + `member-row-actions.test.tsx`).
 
+## Code Review (consolidated PR for phases 2-4)
+
+### DeepSeek V4 Flash — APPROVED, 2 advisory notes
+
+- Phase 2 GetClass + `,omitempty`: SAFE (`COALESCE` always populates the field; `omitempty` only affects struct-literal encoding).
+- Phase 3 always-send-all-four-fields: SOUND (handler uses `*string` pointer fields with `omitempty` Go struct tags; client safely sends all four).
+- Phase 4 self-action backend gap: confirmed via `orgs.go:403, 451` — `UpdateMemberStatus` and `RemoveMember` only check the `org_admin` role, never compare `membership.UserID` against `claims.UserID`. UI is the only gate. Acceptable for v1; track as a known gap.
+- Phase 4 filter relaxation: intentional, covered by `TestOrgList_SuspendedMemberVisible`. No other consumers of the old behavior.
+- Phase 4 + Phase 1 collision: additive, no conflict.
+- ArchiveClassButton empty-body PATCH: functionally fine (handler doesn't read body); semantically unusual but documented.
+- GetClass INNER JOIN returning `(nil, nil)` for orphaned classes: actually MORE correct (handler maps nil → 404).
+
+### GLM 5.1 — needs-attention → 1 BLOCKER REJECTED + 1 finding REJECTED + 1 nit FIXED
+
+GLM raised 7 findings; on close inspection most are wrong-premise or already-known.
+
+**F1 REJECTED (claimed shipping defect)** — GLM said `ArchiveClassButton`'s empty-body PATCH would silently no-op because "the PATCH handler uses `*string` pointer fields — all nil on empty body means nothing changes". Verified false against `platform/internal/handlers/classes.go:206-235`: `ArchiveClass` does NOT decode any request body — it directly calls `s.ArchiveClass(ctx, id)` which runs `UPDATE classes SET status = 'archived'` unconditionally. The empty-body PATCH works correctly. Plan even verified this in Codex pass-1. GLM confused this handler with a different one. No change required.
+
+**F2 REJECTED (LEFT JOIN suggestion)** — GLM suggested switching GetClass to LEFT JOIN to handle "soft-deleted course or dangling course_id". Verified against `drizzle/0004_course-hierarchy.sql:46`: `class_memberships.course_id` is `NOT NULL REFERENCES courses(id) ON DELETE CASCADE`. A deleted course cascades to the class row itself — dangling course_id is impossible. INNER JOIN is correct (also matches DeepSeek's framing as "more correct"). No change required.
+
+**F3 ACKNOWLEDGED (self-action backend gap)** — Same as DeepSeek; UI-only guard accepted for v1.
+
+**F4-F5 OK** — same as DeepSeek.
+
+**F6 ACKNOWLEDGED (modal inconsistency)** — Phase 2's `ArchiveClassButton` uses `window.confirm()`; Phase 4's `MemberRowActions` hand-rolls `<div role="menu">` modals. Real cosmetic divergence, but `Dialog` component doesn't exist in the codebase yet (would be a separate refactor scope). Acceptable for v1; track for a future polish pass that introduces a shared `<Dialog>`.
+
+**F7 FIXED — StatusBadge duplication**: identical `StatusBadge` was defined in both `teachers-list.tsx` and `students-list.tsx`. Extracted to `src/components/org/member-status-badge.tsx` and imported by both. DRY restored.
+
 ## Plan Review
 
 This plan predates the new 4-way review policy (CLAUDE.md commit 3e7397b). Codex passes 1-3 are preserved below as the Codex slot of the 4-way; self-review (Opus 4.7) + DeepSeek V4 Pro + GLM 5.1 added before any implementation.

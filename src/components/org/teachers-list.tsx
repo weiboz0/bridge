@@ -2,6 +2,7 @@
 
 import { OrgListState, type OrgListError } from "./org-list-state";
 import { MemberRowActions } from "./member-row-actions";
+import { MemberStatusBadge } from "./member-status-badge";
 
 export interface OrgMemberRow {
   membershipId: string;
@@ -20,24 +21,6 @@ interface TeachersListProps {
   currentUserId: string;
 }
 
-function StatusBadge({ status }: { status: string }) {
-  const styles: Record<string, string> = {
-    active:
-      "bg-emerald-50 text-emerald-700 border border-emerald-200",
-    pending:
-      "bg-amber-50 text-amber-700 border border-amber-200",
-    suspended:
-      "bg-rose-50 text-rose-700 border border-rose-200",
-  };
-  const cls =
-    styles[status] ??
-    "bg-muted text-muted-foreground border border-border";
-  return (
-    <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${cls}`}>
-      {status}
-    </span>
-  );
-}
 
 export function TeachersList({
   data,
@@ -69,7 +52,7 @@ export function TeachersList({
                 <td className="px-4 py-2">{row.name}</td>
                 <td className="px-4 py-2 text-muted-foreground">{row.email}</td>
                 <td className="px-4 py-2">
-                  <StatusBadge status={row.status} />
+                  <MemberStatusBadge status={row.status} />
                 </td>
                 <td className="px-4 py-2 text-muted-foreground">
                   {new Date(row.joinedAt).toLocaleDateString()}
