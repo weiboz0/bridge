@@ -179,6 +179,38 @@ Specific questions:
 
 ## Code Review
 
+### Phase 3 post-impl — 2026-05-04 (in progress)
+
+First post-impl review under the new 4-way policy (CLAUDE.md commit 3e7397b). Self-review committed first; external reviewers dispatched in parallel and verdicts will land here as they arrive.
+
+**Self-review (Opus 4.7) — 1 NIT:**
+- `ListByClass` SQL doesn't filter `classes.status = 'active'`. A parent linked to a student in an archived class would surface if the popover were opened. Acceptable defense (the class-detail page itself usually blocks archived classes), but defense-in-depth would tighten it. Marking as a NIT — not a blocker.
+
+**DeepSeek V4 Flash — APPROVED.** Confirmed self-review's archived-class NIT (cross-method consistency: `ListByOrg` filters `classes.status='active'`, `ListByClass` doesn't). Found one harmless dead-code branch: the page's `.catch` handles 403, but the handler actually returns 401 (no claims) or 404 (denied). Test coverage is thorough; outside-click dismissal is correct; type drift is zero (Go JSON ↔ TS field names map 1:1). Acceptable to ship; minor cleanup welcome.
+
+**Codex — CONCUR with 1 BLOCKER + 1 NIT** (both fixed inline):
+- BLOCKER: archived-class query escalated from "NIT" to "BLOCKER". Codex correctly noted that `GetClass` does not gate on `status='active'`, so a teacher navigating directly to an archived class URL CAN reach this endpoint and see parent emails. **FIXED**: `ListByClass` SQL now joins `classes` and filters `c.status = 'active'` (matching `ListByOrg`'s pattern). Regression locked with `TestTeacherParentLinks_ArchivedClass_NotShown`.
+- NIT: the parent-count badge had `title` but no `aria-label`. **FIXED**: added explicit `aria-label` describing the parent-link count + click action for screen readers.
+
+Drive-by from DeepSeek's dead-code finding: the page's `.catch` now only handles 404 (was `404 || 403`); 403 is dead code because the handler emits 401 or 404 only.
+
+**GLM 5.1 — needs-changes (1 BLOCKER REJECTED + 1 BLOCKER FIXED + 1 NIT DEFERRED):**
+
+- BLOCKER 1 **REJECTED**: GLM claimed `ListByClass` SQL must filter `cm.status = 'active'` because deactivated student memberships would leak parent links. False premise — `class_memberships` table has NO `status` column (only `id`, `class_id`, `user_id`, `role`, `joined_at` per `drizzle/0004_course-hierarchy.sql:46-52`). Member removal is DELETE-on-row, not a status flip. The recommended filter would be a SQL error. No change required.
+- BLOCKER 2 **FIXED**: observer/guest denial path was implicit (covered only via student-role denial). Added `TestTeacherParentLinks_ObserverAndGuest_Denied` with sub-tests for both roles. Test count: 11 → 13.
+- NIT **DEFERRED**: popover lacks focus-trap (no focus management on open). Consistent with phase 2's deferred ARIA polish — file as a follow-up. Not release-blocking.
+
+**Final verdict (round 1)**: blockers either fixed inline (Codex archived-class, GLM observer/guest test) or rejected with technical evidence (GLM cm.status). NITs not deferred (DeepSeek dead-code, Codex aria-label) also fixed.
+
+#### Round 2 — confirmation pass
+
+Per the policy, round 2 re-dispatches only the reviewers who flagged blockers in round 1.
+
+- **Codex round-2 — CONCUR.** Clean confirmation; both archived-class BLOCKER fix and aria-label NIT fix accepted, no new findings.
+- **GLM 5.1 round-2 — CONCUR.** First call with the corrected identifier (`volcengine-plan/glm-5.1`). Independently verified B1 rejection by reading `drizzle/0004_course-hierarchy.sql:57-63` ("class_memberships has columns id, class_id, user_id, role, joined_at — no status column. The proposed `cm.status = 'active'` filter would be a SQL error"). Confirmed B2's observer/guest test exercises the correct denial gate via `RequireClassAuthority(_, AccessRoster)`. Confirmed all prior NITs (dead 403 branch, aria-label) are clean. Focus-trap deferral noted as acceptable for a read-only popover.
+
+**Final 4-way verdict (round 2)**: all four reviewers CONCUR on the current commit. Phase 3 is ready to merge.
+
 ### Phase 2 post-impl — 2026-05-04: NITS, 2 fixed inline + 1 deferred
 
 Codex post-impl review of `feat/070-phase-2-org-parent-links-ui` (commit 8c57340 + follow-ups). Verdict: NITS only. Three follow-ups; two fixed in-PR, one deferred:

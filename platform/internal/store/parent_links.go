@@ -428,6 +428,72 @@ func (s *ParentLinkStore) ListByOrg(ctx context.Context, orgID string, f ListByO
 	return out, rows.Err()
 }
 
+// TeacherParentLinkRow is the projection consumed by the teacher's
+// class-detail "Parents" popover (plan 070 phase 3). One row per
+// (student, parent) tuple for active links of students enrolled in
+// the class. Read-only — teachers don't write here.
+type TeacherParentLinkRow struct {
+	LinkID        string    `json:"linkId"`
+	StudentUserID string    `json:"studentUserId"`
+	StudentName   string    `json:"studentName"`
+	ParentUserID  string    `json:"parentUserId"`
+	ParentEmail   string    `json:"parentEmail"`
+	ParentName    string    `json:"parentName"`
+	CreatedAt     time.Time `json:"createdAt"`
+}
+
+// ListByClass returns active parent-links for every student
+// enrolled in `classID`. The teacher-side popover renders these
+// grouped by student. Empty slice when none exist — never nil.
+//
+// Caller is responsible for authorizing access to the class
+// (instructor/TA/org_admin/platform_admin); this store query does
+// not gate by role.
+func (s *ParentLinkStore) ListByClass(ctx context.Context, classID string) ([]TeacherParentLinkRow, error) {
+	if classID == "" {
+		return nil, errors.New("classID is required")
+	}
+	// `c.status = 'active'` mirrors the filter on ListByOrg (Codex /
+	// DeepSeek post-impl review of plan 070 phase 3). Even though the
+	// class-detail page itself usually blocks archived classes, the
+	// store query stays defensive so callers reusing this method
+	// can't accidentally surface parents from archived classes.
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT
+			pl.id, pl.child_user_id, cu.name,
+			pl.parent_user_id, pu.email, pu.name,
+			pl.created_at
+		FROM parent_links pl
+		JOIN class_memberships cm
+			ON cm.user_id = pl.child_user_id AND cm.role = 'student'
+		JOIN classes c ON c.id = cm.class_id
+		JOIN users cu ON cu.id = pl.child_user_id
+		JOIN users pu ON pu.id = pl.parent_user_id
+		WHERE cm.class_id = $1
+		  AND pl.status = 'active'
+		  AND c.status = 'active'
+		ORDER BY cu.name, pu.name
+	`, classID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []TeacherParentLinkRow{}
+	for rows.Next() {
+		var r TeacherParentLinkRow
+		if err := rows.Scan(
+			&r.LinkID,
+			&r.StudentUserID, &r.StudentName,
+			&r.ParentUserID, &r.ParentEmail, &r.ParentName,
+			&r.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // EligibleChild is the projection used by the parent-link create
 // form's child picker — distinct active student users whose
 // class_memberships put them in an active class of the org.

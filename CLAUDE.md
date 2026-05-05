@@ -2,10 +2,10 @@
 
 ## CRITICAL RULES (never skip)
 
-- **Use Claude Opus 4.7 for all coding work.** All implementation — writing code, editing files, refactors, bug fixes, tests — runs on Opus 4.7 (`claude-opus-4-7`, 1M context). Do not delegate code generation to Codex or any other model.
-- **Always create a feature branch** before implementation. Never commit directly to main. Use `git checkout -b feat/NNN-description`.
-- **Always dispatch Codex plan review before any implementation.** After drafting or revising any plan in `docs/plans/`, dispatch `codex:codex-rescue` to review the plan against the codebase. **Do NOT begin implementation until Claude and Codex agree** on the plan. If Codex flags blockers, revise the plan and re-dispatch the review. Iterate until both models concur. Capture the agreed verdict in the plan's `## Codex Review of This Plan` section so the agreement is auditable. See "Plan review gate" under Plans below.
-- **Always code review** before merging a PR. Write findings to the plan file's `## Code Review` section.
+- **Use Claude Sonnet 4.6 by default; promote to Opus 4.7 for complex work.** Routine coding (new components, CRUD, tests, refactors, copy edits) runs on Sonnet. Reach for Opus 4.7 (1M context) when you hit cross-cutting design, hard debugging, or large-codebase reasoning. Do not delegate code generation to Codex, DeepSeek, GLM, or any other external model — those are review-only. See "Coding Agent" below for the escalation policy.
+- **Always create the feature branch BEFORE drafting the plan.** Use `git checkout -b feat/NNN-description` first. The plan file, review verdicts, and iterative revisions all commit to this branch — never to `main`. (The opencode session-continuity helper also keys on `plan-NNN`-style branch names, so this is a precondition for reviewer session reuse.)
+- **Always run the 4-way plan review before any implementation.** After drafting or revising any plan in `docs/plans/`, dispatch ALL four reviewers in parallel (see "Plan review gate" below). Do NOT begin implementation until all four concur. Capture each verdict in the plan's `## Plan Review` section, committed to the feature branch as they arrive.
+- **Always run the 4-way code review** before merging a PR. Dispatch all four reviewers in parallel (see "Code review gate" below). Write findings to the plan file's `## Code Review` section.
 - **Always write a post-execution report** in the plan file before shipping.
 - **Always run the full test suite** before pushing. Do not push with failing tests.
 
@@ -56,6 +56,7 @@ Frontend proxies Go routes via `next.config.ts` rewrites (`GO_PROXY_ROUTES`). Al
 
 ## Testing
 
+- **Test code is Sonnet's job.** Default to Claude Sonnet 4.6 for writing and maintaining all test code (Vitest unit + integration, Go test files, Playwright e2e, fixtures, helpers). Tests are pattern-heavy, repetitive, and benefit from Sonnet's faster turnaround. Only escalate to Opus 4.7 when the test itself is hard — e.g., diagnosing a flaky timing-dependent test, designing a new fixture pattern that other suites will copy, or test code that drives a multi-system integration through unfamiliar territory. Implementation code may run on Opus while the matching tests run on Sonnet — that's fine and often faster.
 - When code is added or modified, write or update test cases covering the changes.
 - Run the relevant tests to verify they pass before committing.
 - Test both happy paths and error/edge cases (invalid input, missing data, unauthorized access).
@@ -89,17 +90,28 @@ For substantial code changes — new features, re-architecting, multi-file refac
 
 Before writing a new plan, review existing plans in `docs/plans/` to ensure consistency. Check for: reusable patterns and utilities already established, architectural decisions that must be respected, and existing implementations that the new work should build on rather than duplicate. Avoid introducing duplicate code — reuse existing implementations and keep logic in a single source of truth.
 
-### Plan review gate (mandatory)
+### Plan review gate (mandatory — 4-way)
 
-Every plan — new or revised — must pass a Codex review before any code is written:
+Every plan — new or revised — must pass a 4-way review before any code is written. The four reviewers run **in parallel** (dispatch all simultaneously via multiple Agent/subagent calls in a single message):
 
-1. **Draft or revise the plan** in `docs/plans/`.
-2. **Dispatch `codex:codex-rescue`** with the plan path and explicit review questions (blockers, hidden assumptions, scope, ordering, missing risks). Keep the prompt focused — under 500 words, time-bounded.
-3. **Capture Codex's verdict** in the plan's `## Codex Review of This Plan` section. Include the date, the blockers, the confirmations, and the resolution for each blocker.
-4. **If Codex flags blockers, revise the plan** to address them. Re-dispatch the review on the revised plan. Iterate until Codex returns no blockers and Claude agrees with the resolution.
-5. **Only then** begin implementation. The first commit on the feature branch should be the plan file with the agreed-on Codex review summary already embedded.
+| # | Reviewer | How to dispatch | Model |
+|---|----------|-----------------|-------|
+| 1 | **Self-review (Opus 4.7)** | Claude reads its own plan critically on Opus and lists concerns inline | claude-opus-4-7 |
+| 2 | **Codex** | `codex:codex-rescue` subagent with the plan path + review questions | Codex default |
+| 3 | **DeepSeek V4 Pro** | `opencode:opencode-review` subagent with `--model deepseek/deepseek-v4-pro` | deepseek/deepseek-v4-pro |
+| 4 | **GLM 5.1** | `opencode:opencode-review` subagent with `--model volcengine-plan/glm-5.1` | volcengine-plan/glm-5.1 |
 
-A plan that hasn't passed Codex review is not ready for execution, regardless of how confident Claude is in it. The two-model consensus catches blind spots no single model can see.
+Steps:
+
+1. **Create the feature branch FIRST** — `git checkout -b feat/NNN-description` before any plan drafting. This guarantees every commit (the plan file, the review verdicts, the iterative revisions) lands on the feature branch, never on `main`. The opencode session-continuity helper also keys on the branch name (`plan-NNN`), so reviewer history scopes correctly when the branch matches `feat/NNN-*`.
+2. **Draft or revise the plan** in `docs/plans/`. Commit it to the feature branch so the reviewers can see the same on-disk file Claude is iterating on.
+3. **Run self-review** — Claude reads the plan with fresh eyes and records any concerns.
+4. **Dispatch reviewers 2-4 in parallel** — same prompt to each (plan path + explicit review questions: blockers, hidden assumptions, scope, ordering, missing risks). Keep the prompt focused — under 500 words, time-bounded. If any reviewer needs a remote read (e.g., GitHub-connector access), push the branch first so they can fetch the plan file by branch.
+5. **Capture all four verdicts** in the plan's `## Plan Review` section. Include the date, the reviewer name, the verdict, the blockers, and the resolution for each blocker. Commit the verdicts to the feature branch as they arrive — don't batch the audit trail.
+6. **If ANY reviewer flags blockers, revise the plan** to address them on the same feature branch. Re-dispatch only the flagging reviewer(s) on the revised plan. Iterate until all four concur.
+7. **Only then** begin implementation on the same branch. The plan file with the 4-way review summary is already committed; the next commits are the implementation.
+
+A plan that hasn't passed all four reviews is not ready for execution, regardless of how confident Claude is in it. The multi-model consensus catches blind spots no single model can see.
 
 ## Development Workflow
 
@@ -113,26 +125,77 @@ Follow `docs/development-workflow.md` exactly for every plan (Steps 1–6: Desig
 
 ## Code Review
 
-Follow `docs/code-review.md` for the review process. Key points:
-- Reviews go in the plan file's `## Code Review` section
-- Reviewers: append findings with `[OPEN]` status and file:line references
-- Authors: respond inline with `→ Response:` and `[FIXED]`/`[WONTFIX]`
-- See "Codex (Review Only)" below for how to dispatch second-opinion reviews.
+Follow `docs/code-review.md` for the review process. Reviews use the same 4-way pattern as plans but with a **flash-tier model for DeepSeek** (code reviews are more frequent and latency-sensitive):
+
+| # | Reviewer | How to dispatch | Model |
+|---|----------|-----------------|-------|
+| 1 | **Self-review (Opus 4.7)** | Claude reads the diff critically on Opus before dispatching | claude-opus-4-7 |
+| 2 | **Codex** | `codex:codex-rescue` subagent with branch diff + review questions | Codex default |
+| 3 | **DeepSeek V4 Flash** | `opencode:opencode-review` subagent with `--model deepseek/deepseek-v4-flash` | deepseek/deepseek-v4-flash |
+| 4 | **GLM 5.1** | `opencode:opencode-review` subagent with `--model volcengine-plan/glm-5.1` | volcengine-plan/glm-5.1 |
+
+Key points:
+- All four reviewers dispatch **in parallel** (multiple Agent calls in one message) after the self-review pass.
+- Reviews go in the plan file's `## Code Review` section.
+- Reviewers: append findings with `[OPEN]` status and file:line references.
+- Authors: respond inline with `→ Response:` and `[FIXED]`/`[WONTFIX]`.
+- If ANY reviewer flags a blocker, fix it before merging. Re-dispatch only the flagging reviewer(s) to confirm the fix.
 
 ## Coding Agent
 
-**Claude Opus 4.7 is the primary coding agent.** All implementation, debugging, refactoring, and coding tasks run on Opus 4.7 — either directly or via subagents. Do NOT delegate coding tasks to Codex. Codex is review-only (see below).
+Bridge uses a **two-tier Claude coding policy** — Sonnet 4.6 for the bulk of routine work, Opus 4.7 for the genuinely hard parts. The model in use should match the difficulty of the task, not the prestige of the plan.
 
-## Codex (Review Only)
+### Claude Sonnet 4.6 — general coding agent (default)
 
-**Use Codex exclusively for review tasks.** Codex provides an independent second-model perspective that catches issues Claude may miss. The two-model consensus is **non-optional for plans**; it's strongly recommended for code, specs, and post-impl reviews.
+Use Sonnet for the bulk of day-to-day implementation:
+- **All test code** (Vitest, Go tests, Playwright e2e, fixtures, helpers) — see "Testing" above. Test code is the single most consistent fit for Sonnet: pattern-heavy, repetitive, fast feedback loop.
+- New components / pages following established patterns
+- CRUD endpoints on top of existing handlers + stores
+- Refactors with a clear before/after shape
+- Doc updates, dependency bumps, copy edits
+- Small bug fixes where the root cause is already known
 
-- **Plan review (BLOCKING — see "Plan review gate" above)** — every plan in `docs/plans/` must pass `codex:codex-rescue` review before any code is written. Implementation on a plan that hasn't been reviewed-and-agreed is a process violation.
-- **Code review** — dispatch `codex:codex-rescue` with a prompt targeting the branch diff to get a second opinion before opening or merging a PR. The Bridge Codex review gate also triggers automatically at session stop.
-- **Spec review** — dispatch `codex:codex-rescue` to validate design specs in `docs/specs/`.
-- **Post-implementation review** — dispatch `codex:codex-rescue` to verify implementations match the plan's specifications and surface any drift.
+### Claude Opus 4.7 — complex coding agent (1M context)
 
-Do NOT use Codex for implementation, debugging, refactoring, or any coding work. Those belong to Claude Opus 4.7.
+Escalate to Opus when:
+- Designing a new architectural pattern or cross-cutting abstraction
+- Debugging a non-obvious issue with multi-system surface area (race conditions, state-machine bugs, cross-service auth, distributed correctness)
+- Implementing the first phase of a plan that establishes patterns later phases will follow
+- Reading a large unfamiliar codebase to plan a refactor
+- Tasks that genuinely benefit from the 1M context window (e.g., reasoning over the whole platform/internal/store at once)
+- Anything where Sonnet has already attempted and gotten stuck
+
+When in doubt, start with Sonnet. Promote to Opus only when the work clearly warrants it — Opus is more expensive, slower, and shouldn't be the reflex choice. Promotion mid-task is fine: if Sonnet hits a wall, hand off to Opus with the conversation context intact.
+
+### Self-review always runs on Opus 4.7
+
+The **self-review stage** of both gates (plan review #1 and code review #1) ALWAYS runs on Opus 4.7, regardless of which tier wrote the plan or code. Review is judgment-heavy and load-bearing — a routine implementation deserves a careful review, and the cost gap between Sonnet and Opus on a single review pass is dwarfed by the cost of shipping a flaw that the gate should have caught. Switch to Opus before invoking the self-review step.
+
+### Both tiers — same rules
+
+- Do NOT delegate coding tasks to Codex, DeepSeek, or GLM. Those models are review-only (see below).
+- Both tiers follow the 4-way review gates for plans and code (with Opus on self-review, see above).
+- Both tiers respect the branch-first rule and the development workflow.
+
+## External Reviewers (Review Only)
+
+Three external review models complement Claude's self-review. None of them implement code — they review only.
+
+### Codex
+- Dispatch: `codex:codex-rescue` subagent.
+- Use for: plan reviews, code reviews, spec reviews, post-impl reviews.
+- Prompt style: under 500 words, focused questions, time-bounded.
+
+### DeepSeek (via opencode)
+- Plan reviews: `opencode:opencode-review` subagent with `--model deepseek/deepseek-v4-pro`.
+- Code reviews: `opencode:opencode-review` subagent with `--model deepseek/deepseek-v4-flash` (faster for frequent post-impl passes).
+- Prompt style: same prompt as Codex (plan path + questions, or branch diff + questions). The opencode subagent accepts free-form prompt text forwarded to the model.
+
+### GLM 5.1 (via opencode)
+- All reviews: `opencode:opencode-review` subagent with `--model volcengine-plan/glm-5.1`.
+- Prompt style: same as above.
+
+Do NOT use any of these for implementation, debugging, refactoring, or coding. Those belong to Claude Sonnet 4.6 (default) or Opus 4.7 (complex) — see "Coding Agent" above.
 
 ## Multi-Agent Coordination
 
