@@ -88,20 +88,35 @@ export default async function OrgParentLinksPage({
   let links: ParentLinkRow[] = [];
   let students: OrgStudentRow[] = [];
   let error: { status: number | null; message: string } | null = null;
+  let studentsError: { status: number | null; message: string } | null = null;
 
   try {
-    const [linksRes, studentsRes] = await Promise.all([
+    // Phase 2 — students list is the autocomplete source for the
+    // create-modal child picker. Distinct from /api/org/students
+    // (which queries org_memberships) — we want users enrolled in
+    // any active class. Capture its failure separately from the
+    // primary list fetch so a flaky students endpoint doesn't blank
+    // the page; instead the create modal surfaces a "couldn't load
+    // students" hint.
+    const [linksRes, studentsResult] = await Promise.all([
       api<ParentLinkRow[]>(`/api/orgs/${orgId}/parent-links?status=active`),
-      // Phase 2 — students list is the autocomplete source for the
-      // create-modal child picker. Distinct from /api/org/students
-      // (which queries org_memberships) — we want users enrolled in
-      // any active class.
-      api<OrgStudentRow[]>(`/api/orgs/${orgId}/eligible-children`).catch(
-        () => [] as OrgStudentRow[],
-      ),
+      api<OrgStudentRow[]>(`/api/orgs/${orgId}/eligible-children`)
+        .then((rows) => ({ ok: true as const, rows }))
+        .catch((e: unknown) => ({
+          ok: false as const,
+          status: e instanceof ApiError ? e.status : null,
+          message: e instanceof Error ? e.message : String(e),
+        })),
     ]);
     links = linksRes;
-    students = studentsRes;
+    if (studentsResult.ok) {
+      students = studentsResult.rows;
+    } else {
+      studentsError = {
+        status: studentsResult.status,
+        message: studentsResult.message,
+      };
+    }
   } catch (e) {
     if (e instanceof ApiError && e.status === 401) redirect("/login");
     error = {
@@ -117,6 +132,7 @@ export default async function OrgParentLinksPage({
       initialLinks={links}
       students={students}
       error={error}
+      studentsError={studentsError}
     />
   );
 }

@@ -17,6 +17,7 @@ import type { OrgStudentRow } from "@/app/(portal)/org/parent-links/page";
 interface Props {
   orgId: string;
   students: OrgStudentRow[];
+  studentsError: { status: number | null; message: string } | null;
   onClose: () => void;
   onCreated: () => void;
 }
@@ -24,6 +25,7 @@ interface Props {
 export function CreateParentLinkModal({
   orgId,
   students,
+  studentsError,
   onClose,
   onCreated,
 }: Props) {
@@ -32,7 +34,7 @@ export function CreateParentLinkModal({
   const [childUserId, setChildUserId] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const backdropRef = useRef<HTMLDivElement | null>(null);
 
   // Autocomplete: case-insensitive match on name OR email.
   const suggestions = useMemo(() => {
@@ -114,16 +116,20 @@ export function CreateParentLinkModal({
 
   return (
     <div
+      ref={backdropRef}
       role="dialog"
       aria-modal="true"
       aria-label="Add parent link"
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
       onClick={(e) => {
-        if (e.target === dialogRef.current) onClose();
+        // Click on the backdrop itself (not bubbled from the inner
+        // dialog) closes the modal. Codex post-impl phase 2 NIT-2:
+        // the previous compare-against-inner-ref check inverted the
+        // hit test, so backdrop clicks did nothing.
+        if (e.target === backdropRef.current) onClose();
       }}
     >
       <div
-        ref={dialogRef}
         className="w-full max-w-md rounded-lg bg-background p-6 shadow-xl"
       >
         <h2 className="text-lg font-semibold mb-1">Add parent link</h2>
@@ -191,12 +197,17 @@ export function CreateParentLinkModal({
                 </ul>
               )}
             </div>
-            {students.length === 0 && (
+            {studentsError ? (
+              <p className="text-xs text-rose-700">
+                Couldn&apos;t load the student roster ({studentsError.message}).
+                Refresh to retry.
+              </p>
+            ) : students.length === 0 ? (
               <p className="text-xs text-rose-700">
                 No students enrolled in any active class yet — add students to
                 a class first.
               </p>
-            )}
+            ) : null}
           </div>
 
           {error && (

@@ -179,6 +179,18 @@ Specific questions:
 
 ## Code Review
 
+### Phase 2 post-impl — 2026-05-04: NITS, 2 fixed inline + 1 deferred
+
+Codex post-impl review of `feat/070-phase-2-org-parent-links-ui` (commit 8c57340 + follow-ups). Verdict: NITS only. Three follow-ups; two fixed in-PR, one deferred:
+
+1. **NIT-1 FIXED**: eligible-children fetch errors were silently swallowed by a `.catch(() => [])` so an admin would see "no enrolled students" when the backend was actually broken. Fix: capture the failure separately as `studentsError`, pass it through to the create modal which now shows "Couldn't load the student roster (…)" instead of the generic "no students" hint.
+
+2. **NIT-2 FIXED**: backdrop-click-to-close compared `e.target` against the inner-dialog ref (which never matches when the user clicks the backdrop). Fix: ref attached to the outer backdrop div, hit-test compares against it directly.
+
+3. **NIT-3 DEFERRED** (a11y polish): the autocomplete dropdown isn't a proper combobox — missing `aria-expanded`, `aria-activedescendant`, roving focus. Listed as a future polish pass; not release-blocking absent a hard WCAG gate.
+
+CONCUR on all other questions: org_admin resolution fallback handles the teacher-in-A/admin-in-B case correctly, free-typed child rejection is appropriate for v1, eligible-children fetch on every render is acceptable, revoke confirmation copy is clear, router.refresh() pattern is consistent with the rest of the codebase, and the eligible-children backend extension is properly scoped (covered by 3 integration tests).
+
 ### Phase 1 post-impl — 2026-05-04: 4 NITS, all fixed inline
 
 Codex post-impl review of `feat/070-phase-1-org-parent-links-backend` (commits 571a350 + follow-ups). Verdict: NITS only, no blockers. Four items fixed:

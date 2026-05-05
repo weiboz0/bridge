@@ -27,6 +27,11 @@ interface Props {
   initialLinks: ParentLinkRow[];
   students: OrgStudentRow[];
   error: { status: number | null; message: string } | null;
+  /** Set when the eligible-children fetch failed. The list still
+   *  renders, but the create modal surfaces a hint that the
+   *  autocomplete is empty due to a backend error rather than an
+   *  empty roster. */
+  studentsError: { status: number | null; message: string } | null;
 }
 
 export function OrgParentLinksView({
@@ -35,6 +40,7 @@ export function OrgParentLinksView({
   initialLinks,
   students,
   error,
+  studentsError,
 }: Props) {
   const router = useRouter();
   const [createOpen, setCreateOpen] = useState(false);
@@ -178,6 +184,7 @@ export function OrgParentLinksView({
         <CreateParentLinkModal
           orgId={orgId}
           students={students}
+          studentsError={studentsError}
           onClose={() => setCreateOpen(false)}
           onCreated={() => {
             setCreateOpen(false);
