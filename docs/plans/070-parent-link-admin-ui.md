@@ -207,7 +207,9 @@ Drive-by from DeepSeek's dead-code finding: the page's `.catch` now only handles
 Per the policy, round 2 re-dispatches only the reviewers who flagged blockers in round 1.
 
 - **Codex round-2 — CONCUR.** Clean confirmation; both archived-class BLOCKER fix and aria-label NIT fix accepted, no new findings.
-- **GLM 5.1 round-2** — round-1 dispatch used a typo'd identifier (`volcengine/glm-5.1` doesn't exist in opencode's registry; the canonical path is `volcengine-plan/glm-5.1`). Re-dispatched with the correct identifier; verdict pending.
+- **GLM 5.1 round-2 — CONCUR.** First call with the corrected identifier (`volcengine-plan/glm-5.1`). Independently verified B1 rejection by reading `drizzle/0004_course-hierarchy.sql:57-63` ("class_memberships has columns id, class_id, user_id, role, joined_at — no status column. The proposed `cm.status = 'active'` filter would be a SQL error"). Confirmed B2's observer/guest test exercises the correct denial gate via `RequireClassAuthority(_, AccessRoster)`. Confirmed all prior NITs (dead 403 branch, aria-label) are clean. Focus-trap deferral noted as acceptable for a read-only popover.
+
+**Final 4-way verdict (round 2)**: all four reviewers CONCUR on the current commit. Phase 3 is ready to merge.
 
 ### Phase 2 post-impl — 2026-05-04: NITS, 2 fixed inline + 1 deferred
 
