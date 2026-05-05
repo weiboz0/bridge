@@ -99,7 +99,7 @@ Every plan — new or revised — must pass a 4-way review before any code is wr
 | 1 | **Self-review (Opus 4.7)** | Claude reads its own plan critically on Opus and lists concerns inline | claude-opus-4-7 |
 | 2 | **Codex** | `codex:codex-rescue` subagent with the plan path + review questions | Codex default |
 | 3 | **DeepSeek V4 Pro** | `opencode:opencode-review` subagent with `--model deepseek/deepseek-v4-pro` | deepseek/deepseek-v4-pro |
-| 4 | **GLM 5.1** | `opencode:opencode-review` subagent with `--model volcengine/glm-5.1` | volcengine/glm-5.1 |
+| 4 | **GLM 5.1** | `opencode:opencode-review` subagent with `--model volcengine-plan/glm-5.1` | volcengine-plan/glm-5.1 |
 
 Steps:
 
@@ -132,7 +132,7 @@ Follow `docs/code-review.md` for the review process. Reviews use the same 4-way 
 | 1 | **Self-review (Opus 4.7)** | Claude reads the diff critically on Opus before dispatching | claude-opus-4-7 |
 | 2 | **Codex** | `codex:codex-rescue` subagent with branch diff + review questions | Codex default |
 | 3 | **DeepSeek V4 Flash** | `opencode:opencode-review` subagent with `--model deepseek/deepseek-v4-flash` | deepseek/deepseek-v4-flash |
-| 4 | **GLM 5.1** | `opencode:opencode-review` subagent with `--model volcengine/glm-5.1` | volcengine/glm-5.1 |
+| 4 | **GLM 5.1** | `opencode:opencode-review` subagent with `--model volcengine-plan/glm-5.1` | volcengine-plan/glm-5.1 |
 
 Key points:
 - All four reviewers dispatch **in parallel** (multiple Agent calls in one message) after the self-review pass.
@@ -192,7 +192,7 @@ Three external review models complement Claude's self-review. None of them imple
 - Prompt style: same prompt as Codex (plan path + questions, or branch diff + questions). The opencode subagent accepts free-form prompt text forwarded to the model.
 
 ### GLM 5.1 (via opencode)
-- All reviews: `opencode:opencode-review` subagent with `--model volcengine/glm-5.1`.
+- All reviews: `opencode:opencode-review` subagent with `--model volcengine-plan/glm-5.1`.
 - Prompt style: same as above.
 
 Do NOT use any of these for implementation, debugging, refactoring, or coding. Those belong to Claude Sonnet 4.6 (default) or Opus 4.7 (complex) — see "Coding Agent" above.
