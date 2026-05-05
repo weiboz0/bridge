@@ -5,6 +5,7 @@ import {
   parseOrgIdFromSearchParams,
   appendOrgId,
 } from "@/lib/portal/org-context";
+import { InviteMemberButton } from "@/components/org/invite-member-button";
 
 export default async function OrgTeachersPage({
   searchParams,
@@ -26,7 +27,12 @@ export default async function OrgTeachersPage({
 
   return (
     <div className="p-6 space-y-6">
-      <h1 className="text-2xl font-bold">Teachers{data ? ` (${data.length})` : ""}</h1>
+      <div className="flex items-center justify-between gap-4">
+        <h1 className="text-2xl font-bold">
+          Teachers{data ? ` (${data.length})` : ""}
+        </h1>
+        {orgId && <InviteMemberButton orgId={orgId} role="teacher" />}
+      </div>
       <TeachersList data={data} error={error} />
     </div>
   );
