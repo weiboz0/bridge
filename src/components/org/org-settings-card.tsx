@@ -1,6 +1,7 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import Link from "next/link";
 import type { OrgListError } from "./org-list-state";
+import { OrgSettingsForm } from "./org-settings-form";
 
 export interface OrgSettingsData {
   id: string;
@@ -11,6 +12,7 @@ export interface OrgSettingsData {
   contactName?: string;
   domain?: string | null;
   verifiedAt?: string | null;
+  updatedAt: string;
 }
 
 interface OrgSettingsCardProps {
@@ -18,14 +20,6 @@ interface OrgSettingsCardProps {
   error: OrgListError | null;
 }
 
-function Field({ label, value }: { label: string; value: React.ReactNode }) {
-  return (
-    <div className="grid grid-cols-3 gap-4 py-2 border-t text-sm">
-      <dt className="text-muted-foreground">{label}</dt>
-      <dd className="col-span-2">{value || <span className="text-muted-foreground italic">not set</span>}</dd>
-    </div>
-  );
-}
 
 export function OrgSettingsCard({ org, error }: OrgSettingsCardProps) {
   if (error) {
@@ -57,27 +51,5 @@ export function OrgSettingsCard({ org, error }: OrgSettingsCardProps) {
     );
   }
 
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{org.name}</CardTitle>
-      </CardHeader>
-      <CardContent>
-        <dl>
-          <Field label="Type" value={org.type} />
-          <Field label="Status" value={org.status} />
-          <Field label="Contact name" value={org.contactName} />
-          <Field label="Contact email" value={org.contactEmail} />
-          <Field label="Domain" value={org.domain} />
-          <Field
-            label="Verified"
-            value={org.verifiedAt ? new Date(org.verifiedAt).toLocaleDateString() : null}
-          />
-        </dl>
-        <p className="mt-4 text-xs text-muted-foreground">
-          Editing organization settings is coming in a future update.
-        </p>
-      </CardContent>
-    </Card>
-  );
+  return <OrgSettingsForm org={org} />;
 }
