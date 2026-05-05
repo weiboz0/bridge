@@ -103,7 +103,7 @@ When the org has a `domain` set, the invite forms (§1) check the email's domain
 ### Phase 1 — `/org/teachers` + `/org/students` invite forms
 
 **Add:**
-- `src/components/org/invite-member-modal.tsx` — client component. Props: `{ orgId, role, onClose, onSuccess }`. Renders the form, handles submit, surfaces 404 with the registration-link copy block.
+- `src/components/org/invite-member-modal.tsx` — client component. Props: `{ orgId, role, onClose, onSuccess }`. **Mirror the structure of `src/components/org/create-parent-link-modal.tsx`** (plan 070, polished in #127): backdrop ref + click-to-close, Escape-key dismissal, autoFocus on first input, `role="dialog"` + `aria-modal`. Backend POSTs `/api/orgs/{orgId}/members` with `{ email, role }` (verified — `orgs.go:301-327`). 404 → "User not found, share `/register` link" with copy-to-clipboard. Handle 409 → "Already a member of this org" if backend returns it.
 
 **Modify:**
 - `src/app/(portal)/org/teachers/page.tsx` — add `+ Invite teacher` button (top-right of header) that opens the modal.
@@ -115,6 +115,8 @@ When the org has a `domain` set, the invite forms (§1) check the email's domain
 - `src/app/(portal)/org/classes/[classId]/page.tsx` — server component. Fetches class + members. Codex pass-1 noted `GET /api/classes/{id}` returns `courseId` but NOT `courseTitle`. Pass-2 caught a real auth gap with the original "two-fetch" approach: `GET /api/courses/{courseId}` is gated to creator/platform-admin/class-member only (`platform/internal/handlers/courses.go:141-172`). An org admin who isn't enrolled in the class would 403 on the second fetch. Resolution (option B from pass-1, now required not optional): **extend `GET /api/classes/{id}` to also return `courseTitle`**. Single backend change adds an inline join in the existing class query. Phase 2 includes the backend change explicitly.
 - `src/components/org/archive-class-button.tsx` — client component. Confirmation dialog → empty-body PATCH → refresh. Codex pass-1 confirmed `PATCH /api/classes/{id}` takes NO request body — `ArchiveClass` unconditionally sets `status='archived'`. The fetch sends `{ method: 'PATCH' }` with no body.
 
+**"Open in teacher portal" link** (self-review NIT #4): the page should compute `myRole = members.find(m => m.userId === identity.userId)?.role` and only render the link when `myRole === "instructor" || myRole === "ta"`. Org admins who aren't teachers in the class would 403 on `/teacher/classes/{id}` — better to hide the link.
+
 **Modify:**
 - `src/app/(portal)/org/classes/page.tsx` — wrap each class title in `<Link href={`/org/classes/${cls.id}`}>`.
 
@@ -122,18 +124,19 @@ When the org has a `domain` set, the invite forms (§1) check the email's domain
 
 **Modify:**
 - `src/app/(portal)/org/settings/page.tsx` — replace the "coming later" placeholder with a `<form>` (server action) that PATCHes the org. Show "Last updated {x}" derived from `updated_at`.
+- `src/components/org/org-settings-card.tsx` — extend the local `OrgSettingsData` type (currently lines 5-14) to include `updatedAt: string` (DeepSeek post-impl finding). Backend already returns it on `org_dashboard.go:107`; frontend type just needs the field.
 
 ### Phase 4 — Member quick-actions
 
 **Add:**
 - `src/components/org/member-row-actions.tsx` — client component. 3-dot menu with Update Status + Remove. Each opens a small confirmation dialog. (Role updates deferred — see §"4. Quick-actions menu" above.)
+  - **Self-suspend guard** (self-review NIT #3, GLM, DeepSeek): the status modal MUST disable the `suspended` option when `member.userId === identity.userId`. Backend has no self-action protection (`orgs.go:350-408`), so the UI is the only gate. Mirror the existing self-Remove guard pattern.
 
 **Modify:**
-- `src/app/(portal)/org/teachers/page.tsx` and `src/app/(portal)/org/students/page.tsx` — add the actions column to each row.
-- **Backend response shape change required** (Codex pass-1 important #1): the existing `/api/org/teachers` + `/api/org/students` dashboard responses (`platform/internal/handlers/org_dashboard.go:115-145`) return `userId, name, email, role, joinedAt` — no membership `id`. Phase 4 actions need the membership id to call `PATCH/DELETE /api/orgs/{orgId}/members/{memberId}`. Two options:
-  - **A**: extend the dashboard response to include `membershipId`. Single backend change; UI consumes directly. Preferred.
-  - **B**: switch the UI to fetch from the canonical `GET /api/orgs/{orgId}/members` endpoint (which returns the full member shape including id). Bigger UI change but no backend response shape change.
-  Going with A for v1 — single small response addition. Add a Phase 0 question for Codex pass-2 to confirm the dashboard response is safe to extend.
+- `src/components/org/teachers-list.tsx` (and the analogous `students-list.tsx`) — extend `OrgMemberRow` type to include `membershipId: string` (DeepSeek post-impl finding — frontend type must match the new backend field). Add a status badge column rendering the row's `status` (active / pending / suspended) so non-active members are visible.
+- `src/app/(portal)/org/teachers/page.tsx` and `src/app/(portal)/org/students/page.tsx` — add the actions column to each row. Implementation must account for Phase 1's `+ Invite teacher` / `+ Invite student` button additions in the page header (DeepSeek collision flag).
+- **Backend response shape change required** (Codex pass-1 important #1, DeepSeek): the existing `/api/org/teachers` + `/api/org/students` dashboard responses (`platform/internal/handlers/org_dashboard.go:115-145`) return `userId, name, email, role, joinedAt` — no membership `id`. Phase 4 actions need the membership id to call `PATCH/DELETE /api/orgs/{orgId}/members/{memberId}`. Going with **Option A**: extend the dashboard response to include `membershipId`. Single backend change in `org_dashboard.go:148-153`; UI consumes directly.
+- **Backend visibility fix required** (GLM new finding): `listMembersByRole` at `platform/internal/handlers/org_dashboard.go:147` filters `m.Status == "active"`. Once an admin suspends a member, that member vanishes from the list and is unreachable from the quick-actions menu — suspension becomes one-way from the UI. **Relax the filter to include all statuses** (`active`, `pending`, `suspended`); the new status badge column makes the state visible. Without this, suspension is effectively irreversible.
 
 ### Phase 5 (optional) — Domain hint on invite
 
@@ -208,6 +211,28 @@ Specific questions:
 ## Plan Review
 
 This plan predates the new 4-way review policy (CLAUDE.md commit 3e7397b). Codex passes 1-3 are preserved below as the Codex slot of the 4-way; self-review (Opus 4.7) + DeepSeek V4 Pro + GLM 5.1 added before any implementation.
+
+### 4-way convergence
+
+All four reviewers concur with changes (no blockers). Consolidated required updates folded into the §Files sections below:
+
+- **Phase 1**: mirror plan 070's `create-parent-link-modal.tsx` modal pattern (backdrop dismissal, Escape key, ARIA, focus management)
+- **Phase 2**: "Open in teacher portal" link only renders when caller has instructor/TA role in that class (compute `myRole` from class members fetch)
+- **Phase 3**: extend frontend `OrgSettingsData` type at `org-settings-card.tsx:5-14` to include `updatedAt`
+- **Phase 4**: status modal MUST disable `suspended` when row's `userId === identity.userId` (self-suspend guard, parallel to existing self-remove guard); relax `listMembersByRole` status filter to surface suspended/pending members and add a status badge column (otherwise suspension is one-way from UI); frontend `OrgMemberRow` type at `teachers-list.tsx:3-9` adds `membershipId`
+- **Phase 1 ↔ Phase 4 same-file collision**: both modify `teachers/page.tsx` + `students/page.tsx`. Sequential PRs handle it, but Phase 4 implementation must account for Phase 1's prior additions
+
+
+
+### DeepSeek V4 Pro — CONCUR-WITH-CHANGES (3 small gaps)
+
+DeepSeek V4 Pro confirmed: AddMember shape; phase ordering safe; Option A correct on `membershipId` (also flagged that the frontend `OrgMemberRow` type at `teachers-list.tsx:3-9` needs the new field added too); `updated_at`-only audit correct (no `updated_by` column, would need a migration); no self-action paths beyond Remove + Suspend.
+
+Three gaps to fold:
+
+1. **Self-suspend guard** (also self-review NIT #3 + GLM #1): promote from NIT to must-ship. Backend has no self-action protection (`orgs.go:350-408` only checks `org_admin` role, not caller-vs-member). Phase 4's status modal MUST disable `suspended` when `member.userId === identity.userId`.
+2. **OrgSettingsData type missing `updatedAt`**: backend ships it (`store/orgs.go:26`, returned by `org_dashboard.go:107`), but frontend type at `org-settings-card.tsx:5-14` omits it. Phase 3's "Last updated {x}" display needs the type field added.
+3. **Phase 1 / Phase 4 same-file collision**: both phases modify `teachers/page.tsx` + `students/page.tsx`. Sequential PRs handle this fine, but the plan should flag that Phase 4 implementation must account for Phase 1's prior additions (invite button placement). Cosmetic, not a blocker.
 
 ### GLM 5.1 — CONCUR-WITH-CHANGES (3 changes; 1 new substantive finding)
 
