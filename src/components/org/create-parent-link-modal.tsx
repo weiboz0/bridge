@@ -50,11 +50,6 @@ export function CreateParentLinkModal({
       .slice(0, 8);
   }, [childQuery, students]);
 
-  // Reset highlight when the query changes so new searches start un-highlighted.
-  useEffect(() => {
-    setHighlightedIndex(-1);
-  }, [childQuery]);
-
   // Close modal on Escape (the input's onKeyDown also handles Escape for
   // clearing the highlight, but window-level listener closes the dialog).
   useEffect(() => {
@@ -169,7 +164,17 @@ export function CreateParentLinkModal({
                 id="childQuery"
                 role="combobox"
                 aria-expanded={suggestions.length > 0 && !childUserId}
-                aria-controls="child-autocomplete-listbox"
+                // Codex / DeepSeek / GLM all flagged this: aria-controls
+                // pointed to the listbox id unconditionally, even when the
+                // <ul> wasn't in the DOM (no query, or child already
+                // selected). Stale id refs trigger validator warnings and
+                // confuse some AT. Only set the attribute when the
+                // listbox actually renders.
+                aria-controls={
+                  suggestions.length > 0 && !childUserId
+                    ? "child-autocomplete-listbox"
+                    : undefined
+                }
                 aria-autocomplete="list"
                 aria-activedescendant={
                   highlightedIndex >= 0 && suggestions[highlightedIndex]
@@ -179,6 +184,13 @@ export function CreateParentLinkModal({
                 value={childQuery}
                 onChange={(e) => {
                   setChildQuery(e.target.value);
+                  // GLM 5.1 post-impl NIT-2: reset the highlight inline
+                  // here rather than via a useEffect on `childQuery`. The
+                  // effect approach caused two renders per keystroke
+                  // (state set → render → effect → state set → render);
+                  // batching the two setters into one onChange is one
+                  // render and avoids the intermediate stale-index frame.
+                  setHighlightedIndex(-1);
                   if (childUserId) setChildUserId(null);
                 }}
                 onKeyDown={(e) => {
@@ -195,8 +207,15 @@ export function CreateParentLinkModal({
                       return;
                     }
                     if (e.key === "Enter" && highlightedIndex >= 0) {
+                      // Codex post-impl NIT-Q5: a fast-type race can fire
+                      // Enter before the highlightedIndex-reset useEffect
+                      // commits, leaving the index stale relative to the
+                      // refreshed suggestions list. Guard the lookup so we
+                      // never pass `undefined` to selectChild.
+                      const target = suggestions[highlightedIndex];
+                      if (!target) return;
                       e.preventDefault();
-                      selectChild(suggestions[highlightedIndex]);
+                      selectChild(target);
                       return;
                     }
                   }
@@ -234,8 +253,19 @@ export function CreateParentLinkModal({
                       aria-selected={highlightedIndex === idx}
                       onMouseDown={(e) => {
                         // Prevent the input from losing focus before the click
-                        // registers so that selectChild fires correctly.
+                        // registers so that selectChild fires correctly. This
+                        // covers the mouse path (and most touch).
                         e.preventDefault();
+                        selectChild(s);
+                      }}
+                      onClick={() => {
+                        // Codex post-impl NIT-Q2: screen-reader virtual
+                        // cursors typically dispatch `click` directly without
+                        // a preceding `mousedown`. Without this fallback,
+                        // AT-driven activation would silently no-op. The
+                        // mousedown path already calls selectChild, but
+                        // selectChild is idempotent so a follow-up click
+                        // does no harm.
                         selectChild(s);
                       }}
                       className={`cursor-pointer px-3 py-2 text-sm ${
