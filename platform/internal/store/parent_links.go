@@ -428,6 +428,48 @@ func (s *ParentLinkStore) ListByOrg(ctx context.Context, orgID string, f ListByO
 	return out, rows.Err()
 }
 
+// EligibleChild is the projection used by the parent-link create
+// form's child picker — distinct active student users whose
+// class_memberships put them in an active class of the org.
+type EligibleChild struct {
+	UserID string `json:"userId"`
+	Email  string `json:"email"`
+	Name   string `json:"name"`
+}
+
+// ListEligibleChildren returns the distinct set of users who are
+// active students in any active class of `orgID`. The form's
+// autocomplete child picker (plan 070 phase 2) calls this. Empty
+// slice when no students match — never nil.
+func (s *ParentLinkStore) ListEligibleChildren(ctx context.Context, orgID string) ([]EligibleChild, error) {
+	if orgID == "" {
+		return nil, errors.New("orgID is required")
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT DISTINCT u.id, u.email, u.name
+		FROM class_memberships cm
+		JOIN classes c ON c.id = cm.class_id
+		JOIN users u ON u.id = cm.user_id
+		WHERE cm.role = 'student'
+		  AND c.org_id = $1
+		  AND c.status = 'active'
+		ORDER BY u.name
+	`, orgID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []EligibleChild{}
+	for rows.Next() {
+		var c EligibleChild
+		if err := rows.Scan(&c.UserID, &c.Email, &c.Name); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
 // ChildBelongsToOrg reports whether `childID` is an active student
 // in any active class of `orgID`. Used by the org-admin parent-link
 // authorization gate to prevent cross-org linkage attempts.

@@ -19,6 +19,7 @@ export function getIconChar(iconName: string): string {
     "file-text": "📄",
     "video": "🎥",
     "puzzle": "🧩",
+    "link": "🔗",
   };
   return icons[iconName] || "•";
 }

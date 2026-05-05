@@ -438,3 +438,36 @@ func TestOrgParentLinks_Revoke_NonAdminForbidden(t *testing.T) {
 	w := fx.doRequest(t, http.MethodDelete, "/api/orgs/"+fx.orgID+"/parent-links/"+link.ID, nil, fx.claimsFor(fx.teacher, false))
 	assert.Equal(t, http.StatusForbidden, w.Code)
 }
+
+// ---------- ListEligibleChildren ----------
+
+func TestOrgParentLinks_EligibleChildren_HappyPath(t *testing.T) {
+	fx := newOrgParentLinksFixture(t, t.Name())
+	w := fx.doRequest(t, http.MethodGet, "/api/orgs/"+fx.orgID+"/eligible-children", nil, fx.claimsFor(fx.admin, false))
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+
+	var children []store.EligibleChild
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &children))
+	require.Len(t, children, 1, "fixture seeds exactly one student in this org")
+	assert.Equal(t, fx.child.ID, children[0].UserID)
+	assert.Equal(t, fx.child.Email, children[0].Email)
+}
+
+func TestOrgParentLinks_EligibleChildren_ScopedToOrg(t *testing.T) {
+	// otherOrg has its own student; querying orgID must not surface them.
+	fx := newOrgParentLinksFixture(t, t.Name())
+	w := fx.doRequest(t, http.MethodGet, "/api/orgs/"+fx.orgID+"/eligible-children", nil, fx.claimsFor(fx.admin, false))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var children []store.EligibleChild
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &children))
+	for _, c := range children {
+		assert.NotEqual(t, fx.otherChild.ID, c.UserID, "otherOrg student must not appear")
+	}
+}
+
+func TestOrgParentLinks_EligibleChildren_NonAdminForbidden(t *testing.T) {
+	fx := newOrgParentLinksFixture(t, t.Name())
+	w := fx.doRequest(t, http.MethodGet, "/api/orgs/"+fx.orgID+"/eligible-children", nil, fx.claimsFor(fx.teacher, false))
+	assert.Equal(t, http.StatusForbidden, w.Code)
+}
