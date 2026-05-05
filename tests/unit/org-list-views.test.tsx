@@ -18,10 +18,10 @@ import { OrgSettingsCard, type OrgSettingsData } from "@/components/org/org-sett
 import type { OrgMemberRow } from "@/components/org/teachers-list";
 
 const teacherRows: OrgMemberRow[] = [
-  { userId: "u1", name: "Eve Teacher", email: "eve@demo.edu", role: "teacher", joinedAt: "2026-01-15T00:00:00Z" },
+  { membershipId: "m1", userId: "u1", name: "Eve Teacher", email: "eve@demo.edu", role: "teacher", status: "active", joinedAt: "2026-01-15T00:00:00Z" },
 ];
 const studentRows: OrgMemberRow[] = [
-  { userId: "u2", name: "Alice Student", email: "alice@demo.edu", role: "student", joinedAt: "2026-02-10T00:00:00Z" },
+  { membershipId: "m2", userId: "u2", name: "Alice Student", email: "alice@demo.edu", role: "student", status: "active", joinedAt: "2026-02-10T00:00:00Z" },
 ];
 const courseRows: OrgCourseRow[] = [
   { id: "c1", title: "Intro Python", gradeLevel: "K-5", language: "python", createdAt: "2026-03-01T00:00:00Z" },
@@ -53,24 +53,29 @@ const settingsData: OrgSettingsData = {
 
 describe("TeachersList", () => {
   it("renders rows when populated", () => {
-    render(<TeachersList data={teacherRows} error={null} />);
+    render(<TeachersList data={teacherRows} error={null} orgId="org1" currentUserId="admin1" />);
     expect(screen.getByText("Eve Teacher")).toBeInTheDocument();
     expect(screen.getByText("eve@demo.edu")).toBeInTheDocument();
   });
 
+  it("renders status badge", () => {
+    render(<TeachersList data={teacherRows} error={null} orgId="org1" currentUserId="admin1" />);
+    expect(screen.getByText("active")).toBeInTheDocument();
+  });
+
   it("renders empty-state copy on empty list", () => {
-    render(<TeachersList data={[]} error={null} />);
+    render(<TeachersList data={[]} error={null} orgId="org1" currentUserId="admin1" />);
     expect(screen.getByText(/No teachers yet/i)).toBeInTheDocument();
   });
 
   it("renders error card on 403", () => {
-    render(<TeachersList data={null} error={{ status: 403, message: "Forbidden" }} />);
+    render(<TeachersList data={null} error={{ status: 403, message: "Forbidden" }} orgId="org1" currentUserId="admin1" />);
     expect(screen.getByText(/HTTP 403/i)).toBeInTheDocument();
     expect(screen.getByText(/api\/auth\/debug/i)).toBeInTheDocument();
   });
 
   it("renders error card without status hint on 500", () => {
-    render(<TeachersList data={null} error={{ status: 500, message: "boom" }} />);
+    render(<TeachersList data={null} error={{ status: 500, message: "boom" }} orgId="org1" currentUserId="admin1" />);
     expect(screen.getByText(/HTTP 500/i)).toBeInTheDocument();
     expect(screen.queryByText(/api\/auth\/debug/i)).not.toBeInTheDocument();
   });
@@ -78,12 +83,17 @@ describe("TeachersList", () => {
 
 describe("StudentsList", () => {
   it("renders rows", () => {
-    render(<StudentsList data={studentRows} error={null} />);
+    render(<StudentsList data={studentRows} error={null} orgId="org1" currentUserId="admin1" />);
     expect(screen.getByText("Alice Student")).toBeInTheDocument();
   });
 
+  it("renders status badge", () => {
+    render(<StudentsList data={studentRows} error={null} orgId="org1" currentUserId="admin1" />);
+    expect(screen.getByText("active")).toBeInTheDocument();
+  });
+
   it("renders empty-state copy", () => {
-    render(<StudentsList data={[]} error={null} />);
+    render(<StudentsList data={[]} error={null} orgId="org1" currentUserId="admin1" />);
     expect(screen.getByText(/No students yet/i)).toBeInTheDocument();
   });
 });

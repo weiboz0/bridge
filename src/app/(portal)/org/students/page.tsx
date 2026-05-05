@@ -7,6 +7,7 @@ import {
   appendOrgId,
 } from "@/lib/portal/org-context";
 import { InviteMemberButton } from "@/components/org/invite-member-button";
+import { getIdentity } from "@/lib/identity";
 
 export default async function OrgStudentsPage({
   searchParams,
@@ -14,6 +15,9 @@ export default async function OrgStudentsPage({
   searchParams?: Promise<{ orgId?: string }>;
 }) {
   const orgId = parseOrgIdFromSearchParams(await searchParams);
+  const identity = await getIdentity();
+  const currentUserId = identity?.userId ?? "";
+
   let data: OrgMemberRow[] | null = null;
   let error: OrgListError | null = null;
   try {
@@ -34,7 +38,12 @@ export default async function OrgStudentsPage({
         </h1>
         {orgId && <InviteMemberButton orgId={orgId} role="student" />}
       </div>
-      <StudentsList data={data} error={error} />
+      <StudentsList
+        data={data}
+        error={error}
+        orgId={orgId ?? ""}
+        currentUserId={currentUserId}
+      />
     </div>
   );
 }
