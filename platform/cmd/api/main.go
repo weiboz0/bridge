@@ -202,6 +202,14 @@ func main() {
 		orgH := &handlers.OrgHandler{Orgs: stores.Orgs, Users: stores.Users}
 		orgH.Routes(r)
 
+		// Plan 070 phase 1 — org-admin parent-link CRUD.
+		orgParentLinksH := &handlers.OrgParentLinksHandler{
+			Orgs:        stores.Orgs,
+			ParentLinks: stores.ParentLinks,
+			Users:       stores.Users,
+		}
+		orgParentLinksH.Routes(r)
+
 		courseH := &handlers.CourseHandler{Courses: stores.Courses, Orgs: stores.Orgs}
 		courseH.Routes(r)
 
