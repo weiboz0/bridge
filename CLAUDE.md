@@ -118,9 +118,10 @@ A plan that hasn't passed all four reviews is not ready for execution, regardles
 Follow `docs/development-workflow.md` exactly for every plan (Steps 1–6: Design → Plan → Build → Verify → Review → Ship). Do not skip steps or batch them. Key points:
 - **Design before plan** — explore the problem, brainstorm approaches, align with user
 - **Plan before code** — write and commit plan file before any implementation
-- **Build phase by phase** — implement, test, self-review, document, commit each phase separately
+- **One branch + one PR per plan** — all phases of a plan land on a single feature branch (`feat/NNN-description`) and ship together as a single PR. Phases are commit-level subdivisions of the same branch, not separate PRs. (Exception: a plan with a genuinely independent backend-infrastructure phase that other phases don't depend on may ship as a separate PR — document the deviation in the plan file. Default is single-PR-per-plan.)
+- **Build phase by phase, commit per phase** — implement, test, self-review, document, commit each phase separately on the same plan branch. The phase boundaries help the reviewer trace logical units in the diff; the single PR keeps the audit trail and CI history consolidated.
 - **Verify before review** — full test suite, cross-phase consistency check
-- **Review before ship** — code review findings in plan file, all [OPEN] items resolved
+- **Review before ship** — 4-way code review fires once per plan PR (not per phase). Findings go in the plan file's `## Code Review` section, all [OPEN] items resolved before merge.
 - **Ship cleanly** — post-execution report, update `TODO.md`, then PR
 
 ## Code Review
@@ -135,6 +136,7 @@ Follow `docs/code-review.md` for the review process. Reviews use the same 4-way 
 | 4 | **GLM 5.1** | `opencode:opencode-review` subagent with `--model volcengine-plan/glm-5.1` | volcengine-plan/glm-5.1 |
 
 Key points:
+- **Timing**: the 4-way code review fires once per plan PR — at PR-open time after all phases are implemented and verified. Not after each phase. (Exception: a one-phase plan or a single-PR-deviation plan reviews at the same point — once, before merge.)
 - All four reviewers dispatch **in parallel** (multiple Agent calls in one message) after the self-review pass.
 - Reviews go in the plan file's `## Code Review` section.
 - Reviewers: append findings with `[OPEN]` status and file:line references.
