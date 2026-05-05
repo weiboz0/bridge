@@ -53,3 +53,8 @@ test-results/
 *.tsbuildinfo
 next-env.d.ts
 test-results/
+
+# claude code tooling state (per-session, machine-local)
+.claudecode-buddy/
+.coworker/
+.claude/
