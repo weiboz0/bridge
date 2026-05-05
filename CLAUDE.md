@@ -2,7 +2,7 @@
 
 ## CRITICAL RULES (never skip)
 
-- **Use Claude Sonnet 4.6 by default; promote to Opus 4.7 for complex work.** Routine coding (new components, CRUD, tests, refactors, copy edits) runs on Sonnet. Reach for Opus 4.7 (1M context) when you hit cross-cutting design, hard debugging, or large-codebase reasoning. Do not delegate code generation to Codex, DeepSeek, GLM, or any other external model — those are review-only. See "Coding Agent" below for the escalation policy.
+- **Spawn subagents for coding work; pick the model per task.** The orchestrator stays on Opus 4.7 for planning + review + coordination, then dispatches a subagent (`general-purpose`, `model: "sonnet"`) for routine implementation (CRUD, tests, refactors, copy) or `model: "opus"` for complex implementation (new patterns, hard debugging, large-codebase reasoning). Do not delegate code generation to Codex, DeepSeek, GLM, or any other external model — those are review-only. See "Coding Agent" below for dispatch patterns and tier escalation.
 - **Always create the feature branch BEFORE drafting the plan.** Use `git checkout -b feat/NNN-description` first. The plan file, review verdicts, and iterative revisions all commit to this branch — never to `main`. (The opencode session-continuity helper also keys on `plan-NNN`-style branch names, so this is a precondition for reviewer session reuse.)
 - **Always run the 4-way plan review before any implementation.** After drafting or revising any plan in `docs/plans/`, dispatch ALL four reviewers in parallel (see "Plan review gate" below). Do NOT begin implementation until all four concur. Capture each verdict in the plan's `## Plan Review` section, committed to the feature branch as they arrive.
 - **Always run the 4-way code review** before merging a PR. Dispatch all four reviewers in parallel (see "Code review gate" below). Write findings to the plan file's `## Code Review` section.
@@ -145,9 +145,36 @@ Key points:
 
 Bridge uses a **two-tier Claude coding policy** — Sonnet 4.6 for the bulk of routine work, Opus 4.7 for the genuinely hard parts. The model in use should match the difficulty of the task, not the prestige of the plan.
 
-### Claude Sonnet 4.6 — general coding agent (default)
+### Spawn subagents for coding work (preferred)
 
-Use Sonnet for the bulk of day-to-day implementation:
+The orchestrator Claude (the session talking to the user) stays on Opus 4.7 for **planning, review, and coordination**. Actual implementation work — file edits, code generation, test writing — should be delegated to a subagent so the implementation can run on whichever model fits the task. This pattern has three benefits:
+
+1. **Right-sized model per task** — routine implementation runs on Sonnet (faster + cheaper), complex implementation runs on Opus, both are explicit choices rather than whatever model the orchestrator happens to be on.
+2. **Context isolation** — the subagent gets a focused brief, does its work in its own context window, and returns a summary. The orchestrator's context stays clean for review and coordination.
+3. **Parallelizable** — independent coding tasks (e.g., backend handler + frontend component + tests) can dispatch as parallel subagents in a single message.
+
+How to dispatch:
+
+```
+Agent tool with:
+  subagent_type: "general-purpose"   # or a specific persona where applicable
+  model: "sonnet"                     # or "opus" for complex work
+  prompt: <complete brief — files to touch, what to do, verification steps>
+```
+
+The `model` parameter on the Agent tool **overrides** the subagent definition's default model, so the orchestrator picks per-call. Valid values: `"sonnet"`, `"opus"`, `"haiku"`.
+
+When you spawn a subagent, give it a self-contained brief:
+- The exact files to read / modify / create
+- The acceptance criteria (what tests should pass, what type-check / lint must be clean)
+- Any relevant context the subagent can't infer from the codebase alone (e.g., "use the existing pattern in `X` rather than inventing a new one")
+- Whether the subagent should commit + push, or hand back to the orchestrator for review first
+
+After the subagent returns, the orchestrator must **verify the actual changes** (read the diff, run tests if relevant) before reporting the work as done. The subagent's summary describes intent, not necessarily reality.
+
+### Claude Sonnet 4.6 — routine coding (default subagent model)
+
+Spawn a Sonnet subagent for:
 - **All test code** (Vitest, Go tests, Playwright e2e, fixtures, helpers) — see "Testing" above. Test code is the single most consistent fit for Sonnet: pattern-heavy, repetitive, fast feedback loop.
 - New components / pages following established patterns
 - CRUD endpoints on top of existing handlers + stores
@@ -155,17 +182,26 @@ Use Sonnet for the bulk of day-to-day implementation:
 - Doc updates, dependency bumps, copy edits
 - Small bug fixes where the root cause is already known
 
-### Claude Opus 4.7 — complex coding agent (1M context)
+### Claude Opus 4.7 — complex coding (orchestrator + complex subagents)
 
-Escalate to Opus when:
+Keep work in the orchestrator (or spawn an Opus subagent) when:
 - Designing a new architectural pattern or cross-cutting abstraction
 - Debugging a non-obvious issue with multi-system surface area (race conditions, state-machine bugs, cross-service auth, distributed correctness)
 - Implementing the first phase of a plan that establishes patterns later phases will follow
 - Reading a large unfamiliar codebase to plan a refactor
-- Tasks that genuinely benefit from the 1M context window (e.g., reasoning over the whole platform/internal/store at once)
-- Anything where Sonnet has already attempted and gotten stuck
+- Tasks that genuinely benefit from the 1M context window (e.g., reasoning over the whole `platform/internal/store` at once)
+- Anything where a Sonnet subagent has already attempted and gotten stuck
 
-When in doubt, start with Sonnet. Promote to Opus only when the work clearly warrants it — Opus is more expensive, slower, and shouldn't be the reflex choice. Promotion mid-task is fine: if Sonnet hits a wall, hand off to Opus with the conversation context intact.
+When in doubt, dispatch a Sonnet subagent first. Promote to Opus only when the work clearly warrants it — Opus is more expensive, slower, and shouldn't be the reflex choice. Promotion mid-task is fine: if a Sonnet subagent hits a wall, the orchestrator (already on Opus) can take over directly or spawn an Opus subagent with the previous attempt's context as input.
+
+### When to skip the subagent and stay inline
+
+Spawning a subagent has overhead — context to write, results to verify. Skip it when:
+- The change is a single-line edit or a trivial fix.
+- You're mid-debugging and need the conversation context to continue (the subagent loses everything not in its prompt).
+- You're iterating rapidly on a small file and the back-and-forth would dominate the time spent.
+
+Otherwise, default to the subagent.
 
 ### Self-review always runs on Opus 4.7
 
