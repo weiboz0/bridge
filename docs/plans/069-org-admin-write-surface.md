@@ -208,6 +208,43 @@ Specific questions:
 - Add domain check to invite modal.
 - Smoke test: invite a same-domain email (no warning); invite a different-domain email (confirmation dialog).
 
+## Post-execution report
+
+**Status**: Phases 1-4 shipped. Phase 5 (optional domain hint) deferred — plan flagged it as deferrable polish, not core scope.
+
+**Single-PR-deviation**: Phase 1 shipped as standalone PR #128 under the OLD per-phase pattern (before the single-PR-per-plan policy landed in #129). Phases 2-4 ship together as a single PR `Plan 069 phases 2-4` per the new policy. Plan 069 is the transitional split.
+
+**Phase 1 (PR #128, commit 48a7db5)** — invite forms
+- New: `src/components/org/invite-member-modal.tsx` (mirrored plan 070's `create-parent-link-modal.tsx` pattern), `invite-member-button.tsx`
+- Modified: `/org/teachers/page.tsx`, `/org/students/page.tsx`
+- Backend POST shape verified `{email, role}` against `orgs.go:301-327`
+- 4-way code review found 1 BLOCKER (clipboard guard for HTTP/insecure contexts) + 1 NIT (label case) — both fixed, Codex round-2 confirmed
+
+**Phase 2 (commit cb2450a)** — class drill-down + archive
+- New: `src/app/(portal)/org/classes/[classId]/page.tsx`, `archive-class-button.tsx`
+- Modified: `src/components/org/classes-list.tsx` (clickable rows preserving `?orgId=`), `src/app/(portal)/org/classes/page.tsx`
+- Backend: extended `GET /api/classes/{id}` with inline-join to surface `courseTitle` (avoids the 403 the plan-pass-2 caught — `/api/courses/{id}` is gated to creator/class-member). Added `Class.CourseTitle` field with `,omitempty` so 9-column scans elsewhere stay backward-compat.
+- "Open in teacher portal" link only renders when caller is instructor/TA in the class (self-review NIT #4 fold)
+- Test: `TestGetClass_IncludesCourseTitle` regression locked
+
+**Phase 3 (commits c851578 + f855c16 test fix)** — settings edit form
+- New: `src/components/org/org-settings-form.tsx` — client component with `name`/`contactEmail`/`contactName`/`domain` editable + read-only Type/Status/Verified rows
+- Modified: `org-settings-card.tsx` (delegates happy-path to form; added `updatedAt` to type per DeepSeek finding)
+- PATCH body strategy: always-send all four fields. Backend handler uses `*string` pointer fields with `omitempty` — empty string is the supported clear semantic for `domain`.
+- Test fix: `org-list-views.test.tsx` mocks `next/navigation` (form needs router context); switched to `getByDisplayValue` for the now-editable fields
+
+**Phase 4 (commit 83b50c8)** — member quick-actions
+- New: `src/components/org/member-row-actions.tsx` (3-dot menu with Update Status + Remove modals)
+- Modified: `teachers-list.tsx`, `students-list.tsx` (extended `OrgMemberRow` with `membershipId` + `status`; added Status badge column + Actions column)
+- Modified: `/org/teachers/page.tsx`, `/org/students/page.tsx` (fetch identity, pass `currentUserId` for self-action gating)
+- Backend: added `MembershipID` + `Status` to `orgMemberSummary`; relaxed `listMembersByRole` filter from `role && status='active'` to `role` only (GLM finding — suspension was one-way otherwise)
+- Self-action guards: Suspend disabled when `member.userId === identity.userId`; Remove disabled with tooltip "Use the org transfer flow to leave an org" (no transfer flow exists in v1; documents the path is blocked)
+- Tests: 2 new Go integration tests + 15 new unit tests on `MemberRowActions` covering the self-action guards
+
+**Phase 5 (deferred)** — optional domain hint on invite. Not implemented; plan flagged it as deferrable polish.
+
+**Cross-phase verification**: full Go test suite passes; `tsc --noEmit` baseline of 10 unrelated errors maintained (zero new); `eslint` clean for all modified files; vitest covers Phases 2-4 (27/27 in `org-list-views.test.tsx` + `member-row-actions.test.tsx`).
+
 ## Plan Review
 
 This plan predates the new 4-way review policy (CLAUDE.md commit 3e7397b). Codex passes 1-3 are preserved below as the Codex slot of the 4-way; self-review (Opus 4.7) + DeepSeek V4 Pro + GLM 5.1 added before any implementation.
