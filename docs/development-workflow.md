@@ -42,17 +42,21 @@ Write a concrete execution plan with phases, files, tests, and verification step
 
 ## Step 3 — Build
 
-Implement the plan phase by phase. Do not batch phases.
+Implement the plan phase by phase on a **single plan branch** (`feat/NNN-description`). All phases share one branch and one PR — phase boundaries are commit-level subdivisions, not separate PRs.
 
 For **each phase**:
 
-1. **Implement** — write the code for this phase only.
+1. **Implement** — write the code for this phase only. Stay on the plan branch.
 2. **Test** — write or update tests following the Testing guidelines. Run all relevant tests. Fix failures before proceeding.
 3. **Self-review** — re-read all modified files. Compare against the plan. Check for consistency, dead code, duplicate logic.
 4. **Document** — update `docs/` and affected `README.md` files for this phase's changes.
-5. **Commit** — only after tests pass and self-review is clean. Commit code, tests, and docs together.
+5. **Commit** — only after tests pass and self-review is clean. Commit code, tests, and docs together with a clear `plan NNN phase M: …` message so the reviewer can trace logical units in the squashed diff.
 
-When tasks within a plan are independent and can be implemented without shared state, dispatch them to subagents in parallel when the current coding environment supports it. When tasks have sequential dependencies, execute them in order in the current session.
+Do NOT open a PR after each phase. Open the PR once after Step 4 (Verify) when ALL phases are implemented; the 4-way code review (Step 5) runs against the consolidated branch diff.
+
+**Single-PR exception**: when a plan has a genuinely independent backend-infrastructure phase that other phases don't depend on (e.g., a schema migration that downstream UI doesn't need to coordinate with), it MAY ship as a separate PR. Document the deviation in the plan file's `## Phases` section. Default is one PR per plan.
+
+When tasks within a phase are independent and can be implemented without shared state, dispatch them to subagents in parallel when the current coding environment supports it. When tasks have sequential dependencies, execute them in order in the current session.
 
 When a test fails or behavior is unexpected, debug systematically: reproduce the failure deterministically, isolate the smallest case, form a hypothesis, verify by changing one thing at a time. Don't guess at fixes.
 
@@ -73,9 +77,9 @@ Before claiming work is done, run the verification commands and confirm the actu
 
 ## Step 5 — Review
 
-Code review catches what self-review misses.
+Code review catches what self-review misses. The 4-way review fires **once per plan PR** at PR-open time, against the consolidated branch diff (all phases). Not after each phase.
 
-1. Request code review. Reviewer appends findings to the plan file's `## Code Review` section, following `docs/code-review.md` format.
+1. Request code review (4-way: self on Opus, Codex, DeepSeek V4 Flash, GLM 5.1 — see CLAUDE.md `## Code Review`). Reviewers append findings to the plan file's `## Code Review` section, following `docs/code-review.md` format.
 2. Each finding is numbered with `[OPEN]` status, file:line references, and Must Fix / Should Fix / Nice to Have priority.
 3. Author addresses each finding: fix the code or explain why not. Respond inline with `→ Response:` and update status to `[FIXED]` or `[WONTFIX]`.
 4. All `[OPEN]` items must be resolved before shipping.
@@ -86,13 +90,13 @@ When acting on review feedback, evaluate each finding rigorously before implemen
 
 ## Step 6 — Ship
 
-Wrap up, push, and create the PR.
+Wrap up, push, and create the **single plan PR**. All phases of the plan ship together (default), or per the documented single-PR-deviation if applicable.
 
-1. **Update the plan file** with a post-execution report: implementation details, deviations from plan, known limitations, follow-up work.
+1. **Update the plan file** with a post-execution report: implementation details per phase, deviations from plan, known limitations, follow-up work.
 2. **Update `TODO.md`** — mark completed items, add new follow-up items.
 3. **Commit** the updated plan and docs.
 4. **Run ALL tests** one final time. Do not proceed if any test fails.
-5. **Push** the branch and **create a PR** via `gh pr create`.
+5. **Push** the branch and **create the PR** via `gh pr create`. PR title is `Plan NNN: <description>` (one PR per plan); body summarizes the phases shipped + cross-phase test plan + 4-way review summary.
 
 ---
 
