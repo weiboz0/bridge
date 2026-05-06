@@ -147,7 +147,9 @@ Confirmed Step 3 (line 55) + Step 5 (line 80) of `docs/development-workflow.md` 
 
 `[WONTFIX]` NIT (cosmetic): the plan file's problem-description and review-log sections quote 30+ "4-way" references. → **Response**: explicitly labeled as historical / quoted text in §Out of scope and §Plan Review sections; wrapping in blockquotes adds noise without semantic gain. DeepSeek itself marked this as "not blocking, defensible".
 
-### GLM 5.1 — pending
+### GLM 5.1 — CONCUR (clean)
+
+Confirmed CLAUDE.md:141 NIT from plan-review round resolved. Step 3 / Step 5 / CLAUDE.md mutually consistent; review fires against branch diff after Verify, before PR opens in Step 6. No regression. Scope exactly 8 lines / 3 files — no inflation.
 
 ### Kimi K2.6 — pending
 
