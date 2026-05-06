@@ -180,14 +180,34 @@ After Phase 3, run the 4-way code review against the consolidated branch diff (s
 
 **Confirmed (no fix):** escape-hatch shape correct; old-browser-tab risk sound.
 
-### Kimi K2.6
+### Kimi K2.6 — CONCUR-WITH-CHANGES (5 NEW findings folded)
 
-(dispatched 2026-05-06 with new `opencode-go/kimi-k2.6` identifier per the chore/add-kimi-reviewer-and-opencode-go-provider policy update; verdict pending.)
+Kimi caught five things the other reviewers missed:
+
+1. **Hidden legacy detector at `src/lib/yjs/use-yjs-provider.ts:33`** — the `shouldConnect` guard checks `!token.startsWith(":")`, a vestigial post-cutover check. Add to Phase 2 deletion sweep.
+
+2. **`isLikelyJwt` must be DELETED, not just bypassed.** Plan said "replace with unconditional `verifyRealtimeJwt`", but missed that the function export + its test describe block at `tests/unit/realtime-jwt.test.ts:58-73` become dead code. Remove the export and the describe block in Phase 2.
+
+3. **`onLoadDocument` `TOKEN_SECRET` guard becomes redundant.** After Phase 1's boot check fails without `TOKEN_SECRET`, the runtime guard `if (context?.tokenKind === "jwt" && TOKEN_SECRET)` simplifies to unconditional. Drop the `&& TOKEN_SECRET` clause alongside the `tokenKind` removal.
+
+4. **`BRIDGE_HOST_EXPOSURE` empty-string semantics.** Go treats empty as `localhost` (`platform/cmd/api/main.go:504`). Hocuspocus must match — otherwise dev boxes without the var explicitly exported to the Node process boot-fail. Phase 1's check needs `(exposure === "" || exposure === "localhost")` parity.
+
+5. **`.env.example` should ADD** a (commented-out) `HOCUSPOCUS_ALLOW_LEGACY_TOKEN`, not just remove the old `HOCUSPOCUS_REQUIRE_SIGNED_TOKEN`. Plus `TODO.md:9` should be DELETED outright — this plan completes the JWT replacement, no follow-up.
+
+**Operational concern (Kimi's #3):** Phase 2 makes `onLoadDocument` recheck unconditional. The recheck calls `GO_INTERNAL_API_URL` (default `http://localhost:8002`). Pre-Phase-2 a missing `TOKEN_SECRET` silently skipped the recheck; post-Phase-2 a misconfigured URL becomes a total outage. **Folded:** boot-time sanity check warning when `GO_INTERNAL_API_URL` is the localhost default while `BRIDGE_HOST_EXPOSURE=exposed`.
+
+**Structural concern (Kimi's #2):** the Phase 1 escape hatch is operationally meaningless inside a single PR (no real canary window before Phase 2 deletes it). Acknowledged — Self-review NIT #1 already noted this; keeping the staged structure for diff readability, explicitly labeled as such.
+
+**No blockers.** Kimi confirmed: Go mint endpoint's scope gates are already stricter than the deleted legacy branches, so the JWT path isn't more permissive than what it replaces.
 
 ### Consolidated plan changes (post-review)
 
 - §Phase 1 §Files: explicitly note Hocuspocus reads `BRIDGE_HOST_EXPOSURE`.
-- §Phase 1 §Decisions: env value is `localhost` (plan 068's enum), not the made-up `localhost`.
+- §Phase 1 §Decisions: env value is `localhost` (plan 068's enum), not the made-up `local-only`.
+- §Phase 1 §Files: empty-string `BRIDGE_HOST_EXPOSURE` treated as `localhost` (matches Go `main.go:504`).
+- §Phase 1 §Files: boot-time warning when `GO_INTERNAL_API_URL` is the localhost default while `BRIDGE_HOST_EXPOSURE=exposed` (Kimi's operational concern).
+- §Phase 2 §Files: also delete the legacy detector at `src/lib/yjs/use-yjs-provider.ts:33`; delete the `isLikelyJwt` export + its describe block at `realtime-jwt.test.ts:58-73`; drop `&& TOKEN_SECRET` from the `onLoadDocument` guard alongside the `tokenKind` removal.
+- §Phase 3 §Files: `.env.example` ADDS a commented-out `HOCUSPOCUS_ALLOW_LEGACY_TOKEN` line; `TODO.md:9` is DELETED outright (legacy-token bullet is closed by this plan).
 - §Phase 2 §Files: expand deletion checklist — drop `loadAttemptOwner`/`teacherCanViewAttempt` imports + `attempts.ts:73` legacy-sniff comment + `realtime-jwt.test.ts:63` + `realtime_jwt_test.go:128` legacy fixtures; bypass `onAuthenticate` for noop documents; replace `isLikelyJwt` with unconditional `verifyRealtimeJwt`.
 - §Phase 3 §Files: tighten `e2e/hocuspocus-auth.spec.ts:131,150,159` HTTP tests too (not just the `beforeAll`); update `.env.example:63-71` + `TODO.md:9` legacy references; confirm CI provisions `HOCUSPOCUS_TOKEN_SECRET`.
 - §Risks: add deploy-sequencing note (Go + Hocuspocus secret atomic); add Go-side scope-enforcement verification (broadcast/session scopes deleted legacy code's role/owner checks must be covered by JWT mint endpoint).
