@@ -6,7 +6,7 @@ Outstanding tasks and technical debt. Check this file when planning new work.
 
 - [ ] **Next.js middleware deprecation** — `middleware.ts` convention is deprecated in Next.js 16, should migrate to `proxy` pattern
 - [ ] **Pyodide CDN dependency** — Web Worker loads Pyodide from CDN; should consider self-hosting or bundling for reliability
-- [ ] **Hocuspocus auth** — Token format is simple `userId:role` string; should use JWT or signed tokens in production. **Tracked by plan 053.**
+- [x] ~~**Hocuspocus auth** — Token format is simple `userId:role` string; should use JWT or signed tokens in production. **Tracked by plan 053.**~~ (closed by plan 072)
 - [ ] **Database migrations** — Using direct SQL apply (`psql -f`); drizzle-kit migrate has issues, needs investigation. Only journal entries 0000-0002 exist; 0003+ are hand-applied.
 - [ ] **/login redirect loop** — Auth.js v5 + Next 16 combo causes `/login` to 302 to `/login?callbackUrl=/login`, blocking Playwright auth.setup. Likely related to the middleware-deprecation entry above.
 
