@@ -78,6 +78,14 @@ The dev/test escape hatch from Phase 1 also goes away in this phase. With the le
 
 ## Decisions to lock in
 
+> **Historical design — see ## Post-execution report for what actually shipped.**
+> The following Decisions / Files / Risks / Phases sections describe the
+> original Phase 1 plan. Phase 2 deviated by removing the
+> `HOCUSPOCUS_ALLOW_LEGACY_TOKEN` runtime read entirely instead of leaving it
+> as a no-op flag. The shipped outcome is JWT-only with no escape hatch
+> (more secure than originally specified). Treat the rest of this body as
+> planning context, not runtime claims.
+
 1. **Secure-by-default polarity flip.** New deployments are JWT-only out of the box. Legacy is opt-in via `HOCUSPOCUS_ALLOW_LEGACY_TOKEN=1` AND `BRIDGE_HOST_EXPOSURE=localhost`. Anyone not running with the explicit dev escape hatch gets the safe path.
 2. **Phase 2 deletes the legacy branches outright** rather than leaving them behind a kill switch. The escape hatch in Phase 1 is for the BRIEF window between Phase 1 merging and Phase 2 landing in the same PR — it's not a long-lived feature.
 3. **Boot-time fail-fast** (not log-and-degrade). Misconfigured production should not start, full stop. Mirrors plan 068 phase 1's pattern for `BRIDGE_HOST_EXPOSURE`.
