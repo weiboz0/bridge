@@ -133,7 +133,23 @@ Confirmed self-consistency of the four replacements + CLAUDE.md edits, validated
 
 ## Code Review
 
-(pending — 5-way at branch-diff time per the new policy this plan codifies)
+5-way code review against branch `feat/073-workflow-doc-pr-timing-fix` HEAD `4318cd5` (consolidated branch diff vs main; doc-only).
+
+### Self (Opus 4.7) — clean
+
+Grep-verified all 4-way → 5-way replacements clean across all 3 in-scope files. Cross-checked reviewer list at `docs/development-workflow.md:82` matches the CLAUDE.md `## Code Review` table order. CLAUDE.md lines 125 + 141 carry the new "branch diff before PR is opened" wording.
+
+### Codex — pending
+
+### DeepSeek V4 Flash — CONCUR (1 cosmetic NIT, non-blocking)
+
+Confirmed Step 3 (line 55) + Step 5 (line 80) of `docs/development-workflow.md` are mutually consistent; CLAUDE.md lines 125 + 141 match the workflow doc exactly; `grep -rn "4-way" README.md AGENTS.md .github/` returns zero stragglers; remaining "4-way" hits are correctly scoped as historical (plans 069/070, review 011); reviewer list order at `:82` matches CLAUDE.md `## Code Review`. Scope matches plan exactly.
+
+`[WONTFIX]` NIT (cosmetic): the plan file's problem-description and review-log sections quote 30+ "4-way" references. → **Response**: explicitly labeled as historical / quoted text in §Out of scope and §Plan Review sections; wrapping in blockquotes adds noise without semantic gain. DeepSeek itself marked this as "not blocking, defensible".
+
+### GLM 5.1 — pending
+
+### Kimi K2.6 — pending
 
 ## Post-execution report
 
