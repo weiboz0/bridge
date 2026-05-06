@@ -212,6 +212,37 @@ Kimi caught five things the other reviewers missed:
 - §Phase 3 §Files: tighten `e2e/hocuspocus-auth.spec.ts:131,150,159` HTTP tests too (not just the `beforeAll`); update `.env.example:63-71` + `TODO.md:9` legacy references; confirm CI provisions `HOCUSPOCUS_TOKEN_SECRET`.
 - §Risks: add deploy-sequencing note (Go + Hocuspocus secret atomic); add Go-side scope-enforcement verification (broadcast/session scopes deleted legacy code's role/owner checks must be covered by JWT mint endpoint).
 
+## Post-execution report
+
+**Status**: 3 phases shipped on branch `feat/072-realtime-auth-cutover-completion`. PR pending. Net diff: ~`-210` lines (more deleted than added).
+
+| Phase | Commit | Net |
+|---|---|---|
+| 1 — env flag invert + boot fail-fast | `b96c648` | +85 / -32 |
+| 2 — delete legacy auth branches | `43590e7` | -210 across 6 files |
+| 3 — tests + docs | `f617450` | +26 / -15 |
+
+**5-way plan review verdicts** (all CONCUR after folding):
+- Self (Opus 4.7): 4 concerns folded
+- Codex: CONCUR-WITH-CHANGES — 3 fixes (env enum value, expanded deletion checklist, e2e HTTP hardening + deploy sequencing)
+- DeepSeek V4 Pro: CONCUR-WITH-CHANGES — 3 fixes (Node-side BRIDGE_HOST_EXPOSURE contract, .env.example/TODO.md updates, CI prerequisite)
+- GLM 5.1: CONCUR-WITH-CHANGES — 2 fixes (noop document handling, isLikelyJwt simplification)
+- Kimi K2.6 (new 5th reviewer): CONCUR-WITH-CHANGES — 5 NEW findings (use-yjs-provider:33 detector, full isLikelyJwt deletion, TOKEN_SECRET guard cleanup, empty-string BRIDGE_HOST_EXPOSURE semantics, GO_INTERNAL_API_URL operational risk)
+
+**Verification**:
+- `bun run hocuspocus` boots cleanly with secret + JWT-only mode log line.
+- Boot-fail tests for the four error permutations (no secret + no escape, ALLOW_LEGACY=1 + exposed, invalid BRIDGE_HOST_EXPOSURE) all exit code 1 with expected error messages.
+- Full Go test suite (`go test ./...`) green.
+- Vitest `tests/unit/realtime-jwt.test.ts` 17/17 pass.
+- `tsc --noEmit` baseline of 10 (pre-existing errors in unrelated files) maintained.
+- ESLint clean for all modified files.
+
+**Known follow-ups** (filed for plan 080):
+- CI workflow file is missing from the repo. The hardened e2e tests will fail the moment CI is provisioned without `HOCUSPOCUS_TOKEN_SECRET`. By design (closes the loophole that let the un-flipped flag ship), but means the secret must be added to CI config before e2e can run.
+- Soft suite-level `beforeAll` skip in `e2e/hocuspocus-auth.spec.ts` (WS describe block) was left untouched per Codex's plan-review acceptance.
+
+**No follow-up plans needed for the cutover itself.** Realtime-auth BLOCKER from review 011 §1.1 is closed.
+
 ## Code Review
 
-(pending — at PR-open time per the new policy)
+(pending — 5-way at PR-open time per the new policy)
