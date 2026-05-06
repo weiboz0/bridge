@@ -23,9 +23,22 @@ export function InviteMemberModal({ orgId, role, onClose, onSuccess }: Props) {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notFound, setNotFound] = useState(false);
+  const [orgDomain, setOrgDomain] = useState<string | null>(null);
   const backdropRef = useRef<HTMLDivElement | null>(null);
 
   const label = role === "teacher" ? "Teacher" : "Student";
+
+  // Fetch the org's domain once on mount so we can warn on domain mismatches.
+  useEffect(() => {
+    fetch(`/api/orgs/${orgId}`, { credentials: "include" })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: { domain?: string | null } | null) => {
+        if (data?.domain) setOrgDomain(data.domain);
+      })
+      .catch(() => {
+        // Fetch failed — domain check simply won't fire; backend still validates.
+      });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Close on Escape key.
   useEffect(() => {
@@ -45,6 +58,17 @@ export function InviteMemberModal({ orgId, role, onClose, onSuccess }: Props) {
     if (!trimmedEmail) {
       setError("Email is required");
       return;
+    }
+
+    // Domain mismatch check — warn before submitting if the org has a domain set.
+    if (orgDomain) {
+      const inviteeDomain = trimmedEmail.split("@")[1]?.toLowerCase().trim();
+      if (inviteeDomain && inviteeDomain !== orgDomain.toLowerCase().trim()) {
+        const proceed = window.confirm(
+          `This email's domain (\`${inviteeDomain}\`) doesn't match the org's domain (\`${orgDomain}\`). Continue anyway?`
+        );
+        if (!proceed) return;
+      }
     }
 
     setSubmitting(true);
