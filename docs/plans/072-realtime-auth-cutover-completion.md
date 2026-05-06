@@ -145,7 +145,16 @@ After Phase 3, run the 4-way code review against the consolidated branch diff (s
 
 ## Plan Review
 
-(pending — 4-way: self / Codex / DeepSeek V4 Pro / GLM 5.1)
+### Self-review (Opus 4.7) — 4 concerns, no blockers
+
+1. **Escape-hatch ephemerality**: `ALLOW_LEGACY_TOKEN` only matters in the window between Phase 1 and Phase 2 (since Phase 2 deletes the code it gates). Two options: (a) keep the staged approach for safer rollout — Phase 1 ships, dev validates the polarity flip in production, then Phase 2 deletes; (b) collapse Phase 1 + 2 into a single deletion commit. Going with (a) for a brief soak — the deletion commit lives on the same branch but as a separate logical unit so the diff reads cleanly. Net effect: same single PR, but reviewers can trace "the polarity flip" vs "the deletion" separately. Minor structural choice; staying with the plan as written.
+2. **`tokenKind` reader audit**: before Phase 2, grep `tokenKind` across `server/` to confirm only `onLoadDocument` reads it. If other readers exist, drop them too. Folded into Phase 2 as a pre-work step.
+3. **No shared startup-guard module on the Node side**: Bridge's only env-validation pattern is in Go (`platform/cmd/api/main.go::validateDevAuthEnv`). Hocuspocus boot validation is one-off. Acceptable for a single env contract; if more startup gates land later, extract a shared helper.
+4. **Test-contract change scope**: tightening `e2e/hocuspocus-auth.spec.ts` from `test.skip` to hard fail is technically plan 080 territory. But the soft-skip is the failure mode that LET the unflipped flag ship in production — leaving it for plan 080 means another window of "review 011's BLOCKER could regress and CI wouldn't catch it." Keep in plan 072 Phase 3.
+
+### Codex / DeepSeek V4 Pro / GLM 5.1
+
+(dispatched in parallel; verdicts pending)
 
 ## Code Review
 
