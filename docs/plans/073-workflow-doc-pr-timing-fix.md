@@ -137,4 +137,26 @@ Confirmed self-consistency of the four replacements + CLAUDE.md edits, validated
 
 ## Post-execution report
 
-(pending)
+Single-phase doc-only fix shipped at commit `d2884c5`. Three files updated, 8 lines changed:
+
+- `docs/development-workflow.md` — 4 lines (55, 80, 82, 99). Step 3 / Step 5 reframed to "branch diff before the PR is opened"; Step 5 reviewer list expanded to 5-way with Kimi K2.6; Step 6 PR-summary text updated to "5-way review summary".
+- `CLAUDE.md` — 2 lines (125, 141). Both PR-timing claims rewritten to match the new "branch diff after Step 4, PR opens in Step 6" framing. The contradiction Codex flagged at line 141 ("at PR-open time") is gone.
+- `docs/plans/072-realtime-auth-cutover-completion.md` — 1 line (152). Stale forward instruction "run the 4-way code review" → "5-way" (one-character fix).
+
+### Verification
+
+- `grep -n "4-way" docs/development-workflow.md` returns 0 hits ✓
+- `grep -n "4-way" CLAUDE.md` returns 0 hits ✓
+- `grep -n "4-way" docs/plans/072-...md` returns 0 hits ✓
+- `grep -n "5-way" docs/development-workflow.md` returns 4 hits at lines 55, 80, 82, 99 with the new wording ✓
+- CLAUDE.md lines 125 + 141 carry the new "branch diff before PR is opened" wording ✓
+- Reviewer list at `docs/development-workflow.md:82` matches CLAUDE.md `## Code Review` table order: self / Codex / DeepSeek V4 Flash / GLM 5.1 / Kimi K2.6 ✓
+
+### Out of scope retained
+
+- `docs/reviews/011-...md` — 13+ "4-way" references kept. Historical artifact: review 011 itself documents reduced 2-way / 3-way coverage in its `For this review` callout. Editing retroactively would falsify the audit trail.
+- `docs/plans/069-...md` — 3 "4-way" references kept. All past-tense historical record ("found 1 BLOCKER", "predates the 4-way review policy", "### 4-way convergence" section header for the plan's actual review log).
+
+### No deviations from plan
+
+All four §Files items shipped as specified. No code, test, or other doc changes. No follow-up items.
