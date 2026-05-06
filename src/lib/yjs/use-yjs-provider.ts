@@ -30,7 +30,7 @@ export function useYjsProvider({
   const [, forceUpdate] = useState(0);
 
   // Don't connect for placeholder/empty document names
-  const shouldConnect = documentName && documentName !== "noop" && token && !token.startsWith(":");
+  const shouldConnect = documentName && documentName !== "noop" && token;
 
   useEffect(() => {
     if (!shouldConnect) {

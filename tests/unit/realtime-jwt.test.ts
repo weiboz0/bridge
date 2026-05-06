@@ -1,7 +1,6 @@
 import { createHmac } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  isLikelyJwt,
   JwtVerifyError,
   REALTIME_ISSUER,
   rechckDocumentAccess,
@@ -54,23 +53,6 @@ function mint(args: MintArgs = {}): string {
     .digest("base64url");
   return `${encHeader}.${encPayload}.${sig}`;
 }
-
-describe("isLikelyJwt", () => {
-  it("returns true for a real-shape JWT", () => {
-    expect(isLikelyJwt(mint())).toBe(true);
-  });
-
-  it("returns false for the legacy `userId:role` shape", () => {
-    expect(isLikelyJwt("u-123:teacher")).toBe(false);
-  });
-
-  it("returns false for empty / single-token / unprefixed strings", () => {
-    expect(isLikelyJwt("")).toBe(false);
-    expect(isLikelyJwt("notajwt")).toBe(false);
-    expect(isLikelyJwt("ey.bogus")).toBe(false); // only 2 parts
-    expect(isLikelyJwt("xx.yy.zz")).toBe(false); // doesn't start with `ey`
-  });
-});
 
 describe("verifyRealtimeJwt", () => {
   it("returns claims for a freshly-minted token", () => {

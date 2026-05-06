@@ -126,11 +126,10 @@ func TestVerifyRealtimeToken_RejectsMalformed(t *testing.T) {
 }
 
 func TestSignRealtimeToken_ProducesEyPrefix(t *testing.T) {
-	// Plan 053's flag-off backward-compat parser sniffs JWT vs
-	// legacy `userId:role` by checking for the "ey" prefix
-	// (base64-encoded `{"alg":...}` always starts with "ey").
-	// Lock this in so the parser strategy doesn't drift.
+	// The base64url-encoded JWT header `{"alg":"HS256","typ":"JWT"}`
+	// always starts with "ey". Lock this in so the token format
+	// stays spec-compliant regardless of library changes.
 	tok, err := SignRealtimeToken(realtimeTestSecret, "u", "user", "unit:x", time.Minute)
 	require.NoError(t, err)
-	assert.True(t, strings.HasPrefix(tok, "ey"), "token should start with `ey` for the JWT/legacy sniff")
+	assert.True(t, strings.HasPrefix(tok, "ey"), "token should start with `ey` (base64url JWT header prefix)")
 }
