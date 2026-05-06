@@ -155,11 +155,19 @@ Confirmed Step 3 (line 55) + Step 5 (line 80) of `docs/development-workflow.md` 
 
 Confirmed CLAUDE.md:141 NIT from plan-review round resolved. Step 3 / Step 5 / CLAUDE.md mutually consistent; review fires against branch diff after Verify, before PR opens in Step 6. No regression. Scope exactly 8 lines / 3 files — no inflation.
 
-### Kimi K2.6 — pending
+### Kimi K2.6 — CONCUR (1 NIT, FIXED)
+
+Confirmed timeline coherence across all 3 files; no ambiguity in PR-timing wording; zero "4-way" stragglers in `README.md`, `AGENTS.md`, `.github/`, `docs/specs/`, `docs/code-review.md`; historical references correctly retained in `docs/plans/069-...md` and `docs/reviews/011-...md`.
+
+`[FIXED]` NIT: §Post-execution report said "8 lines changed" but the actual diff is 7 (4 + 2 + 1). → **Response**: corrected to "7 lines changed". The plan-073 file itself is the new plan file, not a modified file.
+
+### Convergence
+
+All 5 reviewers concur. Plan 073 ready to ship.
 
 ## Post-execution report
 
-Single-phase doc-only fix shipped at commit `d2884c5`. Three files updated, 8 lines changed:
+Single-phase doc-only fix shipped at commit `d2884c5`. Three files updated, 7 lines changed:
 
 - `docs/development-workflow.md` — 4 lines (55, 80, 82, 99). Step 3 / Step 5 reframed to "branch diff before the PR is opened"; Step 5 reviewer list expanded to 5-way with Kimi K2.6; Step 6 PR-summary text updated to "5-way review summary".
 - `CLAUDE.md` — 2 lines (125, 141). Both PR-timing claims rewritten to match the new "branch diff after Step 4, PR opens in Step 6" framing. The contradiction Codex flagged at line 141 ("at PR-open time") is gone.
