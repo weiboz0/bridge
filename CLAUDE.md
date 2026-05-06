@@ -4,8 +4,8 @@
 
 - **Spawn subagents for coding work; pick the model per task.** The orchestrator stays on Opus 4.7 for planning + review + coordination, then dispatches a subagent (`general-purpose`, `model: "sonnet"`) for routine implementation (CRUD, tests, refactors, copy) or `model: "opus"` for complex implementation (new patterns, hard debugging, large-codebase reasoning). Do not delegate code generation to Codex, DeepSeek, GLM, or any other external model — those are review-only. See "Coding Agent" below for dispatch patterns and tier escalation.
 - **Always create the feature branch BEFORE drafting the plan.** Use `git checkout -b feat/NNN-description` first. The plan file, review verdicts, and iterative revisions all commit to this branch — never to `main`. (The opencode session-continuity helper also keys on `plan-NNN`-style branch names, so this is a precondition for reviewer session reuse.)
-- **Always run the 4-way plan review before any implementation.** After drafting or revising any plan in `docs/plans/`, dispatch ALL four reviewers in parallel (see "Plan review gate" below). Do NOT begin implementation until all four concur. Capture each verdict in the plan's `## Plan Review` section, committed to the feature branch as they arrive.
-- **Always run the 4-way code review** before merging a PR. Dispatch all four reviewers in parallel (see "Code review gate" below). Write findings to the plan file's `## Code Review` section.
+- **Always run the 5-way plan review before any implementation.** After drafting or revising any plan in `docs/plans/`, dispatch ALL five reviewers in parallel (see "Plan review gate" below). Do NOT begin implementation until all five concur. Capture each verdict in the plan's `## Plan Review` section, committed to the feature branch as they arrive.
+- **Always run the 5-way code review** before merging a PR. Dispatch all five reviewers in parallel (see "Code review gate" below). Write findings to the plan file's `## Code Review` section.
 - **Always write a post-execution report** in the plan file before shipping.
 - **Always run the full test suite** before pushing. Do not push with failing tests.
 
@@ -90,28 +90,29 @@ For substantial code changes — new features, re-architecting, multi-file refac
 
 Before writing a new plan, review existing plans in `docs/plans/` to ensure consistency. Check for: reusable patterns and utilities already established, architectural decisions that must be respected, and existing implementations that the new work should build on rather than duplicate. Avoid introducing duplicate code — reuse existing implementations and keep logic in a single source of truth.
 
-### Plan review gate (mandatory — 4-way)
+### Plan review gate (mandatory — 5-way)
 
-Every plan — new or revised — must pass a 4-way review before any code is written. The four reviewers run **in parallel** (dispatch all simultaneously via multiple Agent/subagent calls in a single message):
+Every plan — new or revised — must pass a 5-way review before any code is written. The five reviewers run **in parallel** (dispatch all simultaneously via multiple Agent/subagent calls in a single message):
 
 | # | Reviewer | How to dispatch | Model |
 |---|----------|-----------------|-------|
 | 1 | **Self-review (Opus 4.7)** | Claude reads its own plan critically on Opus and lists concerns inline | claude-opus-4-7 |
 | 2 | **Codex** | `codex:codex-rescue` subagent with the plan path + review questions | Codex default |
-| 3 | **DeepSeek V4 Pro** | `opencode:opencode-review` subagent with `--model deepseek/deepseek-v4-pro` | deepseek/deepseek-v4-pro |
-| 4 | **GLM 5.1** | `opencode:opencode-review` subagent with `--model volcengine-plan/glm-5.1` | volcengine-plan/glm-5.1 |
+| 3 | **DeepSeek V4 Pro** | `opencode:opencode-review` subagent with `--model opencode-go/deepseek-v4-pro` | opencode-go/deepseek-v4-pro |
+| 4 | **GLM 5.1** | `opencode:opencode-review` subagent with `--model opencode-go/glm-5.1` | opencode-go/glm-5.1 |
+| 5 | **Kimi K2.6** | `opencode:opencode-review` subagent with `--model opencode-go/kimi-k2.6` | opencode-go/kimi-k2.6 |
 
 Steps:
 
 1. **Create the feature branch FIRST** — `git checkout -b feat/NNN-description` before any plan drafting. This guarantees every commit (the plan file, the review verdicts, the iterative revisions) lands on the feature branch, never on `main`. The opencode session-continuity helper also keys on the branch name (`plan-NNN`), so reviewer history scopes correctly when the branch matches `feat/NNN-*`.
 2. **Draft or revise the plan** in `docs/plans/`. Commit it to the feature branch so the reviewers can see the same on-disk file Claude is iterating on.
 3. **Run self-review** — Claude reads the plan with fresh eyes and records any concerns.
-4. **Dispatch reviewers 2-4 in parallel** — same prompt to each (plan path + explicit review questions: blockers, hidden assumptions, scope, ordering, missing risks). Keep the prompt focused — under 500 words, time-bounded. If any reviewer needs a remote read (e.g., GitHub-connector access), push the branch first so they can fetch the plan file by branch.
-5. **Capture all four verdicts** in the plan's `## Plan Review` section. Include the date, the reviewer name, the verdict, the blockers, and the resolution for each blocker. Commit the verdicts to the feature branch as they arrive — don't batch the audit trail.
-6. **If ANY reviewer flags blockers, revise the plan** to address them on the same feature branch. Re-dispatch only the flagging reviewer(s) on the revised plan. Iterate until all four concur.
-7. **Only then** begin implementation on the same branch. The plan file with the 4-way review summary is already committed; the next commits are the implementation.
+4. **Dispatch reviewers 2-5 in parallel** — same prompt to each (plan path + explicit review questions: blockers, hidden assumptions, scope, ordering, missing risks). Keep the prompt focused — under 500 words, time-bounded. If any reviewer needs a remote read (e.g., GitHub-connector access), push the branch first so they can fetch the plan file by branch.
+5. **Capture all five verdicts** in the plan's `## Plan Review` section. Include the date, the reviewer name, the verdict, the blockers, and the resolution for each blocker. Commit the verdicts to the feature branch as they arrive — don't batch the audit trail.
+6. **If ANY reviewer flags blockers, revise the plan** to address them on the same feature branch. Re-dispatch only the flagging reviewer(s) on the revised plan. Iterate until all five concur.
+7. **Only then** begin implementation on the same branch. The plan file with the 5-way review summary is already committed; the next commits are the implementation.
 
-A plan that hasn't passed all four reviews is not ready for execution, regardless of how confident Claude is in it. The multi-model consensus catches blind spots no single model can see.
+A plan that hasn't passed all five reviews is not ready for execution, regardless of how confident Claude is in it. The multi-model consensus catches blind spots no single model can see.
 
 ## Development Workflow
 
@@ -121,23 +122,24 @@ Follow `docs/development-workflow.md` exactly for every plan (Steps 1–6: Desig
 - **One branch + one PR per plan** — all phases of a plan land on a single feature branch (`feat/NNN-description`) and ship together as a single PR. Phases are commit-level subdivisions of the same branch, not separate PRs. (Exception: a plan with a genuinely independent backend-infrastructure phase that other phases don't depend on may ship as a separate PR — document the deviation in the plan file. Default is single-PR-per-plan.)
 - **Build phase by phase, commit per phase** — implement, test, self-review, document, commit each phase separately on the same plan branch. The phase boundaries help the reviewer trace logical units in the diff; the single PR keeps the audit trail and CI history consolidated.
 - **Verify before review** — full test suite, cross-phase consistency check
-- **Review before ship** — 4-way code review fires once per plan PR (not per phase). Findings go in the plan file's `## Code Review` section, all [OPEN] items resolved before merge.
+- **Review before ship** — 5-way code review fires once per plan PR (not per phase). Findings go in the plan file's `## Code Review` section, all [OPEN] items resolved before merge.
 - **Ship cleanly** — post-execution report, update `TODO.md`, then PR
 
 ## Code Review
 
-Follow `docs/code-review.md` for the review process. Reviews use the same 4-way pattern as plans but with a **flash-tier model for DeepSeek** (code reviews are more frequent and latency-sensitive):
+Follow `docs/code-review.md` for the review process. Reviews use the same 5-way pattern as plans but with a **flash-tier model for DeepSeek** (code reviews are more frequent and latency-sensitive):
 
 | # | Reviewer | How to dispatch | Model |
 |---|----------|-----------------|-------|
 | 1 | **Self-review (Opus 4.7)** | Claude reads the diff critically on Opus before dispatching | claude-opus-4-7 |
 | 2 | **Codex** | `codex:codex-rescue` subagent with branch diff + review questions | Codex default |
-| 3 | **DeepSeek V4 Flash** | `opencode:opencode-review` subagent with `--model deepseek/deepseek-v4-flash` | deepseek/deepseek-v4-flash |
-| 4 | **GLM 5.1** | `opencode:opencode-review` subagent with `--model volcengine-plan/glm-5.1` | volcengine-plan/glm-5.1 |
+| 3 | **DeepSeek V4 Flash** | `opencode:opencode-review` subagent with `--model opencode-go/deepseek-v4-flash` | opencode-go/deepseek-v4-flash |
+| 4 | **GLM 5.1** | `opencode:opencode-review` subagent with `--model opencode-go/glm-5.1` | opencode-go/glm-5.1 |
+| 5 | **Kimi K2.6** | `opencode:opencode-review` subagent with `--model opencode-go/kimi-k2.6` | opencode-go/kimi-k2.6 |
 
 Key points:
-- **Timing**: the 4-way code review fires once per plan PR — at PR-open time after all phases are implemented and verified. Not after each phase. (Exception: a one-phase plan or a single-PR-deviation plan reviews at the same point — once, before merge.)
-- All four reviewers dispatch **in parallel** (multiple Agent calls in one message) after the self-review pass.
+- **Timing**: the 5-way code review fires once per plan PR — at PR-open time after all phases are implemented and verified. Not after each phase. (Exception: a one-phase plan or a single-PR-deviation plan reviews at the same point — once, before merge.)
+- All five reviewers dispatch **in parallel** (multiple Agent calls in one message) after the self-review pass.
 - Reviews go in the plan file's `## Code Review` section.
 - Reviewers: append findings with `[OPEN]` status and file:line references.
 - Authors: respond inline with `→ Response:` and `[FIXED]`/`[WONTFIX]`.
@@ -212,12 +214,12 @@ The **self-review stage** of both gates (plan review #1 and code review #1) ALWA
 ### Both tiers — same rules
 
 - Do NOT delegate coding tasks to Codex, DeepSeek, or GLM. Those models are review-only (see below).
-- Both tiers follow the 4-way review gates for plans and code (with Opus on self-review, see above).
+- Both tiers follow the 5-way review gates for plans and code (with Opus on self-review, see above).
 - Both tiers respect the branch-first rule and the development workflow.
 
 ## External Reviewers (Review Only)
 
-Three external review models complement Claude's self-review. None of them implement code — they review only.
+Four external review models complement Claude's self-review. All `opencode-go/*` models are dispatched via the `opencode:opencode-review` subagent; the `opencode-go/` provider is the canonical opencode-hosted slot for these models. None of them implement code — they review only.
 
 ### Codex
 - Dispatch: `codex:codex-rescue` subagent.
@@ -225,13 +227,18 @@ Three external review models complement Claude's self-review. None of them imple
 - Prompt style: under 500 words, focused questions, time-bounded.
 
 ### DeepSeek (via opencode)
-- Plan reviews: `opencode:opencode-review` subagent with `--model deepseek/deepseek-v4-pro`.
-- Code reviews: `opencode:opencode-review` subagent with `--model deepseek/deepseek-v4-flash` (faster for frequent post-impl passes).
+- Plan reviews: `--model opencode-go/deepseek-v4-pro`.
+- Code reviews: `--model opencode-go/deepseek-v4-flash` (flash tier — faster for frequent post-impl passes).
 - Prompt style: same prompt as Codex (plan path + questions, or branch diff + questions). The opencode subagent accepts free-form prompt text forwarded to the model.
 
 ### GLM 5.1 (via opencode)
-- All reviews: `opencode:opencode-review` subagent with `--model volcengine-plan/glm-5.1`.
+- All reviews: `--model opencode-go/glm-5.1`.
 - Prompt style: same as above.
+
+### Kimi K2.6 (via opencode)
+- All reviews: `--model opencode-go/kimi-k2.6`.
+- Prompt style: same as above.
+- Added 2026-05-06 to broaden the multi-model ensemble; brings a different reasoning style to the gate (especially useful when GLM/DeepSeek converge on the same blind spots).
 
 Do NOT use any of these for implementation, debugging, refactoring, or coding. Those belong to Claude Sonnet 4.6 (default) or Opus 4.7 (complex) — see "Coding Agent" above.
 
