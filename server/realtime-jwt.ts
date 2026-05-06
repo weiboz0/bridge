@@ -25,14 +25,6 @@ export class JwtVerifyError extends Error {
   }
 }
 
-export function isLikelyJwt(token: string): boolean {
-  // The base64url-encoded JWT header `{"alg":"HS256","typ":"JWT"}`
-  // ALWAYS starts with `ey` — exploit that for the legacy/JWT split
-  // during the phase-4 rollout window. NOT a security check; the
-  // signature verify below is the actual gate.
-  return token.startsWith("ey") && token.split(".").length === 3;
-}
-
 export function verifyRealtimeJwt(token: string, secret: string): RealtimeClaims {
   if (!secret) {
     throw new JwtVerifyError("HOCUSPOCUS_TOKEN_SECRET is empty");

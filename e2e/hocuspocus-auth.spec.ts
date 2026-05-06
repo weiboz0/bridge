@@ -129,7 +129,11 @@ test.describe("Plan 053 phase 3 — realtime token mint (HTTP)", () => {
     });
 
     if (res.status() === 503) {
-      test.skip(true, "HOCUSPOCUS_TOKEN_SECRET not set in this environment");
+      throw new Error(
+        "Phase 1 of plan 072 made HOCUSPOCUS_TOKEN_SECRET required-in-production. " +
+          "CI must provision this secret. A 503 from the mint endpoint is now a " +
+          "configuration failure, not a skip condition.",
+      );
     }
 
     expect(res.status(), `mint should return 200, got ${res.status()} (${await res.text()})`).toBe(200);
@@ -147,7 +151,7 @@ test.describe("Plan 053 phase 3 — realtime token mint (HTTP)", () => {
       data: { documentName: "unit:any" },
       headers: { "Content-Type": "application/json" },
     });
-    expect([401, 503]).toContain(res.status());
+    expect(res.status()).toBe(401);
   });
 
   test("authenticated request for an unauthorized doc-name returns 403/404", async ({ page }) => {
@@ -157,7 +161,11 @@ test.describe("Plan 053 phase 3 — realtime token mint (HTTP)", () => {
       headers: { "Content-Type": "application/json" },
     });
     if (res.status() === 503) {
-      test.skip(true, "HOCUSPOCUS_TOKEN_SECRET not set in this environment");
+      throw new Error(
+        "Phase 1 of plan 072 made HOCUSPOCUS_TOKEN_SECRET required-in-production. " +
+          "CI must provision this secret. A 503 from the mint endpoint is now a " +
+          "configuration failure, not a skip condition.",
+      );
     }
     expect([403, 404]).toContain(res.status());
   });

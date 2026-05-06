@@ -166,7 +166,7 @@ falling through. `BRIDGE_HOST_EXPOSURE=public` (or any other unknown
 string) refuses startup with a clear "unrecognized" error so a typo
 can't accidentally defang the guard.
 
-## Hocuspocus Token Secret (plan 053)
+## Hocuspocus Token Secret (plan 053 / plan 072)
 
 The Go API mints short-lived HMAC-SHA256 JWTs that the browser presents to the
 Hocuspocus WebSocket server. Both processes must share the same secret:
@@ -180,10 +180,10 @@ which signs and verifies tokens for the internal callback) and the Hocuspocus
 Node process (`server/hocuspocus.ts`, which verifies on connect) read it from
 the same env var.
 
-If the secret is unset, the `/api/realtime/token` endpoint returns
-`503 Realtime tokens not configured` and the legacy `userId:role` token format
-remains active (plan 053 phase 4 removes that fallback). Production deployments
-MUST set this before enabling the realtime-token feature flag.
+**`HOCUSPOCUS_TOKEN_SECRET` is required.** As of plan 072 the Hocuspocus
+server refuses to start if the secret is unset — no escape hatch. Phase 2
+of the plan also deleted the legacy `userId:role` token path entirely; JWT
+is the only runtime auth.
 
 The sibling `/api/internal/realtime/auth` endpoint is server-to-server
 only and is gated by the same secret as a bearer token — it must NOT be
@@ -191,21 +191,27 @@ exposed publicly. (It is registered OUTSIDE the user-auth middleware so
 the bearer check runs first; mounting it under user-auth would 401 the
 unauthenticated callback before the bearer could be validated.)
 
-### Hocuspocus-side configuration (plan 053 phase 2)
+### Hocuspocus-side configuration (plan 072 — secure-by-default)
 
-The Node process (`server/hocuspocus.ts`) reads three env vars:
+The Node process (`server/hocuspocus.ts`) reads four env vars. A boot-time
+validation function (`validateRealtimeAuthEnv`) checks these before the server
+starts and calls `process.exit(1)` on any misconfig — mirrors the Go API's
+`validateDevAuthEnv` pattern.
 
-- `HOCUSPOCUS_TOKEN_SECRET` — the same secret as above. Empty disables
-  the JWT path entirely; legacy `userId:role` parsing is the only mode
-  in that case.
-- `HOCUSPOCUS_REQUIRE_SIGNED_TOKEN=1` — phase-4 hard cutover. With the
-  flag ON, ANY non-JWT token is rejected. With it OFF (default during
-  rollout), legacy `userId:role` is still accepted alongside JWT, so
-  old browser tabs minted before the client-side rollout don't break.
+- `HOCUSPOCUS_TOKEN_SECRET` — **required.** The shared HMAC secret signed by
+  the Go API and verified by Hocuspocus on every WebSocket connect. Unset
+  causes a boot failure with no escape hatch — plan 072 phase 2 made this
+  unconditional. Generate with `openssl rand -hex 32` and set the same value
+  on both the Go API and the Hocuspocus process.
+- `BRIDGE_HOST_EXPOSURE` — same semantics as the Go API (see "Host Exposure
+  Declaration" above). Allowed values: `""` / `"localhost"` (default) and
+  `"exposed"`. Unrecognized values fail loud at boot.
 - `GO_INTERNAL_API_URL` — base URL the Hocuspocus Node process uses to
-  call the recheck endpoint. Defaults to `http://localhost:8002` (Go's
-  local port). The recheck path is internal-only — keep it off any
-  internet-facing route.
+  call the recheck endpoint (`POST /api/internal/realtime/auth`). Defaults to
+  `http://localhost:8002` (Go's local port). A warning is logged at boot if
+  this is still the default value under `BRIDGE_HOST_EXPOSURE=exposed` — the
+  Go API will be unreachable in that configuration. The recheck path is
+  internal-only — keep it off any internet-facing route.
 
 ## Trusted Reverse-Proxy Configuration
 
