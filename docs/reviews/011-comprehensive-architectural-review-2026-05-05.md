@@ -1,9 +1,64 @@
 # Comprehensive Architectural Review — 2026-05-05
 
-> **Status**: charter committed; reviewer findings pending.
-> **Reviewers**: Self (Opus 4.7), Codex, DeepSeek V4 Pro, GLM 5.1 (via opencode).
+> **Status**: COMPLETE (2-way convergence; DeepSeek Pro + GLM 5.1 unavailable).
+> **Reviewers**: Self (Opus 4.7) ✅, Codex ✅, DeepSeek V4 Pro ❌ (timeout × 3), GLM 5.1 ❌ (timeout × 2).
 > **Scope**: cross-cutting architectural assessment, not per-PR code review.
-> **Deliverable**: this file, with each reviewer's findings appended in their own section.
+> **Result**: 16 findings — 1 BLOCKER, 11 IMPORTANT, 4 NIT/strategic. Action items distilled below.
+
+## Convergence summary
+
+**Both reviewers (Self + Codex) independently identified three of the same architectural debts:**
+1. **`RequireOrgAuthority` helper missing** (Self §1.1, Codex §1.3) — class-scoped has it; org-scoped repeats `GetUserRolesInOrg` per handler.
+2. **Modal pattern fragmentation** (Self §3.1, Codex §3.2) — 4+ hand-rolled dialogs generating repeated a11y rework.
+3. **Server-component fetch pattern inconsistency** (Self §3.2, Codex §3.1) — some org pages use `resolveOrgIdServerSide`, others don't; one (parent-links) hand-rolls its own resolution.
+
+Cross-validation = high confidence; ship the underlying refactors.
+
+**Codex independently surfaced 5 issues Self missed**:
+- Realtime auth cutover incomplete (BLOCKER)
+- Shadow Next API routes still carry stale write logic
+- Schema probe only validates table presence, not constraints
+- E2E `test.skip` paths mask realtime-auth + live-session regressions
+- Workflow doc PR-timing contradiction
+
+**Self surfaced 5 Codex didn't focus on**:
+- Self-action guards still incomplete (parent-link revoke, class self-removal, last-org-admin)
+- Soft-delete schema inconsistency
+- Test-DB contention on parallel runs
+- Plan-file-as-audit-trail showing strain
+- External-reviewer signal-to-noise tracking (today's missing-DeepSeek/GLM result reinforces this)
+
+**No findings disagree.** Where both reviewers covered the same area, conclusions aligned.
+
+## Action items (prioritized)
+
+### Immediate (next 1-2 plans)
+
+1. **Plan 072 — Realtime auth cutover completion** (Codex §1.1, BLOCKER). Make `HOCUSPOCUS_REQUIRE_SIGNED_TOKEN=1` the production default; fail Hocuspocus startup without a valid signing secret; delete the legacy `userId:role` token branches after one compatibility release. Small scope, high safety return.
+2. **Plan 073 — Workflow doc PR-timing fix** (Codex §5.1). Amend `docs/development-workflow.md` Step 5/6 to introduce a draft-PR step: open draft → run 4-way review → resolve findings → mark ready & merge. Plus an explicit reviewer-disagreement protocol while editing the same section. ~1 hour.
+3. **Plan 074 — Shadow Next API route cleanup** (Codex §1.2). Delete or quarantine the migrated Next routes for `/api/orgs/...` that still carry stale Drizzle write logic without self-action guards. Add a CI lint that fails when a Go-proxied path also has an executable Next handler. ~0.5 day.
+
+### Short-term (next 3-4 plans)
+
+4. **Plan 075 — `RequireOrgAuthority` helper** (Self §1.1, Codex §1.3, IMPORTANT). Add the parallel to `RequireClassAuthority` with `OrgRead/OrgManage` levels. Migrate org dashboard, membership, courses/classes, parent-link handlers. ~1-2 days. Should land before plan 069b/070b add more org-admin endpoints.
+5. **Plan 076 — Self-action guards completion** (Self §1.2). Fold parent-link revoke, class self-removal, and last-org-admin into the `RequireOrgAuthority` migration above. Adds `requireNotSelfMutation` + `requireNotLastAdmin` helpers. ~+0.5 day on top of #075.
+6. **Plan 077 — Schema probe hardening** (Codex §2.1). Replace the single-table `to_regclass` probe with a multi-sentinel check: critical columns, FK constraints, partial indexes, enum values. ~0.5 day.
+
+### Medium-term (next month)
+
+7. **Plan 078 — Shared `<Dialog>` primitive** (Self §3.1, Codex §3.2). Migrate the 4+ hand-rolled modals + `confirm()` calls. Surface a single place to fix focus-trap NITs deferred from plan 070. ~1 day.
+8. **Plan 079 — Org context server-side resolver** (Self §3.2, Codex §3.1). All org-portal pages resolve a `{orgId, orgName, error}` object via one helper. Stop swallowing every API error as `null`. ~0.5 day.
+9. **Plan 080 — E2E suite reliability** (Codex §4.1). Deterministic fixture for one teacher/student/class/unit/realtime-secret. Convert conditional `test.skip` paths into hard CI failures for the auth/realtime/live-session projects. ~1-2 days.
+10. **Plan 081 — Plan file audit-trail separation** (Self §5.1). Move `## Code Review` from plan files into `docs/reviews/plan-NNN-code-review.md`. Keep `## Plan Review` (decisions that altered the plan) inside the plan. ~2 hours + one-time migration.
+
+### Strategic / informational
+
+11. **Test-DB contention** (Self §4.1). Per-test schema or per-test transaction isolation. ~2 days. Don't block — file as plan 082, low priority.
+12. **Soft-delete schema documentation** (Self §2.1). Document the deletion model in `docs/schema-deletion-model.md`. ~2 hours.
+13. **External reviewer infrastructure** (this review's blocking constraint). The opencode 300s timeout on volcengine Pro models is currently a blocker for architectural-review-class prompts. Either: configure opencode timeout extension, split architectural reviews into per-section calls, or accept the limitation and document it in CLAUDE.md.
+14. **External reviewer signal tracking** (Self §7.1). Track `docs/review-stats.md` over the next 5 plans; re-evaluate the four-way ensemble.
+
+---
 
 ## Why now
 
@@ -311,7 +366,20 @@ The realtime ratchet skips WebSocket auth entirely when `HOCUSPOCUS_TOKEN_SECRET
 
 ## DeepSeek V4 Pro findings
 
-(pending)
+**INFRASTRUCTURE UNAVAILABLE (this pass)** — three attempts, all hit the opencode 300s SIGTERM hard limit with zero output. Same failure mode as GLM 5.1 below.
+
+Attempts:
+1. Full-charter URL fetch + 1500-word output target — timeout
+2. Condensed inline brief + 1200-word target — timeout
+3. Condensed inline brief, backend-correctness-focused questions, 800-word target — timeout
+
+Per-PR code reviews on this same model succeeded recently (plan 069 phase 5 round-1 used it without issue), so the model itself is reachable. The architectural review prompt size pushes the response beyond the opencode budget.
+
+**Same mitigations as GLM 5.1** apply (per-section split / timeout extension / accept the constraint and document it).
+
+**For this review**: protocol reduced from 4-way to 2-way (Self + Codex). Even at 2-way the signal is strong — 16 findings total including 1 BLOCKER (realtime auth cutover), 7 important findings, with substantive cross-validation between the two reviewers.
+
+
 
 ## GLM 5.1 findings
 
