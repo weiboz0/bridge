@@ -239,7 +239,75 @@ GLM is currently the lowest-signal reviewer. But: the FOUR-way diversity is what
 
 ## Codex findings
 
-(pending)
+**Executive summary**: Bridge's architectural direction is sound: Go-owned auth, explicit store-layer SQL, and plan-driven review are coherent choices. The weak spots are mostly incomplete cutovers and accumulated transition code. Highest-risk gap: realtime auth — Go JWT mint/recheck path exists, but Hocuspocus still accepts legacy `userId:role` tokens by default, with known forged-token and per-unit authorization holes documented in code comments. Auth has two parallel transition debts: org authority is reimplemented per-handler instead of centralized, and shadow Next API routes still contain stale direct-DB write logic under paths now proxied to Go. Data-layer risk is concentrated in schema validation: the startup probe confirms one table exists, but not constraints, indexes, enums, or non-table migrations. Frontend drift is visible in org-context resolution and modal patterns; both have already produced review findings and local fixes. Testing has breadth, but the E2E suite can silently skip core live-session and realtime auth coverage based on seed data or missing secrets. Finally, the workflow docs conflict on when PR creation happens relative to the 4-way review, which matters now that reviews run once against consolidated plan diffs.
+
+### Section 1.1 — Realtime auth cutover is incomplete and still defaults to legacy tokens
+**Severity**: blocker
+**Category**: risk
+
+Go now mints scoped realtime JWTs and rechecks access through `/api/internal/realtime/auth` (`platform/internal/handlers/realtime_token.go:77`, `:132`). Hocuspocus verifies those JWTs (`server/hocuspocus.ts:49`) and rechecks Go on load (`:174`). That path is the right architecture.
+
+The problem is that Hocuspocus still accepts legacy `userId:role` tokens unless `HOCUSPOCUS_REQUIRE_SIGNED_TOKEN=1` is set (`server/hocuspocus.ts:16`, `:25`, `:79`). The comments document the exposure: a forged legacy token could open session documents where `docOwner` matches the forged user id (`:97`, `:104`), and `unit:*` legacy auth checks only `role === "teacher"` without unit/org validation (`:144`, `:147`).
+
+**Recommendation**: finish the plan 053 cutover as a production hard requirement. Make signed tokens required by default in production, fail Hocuspocus startup if the secret or require flag is absent, and delete the legacy auth branches after one compatibility release. Small scope, high safety return.
+
+### Section 1.2 — Shadow Next write routes contain stale authorization logic
+**Severity**: important
+**Category**: drift
+
+`next.config.ts` proxies `/api/orgs/:path*` to Go, but the repo still carries overlapping Next API routes with direct Drizzle writes and their own auth decisions (`src/app/api/orgs/[id]/members/route.ts:18, 25, 53`). The shadow Next PATCH/DELETE routes have no self-action guard (`src/app/api/orgs/[id]/members/[memberId]/route.ts:37, 65`), unlike the Go path that plan 069 phase 4 hardened.
+
+**Recommendation**: delete or quarantine migrated Next route files in one cleanup plan. Until deletion, add a test that fails when proxied Go routes still have executable Next handlers under the same path.
+
+### Section 1.3 — Org authority needs a shared helper to match the class authority pattern
+**Severity**: important
+**Category**: debt
+
+(Confirms Self-review 1.1.) Class-scoped access has `RequireClassAuthority` (`access.go:17, 67`). Org-scoped access repeats role scans in every handler: `UpdateOrg`, `AddMember`, `UpdateMember`, `RemoveMember` each call `GetUserRolesInOrg` (`orgs.go:185, 282, 360, 441`). Parent links introduced a local `requireOrgAdmin` helper scoped only to that file (`org_parent_links.go:76, 88`) — better locally but confirms the missing abstraction.
+
+**Recommendation**: add `RequireOrgAuthority(ctx, orgs, claims, orgID, level)` with read/admin levels and platform-admin override semantics. Migrate org dashboard, membership, courses/classes, parent-link handlers in the next auth-consolidation plan.
+
+### Section 2.1 — Schema probe validates table presence, not schema integrity
+**Severity**: important
+**Category**: risk
+
+The boot check verifies only `to_regclass('public.' + ExpectedSchemaProbe)` (`schema_probe.go:34, 36`). The migration docs explicitly acknowledge this cannot distinguish fully-migrated from partial (`migrations.go:13, 19`). `parent_links` relies on a status check, no-self-link check, FK actions, and a partial unique index (`drizzle/0024_parent_links.sql:20, 22, 35`). The current probe passes if the table exists but those constraints/indexes are missing.
+
+**Recommendation**: keep `to_regclass`, but add a multi-sentinel probe for critical columns, constraints, enum values, and indexes. Before the next schema-affecting plan, not after.
+
+### Section 3.1 — Org pages resolve org context via four different patterns
+**Severity**: important
+**Category**: drift
+
+(Extends Self-review 3.2.) Teachers/students use `resolveOrgIdServerSide` (`org-context.ts:55, 61`). Classes/courses/settings still parse the query param and rely on endpoint fallback (`org/classes/page.tsx:14, 18`; `org/courses/page.tsx:14, 18`; `org/settings/page.tsx:22, 27`). Parent-links page hand-rolls its own fallback instead of using the helper (`org/parent-links/page.tsx:57, 59`).
+
+**Recommendation**: make all org portal pages resolve one `OrgContext` object server-side: `{orgId, orgName, error}`. Replace scattered `parseOrgIdFromSearchParams` calls and stop swallowing all resolver errors as `null` (`org-context.ts:69`).
+
+### Section 3.2 — Modal divergence generating repeated accessibility rework
+**Severity**: important
+**Category**: debt
+
+(Confirms Self-review 3.1.) Multiple hand-rolled dialog implementations: invite modal (`invite-member-modal.tsx:137`), parent-link modal (`create-parent-link-modal.tsx:119`), status modal and remove dialog (`member-row-actions.tsx:90, 232`), native confirms for revoke/archive (`parent-links-view.tsx:50`, `archive-class-button.tsx:18`). Recent comments show repeated fixes for backdrop clicks, stale ARIA references, and clipboard/native-dialog edge cases — the same lifecycle and accessibility logic is being rediscovered per component.
+
+**Recommendation**: introduce one shared `<Dialog>`/`<Confirm>` primitive and migrate org-admin modals first. Small frontend-foundation plan; should precede more org-admin write surfaces.
+
+### Section 4.1 — E2E suite can pass while silently skipping realtime auth and live-session coverage
+**Severity**: important
+**Category**: risk
+
+The realtime ratchet skips WebSocket auth entirely when `HOCUSPOCUS_TOKEN_SECRET` is unset (`hocuspocus-auth.spec.ts:26, 168`). HTTP mint tests also skip on missing seed units or 503 token config (`:117, 131, 159`). Core live-session E2E is data-dependent: missing class, existing active session, missing enrollment, absent past sessions all become skips (`session-flow.spec.ts:45, 69, 94, 159`). With Playwright serialized to one worker (`playwright.config.ts:6, 9`), the suite is stable but not a reliable regression gate for the features most likely to break on auth changes.
+
+**Recommendation**: create deterministic E2E fixture setup for one teacher, student, class, unit, realtime secret. Convert these conditional skips into hard failures in CI for the auth, realtime, and live-session projects.
+
+### Section 5.1 — Workflow docs conflict on PR timing relative to 4-way code review
+**Severity**: important
+**Category**: strategic
+
+`docs/development-workflow.md:80` says the 4-way code review fires at PR-open time against the consolidated branch diff. But Step 6 says push and create the PR after Step 5 review (`:91, 99`). That sequencing is impossible as written. Single-PR-per-plan makes the review artifact larger and later (`:45, 55`); the contradiction matters more now.
+
+**Recommendation**: amend the workflow now — Step 5 should open a draft PR, run 4-way review, resolve findings, then Step 6 marks it ready and merges. Add an explicit disagreement-resolution rule while editing the same section.
+
+
 
 ## DeepSeek V4 Pro findings
 
