@@ -139,7 +139,11 @@ Confirmed self-consistency of the four replacements + CLAUDE.md edits, validated
 
 Grep-verified all 4-way → 5-way replacements clean across all 3 in-scope files. Cross-checked reviewer list at `docs/development-workflow.md:82` matches the CLAUDE.md `## Code Review` table order. CLAUDE.md lines 125 + 141 carry the new "branch diff before PR is opened" wording.
 
-### Codex — pending
+### Codex — NITS only (no blockers)
+
+All 6 review questions confirmed clean. Lines 55/80/82/99 of `docs/development-workflow.md` match plan §Files exactly. `CLAUDE.md:125` matches. `docs/plans/072-...md:152` shows the one-char fix. Steps 3 and 5 are mutually consistent; CLAUDE.md is consistent with the workflow doc. No regressions; terminology applied uniformly.
+
+`[WONTFIX]` NIT: `CLAUDE.md:141` carries a slightly expanded phrase ("in Step 6. Not after each phase.") beyond the literal spec text in plan §Files. → **Response**: Codex itself flagged this as "harmless clarification, not a discrepancy. No action required." The expansion makes the timing reference more concrete (anchors "before the PR is opened" to Step 6 explicitly) without changing semantics. Keeping.
 
 ### DeepSeek V4 Flash — CONCUR (1 cosmetic NIT, non-blocking)
 
