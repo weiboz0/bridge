@@ -315,4 +315,15 @@ The realtime ratchet skips WebSocket auth entirely when `HOCUSPOCUS_TOKEN_SECRET
 
 ## GLM 5.1 findings
 
-(pending)
+**INFRASTRUCTURE UNAVAILABLE (this pass)** — both attempts timed out at the opencode 300s SIGTERM hard limit. First call used the full-charter URL fetch + 1500-word target; second call used a condensed inline brief + 800-word target. Both hit the same timeout window with zero output.
+
+The volcengine endpoint hosting `volcengine-plan/glm-5.1` appears to need more time than opencode allots for architectural-review-sized reasoning. Per-PR code reviews (smaller scope, quicker output) succeeded on this same model in prior plans (069/070), so the model itself is reachable — just not within the 300s envelope on this prompt class.
+
+**Substitution / mitigation options** for future architectural passes:
+1. Split the architectural review into per-section calls (one charter section per call) — gives each model a 300s window for a small slice instead of the whole charter.
+2. Configure opencode timeout extension if the runtime supports it (out of scope for this pass — would need a config change in the buddy plugin).
+3. Accept that volcengine models work for per-PR reviews but not architectural reviews; document the constraint in CLAUDE.md.
+
+**For this review**: the 4-way protocol is reduced to 3-way (self/Codex/DeepSeek). Re-running GLM 5.1 against the published findings (when convergence is established) would be a useful sanity-check follow-up but is not blocking the action items.
+
+
