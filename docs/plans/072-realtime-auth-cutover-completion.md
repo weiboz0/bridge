@@ -247,4 +247,40 @@ Kimi caught five things the other reviewers missed:
 
 ## Code Review
 
-(pending — 5-way at PR-open time per the new policy)
+5-way code review against branch `feat/072-realtime-auth-cutover-completion` head `dc7f5c6` (3-phase implementation). All four external reviewers independently identified the same auth-bypass BLOCKER — the multi-reviewer consensus working as designed.
+
+### Self (Opus 4.7) — OK
+
+Verified diff structure, ran full Go test suite (passes), vitest realtime tests (17/17), tsc baseline maintained, spot-greps confirmed deletion completeness during phase implementation. No findings before externals returned.
+
+### Codex round-1 — BLOCKERS (2)
+
+**Q3 BLOCKER — auth regression**: `onAuthenticate` returned `{userId:"", role:""}` for any missing/empty token (line 78 originally read `if (!token || documentName === "noop")`). An unauthenticated WebSocket could load any document; `onLoadDocument` then skipped recheck because `context.userId` was empty. **FIXED in commit `28e3b3e`** — split conditions so only noop bypasses, missing token on any other document throws.
+
+**Q6 BLOCKER — docs lie**: `docs/setup.md:205` and `.env.example:60-71` documented `HOCUSPOCUS_ALLOW_LEGACY_TOKEN` as a working escape hatch, but Phase 2's deletion sweep removed the runtime read entirely. **FIXED in commit `55077d5`** — phantom-flag references stripped from both files; setup.md prose rewritten ("required, no escape hatch"); plan-file post-execution report adds a "Plan deviation" note acknowledging Phase 2 went further than originally specified (more secure outcome).
+
+NITS (acceptable, not actionable): recheck "unconditional" wording slightly imprecise (gated on `context?.userId`); WS `beforeAll` soft-skip remains (deferred to plan 080 per Codex's own plan-review).
+
+### DeepSeek V4 Flash — needs-attention (1)
+
+Independently surfaced the same Q6 phantom-flag finding ("docs/setup.md and .env.example describe HOCUSPOCUS_ALLOW_LEGACY_TOKEN behavior that Phase 2 deleted from runtime"). **FIXED in `55077d5`** — same fix as Codex Q6. Other findings confirmed clean.
+
+### GLM 5.1 — needs-attention (2)
+
+Independently surfaced both the auth-bypass and the phantom-flag findings. Phrased the auth bypass as "Bug: `!token || documentName === "noop"` is too broad". **Both FIXED** in commits `28e3b3e` + `55077d5`.
+
+### Kimi K2.6 — BLOCKER (1)
+
+Independently surfaced the auth bypass with the same recommended fix ("separate the conditions: noop bypass first, then restore `if (!token) throw new Error('Authentication required')`"). **FIXED in `28e3b3e`** — exactly the recommended split. Confirmed all 5 of its plan-review findings landed correctly.
+
+### Codex round-2 (against `28e3b3e`)
+
+Q3 closed; Q6 still flagged because round-2 reviewed `28e3b3e` (Q6 fix landed in `55077d5` AFTER round-2 was dispatched). Round-3 dispatched against `55077d5` for final confirmation.
+
+### Codex round-3
+
+(running)
+
+### Convergence
+
+All four external reviewers (Codex, DeepSeek V4 Flash, GLM 5.1, Kimi K2.6) independently identified the same auth-bypass BLOCKER. Three of four also flagged the phantom-flag docs issue. **Both BLOCKERS fixed** in commits `28e3b3e` + `55077d5`. Awaiting Codex round-3 confirmation; otherwise ready to PR.
