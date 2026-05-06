@@ -77,7 +77,7 @@ Alternative considered: flip the order so PR opens at the START of Step 5 and re
 | Risk | Severity | Mitigation |
 |---|---|---|
 | Authors who already memorized the old workflow get confused by the change | low | The change matches lived behavior — anyone who has shipped a plan since 067 is already doing the new flow. The doc just catches up to reality. |
-| Reviewers expecting a PR to comment on can't find one during Step 5 | very low | Reviewers fetch by branch name, not PR (verified across plans 067-072). All 5 external reviewers operate on branch diff. |
+| Reviewers expecting a PR to comment on can't find one during Step 5 | very low | Reviewers fetch by branch name, not PR (verified across plans 067-072). All reviewers (self on Opus + the 4 external models) operate on the branch diff. |
 | `4-way` references elsewhere in the repo I missed | low | Single grep sweep before commit (planned for the implementation phase). |
 | Future workflow refactor (e.g., PR-first review) gets blocked by this fix | very low | This plan documents lived behavior, not a new direction. A future plan can revisit the order if desired. |
 
@@ -125,7 +125,11 @@ DeepSeek round-1 also confirmed direction: "Match lived behavior is defensible. 
 
 Independently surfaced the same CLAUDE.md:141 contradiction Codex flagged. CONCUR otherwise. The CLAUDE.md fix already covers it.
 
-#### Kimi K2.6 — pending
+#### Kimi K2.6 — CONCUR with 1 NIT (FIXED)
+
+Confirmed self-consistency of the four replacements + CLAUDE.md edits, validated the §Out-of-scope framing (plan 072 line 152 correctly pulled out of the historical bucket as a stale forward instruction; review 011 and older plans correctly retained), validated `docs/code-review.md` as genuinely fine reviewer-agnostic.
+
+`[FIXED]` NIT: §Risks row 2 said "All 5 external reviewers" but self-review is not external. → **Response**: changed to "All reviewers (self on Opus + the 4 external models)".
 
 ## Code Review
 
