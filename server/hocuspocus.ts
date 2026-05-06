@@ -75,8 +75,15 @@ const server = new Server({
   async onAuthenticate({ token, documentName }: { token: string; documentName: string }) {
     // noop documents don't carry collaboration content — short-circuit
     // before JWT verification so connection probes don't require a token.
-    if (!token || documentName === "noop") {
+    // Codex code-review BLOCKER: must NOT also bypass on missing-token for
+    // real documents; otherwise an unauthenticated WebSocket can load any
+    // document. noop is the only doc that bypasses; everything else
+    // requires a JWT.
+    if (documentName === "noop") {
       return { userId: "", role: "" } satisfies AuthContext;
+    }
+    if (!token) {
+      throw new Error("Authentication required");
     }
 
     // Plan 072 phase 2 — JWT is the ONLY auth path. Legacy userId:role

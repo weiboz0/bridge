@@ -202,10 +202,15 @@ starts and calls `process.exit(1)` on any misconfig — mirrors the Go API's
   secret signed by the Go API and verified by Hocuspocus on every WebSocket
   connect. Unset causes a boot failure unless `HOCUSPOCUS_ALLOW_LEGACY_TOKEN=1`
   is also set.
-- `HOCUSPOCUS_ALLOW_LEGACY_TOKEN=1` — **dev-only escape hatch.** Re-enables the
-  legacy `userId:role` token path. Only honored when `BRIDGE_HOST_EXPOSURE` is
-  `""` or `"localhost"`. An exposed host refuses to start with this flag set.
-  Do NOT set in production or staging.
+- `HOCUSPOCUS_ALLOW_LEGACY_TOKEN=1` — **dev-only boot escape hatch.** Lets
+  Hocuspocus boot without `HOCUSPOCUS_TOKEN_SECRET`. Only honored when
+  `BRIDGE_HOST_EXPOSURE` is `""` or `"localhost"`. An exposed host refuses to
+  start with this flag set. Note: plan 072 phase 2 deleted the legacy
+  `userId:role` parsing code — JWT is the only runtime auth path regardless
+  of this flag. The flag now ONLY controls whether boot tolerates a missing
+  signing secret. Useful when running a local Hocuspocus against a Go API
+  that hasn't been provisioned with a secret yet. Do NOT set in production
+  or staging.
 - `BRIDGE_HOST_EXPOSURE` — same semantics as the Go API (see "Host Exposure
   Declaration" above). Allowed values: `""` / `"localhost"` (default) and
   `"exposed"`. Unrecognized values fail loud at boot.
