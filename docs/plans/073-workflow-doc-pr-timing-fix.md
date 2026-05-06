@@ -105,7 +105,7 @@ After Phase 1, run the 5-way code review against the consolidated branch diff (s
 
 Folded one scope clarification at `150f1df`: `docs/reviews/011-...md` retains "4-way" because review 011's `For this review` callout documents reduced 2-way / 3-way coverage; editing those references retroactively would falsify the audit trail of which reviewers actually ran. Same for historical references in older `docs/plans/*.md` files.
 
-#### Codex — 3 BLOCKERS (all FIXED)
+#### Codex — 3 BLOCKERS (all FIXED, round-3 CONCUR)
 
 1. `[FIXED]` `CLAUDE.md:125` and `CLAUDE.md:141` still encode the PR-open timing this plan rejects ("once per plan PR" / "at PR-open time"). Sweeping `docs/development-workflow.md` alone leaves the same contradiction alive in the tool-specific guidance. → **Response**: Added CLAUDE.md as a second file in §Files with explicit line edits at 125 + 141.
 2. `[FIXED]` `docs/plans/073-...md:81` (now §Phases) said `grep -n "4-way\|5-way" docs/` which is non-recursive and won't perform the promised sweep. → **Response**: Changed to `grep -rn "4-way\|5-way" docs/` and added expected-output description.

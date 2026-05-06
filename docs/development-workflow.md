@@ -52,7 +52,7 @@ For **each phase**:
 4. **Document** — update `docs/` and affected `README.md` files for this phase's changes.
 5. **Commit** — only after tests pass and self-review is clean. Commit code, tests, and docs together with a clear `plan NNN phase M: …` message so the reviewer can trace logical units in the squashed diff.
 
-Do NOT open a PR after each phase. Open the PR once after Step 4 (Verify) when ALL phases are implemented; the 4-way code review (Step 5) runs against the consolidated branch diff.
+Do NOT open a PR after each phase. After Step 4 (Verify), the 5-way code review (Step 5) runs against the consolidated branch diff. The PR is opened in Step 6, after all reviewers concur.
 
 **Single-PR exception**: when a plan has a genuinely independent backend-infrastructure phase that other phases don't depend on (e.g., a schema migration that downstream UI doesn't need to coordinate with), it MAY ship as a separate PR. Document the deviation in the plan file's `## Phases` section. Default is one PR per plan.
 
@@ -77,9 +77,9 @@ Before claiming work is done, run the verification commands and confirm the actu
 
 ## Step 5 — Review
 
-Code review catches what self-review misses. The 4-way review fires **once per plan PR** at PR-open time, against the consolidated branch diff (all phases). Not after each phase.
+Code review catches what self-review misses. The 5-way review fires **once per plan** against the consolidated branch diff, after Step 4 (Verify) and before the PR is opened. Findings go in the plan file's `## Code Review` section. Not after each phase.
 
-1. Request code review (4-way: self on Opus, Codex, DeepSeek V4 Flash, GLM 5.1 — see CLAUDE.md `## Code Review`). Reviewers append findings to the plan file's `## Code Review` section, following `docs/code-review.md` format.
+1. Request code review (5-way: self on Opus, Codex, DeepSeek V4 Flash, GLM 5.1, Kimi K2.6 — see CLAUDE.md `## Code Review`). Reviewers append findings to the plan file's `## Code Review` section, following `docs/code-review.md` format.
 2. Each finding is numbered with `[OPEN]` status, file:line references, and Must Fix / Should Fix / Nice to Have priority.
 3. Author addresses each finding: fix the code or explain why not. Respond inline with `→ Response:` and update status to `[FIXED]` or `[WONTFIX]`.
 4. All `[OPEN]` items must be resolved before shipping.
@@ -96,7 +96,7 @@ Wrap up, push, and create the **single plan PR**. All phases of the plan ship to
 2. **Update `TODO.md`** — mark completed items, add new follow-up items.
 3. **Commit** the updated plan and docs.
 4. **Run ALL tests** one final time. Do not proceed if any test fails.
-5. **Push** the branch and **create the PR** via `gh pr create`. PR title is `Plan NNN: <description>` (one PR per plan); body summarizes the phases shipped + cross-phase test plan + 4-way review summary.
+5. **Push** the branch and **create the PR** via `gh pr create`. PR title is `Plan NNN: <description>` (one PR per plan); body summarizes the phases shipped + cross-phase test plan + 5-way review summary.
 
 ---
 

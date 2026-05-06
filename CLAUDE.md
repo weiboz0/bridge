@@ -122,7 +122,7 @@ Follow `docs/development-workflow.md` exactly for every plan (Steps 1–6: Desig
 - **One branch + one PR per plan** — all phases of a plan land on a single feature branch (`feat/NNN-description`) and ship together as a single PR. Phases are commit-level subdivisions of the same branch, not separate PRs. (Exception: a plan with a genuinely independent backend-infrastructure phase that other phases don't depend on may ship as a separate PR — document the deviation in the plan file. Default is single-PR-per-plan.)
 - **Build phase by phase, commit per phase** — implement, test, self-review, document, commit each phase separately on the same plan branch. The phase boundaries help the reviewer trace logical units in the diff; the single PR keeps the audit trail and CI history consolidated.
 - **Verify before review** — full test suite, cross-phase consistency check
-- **Review before ship** — 5-way code review fires once per plan PR (not per phase). Findings go in the plan file's `## Code Review` section, all [OPEN] items resolved before merge.
+- **Review before ship** — 5-way code review fires once per plan against the branch diff before the PR is opened (not per phase). Findings go in the plan file's `## Code Review` section, all [OPEN] items resolved before merge.
 - **Ship cleanly** — post-execution report, update `TODO.md`, then PR
 
 ## Code Review
@@ -138,7 +138,7 @@ Follow `docs/code-review.md` for the review process. Reviews use the same 5-way 
 | 5 | **Kimi K2.6** | `opencode:opencode-review` subagent with `--model opencode-go/kimi-k2.6` | opencode-go/kimi-k2.6 |
 
 Key points:
-- **Timing**: the 5-way code review fires once per plan PR — at PR-open time after all phases are implemented and verified. Not after each phase. (Exception: a one-phase plan or a single-PR-deviation plan reviews at the same point — once, before merge.)
+- **Timing**: the 5-way code review fires once per plan against the consolidated branch diff after Step 4 (Verify) — before the PR is opened in Step 6. Not after each phase. (Exception: a one-phase plan or a single-PR-deviation plan reviews at the same point — once, before the PR is opened.)
 - All five reviewers dispatch **in parallel** (multiple Agent calls in one message) after the self-review pass.
 - Reviews go in the plan file's `## Code Review` section.
 - Reviewers: append findings with `[OPEN]` status and file:line references.
