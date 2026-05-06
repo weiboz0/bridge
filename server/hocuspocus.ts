@@ -9,22 +9,77 @@ import {
 } from "./attempts";
 import { isLikelyJwt, rechckDocumentAccess, verifyRealtimeJwt } from "./realtime-jwt";
 
-// Plan 053 phase 2 config:
+// Plan 072 phase 1 config (inverted from plan 053 defaults):
 // - HOCUSPOCUS_TOKEN_SECRET: shared HMAC secret with the Go API.
-//   Empty disables the JWT path entirely; legacy `userId:role`
-//   parsing is the only mode in that case.
-// - HOCUSPOCUS_REQUIRE_SIGNED_TOKEN=1: phase-4 hard cutover. With
-//   the flag ON, ANY non-JWT token is rejected. With it OFF
-//   (default during rollout), legacy `userId:role` is still
-//   accepted alongside JWT, so old browser tabs minted before the
-//   client-side rollout don't break.
+//   REQUIRED in production. Boot fails (process.exit(1)) if unset
+//   and HOCUSPOCUS_ALLOW_LEGACY_TOKEN is not set.
+// - HOCUSPOCUS_ALLOW_LEGACY_TOKEN=1: dev-only escape hatch. Re-enables
+//   the legacy `userId:role` token path for local development. Only
+//   honored when BRIDGE_HOST_EXPOSURE is "" or "localhost"; an exposed
+//   host refuses to start with this flag set (defense-in-depth).
+// - BRIDGE_HOST_EXPOSURE: "" / "localhost" (default) or "exposed".
+//   Mirrors the Go API's semantics (platform/cmd/api/main.go line 504).
 // - GO_INTERNAL_API_URL: base URL Hocuspocus uses to call the
 //   server-to-server recheck (`POST /api/internal/realtime/auth`).
 //   Defaults to localhost:8002 (the Go API's local port). NOT
-//   browser-reachable.
+//   browser-reachable. A warning is logged at boot when this is the
+//   default value under BRIDGE_HOST_EXPOSURE=exposed.
 const TOKEN_SECRET = process.env.HOCUSPOCUS_TOKEN_SECRET ?? "";
-const REQUIRE_SIGNED_TOKEN = process.env.HOCUSPOCUS_REQUIRE_SIGNED_TOKEN === "1";
+const ALLOW_LEGACY_TOKEN = process.env.HOCUSPOCUS_ALLOW_LEGACY_TOKEN === "1";
+const BRIDGE_HOST_EXPOSURE = (process.env.BRIDGE_HOST_EXPOSURE ?? "").toLowerCase().trim();
 const GO_INTERNAL_API_URL = process.env.GO_INTERNAL_API_URL ?? "http://localhost:8002";
+
+function validateRealtimeAuthEnv(): void {
+  // Plan 072 phase 1 — secure-by-default realtime auth boot check.
+  // Mirrors platform/cmd/api/main.go::validateDevAuthEnv pattern.
+
+  // Empty-string BRIDGE_HOST_EXPOSURE is treated as "localhost" — matches
+  // Go's main.go:504 semantics so a dev box without the env var
+  // explicitly exported to the Node process behaves consistently.
+  const isLocalhost = BRIDGE_HOST_EXPOSURE === "" || BRIDGE_HOST_EXPOSURE === "localhost";
+  const isExposed = BRIDGE_HOST_EXPOSURE === "exposed";
+
+  // Validate BRIDGE_HOST_EXPOSURE enum: only "", "localhost", "exposed" allowed.
+  if (!isLocalhost && !isExposed) {
+    console.error(
+      `[hocuspocus] refusing to start: BRIDGE_HOST_EXPOSURE=${JSON.stringify(BRIDGE_HOST_EXPOSURE)} is unrecognized. Allowed values are "localhost" (default) and "exposed".`
+    );
+    process.exit(1);
+  }
+
+  // Hard fail: no signing secret AND legacy not opted-in.
+  if (!TOKEN_SECRET && !ALLOW_LEGACY_TOKEN) {
+    console.error(
+      "[hocuspocus] refusing to start: HOCUSPOCUS_TOKEN_SECRET is unset. Set the shared HMAC secret with the Go API, or set HOCUSPOCUS_ALLOW_LEGACY_TOKEN=1 (dev-only, requires BRIDGE_HOST_EXPOSURE=localhost) to enable the legacy token path."
+    );
+    process.exit(1);
+  }
+
+  // Hard fail: ALLOW_LEGACY_TOKEN=1 only honored under localhost exposure.
+  if (ALLOW_LEGACY_TOKEN && !isLocalhost) {
+    console.error(
+      `[hocuspocus] refusing to start: HOCUSPOCUS_ALLOW_LEGACY_TOKEN=1 is only honored under BRIDGE_HOST_EXPOSURE=localhost (or empty). Current BRIDGE_HOST_EXPOSURE=${JSON.stringify(BRIDGE_HOST_EXPOSURE)}.`
+    );
+    process.exit(1);
+  }
+
+  // Operational warning (Kimi K2.6 finding): GO_INTERNAL_API_URL default
+  // localhost in an exposed environment will make every onLoadDocument
+  // recheck fail post-Phase-2. Surface a warning at boot for ops.
+  if (isExposed && GO_INTERNAL_API_URL === "http://localhost:8002") {
+    console.warn(
+      "[hocuspocus] WARNING: GO_INTERNAL_API_URL is the default http://localhost:8002 in a BRIDGE_HOST_EXPOSURE=exposed environment. Realtime document loads will fail unless this points at a reachable Go API. Set GO_INTERNAL_API_URL explicitly."
+    );
+  }
+
+  // Startup mode log — visible in ops at boot.
+  const mode = TOKEN_SECRET
+    ? (ALLOW_LEGACY_TOKEN ? "JWT + legacy fallback (dev escape hatch)" : "JWT only")
+    : "legacy only (no signing secret — dev only)";
+  console.log(`[hocuspocus] realtime auth mode: ${mode}; exposure=${BRIDGE_HOST_EXPOSURE || "localhost (default)"}`);
+}
+
+validateRealtimeAuthEnv();
 
 interface AuthContext {
   userId: string;
@@ -76,9 +131,13 @@ const server = new Server({
       return ctx;
     }
 
-    // Phase-4 cutover: with the flag ON, ONLY JWTs are accepted.
-    if (REQUIRE_SIGNED_TOKEN) {
-      throw new Error("Signed token required (HOCUSPOCUS_REQUIRE_SIGNED_TOKEN=1)");
+    // Plan 072 phase 1 — inverted gate. Legacy userId:role tokens are now
+    // opt-in (HOCUSPOCUS_ALLOW_LEGACY_TOKEN=1) rather than the default.
+    // Boot validation already enforces that the flag is only honored under
+    // localhost exposure, so this check at authenticate-time is the runtime
+    // guard per connection.
+    if (!ALLOW_LEGACY_TOKEN) {
+      throw new Error("Legacy userId:role tokens are disabled. Set HOCUSPOCUS_ALLOW_LEGACY_TOKEN=1 (dev-only, requires BRIDGE_HOST_EXPOSURE=localhost) to enable.");
     }
 
     // Backward-compat path — unchanged from pre-053 behavior.
