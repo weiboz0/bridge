@@ -116,7 +116,126 @@ End with a 200-word executive summary at the top of your section. Don't repeat t
 
 ## Self-review (Opus 4.7) findings
 
-(pending)
+**Executive summary** (200 words): Bridge is in solid shape architecturally. The plan-driven workflow + 4-way review gate is paying off (real BLOCKERS caught in PRs #128, #124, #130 that per-PR self-review would have missed). Recent strategic shifts (Go owns auth, sectioned sidebar, single-PR-per-plan, subagent-first coding) are coherent. Three areas where I'd push hardest:
+
+1. **Auth-gate inconsistency between class-scoped and org-scoped paths** is real architectural debt — `RequireClassAuthority(ctx, level)` exists for classes; org endpoints repeat ad-hoc `GetUserRolesInOrg` checks across ~6 handler functions. This is the highest-leverage refactor on the table.
+
+2. **Modal pattern fragmentation** is becoming a real cost. Three plans in a row (066/069/070) hand-rolled their own modal scaffold. A shared `<Dialog>` primitive is overdue.
+
+3. **Plan-file-as-audit-trail is showing strain.** Plan files now mix design, decisions, code review verdicts, post-execution reports, and reviewer push-back into one document. Plan 069's review section is ~500 lines of running commentary. A `docs/reviews/NNN-plan-XXX-review.md` separation would scale better.
+
+Lower-priority items: TS baseline drift (10 errors persisting), test-DB contention risk on parallel runs, deferred items list growing without explicit triage cadence.
+
+### Section 1.1 — Auth-gate inconsistency between class- and org-scoped endpoints
+**Severity**: important
+**Category**: drift
+
+`platform/internal/handlers/access.go` defines `RequireClassAuthority(ctx, classes, orgs, claims, classID, level)` with three levels (`AccessRead/Roster/Mutate`) — a clean, reusable primitive. Class-scoped handlers across `classes.go`, `sessions.go`, `assignments.go` all use it.
+
+Org-scoped handlers, in contrast, ad-hoc the same gate: `orgs.go::UpdateMember`, `RemoveMember`, `UpdateOrg`, plus `OrgParentLinksHandler::requireOrgAdmin` (plan 070), all repeat the same `GetUserRolesInOrg` lookup + role-membership scan. Plan 069 phase 4 added self-action guards to `UpdateMember` and `RemoveMember` — but only those two. `UpdateOrg` doesn't have a self-action guard (org admin can rename their own org's name, which is fine, but the pattern is asymmetric).
+
+A `RequireOrgAuthority(ctx, orgs, claims, orgID, level)` parallel — with `OrgRead / OrgManage / OrgWrite` — would centralize the gate, make adding a self-action guard a one-line change in the helper, and drop ~80 lines of duplicated code across `orgs.go` + `org_parent_links.go`.
+
+**Recommendation**: file plan 072 — `RequireOrgAuthority` helper. ~1 day of work, single-PR. Should land before plan 069b/070b add more org-admin endpoints.
+
+### Section 1.2 — Self-action guards: incomplete coverage
+**Severity**: important
+**Category**: risk
+
+Plan 069 phase 4 added self-action guards to `UpdateMember` (suspend) and `RemoveMember`. Codex's post-impl review (#130) explicitly called these out as v1-blocking. But the same risk exists in:
+- **Parent-link revoke** (`platform/internal/handlers/org_parent_links.go::RevokeLink`): an org_admin parent of a child in the org could revoke their own parent_link. Less severe (loses /parent dashboard, not org access), but the asymmetry with the guarded paths is striking.
+- **Class membership** (`classes.go::RemoveMember`): a teacher with `instructor` role can remove themselves from their own class via the API (UI gate exists). Backend has no protection.
+- **Org admin removing the LAST org_admin**: more nuanced — would orphan the org. Backend has no enforcement.
+
+**Recommendation**: as part of the §1.1 `RequireOrgAuthority` refactor, add a `requireNotSelfMutation(membership, claims)` and a `requireNotLastAdmin(orgID, role)` helper. Tackle the same time as the helper; ~+0.5 day.
+
+### Section 2.1 — Soft-delete inconsistency across the schema
+**Severity**: nit (today) → important (when product asks for "deactivated user" support)
+**Category**: debt
+
+Bridge's deletion model is a tangle:
+- `parent_links`: soft-revoke (`status='revoked'` + `revoked_at`)
+- `org_memberships`: status state machine (`pending/active/suspended`)
+- `class_memberships`: hard-delete (DELETE on the row; no status column)
+- `classes`: state machine (`active/archived`)
+- `organizations`: state machine (`pending/active/suspended`)
+- `users`: hard-delete (with FK CASCADE)
+- `parent_links → users`: ON DELETE CASCADE (from drizzle/0024)
+- `class_memberships → users`: ON DELETE CASCADE
+- `org_memberships → users`: ON DELETE CASCADE
+
+The inconsistency is accumulated, not designed. Currently fine — each table's choice has independent justification. But the moment product asks for "audit trail of removed students" or "GDPR-erasure user without losing assignment history", the schema will need the `class_memberships` soft-delete that doesn't exist, and migrations will compound.
+
+**Recommendation**: don't migrate proactively. Document the model in `docs/schema-deletion-model.md` so future plans can decide intentionally instead of carrying assumptions. ~2 hours.
+
+### Section 3.1 — Modal pattern fragmentation
+**Severity**: important
+**Category**: debt
+
+Three modals shipped in the last 3 plans, all hand-rolled:
+- `src/components/org/create-parent-link-modal.tsx` (plan 070)
+- `src/components/org/invite-member-modal.tsx` (plan 069 phase 1)
+- `src/components/org/member-row-actions.tsx` (plan 069 phase 4 — TWO modals: status + remove)
+
+Each duplicates: backdrop ref, `e.target === backdropRef.current` dismissal, Escape key listener, `role="dialog" + aria-modal`, autoFocus on first input. The `confirm()` call in `archive-class-button.tsx` skips the pattern entirely (different visual treatment).
+
+A shared `<Dialog>` primitive (e.g., wrapping shadcn's underlying Radix `<Dialog.Root>` if it's available, or a small ~50-line component) would:
+- Cut ~30 lines per modal site → ~120 lines saved
+- Surface a single place to fix the focus-trap NIT (deferred from plan 070 phase 2 + 3 reviews)
+- Make the next modal a 5-minute write rather than another hand-roll
+
+**Recommendation**: plan 073 — `<Dialog>` primitive + migrate the 4 existing call sites. ~0.5 day.
+
+### Section 3.2 — Server-component data-fetching pattern inconsistency
+**Severity**: nit
+**Category**: drift
+
+Some org-portal pages resolve `orgId` server-side via `resolveOrgIdServerSide` (helper introduced in plan 069 phase 4): `/org/teachers`, `/org/students`, `/org/parent-links`. Others still use the legacy `?orgId=` query fallback (`/org/courses`, `/org/classes`, `/org`, `/org/units`, `/org/settings`).
+
+The split is accidental — pages that needed path-style API URLs (which require a real, non-empty orgId) got the helper; pages that only needed the query-fallback `?orgId=` didn't. Eventually all org-admin pages will need write surfaces with path-style URLs, at which point the inconsistency becomes more visible.
+
+**Recommendation**: low-priority. Fold into plan 072 (RequireOrgAuthority) — when adding `RequireOrgAuthority`, also migrate all org-portal pages to `resolveOrgIdServerSide` for consistency. Single follow-up commit.
+
+### Section 4.1 — Test database contention on parallel runs
+**Severity**: important
+**Category**: risk
+
+Both Vitest (`bun run test`) and Go integration tests share `bridge_test`. CI runs them in separate jobs today, but a developer running both locally in parallel hits intermittent FK conflicts when one suite seeds users while another deletes them.
+
+The flake from plan 069 (`TestProblemStore_CreateProblem_SlugAllowedInDifferentScope` collision-prone email) is a symptom of this — test isolation relies on per-test cleanup, but per-test cleanup races with other tests' SETUPs.
+
+**Recommendation**: move toward per-test isolated schemas (`SET search_path = test_$pid`) or per-test transactions with rollback. ~2 days. Don't block on this — the contention is real but rare today. File as plan 074, low-priority.
+
+### Section 5.1 — Plan-file-as-audit-trail is showing strain
+**Severity**: important
+**Category**: drift
+
+Plan 069's `## Plan Review` + `## Code Review` sections together are ~500 lines (longer than the original spec). They mix:
+- Pre-impl Codex passes 1-3 (legacy single-reviewer)
+- Pre-impl 4-way review (self/Codex/DeepSeek/GLM)
+- Per-phase post-impl review verdicts
+- Reviewer push-back rejections with technical evidence
+- Cross-phase consolidated PR review verdicts
+- Per-fix re-dispatch confirmations
+
+The result: when revisiting the plan to understand "what did we ship and why", the audit trail is signal but the review history is noise. New collaborators are likely to skip it.
+
+**Recommendation**: separate the surfaces. Keep `## Plan Review` (decisions that altered the plan, kept as load-bearing context) inside the plan file. Move `## Code Review` to `docs/reviews/plan-NNN-code-review.md` with one section per PR. ~2 hours plus a one-time migration of the existing reviews. File as a chore PR.
+
+### Section 7.1 — External-reviewer set: net-positive but signal-to-noise warrants tracking
+**Severity**: nit (informational)
+**Category**: strategic
+
+Across the recent plans, the external-reviewer hit-rate is roughly:
+- **Codex**: caught 3 real BLOCKERS (clipboard guard, archived-class filter, self-action backend guard). High signal.
+- **DeepSeek V4 Flash**: caught 2 real concerns (dead 403 branch, AbortController). Moderate signal.
+- **GLM 5.1**: caught 0 real BLOCKERS. Real signal: 1 NIT (StatusBadge dup), 1 NIT (conditional aria-controls). Reported 3+ false-premise BLOCKERS that were rejected with technical evidence (`cm.status` filter, `LEFT JOIN` for cascade FK, ArchiveClassButton body shape).
+
+GLM is currently the lowest-signal reviewer. But: the FOUR-way diversity is what makes the ensemble robust. Removing GLM would re-introduce the blind-spot risk single-reviewer + dual-reviewer designs had.
+
+**Recommendation**: keep the four-way for now. After 5 more plans, re-evaluate with concrete numbers. Track in `docs/review-stats.md`.
+
+
 
 ## Codex findings
 
