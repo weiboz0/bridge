@@ -243,6 +243,8 @@ Kimi caught five things the other reviewers missed:
 
 **No follow-up plans needed for the cutover itself.** Realtime-auth BLOCKER from review 011 §1.1 is closed.
 
+**Plan deviation (intentional, more secure)**: Phase 2's deletion sweep also removed the `ALLOW_LEGACY_TOKEN` runtime check from `validateRealtimeAuthEnv` — not just the legacy parsing branches. Net effect: `HOCUSPOCUS_TOKEN_SECRET` is now unconditionally required at boot, with no escape hatch (the original plan kept the boot-tolerance knob for the dev case). DeepSeek + GLM caught that `.env.example` and `docs/setup.md` still described the now-phantom flag; corrected in the BLOCKER-fix commit (28e3b3e + follow-up). The new contract is strictly more secure than the original Phase 1 design.
+
 ## Code Review
 
 (pending — 5-way at PR-open time per the new policy)

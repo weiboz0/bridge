@@ -180,10 +180,10 @@ which signs and verifies tokens for the internal callback) and the Hocuspocus
 Node process (`server/hocuspocus.ts`, which verifies on connect) read it from
 the same env var.
 
-**`HOCUSPOCUS_TOKEN_SECRET` is required in production.** As of plan 072 phase 1
-the Hocuspocus server refuses to start if the secret is unset and
-`HOCUSPOCUS_ALLOW_LEGACY_TOKEN` is not set. The legacy `userId:role` token path
-is now opt-in for local development only (see below).
+**`HOCUSPOCUS_TOKEN_SECRET` is required.** As of plan 072 the Hocuspocus
+server refuses to start if the secret is unset — no escape hatch. Phase 2
+of the plan also deleted the legacy `userId:role` token path entirely; JWT
+is the only runtime auth.
 
 The sibling `/api/internal/realtime/auth` endpoint is server-to-server
 only and is gated by the same secret as a bearer token — it must NOT be
@@ -198,19 +198,11 @@ validation function (`validateRealtimeAuthEnv`) checks these before the server
 starts and calls `process.exit(1)` on any misconfig — mirrors the Go API's
 `validateDevAuthEnv` pattern.
 
-- `HOCUSPOCUS_TOKEN_SECRET` — **required in production.** The shared HMAC
-  secret signed by the Go API and verified by Hocuspocus on every WebSocket
-  connect. Unset causes a boot failure unless `HOCUSPOCUS_ALLOW_LEGACY_TOKEN=1`
-  is also set.
-- `HOCUSPOCUS_ALLOW_LEGACY_TOKEN=1` — **dev-only boot escape hatch.** Lets
-  Hocuspocus boot without `HOCUSPOCUS_TOKEN_SECRET`. Only honored when
-  `BRIDGE_HOST_EXPOSURE` is `""` or `"localhost"`. An exposed host refuses to
-  start with this flag set. Note: plan 072 phase 2 deleted the legacy
-  `userId:role` parsing code — JWT is the only runtime auth path regardless
-  of this flag. The flag now ONLY controls whether boot tolerates a missing
-  signing secret. Useful when running a local Hocuspocus against a Go API
-  that hasn't been provisioned with a secret yet. Do NOT set in production
-  or staging.
+- `HOCUSPOCUS_TOKEN_SECRET` — **required.** The shared HMAC secret signed by
+  the Go API and verified by Hocuspocus on every WebSocket connect. Unset
+  causes a boot failure with no escape hatch — plan 072 phase 2 made this
+  unconditional. Generate with `openssl rand -hex 32` and set the same value
+  on both the Go API and the Hocuspocus process.
 - `BRIDGE_HOST_EXPOSURE` — same semantics as the Go API (see "Host Exposure
   Declaration" above). Allowed values: `""` / `"localhost"` (default) and
   `"exposed"`. Unrecognized values fail loud at boot.
