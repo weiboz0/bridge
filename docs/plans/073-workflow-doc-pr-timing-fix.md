@@ -63,6 +63,8 @@ Alternative considered: flip the order so PR opens at the START of Step 5 and re
 
 **No code, test, or other doc changes.** `docs/code-review.md` was already audited (no `4-way` / `5-way` references; reviewer-agnostic format).
 
+**Out of scope — `docs/reviews/011-...md` retains "4-way".** That document has 13+ "4-way" references but they are historical artifacts: review 011 was drafted with the 4-way terminology that was current when it was written, and the document explicitly notes in its `For this review` callout that it ran with reduced 2-way / 3-way coverage due to opencode timeout. Editing those references retroactively would falsify the audit trail of which reviewers actually ran on which review. Same applies to historical references in older `docs/plans/*.md` files — they describe the gate as it was at the time. Going forward, all NEW plans use 5-way (per CLAUDE.md PR #133).
+
 ## Risks
 
 | Risk | Severity | Mitigation |
