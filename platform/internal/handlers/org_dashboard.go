@@ -113,11 +113,13 @@ func (h *OrgDashboardHandler) Dashboard(w http.ResponseWriter, r *http.Request) 
 }
 
 type orgMemberSummary struct {
-	UserID   string `json:"userId"`
-	Name     string `json:"name"`
-	Email    string `json:"email"`
-	Role     string `json:"role"`
-	JoinedAt string `json:"joinedAt"`
+	MembershipID string `json:"membershipId"`
+	UserID       string `json:"userId"`
+	Name         string `json:"name"`
+	Email        string `json:"email"`
+	Role         string `json:"role"`
+	Status       string `json:"status"`
+	JoinedAt     string `json:"joinedAt"`
 }
 
 // ListTeachers handles GET /api/org/teachers?orgId=...
@@ -144,13 +146,15 @@ func (h *OrgDashboardHandler) listMembersByRole(w http.ResponseWriter, r *http.R
 
 	out := make([]orgMemberSummary, 0)
 	for _, m := range members {
-		if m.Role == role && m.Status == "active" {
+		if m.Role == role {
 			out = append(out, orgMemberSummary{
-				UserID:   m.UserID,
-				Name:     m.Name,
-				Email:    m.Email,
-				Role:     m.Role,
-				JoinedAt: m.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+				MembershipID: m.ID,
+				UserID:       m.UserID,
+				Name:         m.Name,
+				Email:        m.Email,
+				Role:         m.Role,
+				Status:       m.Status,
+				JoinedAt:     m.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 			})
 		}
 	}

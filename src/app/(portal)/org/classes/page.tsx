@@ -27,7 +27,7 @@ export default async function OrgClassesPage({
   return (
     <div className="p-6 space-y-6">
       <h1 className="text-2xl font-bold">Classes{data ? ` (${data.length})` : ""}</h1>
-      <ClassesList data={data} error={error} />
+      <ClassesList data={data} error={error} orgId={orgId} />
     </div>
   );
 }

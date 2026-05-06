@@ -208,6 +208,92 @@ Specific questions:
 - Add domain check to invite modal.
 - Smoke test: invite a same-domain email (no warning); invite a different-domain email (confirmation dialog).
 
+## Post-execution report
+
+**Status**: Phases 1-4 shipped. Phase 5 (optional domain hint) deferred — plan flagged it as deferrable polish, not core scope.
+
+**Single-PR-deviation**: Phase 1 shipped as standalone PR #128 under the OLD per-phase pattern (before the single-PR-per-plan policy landed in #129). Phases 2-4 ship together as a single PR `Plan 069 phases 2-4` per the new policy. Plan 069 is the transitional split.
+
+**Phase 1 (PR #128, commit 48a7db5)** — invite forms
+- New: `src/components/org/invite-member-modal.tsx` (mirrored plan 070's `create-parent-link-modal.tsx` pattern), `invite-member-button.tsx`
+- Modified: `/org/teachers/page.tsx`, `/org/students/page.tsx`
+- Backend POST shape verified `{email, role}` against `orgs.go:301-327`
+- 4-way code review found 1 BLOCKER (clipboard guard for HTTP/insecure contexts) + 1 NIT (label case) — both fixed, Codex round-2 confirmed
+
+**Phase 2 (commit cb2450a)** — class drill-down + archive
+- New: `src/app/(portal)/org/classes/[classId]/page.tsx`, `archive-class-button.tsx`
+- Modified: `src/components/org/classes-list.tsx` (clickable rows preserving `?orgId=`), `src/app/(portal)/org/classes/page.tsx`
+- Backend: extended `GET /api/classes/{id}` with inline-join to surface `courseTitle` (avoids the 403 the plan-pass-2 caught — `/api/courses/{id}` is gated to creator/class-member). Added `Class.CourseTitle` field with `,omitempty` so 9-column scans elsewhere stay backward-compat.
+- "Open in teacher portal" link only renders when caller is instructor/TA in the class (self-review NIT #4 fold)
+- Test: `TestGetClass_IncludesCourseTitle` regression locked
+
+**Phase 3 (commits c851578 + f855c16 test fix)** — settings edit form
+- New: `src/components/org/org-settings-form.tsx` — client component with `name`/`contactEmail`/`contactName`/`domain` editable + read-only Type/Status/Verified rows
+- Modified: `org-settings-card.tsx` (delegates happy-path to form; added `updatedAt` to type per DeepSeek finding)
+- PATCH body strategy: always-send all four fields. Backend handler uses `*string` pointer fields with `omitempty` — empty string is the supported clear semantic for `domain`.
+- Test fix: `org-list-views.test.tsx` mocks `next/navigation` (form needs router context); switched to `getByDisplayValue` for the now-editable fields
+
+**Phase 4 (commit 83b50c8)** — member quick-actions
+- New: `src/components/org/member-row-actions.tsx` (3-dot menu with Update Status + Remove modals)
+- Modified: `teachers-list.tsx`, `students-list.tsx` (extended `OrgMemberRow` with `membershipId` + `status`; added Status badge column + Actions column)
+- Modified: `/org/teachers/page.tsx`, `/org/students/page.tsx` (fetch identity, pass `currentUserId` for self-action gating)
+- Backend: added `MembershipID` + `Status` to `orgMemberSummary`; relaxed `listMembersByRole` filter from `role && status='active'` to `role` only (GLM finding — suspension was one-way otherwise)
+- Self-action guards: Suspend disabled when `member.userId === identity.userId`; Remove disabled with tooltip "Use the org transfer flow to leave an org" (no transfer flow exists in v1; documents the path is blocked)
+- Tests: 2 new Go integration tests + 15 new unit tests on `MemberRowActions` covering the self-action guards
+
+**Phase 5 (deferred)** — optional domain hint on invite. Not implemented; plan flagged it as deferrable polish.
+
+**Cross-phase verification**: full Go test suite passes; `tsc --noEmit` baseline of 10 unrelated errors maintained (zero new); `eslint` clean for all modified files; vitest covers Phases 2-4 (27/27 in `org-list-views.test.tsx` + `member-row-actions.test.tsx`).
+
+## Code Review (consolidated PR for phases 2-4)
+
+### Codex — BLOCKERS → both fixed inline + 1 NIT fixed
+
+Codex round-1 returned BLOCKERS with two real findings (and the same self-action backend gap that DeepSeek/GLM both classified as v1-acceptable). Codex was the strict reviewer that called it out as a blocker — and rightly so for a feature with potential self-locking-out.
+
+**Q3 BLOCKER FIXED — backend self-action guard.** UI disabled Suspend/Remove on self, but `UpdateMember` and `RemoveMember` only checked `org_admin` role, never compared `membership.UserID` against `claims.UserID`. A direct PATCH/DELETE bypassed the UI and could lock the caller out. Fix:
+- `UpdateMember` rejects `status='suspended'` when `!claims.IsPlatformAdmin && membership.UserID == claims.UserID`. Self-set-to-active still allowed (harmless no-op when already active).
+- `RemoveMember` rejects when `!claims.IsPlatformAdmin && membership.UserID == claims.UserID`. Platform admins bypass since their org access doesn't depend on the membership row.
+- 4 new tests in `platform/internal/handlers/org_self_action_guard_test.go` lock the regressions: `TestUpdateMember_SelfSuspendForbidden`, `TestUpdateMember_SelfActivateAllowed`, `TestRemoveMember_SelfRemoveForbidden`, `TestRemoveMember_PlatformAdminBypass`.
+
+**Q5 BLOCKER FIXED — orgId resolution before row actions render.** When the URL had no `?orgId=`, the legacy fetch fallback let `/api/org/teachers` auto-resolve, but the row-action props received `orgId ?? ""`, producing `/api/orgs//members/...` URLs in the dropdown. Fix:
+- New `resolveOrgIdServerSide(searchParams)` helper in `src/lib/portal/org-context.ts`. Prefers `?orgId=` if valid; otherwise looks up the caller's first active `org_admin` membership via `/api/orgs`.
+- Both `/org/teachers/page.tsx` and `/org/students/page.tsx` use the helper; render a "no org" state when the helper returns null. Row actions now always receive a real `orgId`.
+
+**Q7 NIT FIXED — UpdateMember nil-race.** When the membership row is deleted between the ownership check and the status update (rare under concurrent ops), `UpdateMemberStatus` returns `(nil, nil)`. The handler used to return `200 null`. Now returns 404.
+
+**Q4 NIT ACKNOWLEDGED — header count divergence.** List page header counts use `data.length` (all statuses now), while the dashboard aggregate counts in `stats.go` remain active-only. Cosmetic UX divergence for orgs with suspended/pending members. Track for a future polish pass — either match the stats endpoint to "all statuses" or add a visible filter label.
+
+**Q1, Q2, Q6 OK** (matches DeepSeek + GLM verdicts).
+
+**Codex round-2 — CONCUR (1 NIT)**: confirmed both BLOCKERS resolved + nil-race fix correct. New NIT D: `resolveOrgIdServerSide` swallows all API errors (500/403/401) as `null`, so a transient backend failure is indistinguishable from "no org_admin membership". Same pattern as plan 070's `/org/parent-links/page.tsx`; the downstream list fetch surfaces the 500 with `OrgListState`, so user does get a real error eventually. Acknowledged for a future polish pass that introduces a discriminated-union return type or a shared error-boundary component for the org pages. Not release-blocking.
+
+### DeepSeek V4 Flash — APPROVED, 2 advisory notes
+
+- Phase 2 GetClass + `,omitempty`: SAFE (`COALESCE` always populates the field; `omitempty` only affects struct-literal encoding).
+- Phase 3 always-send-all-four-fields: SOUND (handler uses `*string` pointer fields with `omitempty` Go struct tags; client safely sends all four).
+- Phase 4 self-action backend gap: confirmed via `orgs.go:403, 451` — `UpdateMemberStatus` and `RemoveMember` only check the `org_admin` role, never compare `membership.UserID` against `claims.UserID`. UI is the only gate. Acceptable for v1; track as a known gap.
+- Phase 4 filter relaxation: intentional, covered by `TestOrgList_SuspendedMemberVisible`. No other consumers of the old behavior.
+- Phase 4 + Phase 1 collision: additive, no conflict.
+- ArchiveClassButton empty-body PATCH: functionally fine (handler doesn't read body); semantically unusual but documented.
+- GetClass INNER JOIN returning `(nil, nil)` for orphaned classes: actually MORE correct (handler maps nil → 404).
+
+### GLM 5.1 — needs-attention → 1 BLOCKER REJECTED + 1 finding REJECTED + 1 nit FIXED
+
+GLM raised 7 findings; on close inspection most are wrong-premise or already-known.
+
+**F1 REJECTED (claimed shipping defect)** — GLM said `ArchiveClassButton`'s empty-body PATCH would silently no-op because "the PATCH handler uses `*string` pointer fields — all nil on empty body means nothing changes". Verified false against `platform/internal/handlers/classes.go:206-235`: `ArchiveClass` does NOT decode any request body — it directly calls `s.ArchiveClass(ctx, id)` which runs `UPDATE classes SET status = 'archived'` unconditionally. The empty-body PATCH works correctly. Plan even verified this in Codex pass-1. GLM confused this handler with a different one. No change required.
+
+**F2 REJECTED (LEFT JOIN suggestion)** — GLM suggested switching GetClass to LEFT JOIN to handle "soft-deleted course or dangling course_id". Verified against `drizzle/0004_course-hierarchy.sql:46`: `class_memberships.course_id` is `NOT NULL REFERENCES courses(id) ON DELETE CASCADE`. A deleted course cascades to the class row itself — dangling course_id is impossible. INNER JOIN is correct (also matches DeepSeek's framing as "more correct"). No change required.
+
+**F3 ACKNOWLEDGED (self-action backend gap)** — Same as DeepSeek; UI-only guard accepted for v1.
+
+**F4-F5 OK** — same as DeepSeek.
+
+**F6 ACKNOWLEDGED (modal inconsistency)** — Phase 2's `ArchiveClassButton` uses `window.confirm()`; Phase 4's `MemberRowActions` hand-rolls `<div role="menu">` modals. Real cosmetic divergence, but `Dialog` component doesn't exist in the codebase yet (would be a separate refactor scope). Acceptable for v1; track for a future polish pass that introduces a shared `<Dialog>`.
+
+**F7 FIXED — StatusBadge duplication**: identical `StatusBadge` was defined in both `teachers-list.tsx` and `students-list.tsx`. Extracted to `src/components/org/member-status-badge.tsx` and imported by both. DRY restored.
+
 ## Plan Review
 
 This plan predates the new 4-way review policy (CLAUDE.md commit 3e7397b). Codex passes 1-3 are preserved below as the Codex slot of the 4-way; self-review (Opus 4.7) + DeepSeek V4 Pro + GLM 5.1 added before any implementation.

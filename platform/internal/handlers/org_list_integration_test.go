@@ -277,6 +277,69 @@ func TestOrgList_MissingOrgId_UsesCallerOrg(t *testing.T) {
 	require.Len(t, rows, 1)
 }
 
+// TestOrgList_Teachers_HasMembershipIdAndStatus verifies the response includes
+// the new membershipId and status fields added in plan 069 phase 4.
+func TestOrgList_Teachers_HasMembershipIdAndStatus(t *testing.T) {
+	fx := newOrgListFixture(t, "teachers-fields")
+	code, body := fx.call(t, http.MethodGet, "/api/org/teachers?orgId="+fx.orgID,
+		&auth.Claims{UserID: fx.orgAdmin.ID})
+	require.Equal(t, http.StatusOK, code)
+	var rows []map[string]any
+	require.NoError(t, json.Unmarshal(body, &rows))
+	require.Len(t, rows, 1)
+	assert.NotEmpty(t, rows[0]["membershipId"], "membershipId must be present")
+	assert.Equal(t, "active", rows[0]["status"])
+}
+
+// TestOrgList_SuspendedMemberVisible verifies that a suspended member is still
+// returned in the list (relaxed filter — plan 069 phase 4 GLM finding).
+func TestOrgList_SuspendedMemberVisible(t *testing.T) {
+	fx := newOrgListFixture(t, "suspended-visible")
+	ctx := context.Background()
+	orgs := store.NewOrgStore(fx.db)
+
+	// Add a second teacher then suspend them.
+	extra, err := store.NewUserStore(fx.db).RegisterUser(ctx, store.RegisterInput{
+		Name:     "Extra Teacher",
+		Email:    "extra-suspended-visible@example.com",
+		Password: "testpassword123",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		fx.db.ExecContext(ctx, "DELETE FROM org_memberships WHERE user_id = $1", extra.ID)
+		fx.db.ExecContext(ctx, "DELETE FROM auth_providers WHERE user_id = $1", extra.ID)
+		fx.db.ExecContext(ctx, "DELETE FROM users WHERE id = $1", extra.ID)
+	})
+
+	membership, err := orgs.AddOrgMember(ctx, store.AddMemberInput{
+		OrgID: fx.orgID, UserID: extra.ID, Role: "teacher", Status: "active",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, membership)
+
+	_, err = orgs.UpdateMemberStatus(ctx, membership.ID, "suspended")
+	require.NoError(t, err)
+
+	code, body := fx.call(t, http.MethodGet, "/api/org/teachers?orgId="+fx.orgID,
+		&auth.Claims{UserID: fx.orgAdmin.ID})
+	require.Equal(t, http.StatusOK, code)
+	var rows []map[string]any
+	require.NoError(t, json.Unmarshal(body, &rows))
+
+	// Both the active teacher from the fixture AND the suspended extra teacher
+	// must appear (suspended members are no longer filtered out).
+	require.Len(t, rows, 2, "suspended teacher must be included in the list")
+
+	statuses := make(map[string]string)
+	for _, r := range rows {
+		uid, _ := r["userId"].(string)
+		st, _ := r["status"].(string)
+		statuses[uid] = st
+	}
+	assert.Equal(t, "active", statuses[fx.teacher.ID])
+	assert.Equal(t, "suspended", statuses[extra.ID])
+}
+
 func TestOrgList_EmptyOrg_ReturnsEmptyArrays(t *testing.T) {
 	// New org with only an org_admin — no teachers, students, courses,
 	// or classes. Endpoints should return [], not 404.

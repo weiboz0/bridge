@@ -102,6 +102,22 @@ func TestGetClass_NonexistentClass_404(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, code)
 }
 
+// TestGetClass_IncludesCourseTitle verifies that the GET /api/classes/{id}
+// response includes the courseTitle field populated from the joined courses row.
+// This catches the Codex pass-2 auth gap: the old two-fetch approach would
+// 403 org admins not enrolled in the class when hitting /api/courses/{id}.
+func TestGetClass_IncludesCourseTitle(t *testing.T) {
+	fx := newSessionPageFixture(t, "gc-coursetitle")
+	ch := newClassHandlerForFixture(fx)
+	code, body := callGetClass(t, ch, fx.classID, &auth.Claims{UserID: fx.orgAdmin.ID})
+	require.Equal(t, http.StatusOK, code)
+	var resp map[string]interface{}
+	require.NoError(t, json.Unmarshal(body, &resp))
+	courseTitle, ok := resp["courseTitle"]
+	require.True(t, ok, "response should include courseTitle field")
+	assert.NotEmpty(t, courseTitle, "courseTitle should be non-empty (fixture course has a title)")
+}
+
 // --- JoinSession (SessionHandler) --------------------------------------------
 
 func callJoinSession(t *testing.T, h *SessionHandler, sessionID string, claims *auth.Claims) (int, []byte) {

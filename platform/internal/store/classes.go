@@ -13,15 +13,16 @@ import (
 )
 
 type Class struct {
-	ID        string    `json:"id"`
-	CourseID  string    `json:"courseId"`
-	OrgID     string    `json:"orgId"`
-	Title     string    `json:"title"`
-	Term      string    `json:"term"`
-	JoinCode  string    `json:"joinCode"`
-	Status    string    `json:"status"`
-	CreatedAt time.Time `json:"createdAt"`
-	UpdatedAt time.Time `json:"updatedAt"`
+	ID          string    `json:"id"`
+	CourseID    string    `json:"courseId"`
+	OrgID       string    `json:"orgId"`
+	Title       string    `json:"title"`
+	Term        string    `json:"term"`
+	JoinCode    string    `json:"joinCode"`
+	Status      string    `json:"status"`
+	CreatedAt   time.Time `json:"createdAt"`
+	UpdatedAt   time.Time `json:"updatedAt"`
+	CourseTitle string    `json:"courseTitle,omitempty"`
 }
 
 // ClassSettings is the per-class editor configuration (formerly NewClassroom).
@@ -152,8 +153,21 @@ func (s *ClassStore) CreateClass(ctx context.Context, input CreateClassInput) (*
 }
 
 func (s *ClassStore) GetClass(ctx context.Context, id string) (*Class, error) {
-	return scanClass(s.db.QueryRowContext(ctx,
-		`SELECT `+classColumns+` FROM classes WHERE id = $1`, id))
+	var c Class
+	err := s.db.QueryRowContext(ctx,
+		`SELECT cls.id, cls.course_id, cls.org_id, cls.title, cls.term, cls.join_code, cls.status, cls.created_at, cls.updated_at, COALESCE(co.title, '')
+		 FROM classes cls
+		 JOIN courses co ON co.id = cls.course_id
+		 WHERE cls.id = $1`, id,
+	).Scan(&c.ID, &c.CourseID, &c.OrgID, &c.Title, &c.Term,
+		&c.JoinCode, &c.Status, &c.CreatedAt, &c.UpdatedAt, &c.CourseTitle)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &c, nil
 }
 
 func (s *ClassStore) ListClassesByOrg(ctx context.Context, orgID string) ([]Class, error) {

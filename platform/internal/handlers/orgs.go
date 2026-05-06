@@ -400,9 +400,28 @@ func (h *OrgHandler) UpdateMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Plan 069 phase 4 self-action guard (Codex post-impl Q3): an
+	// org_admin must not suspend their own membership — the UI
+	// disables this option, but a direct PATCH would otherwise
+	// succeed and lock the caller out of the org. Platform admins
+	// remain free to suspend anyone (including themselves) since
+	// the platform-admin path bypasses org_admin gating entirely.
+	if !claims.IsPlatformAdmin && membership.UserID == claims.UserID && body.Status == "suspended" {
+		writeError(w, http.StatusForbidden, "You cannot suspend your own membership")
+		return
+	}
+
 	updated, err := h.Orgs.UpdateMemberStatus(r.Context(), memberID, body.Status)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	// Codex post-impl Q7: store can return (nil, nil) when the row
+	// was deleted between the ownership check and the update (rare
+	// but possible under concurrent ops). Map to 404 instead of
+	// returning `200 null`.
+	if updated == nil {
+		writeError(w, http.StatusNotFound, "Not found")
 		return
 	}
 	writeJSON(w, http.StatusOK, updated)
@@ -445,6 +464,17 @@ func (h *OrgHandler) RemoveMember(w http.ResponseWriter, r *http.Request) {
 	}
 	if membership == nil || membership.OrgID != orgID {
 		writeError(w, http.StatusNotFound, "Not found")
+		return
+	}
+
+	// Plan 069 phase 4 self-action guard (Codex post-impl Q3): an
+	// org_admin must not remove their own membership. UI hides the
+	// option ("Use the org transfer flow to leave an org"); backend
+	// rejects to defend against direct DELETE calls. Platform
+	// admins bypass since they don't get locked out of the org via
+	// their org_membership row.
+	if !claims.IsPlatformAdmin && membership.UserID == claims.UserID {
+		writeError(w, http.StatusForbidden, "You cannot remove your own membership; use the org transfer flow")
 		return
 	}
 
