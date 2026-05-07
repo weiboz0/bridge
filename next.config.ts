@@ -1,8 +1,12 @@
 import type { NextConfig } from "next";
 
-// TODO(plan-038): ~42 Next.js API route files in src/app/api/ overlap with
-// GO_PROXY_ROUTES below. Each needs contract-parity verification before
-// deletion. This cleanup needs its own migration plan — see docs/plans/038.
+// Plan 074 deleted the /api/orgs shadow Next handlers (security gap: PATCH/DELETE
+// without the self-action guard the Go side gained in plan 069 phase 4). 31 shadow
+// route files remain under proxied prefixes — see `tests/unit/shadow-routes.test.ts`
+// `KNOWN_SHADOW_ALLOWLIST` for the canonical worklist. Each entry needs a
+// follow-up plan that verifies Go parity before deletion. Adding a NEW shadow
+// route without an allowlist entry fails CI immediately (forward check); deleting
+// a shadow file without removing its allowlist entry also fails (reverse check).
 const GO_API_URL = process.env.GO_API_URL || "http://localhost:8002";
 
 // Routes that have been migrated to Go and should be proxied.
