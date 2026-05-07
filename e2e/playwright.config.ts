@@ -17,10 +17,16 @@ export default defineConfig({
   },
 
   projects: [
-    // Auth setup — runs first, saves storage state
+    // Seed — runs first, ensures fixture data exists and writes e2e/.fixture/state.json
+    {
+      name: "seed",
+      testMatch: "seed.setup.ts",
+    },
+    // Auth setup — runs after seed, saves storage state for each role
     {
       name: "auth-setup",
       testMatch: "auth.setup.ts",
+      dependencies: ["seed"],
     },
     // Main tests — use saved auth state
     {
