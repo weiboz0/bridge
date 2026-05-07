@@ -212,4 +212,49 @@ All 5 reviewers concur after fold-in. Codex round-2 dispatch needed to confirm b
 
 ## Post-execution report
 
-(pending)
+3-phase implementation shipped on a single branch.
+
+### Phase 1 — `8019440`
+
+Added `SchemaSentinels` type + `ExpectedSchemaSentinels` constant in `platform/internal/db/migrations.go` (~70 lines including doc comment). Extended `CheckSchemaProbe` in `platform/internal/db/schema_probe.go` with three new helpers (`checkColumns`, `checkConstraints`, `checkIndexes`) that walk the sentinel struct and run table-qualified queries against `information_schema.columns`, `pg_constraint` (joined to `pg_class`), and `pg_indexes`. New typed error `ErrSchemaSentinelMissing{Table, Kind, Name}` with operator-runbook-aware `Error()` text — distinguishes "Table missing → re-run migration" from "sentinel missing → run specific ALTER/CREATE INDEX manually" (Kimi K2.6 NIT, since `CREATE TABLE IF NOT EXISTS` is a no-op for re-runs).
+
+Created `platform/internal/db/schema_probe_integration_test.go` (108 lines, 4 tests) using the COMMIT + `t.Cleanup` re-CREATE pattern (NOT BEGIN/ROLLBACK — Codex BLOCKER 2 + GLM round-1 NIT caught that BEGIN/ROLLBACK doesn't isolate DDL across the `*sql.DB` connection pool):
+- `TestCheckSchemaProbe_HappyPath_AllSentinels` — clean DB passes all 4 sentinel walks.
+- `TestCheckSchemaProbe_MissingColumn` — drops `revoked_at`, asserts `*ErrSchemaSentinelMissing{Kind:"column"}`.
+- `TestCheckSchemaProbe_MissingConstraint` — drops `parent_links_status_check`, asserts `Kind:"constraint"`.
+- `TestCheckSchemaProbe_MissingIndex` — drops `parent_links_active_uniq`, asserts `Kind:"index"`.
+
+All tests pass on first run AND second run (cleanup re-CREATE is correct).
+
+### Phase 2 — `9d9314b`
+
+Extended `platform/internal/db/schema_probe_parity_test.go` (+210 lines) with `TestExpectedSchemaSentinels_BidirectionalParity` (Kimi K2.6 NIT — mirror plan 074's `shadow-routes.test.ts`):
+
+- **Forward** (DDL → sentinel): every `CONSTRAINT <name>`, `CREATE [UNIQUE] INDEX <name>`, and column inside the latest migration's `CREATE TABLE` block must be in `ExpectedSchemaSentinels`. Catches a PR that adds DDL but forgets to update the sentinel struct.
+- **Reverse** (sentinel → DDL): every entry in `ExpectedSchemaSentinels.{Constraints,Indexes,Columns}` must appear in the DDL. Catches typos and stale ghosts after a future migration drops something.
+
+Implementation details that took an extra iteration:
+
+- Comment-stripping (DeepSeek NIT): a `lineCommentRE` strips `--` line comments before regex matching so commented-out DDL doesn't register.
+- Column extraction is scoped to `CREATE TABLE` bodies via a paren-depth counter, not file-wide. Initial draft scanned the whole file and incorrectly captured `ON` and `WHERE` from the partial-unique-index `CREATE UNIQUE INDEX ... ON parent_links (...) WHERE status = 'active'` clause. Fixed by `extractCreateTableBodies` which extracts text between matched `(...)` pairs after each `CREATE TABLE`.
+
+Both directions sanity-checked manually:
+- Removed `parent_links_status_check` from sentinels → forward FAILS with "declares constraint(s) not in ExpectedSchemaSentinels".
+- Added `fake_index_name` to sentinels → reverse FAILS with "entry not declared in 0024_parent_links.sql".
+
+### Phase 3 — verification
+
+- `go build ./...` clean.
+- Full Go test suite: all 15 packages PASS (handlers 169s, store 30s, db <1s, others sub-second).
+- 14 db-package tests (10 pre-existing + 4 new sentinel integration tests + 1 new bidirectional parity test).
+- Vitest: not affected (no JS/TS changes).
+
+### No deviations from plan
+
+All 5 reviewer fold-ins applied as designed. The Phase-2 column-extraction false-positive was a parser implementation detail caught + fixed during the same phase, not a spec deviation.
+
+### Follow-ups
+
+- The `extractCreateTableBodies` paren-depth counter is fine for current Bridge migrations but won't handle parenthesized DEFAULT expressions like `DEFAULT (now() AT TIME ZONE 'utc')`. Documented inline; revisit if a future migration uses that style.
+- Optional: add a heuristic that scans the numerically latest migration file (regardless of CREATE TABLE) for `DROP CONSTRAINT` / `DROP INDEX` and asserts those names are NOT in the sentinel list. Currently relies on PR review. Documented in §Approach Bump Procedure.
+- Operator runbook: when `ErrSchemaSentinelMissing` fires, the operator must apply specific `ALTER TABLE ADD CONSTRAINT` / `CREATE INDEX` DDL by hand. Future hardening could provide a `make schema-repair` target that re-applies all of `parent_links`' inline DDL — out of scope here.
