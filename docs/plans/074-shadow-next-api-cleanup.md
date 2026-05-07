@@ -231,7 +231,15 @@ Confirmed text-parse pattern matches `middleware-proxy-parity.test.ts` exactly (
 
 Confirmed all 4 round-1 plan-review NITs landed: typed `ShadowEntry` shape (lines 123-129 of test file), TODO comment on `GO_PROXY_ROUTES` extraction (lines 3-8), `// @vitest-environment node` pin (line 1), no broken imports. Allowlist contents match on-disk routes exactly (31 entries). Phase 1 test deletions defensible — coverage inventory in commit body comprehensive.
 
-### Kimi K2.6 — pending
+### Kimi K2.6 — CONCUR (1 NIT, already FIXED — same finding as Codex)
+
+Confirmed bidirectional check works correctly; `// @vitest-environment node` pin present at line 1; allowlist matches exactly 31 on-disk routes; no regressions; Phase 1 commit message coverage inventory comprehensive.
+
+`[FIXED]` NIT (independently surfaced same finding as Codex round-1): catch-all skip too broad. Kimi's specific suggestion was `rel.includes("[...nextauth]")` (whitelist current legitimate catch-all). My fix at `1ab2534` is more principled (detect any catch-all + check parent prefix against proxied routes); Kimi's would require updating the whitelist whenever a new legitimate-Next catch-all is added. Either works; the principled version shipped. Two independent reviewers flagging the same gap is exactly the multi-reviewer-ensemble signal that justifies running 5-way.
+
+### Convergence
+
+All 5 reviewers concur. 1 NIT (catch-all guard tightening) caught by 2 of 4 external reviewers + already fixed at `1ab2534`. Plan 074 ready to ship.
 
 ## Post-execution report
 
