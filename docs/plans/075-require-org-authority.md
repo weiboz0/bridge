@@ -384,7 +384,11 @@ All 5 reviewers concur after Codex round-1 BLOCKER (audit gap, 14 → 16 in-scop
 
 ### Codex — pending
 
-### DeepSeek V4 Flash — pending
+### DeepSeek V4 Flash — CONCUR (1 edge-note, no action)
+
+Confirmed bypass order (claims-nil → IsPlatformAdmin/Impersonator → nil-orgs misconfig → role scan with active filter), OrgTeach + OrgAdmin level rules with active guard, all 6 Phase-2 levels + messages preserved, Phase 3 CreateLink claims still in scope, Phase 4 return shapes preserved, Phase 5 TODO comments at all 8 out-of-scope files.
+
+Edge note (no action): `isTopicEditor` previously did an early-return on `IsPlatformAdmin` BEFORE the topic/course DB lookups; post-migration the platform admin goes through the lookups before the helper bypass fires. → DeepSeek's own analysis: "behavior unchanged for valid routes; arguably more correct for invalid ones" — a platform admin trying to access a non-existent topic now correctly gets 404 instead of bypassing to grant. Acceptable.
 
 ### GLM 5.1 — CONCUR (0 BLOCKERS, 0 NITS)
 
