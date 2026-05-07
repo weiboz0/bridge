@@ -208,7 +208,43 @@ All 5 reviewers concur after fold-in. Codex round-2 dispatch needed to confirm b
 
 ## Code Review
 
-(pending — 5-way at branch-diff time)
+5-way code review against branch `feat/076-schema-probe-hardening`. Initial dispatch was at HEAD `addde54` which had a critical commit gap; subsequent fix at `d7672b3` is the actual review target.
+
+### Self (Opus 4.7) — clean post-fix
+
+`go build ./...` clean. Full Go suite (15 packages) PASS. 14 db tests pass. Sanity-checked both bidirectional parity directions (forward + reverse).
+
+### Codex round-1 — 3 BLOCKERS (all FIXED)
+
+The most important finding of the entire plan-076 review cycle:
+
+**BLOCKERS Q1, Q2, Q6**: at HEAD `addde54`, only the integration test file was committed by Sonnet's `8019440` — my edits to `migrations.go` (SchemaSentinels type + ExpectedSchemaSentinels const) and `schema_probe.go` (extended CheckSchemaProbe + ErrSchemaSentinelMissing) were never staged. The branch did not compile at HEAD; tests referenced undefined symbols. Codex's git-aware review caught this — `addde54` only had docs + tests.
+
+**Cause**: Sonnet subagent's git-add at end of Phase 1 included only the new test file it created, not the modified runtime files I'd edited inline before dispatching.
+
+**Fix**: committed the missed implementation at `e3c5475` (+250 −37 lines) explicitly.
+
+**NIT Q3**: cleanup DDL in `schema_probe_integration_test.go:95` matched 0024_parent_links.sql semantically but not exactly (missing `IF NOT EXISTS` on column ADD + index CREATE). **Fix**: tightened at `d7672b3` so cleanups match drizzle line-for-line where Postgres allows (constraint ADD has no `IF NOT EXISTS` form).
+
+### Codex round-2 — pending against `d7672b3`
+
+### DeepSeek V4 Flash — CONCUR clean (BUT MISSED THE BLOCKER)
+
+Returned CONCUR with file:line references like `schema_probe.go:96-98` for the constraint query. **Caveat**: DeepSeek read the WORKING TREE (which had my uncommitted changes) instead of comparing against HEAD. The implementation was correct in the working tree but absent from the committed branch state at the time. The stop hook + Codex caught what DeepSeek's content-only review missed.
+
+**Lesson**: file-content reviewers (DeepSeek, GLM, Kimi via opencode) read live filesystem state and can miss commit-gap issues. Git-aware reviewers (Codex) catch them. The 5-way ensemble is most useful when the reviewers' read methodologies DIFFER — Codex's `git diff main...HEAD`-based review is the canonical state for downstream merge.
+
+### GLM 5.1 — CONCUR clean (also missed the BLOCKER)
+
+Same caveat as DeepSeek — read the working tree, missed the commit gap. Confirmed table-qualification + bidirectional parity + paren-depth counter correctness against the live files (which were correct, just uncommitted).
+
+### Kimi K2.6 — CONCUR clean (also missed the BLOCKER) + 1 pre-existing quirk noted
+
+Same caveat. Noted one pre-existing nit unrelated to plan 076: `ErrSchemaProbeMissing.Error()` literal-prints `drizzle/<latest>.sql` instead of interpolating the actual filename. Not in scope for this plan; acknowledge but no action.
+
+### Stop-hook gate
+
+Independently caught the same commit gap Codex flagged ("Working tree has uncommitted implementation changes that are NOT in HEAD addde54 — external reviewers dispatched against HEAD cannot review this code"). Belt-and-suspenders with the multi-reviewer ensemble.
 
 ## Post-execution report
 
