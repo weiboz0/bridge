@@ -62,7 +62,18 @@ func (h *OrgParentLinksHandler) Routes(r chi.Router) {
 // — same auth gate as the rest of the org parent-link endpoints.
 func (h *OrgParentLinksHandler) ListEligibleChildren(w http.ResponseWriter, r *http.Request) {
 	orgID := chi.URLParam(r, "orgID")
-	if _, ok := h.requireOrgAdmin(w, r, orgID); !ok {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	ok, err := RequireOrgAuthority(r.Context(), h.Orgs, claims, orgID, OrgAdmin)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if !ok {
+		writeError(w, http.StatusForbidden, "Only org admins can manage parent links")
 		return
 	}
 	rows, err := h.ParentLinks.ListEligibleChildren(r.Context(), orgID)
@@ -71,32 +82,6 @@ func (h *OrgParentLinksHandler) ListEligibleChildren(w http.ResponseWriter, r *h
 		return
 	}
 	writeJSON(w, http.StatusOK, rows)
-}
-
-// requireOrgAdmin verifies the caller is a platform admin OR an
-// active org_admin in `orgID`. Returns true on success and writes a
-// 401/403 response itself on failure (caller just `return`s).
-func (h *OrgParentLinksHandler) requireOrgAdmin(w http.ResponseWriter, r *http.Request, orgID string) (*auth.Claims, bool) {
-	claims := auth.GetClaims(r.Context())
-	if claims == nil {
-		writeError(w, http.StatusUnauthorized, "Unauthorized")
-		return nil, false
-	}
-	if claims.IsPlatformAdmin {
-		return claims, true
-	}
-	roles, err := h.Orgs.GetUserRolesInOrg(r.Context(), orgID, claims.UserID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "Database error")
-		return nil, false
-	}
-	for _, m := range roles {
-		if m.Role == "org_admin" && m.Status == "active" {
-			return claims, true
-		}
-	}
-	writeError(w, http.StatusForbidden, "Only org admins can manage parent links")
-	return nil, false
 }
 
 // ListByOrg handles GET /api/orgs/{orgID}/parent-links.
@@ -113,7 +98,18 @@ func (h *OrgParentLinksHandler) requireOrgAdmin(w http.ResponseWriter, r *http.R
 // embedded. Empty array if none match (never null).
 func (h *OrgParentLinksHandler) ListByOrg(w http.ResponseWriter, r *http.Request) {
 	orgID := chi.URLParam(r, "orgID")
-	if _, ok := h.requireOrgAdmin(w, r, orgID); !ok {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	ok, err := RequireOrgAuthority(r.Context(), h.Orgs, claims, orgID, OrgAdmin)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if !ok {
+		writeError(w, http.StatusForbidden, "Only org admins can manage parent links")
 		return
 	}
 	q := r.URL.Query()
@@ -145,8 +141,18 @@ func (h *OrgParentLinksHandler) ListByOrg(w http.ResponseWriter, r *http.Request
 // 400 for missing/equal IDs.
 func (h *OrgParentLinksHandler) CreateLink(w http.ResponseWriter, r *http.Request) {
 	orgID := chi.URLParam(r, "orgID")
-	claims, ok := h.requireOrgAdmin(w, r, orgID)
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	ok, err := RequireOrgAuthority(r.Context(), h.Orgs, claims, orgID, OrgAdmin)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
 	if !ok {
+		writeError(w, http.StatusForbidden, "Only org admins can manage parent links")
 		return
 	}
 
@@ -218,7 +224,18 @@ func (h *OrgParentLinksHandler) CreateLink(w http.ResponseWriter, r *http.Reques
 // just shows "no children" if all links revoke.
 func (h *OrgParentLinksHandler) RevokeLink(w http.ResponseWriter, r *http.Request) {
 	orgID := chi.URLParam(r, "orgID")
-	if _, ok := h.requireOrgAdmin(w, r, orgID); !ok {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	ok, err := RequireOrgAuthority(r.Context(), h.Orgs, claims, orgID, OrgAdmin)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if !ok {
+		writeError(w, http.StatusForbidden, "Only org admins can manage parent links")
 		return
 	}
 	linkID := chi.URLParam(r, "linkID")
