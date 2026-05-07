@@ -19,7 +19,7 @@ Falls back to the caller's first active `org_admin` membership when `?orgId=` is
 No fallback. No no-org state. Relies on the API endpoint to do server-side resolution. Works only because those endpoints (e.g., `/api/org/dashboard`) ALSO have their own first-org-admin fallback — yet another place the same logic lives.
 
 ### Pattern C — Hand-rolled fallback (returns `string | undefined` after manual probe)
-- `org/parent-links/page.tsx:50-74` — calls `parseOrgIdFromSearchParams`, then if undefined fetches `/api/orgs` and picks the first active org_admin (literally inlining what `resolveOrgIdServerSide` does), then renders a no-org state. Adds `orgName` to the resolved bag — Pattern A doesn't expose `orgName`.
+- `org/parent-links/page.tsx:50-74` — calls `parseOrgIdFromSearchParams`, then if undefined fetches `/api/orgs` and picks the first active org_admin (literally inlining what `resolveOrgIdServerSide` does), then renders a no-org state. Adds `orgName` to the resolved bag — Pattern A doesn't expose `orgName`. **Also** redirects to `/login` on `ApiError` with status 401 (line 71) — the only Pattern that explicitly handles 401 vs other errors; the others rely on Auth.js middleware to redirect first.
 
 The same logic lives in three places, each slightly different:
 
@@ -93,9 +93,13 @@ The existing `resolveOrgIdServerSide` catches every exception and returns `null`
 
 ## Files
 
-**Modify (7 files + 1 helper):**
+**Modify (7 files + 1 helper) + Create (1 component):**
 
 - `src/lib/portal/org-context.ts` — replace existing exports with `resolveOrgContext` + `OrgContext` type. Delete `parseOrgIdFromSearchParams` (becomes private internal `parseOrgIdParam`) and `resolveOrgIdServerSide`. Keep `appendOrgId` unchanged. ~80 lines diff.
+
+- **NEW (GLM 5.1 round-1 NIT):** `src/components/portal/org-context-guard.tsx` — a shared server-side guard component that takes an `OrgContext` and either renders children with the resolved `{orgId, orgName}` (when `kind: "ok"`), redirects to `/login` (when `kind: "error", status: 401`), or renders the no-org / error states inline. Each page does ONE call: `<OrgContextGuard ctx={ctx}>{({orgId, orgName}) => /* page body */}</OrgContextGuard>` — collapses the 3-branch handling into one component. Without this, the 7 pages would each carry 3 conditional render branches × 7 = 21 redundant blocks.
+
+  Implementation note: a server component using a render-prop pattern that takes `OrgContext` and returns either `{kind: "render", children: ReactNode}` (the page proceeds) or `{kind: "guard", element: ReactNode}` (the page returns the guard's element). Simpler shape: a `handleOrgContext(ctx)` helper that returns `{kind:"render", orgId, orgName} | {kind:"guard", element: <NoOrgState/> | <ErrorState/>}` and pages do `if (handled.kind === "guard") return handled.element; const {orgId, orgName} = handled;`. One conditional per page instead of three.
 - `src/app/(portal)/org/page.tsx` — switch from `parseOrgIdFromSearchParams` to `resolveOrgContext`. Render no-org state on `kind:"no-org"`; render error state on `kind:"error"`.
 - `src/app/(portal)/org/teachers/page.tsx` — same. Drop the now-redundant `if (!orgId)` empty-state. Now uses `ctx.orgName` for the page header (currently shows "Teachers" generically).
 - `src/app/(portal)/org/students/page.tsx` — same.
@@ -176,7 +180,25 @@ After Phase 4, run the 5-way code review against the consolidated branch diff (s
 
 ## Plan Review
 
-(pending — 5-way before implementation)
+### Round 1 (2026-05-06)
+
+#### Self-review (Opus 4.7) — clarification
+
+Folded one correction at `b74f35b`: the existing `tests/unit/org-context.test.ts` covers `parseOrgIdFromSearchParams` + `appendOrgId` (10 tests). Plan now describes Phase 3 as REPLACING the parsing tests with `resolveOrgContext` tests, not creating a new file.
+
+#### Codex — pending
+
+#### DeepSeek V4 Pro — pending
+
+#### GLM 5.1 — CONCUR with NITs (1 FIXED, 1 minor noted, 1 acknowledged)
+
+1. `[FIXED]` Add a shared `handleOrgContext(ctx)` / `<OrgContextGuard>` component to Phase 1. Without it, 21 conditional render blocks across 7 pages duplicate the same logic. → **Response**: added §Files entry for `src/components/portal/org-context-guard.tsx`. Pages use `if (handled.kind === "guard") return handled.element; const {orgId, orgName} = handled;` — one conditional per page instead of three.
+2. `[FIXED]` `parent-links/page.tsx` description omitted the 401→redirect behavior (line 71). → **Response**: §Pattern C description now explicitly notes the redirect-to-/login on ApiError 401.
+3. `[ACKNOWLEDGED]` Suggestion to merge Phase 2 + Phase 3. The intermediate state (pages migrated, legacy exports still present) is technically dead code for one commit. Decision: keep the split — separate phases preserve commit-level bisectability if a regression appears in the page migration vs the deletion. The dead-code-for-one-commit cost is trivial.
+
+GLM round-1 also confirmed direction: "Discriminated union forces callers to distinguish 'no org' from 'API broke'... the new error semantics is strictly better."
+
+#### Kimi K2.6 — pending
 
 ## Code Review
 
