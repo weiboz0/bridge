@@ -68,23 +68,14 @@ func (h *CourseHandler) CreateCourse(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Auth: teacher or org_admin in org, or platform admin
-	if !claims.IsPlatformAdmin {
-		roles, err := h.Orgs.GetUserRolesInOrg(r.Context(), body.OrgID, claims.UserID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "Database error")
-			return
-		}
-		hasRole := false
-		for _, m := range roles {
-			if m.Role == "teacher" || m.Role == "org_admin" {
-				hasRole = true
-				break
-			}
-		}
-		if !hasRole {
-			writeError(w, http.StatusForbidden, "Must be teacher or org admin")
-			return
-		}
+	ok, err := RequireOrgAuthority(r.Context(), h.Orgs, claims, body.OrgID, OrgTeach)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if !ok {
+		writeError(w, http.StatusForbidden, "Must be teacher or org admin")
+		return
 	}
 
 	course, err := h.Courses.CreateCourse(r.Context(), store.CreateCourseInput{
@@ -118,16 +109,14 @@ func (h *CourseHandler) ListCourses(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Auth: any member of org, or platform admin
-	if !claims.IsPlatformAdmin {
-		roles, err := h.Orgs.GetUserRolesInOrg(r.Context(), orgID, claims.UserID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "Database error")
-			return
-		}
-		if len(roles) == 0 {
-			writeError(w, http.StatusForbidden, "Not a member of this organization")
-			return
-		}
+	ok, err := RequireOrgAuthority(r.Context(), h.Orgs, claims, orgID, OrgRead)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if !ok {
+		writeError(w, http.StatusForbidden, "Not a member of this organization")
+		return
 	}
 
 	courses, err := h.Courses.ListCoursesByOrg(r.Context(), orgID)

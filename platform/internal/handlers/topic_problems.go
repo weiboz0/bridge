@@ -49,9 +49,6 @@ func (h *TopicProblemHandler) Routes(r chi.Router, listHandler func(http.Respons
 // isTopicEditor returns true when the caller is a teacher or org_admin in the
 // org that owns the topic's course, or a platform admin.
 func (h *TopicProblemHandler) isTopicEditor(r *http.Request, topicID string, claims *auth.Claims) (bool, int) {
-	if claims.IsPlatformAdmin {
-		return true, 0
-	}
 	topic, err := h.Topics.GetTopic(r.Context(), topicID)
 	if err != nil {
 		return false, http.StatusInternalServerError
@@ -66,16 +63,14 @@ func (h *TopicProblemHandler) isTopicEditor(r *http.Request, topicID string, cla
 	if course == nil {
 		return false, http.StatusNotFound
 	}
-	roles, err := h.Orgs.GetUserRolesInOrg(r.Context(), course.OrgID, claims.UserID)
+	ok, err := RequireOrgAuthority(r.Context(), h.Orgs, claims, course.OrgID, OrgTeach)
 	if err != nil {
 		return false, http.StatusInternalServerError
 	}
-	for _, m := range roles {
-		if m.Status == "active" && (m.Role == "org_admin" || m.Role == "teacher") {
-			return true, 0
-		}
+	if !ok {
+		return false, http.StatusForbidden
 	}
-	return false, http.StatusForbidden
+	return true, 0
 }
 
 // AttachProblem — POST /api/topics/{topicId}/problems
