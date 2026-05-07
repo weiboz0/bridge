@@ -265,7 +265,37 @@ All 5 reviewers concur after fold-in. Codex round-2 dispatch needed to confirm b
 
 ## Code Review
 
-(pending — 5-way at branch-diff time)
+5-way code review against branch HEAD `64c8b99` (consolidated branch diff vs main).
+
+### Self (Opus 4.7) — clean
+
+`bun run test` 641 passing / 11 skipped / 0 failed (3-test net delta from removing `parseOrgIdFromSearchParams` describe block in Phase 3 + adding 1 array test). `bunx tsc --noEmit` 10 errors (pre-existing baseline). Working tree clean — including recovery from leftover merge-conflict markers in `tests/helpers.ts` + `src/lib/db/schema.ts` from earlier session's stash-pop.
+
+### Codex (2 rounds) — 1 BLOCKER + final CONCUR
+
+Round-1: BLOCKER on `src/app/(portal)/org/layout.tsx:28` calling `/api/orgs` directly via `api()`, bypassing the cached `fetchMyOrgs` helper. The React `cache()` wrapper only deduped within the helper's own callers — layout was on a separate fetch path.
+
+Fix landed at `64c8b99`: exported `fetchMyOrgs` from `org-context.ts`; layout imports + calls it. Layout + resolveOrgContext now share one fetch per render. Round-2 CONCUR.
+
+### DeepSeek V4 Flash — CONCUR clean (0 BLOCKERS, 0 NITS)
+
+Confirmed `cache` import is from `react` (render-scoped) not `next/cache` (request-scoped); all three no-org reasons handled exhaustively; `vi.mock("@/lib/api-client")` strategy correct; all 7 pages use the identical pattern; legacy exports actually deleted (only doc-comment mention remains, intentional).
+
+### GLM 5.1 — CONCUR with 1 NIT (FIXED)
+
+NIT: `classes/page.tsx` and `courses/page.tsx` headers showed bare "Classes"/"Courses" while `teachers`/`students` show `{orgName} — {Title}`. → **Response**: destructured `orgName` from handled, made headers consistent (`{orgName} — Classes`, `{orgName} — Courses`).
+
+Confirmed all other claims: handleOrgContext present with `{kind:"render"|"guard"}` shape (21 → 7 conditionals); 401 redirect handled via `redirect("/login")`; legacy helpers deleted; no broken imports.
+
+### Kimi K2.6 — CONCUR with 1 NIT (FIXED)
+
+NIT: `parent-links/page.tsx` lost the inner 401 redirect on the downstream `/api/orgs/{orgId}/parent-links` + `/eligible-children` fetches. The original page had two 401 redirects; migration preserved the first (handled by guard) but lost the second. Edge case (session expires mid-render) but technically a behavior narrowing. → **Response**: restored the inner `if (e instanceof ApiError && e.status === 401) redirect("/login")` in the data-fetch catch block.
+
+Confirmed all other claims: `role` removed from `kind:"ok"`; `vi.mock` strategy correct; React `cache()` import; merge-conflict claim verified (files match main, zero markers anywhere).
+
+### Convergence
+
+5 reviewers concur after 1 round of code-review fixes (Codex BLOCKER + 2 NITs all folded). Ready to ship.
 
 ## Post-execution report
 
