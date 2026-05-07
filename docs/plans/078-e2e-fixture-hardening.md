@@ -195,4 +195,58 @@ All 5 reviewers concur after fold-in. Codex round-2 dispatch needed to confirm b
 
 ## Post-execution report
 
-(pending)
+3 active phases shipped (Phase 4 was post-execution-report-only).
+
+### Phase 1 — `8378ddc`
+
+- `e2e/seed.setup.ts` (new) — fixture-setup spec asserting `HOCUSPOCUS_TOKEN_SECRET` is set, login-validating eve@demo.edu existence with an actionable error message, idempotently creating the `e2e-fixture-class` (matched via title-prefix), enrolling alice via the join-code flow, ending leftover active sessions (with `console.warn` tolerance), and writing `e2e/.fixture/state.json` with `{classId, unitId?}`.
+- `e2e/helpers/fixture-state.ts` (new) — synchronous `getFixtureState()` reader with developer-actionable error on missing JSON.
+- `e2e/playwright.config.ts` — added `seed` project; `auth-setup` now `dependencies: ["seed"]`. Chain: tests → auth-setup → seed.
+- `.gitignore` — added `e2e/.fixture/`.
+
+**Sonnet subagent deviation**: unit creation is currently a TODO in seed.setup.ts (logged as console message, not yet creating a unit via UI). The seed queries `/api/units` for an existing fixture-prefixed unit. Since the Python 101 demo seed creates many units owned by eve, a non-fixture unit may be returned — `unitId` may be undefined in `state.json` if no fixture-prefixed unit exists. The hocuspocus-auth.spec.ts mint tests don't depend on `unitId` from fixture state — they query `/api/me/units` themselves at test time and use the first available. So the deferred unit-creation isn't blocking; it just means the fixture's `unitId` field may be undefined for now. A follow-up plan can add unit creation if a need arises.
+
+**Hardcoded UUIDs in seed**: the subagent referenced `00000000-0000-0000-0000-0000000aa001` (course UUID) and `d386983b-6da4-4cb8-8057-f2aa70d27c07` (org UUID). Verified both come from `scripts/seed_problem_demo.sql` and `scripts/python-101/import.ts:838` — stable demo-seed identifiers safe to hardcode.
+
+### Phase 2 — `0d0895a`
+
+5/5 skips converted to hard failures in `e2e/hocuspocus-auth.spec.ts`:
+- Line 119: `test.skip(true, "teacher has no units accessible...")` → `expect(unitsRes.ok()).toBeTruthy()`.
+- Line 123: `test.skip(!unitId, ...)` → `expect(unitId).toBeDefined()`.
+- Line 176: `test.skip(!TOKEN_SECRET, ...)` → `expect(TOKEN_SECRET).toBeTruthy()`.
+- Line 184: `test.skip(!unitsRes.ok(), ...)` → `expect(unitsRes.ok()).toBeTruthy()`.
+- Line 187: `test.skip(!unitId, ...)` → `expect(unitId).toBeDefined()`.
+
+`grep -c "test.skip" e2e/hocuspocus-auth.spec.ts` returns 0.
+
+### Phase 3 — `f319e02`
+
+9/9 skips converted to hard failures in `e2e/session-flow.spec.ts`:
+- Line 46 / 150: skip-on-no-classes → read `classId` from `getFixtureState()`, navigate directly to `/teacher/classes/{classId}`, `expect(classId).toBeDefined()`.
+- Line 69: skip-when-resume-button-visible → `expect(resumeButton).not.toBeVisible({timeout:2000})` (seed cleanup ensures no active session).
+- Line 72: skip-when-start-button-not-visible → `await expect(startButton).toBeVisible({timeout:5000})`.
+- Line 94 / 120: skip-when-classId/sessionId-undefined → `expect(classId).toBeDefined(); expect(sessionId).toBeDefined()`.
+- Line 105: skip-when-live-session-card-not-visible → `await expect(liveCard).toBeVisible({timeout:5000})`.
+- Line 131: skip-when-end-button-not-visible → `await expect(endButton).toBeVisible({timeout:5000})`.
+- Line 160: skip-when-no-past-sessions → `await expect(pastSessionsHeading).toBeVisible({timeout:5000})`.
+
+`grep -c "test.skip" e2e/session-flow.spec.ts` returns 0.
+
+### Verification
+
+- `bunx tsc --noEmit`: 10 errors, all pre-existing baseline.
+- `grep -c "test.skip"` in both target files: 0.
+- Working tree clean at HEAD `f319e02`.
+- **Live e2e suite NOT exercised by orchestrator** — would require Next + Go + Hocuspocus running, demo-seeded DB, browser. Author manual verification at code-review time is the final gate. Spec changes are correct-by-construction per the plan.
+
+### Behavior changes shipped (deliberate)
+
+1. **Hard environment requirement**: `HOCUSPOCUS_TOKEN_SECRET` must be set or the entire e2e suite fails at seed-time. Aligns with plan 072's runtime contract.
+2. **Hard data requirement**: a fixture class with eve+alice enrolled exists, or seed fails. No more silent "no class" pass-with-skip.
+3. **All 14 prior skip paths now hard-fail** when the prerequisite isn't present — the suite is now a reliable regression gate for realtime auth + live-session flows.
+
+### Follow-ups
+
+- **Unit creation in seed**: currently a TODO. If a future test depends on a stable fixture unitId, add UI-driven unit creation to `seed.setup.ts`. For now, hocuspocus-auth's mint tests query units at test time so the gap is invisible.
+- **CI provisioning**: the `HOCUSPOCUS_TOKEN_SECRET` requirement now makes the e2e suite hard-block on env. Document CI setup in `docs/setup.md` if not already covered.
+- **Stop-hook stash-pop guard**: plan 077's incident (leftover `<<<<<<<` markers from a stash-pop) suggests adding a pre-commit / stop-hook guard for stray conflict markers. Filed as a follow-up TODO.
