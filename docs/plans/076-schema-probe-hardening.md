@@ -26,7 +26,7 @@ Augment `CheckSchemaProbe` with three additional categories of presence checks a
 2. **Constraints** — query `pg_constraint` joined to `pg_class` for each named CHECK / unique constraint, **filtering by `pg_class.relname = sentinels.Table`** so the probe doesn't accidentally match a same-named constraint on a different table (DeepSeek round-1 NIT). Catches missing CHECK and partial ALTER ADD CONSTRAINT.
 3. **Indexes** — query `pg_indexes` for each declared index name, filtering by `tablename = sentinels.Table` for the same reason. Catches missing CREATE INDEX (partial-unique included).
 
-Foreign-key actions (`ON DELETE CASCADE` etc.) are NOT verified at this layer — the FK constraint NAME presence is enough; the action is structural and rarely the failure mode. This matches the review's wording ("constraints, enum values, and indexes") without overreaching.
+Foreign-key constraint NAMES are deliberately NOT in the sentinel list (Kimi K2.6 round-1 NIT clarification). Two reasons: (a) PG auto-generates FK names from column names (e.g., `parent_links_parent_user_id_fkey`), so a column rename in a future migration would break the sentinel without the constraint actually being missing; (b) inline `REFERENCES` is syntactically bound to `CREATE TABLE` — a partial failure where the table exists but FKs don't is effectively impossible (Postgres rejects the whole CREATE TABLE if any inline constraint is malformed). FK actions (`ON DELETE CASCADE` etc.) similarly stay out — checking them would require parsing `pg_constraint.confdeltype` and comparing against the migration source, fragile string-matching. This matches the review's wording ("constraints, enum values, and indexes") without overreaching.
 
 The probe stays cheap: 1 + N + M + K small queries on a tiny system catalog at startup. Total <100ms in practice. No retry, no fallback — if the schema's wrong, the server should refuse to start.
 
@@ -67,11 +67,16 @@ var ExpectedSchemaSentinels = SchemaSentinels{
 - `ErrSchemaProbeMissing{Table: ...}` — table not present (existing).
 - `ErrSchemaSentinelMissing{Kind: "column"|"constraint"|"index", Name: ...}` — sentinel absent.
 
-Error messages in `Error()` direct the operator to re-apply the latest migration with `psql $DATABASE_URL -f drizzle/<latest>.sql`.
+**Operator runbook in `Error()` text** (Kimi K2.6 round-1 NIT — important nuance):
+- For `Table` missing → "Run `psql $DATABASE_URL -f drizzle/<latest>.sql` and restart" (the existing wording works because `CREATE TABLE IF NOT EXISTS` runs).
+- For `column`/`constraint`/`index` missing → re-running the migration file is a NO-OP (`CREATE TABLE IF NOT EXISTS` short-circuits when the table already exists, so inline column/constraint/index declarations don't re-execute). The error message must direct the operator to MANUALLY apply the specific DDL — e.g., "Constraint `parent_links_status_check` is missing on `parent_links`. Apply the corresponding `ALTER TABLE parent_links ADD CONSTRAINT ...` from drizzle/0024_parent_links.sql, or DROP and re-CREATE the table if the database is dev-only." Same for indexes (`CREATE UNIQUE INDEX ... ON ...`).
+- Format: `Error()` text quotes the table + sentinel name + points at the exact migration file + line range so the operator can find the original DDL fast.
 
 ### Bump procedure
 
-When a new schema-affecting migration adds a table (and so bumps `ExpectedSchemaProbe`), the same PR also updates `ExpectedSchemaSentinels`. The CI parity test (extended in Phase 2) catches PRs that bump the constant but forget the sentinel list, by parsing the latest `drizzle/*.sql` file's CREATE INDEX / CONSTRAINT lines and comparing against the sentinel struct.
+When a new schema-affecting migration adds a table (and so bumps `ExpectedSchemaProbe`), the same PR also updates `ExpectedSchemaSentinels`. The CI parity test (extended in Phase 2) catches PRs that bump the constant but forget the sentinel list, by parsing the latest `drizzle/*.sql` file's CREATE INDEX / CONSTRAINT lines and comparing against the sentinel struct (bidirectional, both forward and reverse).
+
+**DROP migrations** (Kimi K2.6 round-1 NIT): a future migration that DROPs a constraint or index without creating a new table won't change `ExpectedSchemaProbe` (it points at the latest CREATE TABLE), so the parity test won't auto-detect the obsolete sentinel. Mitigation: the bump procedure for a DROP migration explicitly requires updating `ExpectedSchemaSentinels` to remove the dropped name. Code reviewers enforce this at PR-time. Optional follow-up: add a heuristic to the parity test that scans the numerically latest migration file (regardless of whether it has a CREATE TABLE) for `DROP CONSTRAINT` / `DROP INDEX` and asserts those names are NOT in the sentinel list. Out of scope for plan 076.
 
 ## Decisions to lock in
 
@@ -135,11 +140,16 @@ When a new schema-affecting migration adds a table (and so bumps `ExpectedSchema
 
 ### Phase 2 — Extend CI parity test (commit 2)
 
-- Update `schema_probe_parity_test.go` to additionally:
-  - Parse the latest `drizzle/*.sql` file for `CONSTRAINT <name>` declarations; assert each appears in `ExpectedSchemaSentinels.Constraints`.
-  - Parse for `CREATE (UNIQUE )?INDEX <name>` declarations; assert each appears in `ExpectedSchemaSentinels.Indexes`.
-  - For columns: parse the CREATE TABLE block for column-name lines; assert each NOT NULL or PRIMARY KEY column appears in `ExpectedSchemaSentinels.Columns`.
-- Each new assertion's failure message points at `migrations.go::ExpectedSchemaSentinels` and tells the operator which name to add.
+- Update `schema_probe_parity_test.go` to additionally do BIDIRECTIONAL checks (Kimi K2.6 round-1 NIT — mirror plan 074's `shadow-routes.test.ts` pattern):
+  - **Forward** (DDL → sentinel — catches omissions):
+    - Parse the latest `drizzle/*.sql` file for `CONSTRAINT <name>` declarations; assert each appears in `ExpectedSchemaSentinels.Constraints`.
+    - Parse for `CREATE (UNIQUE )?INDEX <name>` declarations; assert each appears in `ExpectedSchemaSentinels.Indexes`.
+    - Parse the CREATE TABLE block for column-name lines; assert each NOT NULL or PRIMARY KEY column appears in `ExpectedSchemaSentinels.Columns`.
+  - **Reverse** (sentinel → DDL — catches typos and stale ghosts):
+    - Every entry in `ExpectedSchemaSentinels.Constraints` must appear as `CONSTRAINT <name>` in the latest `drizzle/*.sql`. Catches typos and entries left behind after a future migration drops a constraint.
+    - Every entry in `ExpectedSchemaSentinels.Indexes` must appear as `CREATE (UNIQUE )?INDEX <name>` in the latest file.
+    - Every entry in `ExpectedSchemaSentinels.Columns` must appear in the CREATE TABLE column list.
+- Each new assertion's failure message points at `migrations.go::ExpectedSchemaSentinels` and tells the operator which name to add (forward-direction failures) or remove (reverse-direction failures).
 - Run `cd platform && go test ./internal/db/ -run TestExpectedSchemaProbe -count=1 -v` — passes.
 - Commit: `plan 076 phase 2: extend parity test to assert sentinel completeness`.
 
@@ -182,7 +192,19 @@ DeepSeek round-1 also explicitly addressed the soft-mode-for-indexes question (r
 
 GLM round-1 also confirmed direction: "Latest-migration-only scope catches the dominant failure mode without expanding maintenance surface across 24+ files. The plan leaves a clear extension point... Deferring enum checks is correct call." (Note: GLM said "no enums exist" which contradicted Codex's grep — Codex was correct; the deferral reasoning is correct but GLM's premise was wrong. My response §Decisions #3 reconciles.)
 
-#### Kimi K2.6 — pending
+#### Kimi K2.6 — CONCUR (3 NITs, all FIXED + 1 factual correction overlap)
+
+1. `[FIXED]` Q2 — FK constraint name rationale was ambiguous. → **Response**: §Approach now explicitly explains why FK names are NOT in the sentinel list (PG auto-names them; inline REFERENCES is bound to CREATE TABLE so partial table-without-FKs is impossible).
+2. `[FIXED]` Q3 — Bidirectional parity (load-bearing per Kimi). Mirror plan 074's `shadow-routes.test.ts` pattern: forward (DDL → sentinel) catches omissions; reverse (sentinel → DDL) catches typos and stale ghosts. → **Response**: §Files Phase 2 rewritten with explicit Forward + Reverse subsections.
+3. `[FIXED]` Q4 — DROP migrations don't bump `ExpectedSchemaProbe` so parity test won't catch obsolete sentinels. → **Response**: added explicit bump-procedure rule for DROP migrations + optional `DROP CONSTRAINT/INDEX` scanner as out-of-scope follow-up. Code reviewers enforce at PR-time.
+4. `[FIXED]` Q5 factual correction — Operator runbook: re-running the migration file is a no-op for missing inline constraints because `CREATE TABLE IF NOT EXISTS` short-circuits. → **Response**: §Approach `Error()` text now distinguishes Table-missing (re-run migration) from sentinel-missing (manual `ALTER TABLE ADD CONSTRAINT` / `CREATE INDEX` against the running DB).
+5. `[OVERLAP]` Q5 test isolation — same finding as Codex BLOCKER 2 + GLM round-1 NIT. Already folded.
+
+Kimi round-1 also confirmed: column list correct, latest-only scope defensible, soft-mode for indexes rejected (active_uniq is a correctness boundary).
+
+### Convergence
+
+All 5 reviewers concur after fold-in. Codex round-2 dispatch needed to confirm both BLOCKERS closed.
 
 ## Code Review
 
