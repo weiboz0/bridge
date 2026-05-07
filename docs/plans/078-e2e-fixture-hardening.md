@@ -76,7 +76,7 @@ All 9 skips convert. The fixture is now load-bearing for the full chain: any lin
 
 - `e2e/playwright.config.ts` — add a new `seed` project before `auth-setup`. Update `dependencies` chain: `tests` → `auth-setup` → `seed`.
 - `e2e/hocuspocus-auth.spec.ts` — convert `test.skip(!unitId, ...)` → `expect(unitId).toBeDefined()`; convert `test.skip(!TOKEN_SECRET, ...)` → `expect(TOKEN_SECRET).toBeTruthy()`. Read `classId` / `unitId` from the fixture-state file.
-- `e2e/session-flow.spec.ts` — convert "no classes" / "student not enrolled" / "no session was started" skips to hard failures. Keep "End Session button not visible" (downstream) and "No past sessions visible" (out-of-scope) as legitimate skips with a clarifying comment. Read seeded entity ids from fixture state.
+- `e2e/session-flow.spec.ts` — convert ALL 9 conditional `test.skip` calls to hard failures. Read seeded `classId` from fixture state. Each test reads `classId`/`sessionId` from a shared module-level state set by the previous test in the chain (already the existing pattern); after Phase 3 those reads `expect()` non-null instead of skipping. (Codex round-2 + DeepSeek/Kimi round-1 — see §"Convert ALL 9" + §Decisions #5; no skip stays "legitimate".)
 - `.gitignore` — add `e2e/.fixture/`.
 
 **Create (2 files):**
@@ -125,13 +125,19 @@ All 9 skips convert. The fixture is now load-bearing for the full chain: any lin
 
 ### Phase 3 — Convert session-flow.spec.ts skips (commit 3) — ALL 9
 
-- Read `classId` from fixture state; remove "no classes" skip at line 46.
-- Remove "session already active" skip — fixture ends active sessions before tests run.
-- Convert "Live session card not visible" skip (line 105) — fixture guarantees student enrollment.
-- Convert "Start Live Session button not visible" (line 72) — fixture guarantees class state allows starting.
-- Convert "End Session button not visible" (line 131) — previous test in the chain creates the session that must be endable.
-- Convert "No past sessions visible" (line 160) — previous "end session" test creates exactly one past session.
-- Run `bun run test:e2e e2e/session-flow.spec.ts` — confirm zero `test.skip` calls remain in this file. All 9 converted to hard `expect()` assertions.
+Each conditional `test.skip(condition, msg)` becomes `expect(condition).toBeFalsy()` (or read seeded id from fixture state and assert non-null). Per the line numbers in `session-flow.spec.ts` at HEAD:
+
+- **Line 46** — `test.skip(true, "No classes available for teacher")` after `classLink.isVisible()` returns false. Fixture guarantees a class for eve. Read `classId` from fixture state instead of clicking the first link; remove the visibility-fallback skip.
+- **Line 69** — `test.skip(true, "Session already active...")` when Resume button visible. Fixture ends active sessions in seed; this branch should never fire. Convert to a hard `expect(resumeButton).not.toBeVisible()` after seed cleanup.
+- **Line 72** — `test.skip(true, "Start Live Session button not visible")`. Fixture's class-detail page MUST show the Start button. Convert to `await expect(startButton).toBeVisible({timeout: 5000})`.
+- **Line 94** — `test.skip(!classId || !sessionId, "No session was started in previous test")`. The previous test guarantees both via fixture-driven flow. Replace with `expect(classId).toBeDefined(); expect(sessionId).toBeDefined();`.
+- **Line 105** — `test.skip(true, "Live session card not visible — student may not be enrolled")`. Fixture enrolls alice. Convert to `await expect(liveCard).toBeVisible({timeout: 5000})`.
+- **Line 120** — `test.skip(!sessionId, "No session was started")`. Same as line 94 — `expect(sessionId).toBeDefined()`.
+- **Line 131** — `test.skip(true, "End Session button not visible")`. After previous start-session test, the End button MUST be visible to the teacher. Convert to `await expect(endButton).toBeVisible({timeout: 5000})`.
+- **Line 150** — `test.skip(!classId, "No class available")`. Fixture guarantees classId. Replace with `expect(classId).toBeDefined()`.
+- **Line 160** — `test.skip(true, "No past sessions visible")`. After the end-session test runs, one past session exists. Convert to `await expect(pastSessionsList).toContainText(/expected text/)`.
+
+After conversion: `grep -c "test.skip" e2e/session-flow.spec.ts` returns 0. Run `bun run test:e2e e2e/session-flow.spec.ts` — all tests execute, none skip.
 - Commit: `plan 078 phase 3: session-flow — convert all 9 skips to hard failures`.
 
 ### Phase 4 — Verify + post-execution report (commit 4)
