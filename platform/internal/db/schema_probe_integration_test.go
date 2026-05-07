@@ -36,7 +36,10 @@ func TestCheckSchemaProbe_MissingColumn(t *testing.T) {
 	// Register cleanup IMMEDIATELY after the destructive DDL succeeds so it
 	// runs even if the assertion below panics or the test is skipped.
 	t.Cleanup(func() {
-		_, cleanupErr := db.ExecContext(ctx, `ALTER TABLE parent_links ADD COLUMN revoked_at timestamptz`)
+		// Match drizzle/0024_parent_links.sql:19 — `revoked_at timestamptz`
+		// (nullable, no DEFAULT). `IF NOT EXISTS` is defensive in case the
+		// destructive DDL above somehow didn't actually drop the column.
+		_, cleanupErr := db.ExecContext(ctx, `ALTER TABLE parent_links ADD COLUMN IF NOT EXISTS revoked_at timestamptz`)
 		if cleanupErr != nil {
 			t.Errorf("cleanup: failed to restore revoked_at: %v", cleanupErr)
 		}
@@ -91,8 +94,10 @@ func TestCheckSchemaProbe_MissingIndex(t *testing.T) {
 	require.NoError(t, err, "precondition: drop parent_links_active_uniq")
 
 	t.Cleanup(func() {
+		// Match drizzle/0024_parent_links.sql:35-37 exactly — partial-unique
+		// CREATE UNIQUE INDEX IF NOT EXISTS with WHERE status = 'active'.
 		_, cleanupErr := db.ExecContext(ctx,
-			`CREATE UNIQUE INDEX parent_links_active_uniq ON parent_links (parent_user_id, child_user_id) WHERE status = 'active'`)
+			`CREATE UNIQUE INDEX IF NOT EXISTS parent_links_active_uniq ON parent_links (parent_user_id, child_user_id) WHERE status = 'active'`)
 		if cleanupErr != nil {
 			t.Errorf("cleanup: failed to restore parent_links_active_uniq: %v", cleanupErr)
 		}
