@@ -1,10 +1,8 @@
 import { api, ApiError } from "@/lib/api-client";
 import { OrgSettingsCard, type OrgSettingsData } from "@/components/org/org-settings-card";
 import type { OrgListError } from "@/components/org/org-list-state";
-import {
-  parseOrgIdFromSearchParams,
-  appendOrgId,
-} from "@/lib/portal/org-context";
+import { resolveOrgContext, appendOrgId } from "@/lib/portal/org-context";
+import { handleOrgContext } from "@/components/portal/org-context-guard";
 
 interface DashboardPayload {
   org: OrgSettingsData;
@@ -19,7 +17,12 @@ export default async function OrgSettingsPage({
 }: {
   searchParams?: Promise<{ orgId?: string }>;
 }) {
-  const orgId = parseOrgIdFromSearchParams(await searchParams);
+  const sp = await searchParams;
+  const ctx = await resolveOrgContext(sp);
+  const handled = handleOrgContext(ctx);
+  if (handled.kind === "guard") return handled.element;
+  const { orgId } = handled;
+
   let org: OrgSettingsData | null = null;
   let error: OrgListError | null = null;
   try {

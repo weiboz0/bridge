@@ -1,9 +1,7 @@
 import { api, ApiError } from "@/lib/api-client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import {
-  parseOrgIdFromSearchParams,
-  appendOrgId,
-} from "@/lib/portal/org-context";
+import { resolveOrgContext, appendOrgId } from "@/lib/portal/org-context";
+import { handleOrgContext } from "@/components/portal/org-context-guard";
 
 interface OrgDashboardData {
   org: { id: string; name: string; type: string; status: string };
@@ -18,7 +16,12 @@ export default async function OrgDashboard({
 }: {
   searchParams?: Promise<{ orgId?: string }>;
 }) {
-  const orgId = parseOrgIdFromSearchParams(await searchParams);
+  const sp = await searchParams;
+  const ctx = await resolveOrgContext(sp);
+  const handled = handleOrgContext(ctx);
+  if (handled.kind === "guard") return handled.element;
+  const { orgId } = handled;
+
   let data: OrgDashboardData;
   try {
     data = await api<OrgDashboardData>(appendOrgId("/api/org/dashboard", orgId));

@@ -1,17 +1,20 @@
 import { api, ApiError } from "@/lib/api-client";
 import { ClassesList, type OrgClassRow } from "@/components/org/classes-list";
 import type { OrgListError } from "@/components/org/org-list-state";
-import {
-  parseOrgIdFromSearchParams,
-  appendOrgId,
-} from "@/lib/portal/org-context";
+import { resolveOrgContext, appendOrgId } from "@/lib/portal/org-context";
+import { handleOrgContext } from "@/components/portal/org-context-guard";
 
 export default async function OrgClassesPage({
   searchParams,
 }: {
   searchParams?: Promise<{ orgId?: string }>;
 }) {
-  const orgId = parseOrgIdFromSearchParams(await searchParams);
+  const sp = await searchParams;
+  const ctx = await resolveOrgContext(sp);
+  const handled = handleOrgContext(ctx);
+  if (handled.kind === "guard") return handled.element;
+  const { orgId } = handled;
+
   let data: OrgClassRow[] | null = null;
   let error: OrgListError | null = null;
   try {
