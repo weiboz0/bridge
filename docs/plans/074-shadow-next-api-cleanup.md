@@ -215,4 +215,45 @@ All 5 reviewers concur after fold-in (DeepSeek round-2 confirmed BLOCKER closed 
 
 ## Post-execution report
 
-(pending)
+3-phase implementation shipped on a single branch.
+
+### Phase 1 — `a478d7a`
+
+Deleted 4 shadow Next route files under `/api/orgs/` + 2 vitest integration tests that exercised them. Removed empty parent directories. Coverage equivalence inventory captured in the commit body — Go has strictly more coverage (Vitest tests had no self-action guard assertions; Go has 4 dedicated tests for it from plan 069 phase 4).
+
+Pre-impl greps (both clean):
+- `grep -rln "@/app/api/orgs" tests/ e2e/ src/` — only the 2 deleted vitest files.
+- `grep -rn "/api/orgs/" src/ --include="*.tsx" --include="*.ts"` — ~15 fetch/string refs, all proxy-routed to Go (proxy works without the Next route file existing).
+
+Verification:
+- `bunx tsc --noEmit`: 10 errors, all pre-existing in unrelated files (verified via `git stash` comparison); 0 new errors from this change.
+- `bun run test`: 621 passed, 11 skipped, 0 failed.
+- `cd platform && go test ./... -count=1 -timeout 120s`: all packages OK.
+
+### Phase 2 — `d797920`
+
+Added `tests/unit/shadow-routes.test.ts` (294 lines) — a Vitest contract-parity test with bidirectional check + matcher fixtures. Implementation by Sonnet subagent following the exact design from §Files (typed `ShadowEntry`, text-parse with `//` comment stripping, `// @vitest-environment node` pin, both forward + reverse assertions, inline fixtures for `routeFileToUrlPath` / `stripPathWildcard` / `isUnderProxiedPrefix` cross-prefix collision check).
+
+13 tests, all passing in 620ms. Sanity checks (verified by subagent):
+- Forward: temporarily added `src/app/api/orgs/test-shadow/route.ts` → test FAILED with clear "unallowlisted shadow path" naming `/api/orgs/test-shadow`. Removed → PASS.
+- Reverse: temporarily added stale entry `/api/orgs/nonexistent` to allowlist → test FAILED naming the ghost. Removed → PASS.
+
+Initial allowlist contains exactly 31 shadow paths matching the §Approach inventory (4 admin, 2 ai, 4 assignments, 3 classes, 6 courses, 3 documents, 1 parent, 7 sessions, 1 submissions). All entries have `cleanupPlan: "TBD"`.
+
+One implementation note from the subagent: legitimate-Next catch-all routes (`[...nextauth]`) are skipped via an `includes("[...")` check before `routeFileToUrlPath` is called, since the helper throws on catch-alls. If a future change adds a catch-all UNDER a proxied prefix, the skip would silently exempt it — acceptable for current state (no proxied catch-alls today, Next router conventions discourage them in API routes), but worth flagging if that pattern ever appears.
+
+### Phase 3 — `a210523`
+
+- `next.config.ts`: rewrote the stale `TODO(plan-038)` comment ("~42 Next.js API route files...") to reference plan 074, the actual current count (31 shadow files remain), and the canonical worklist location (`tests/unit/shadow-routes.test.ts:KNOWN_SHADOW_ALLOWLIST`).
+- `TODO.md`: added "Shadow Next API allowlist shrinkage" under Technical Debt with a pointer to the allowlist as the canonical worklist.
+
+Final verification: `bun run test` → 634 passed (up from 621 in Phase 1; the +13 are the new shadow-routes tests), 11 skipped, 0 failed. `bunx tsc --noEmit` still at 10 pre-existing errors, no regression.
+
+### No deviations from plan
+
+Phase boundaries, file lists, and verification steps shipped exactly as specified after the 5-way plan review's fold-in. The implementation reflects all NITs from Codex (matcher fixtures, coverage inventory), DeepSeek (text-parse pattern), GLM (typed entries, future GO_PROXY_ROUTES extraction noted as TODO), and Kimi (env:node pin, bidirectional check, fetch-string grep).
+
+### Follow-ups
+
+- Each of the 31 allowlist entries needs a future plan to verify Go parity and delete the shadow file. Allowlist is grep-friendly to find migration targets; reverse check makes the cleanup self-cleaning.
+- Future plan should consider extracting `GO_PROXY_ROUTES` from `next.config.ts` to a shared `src/lib/go-proxy-routes.ts` so both `next.config.ts` and `tests/unit/shadow-routes.test.ts` (plus the existing `tests/unit/middleware-proxy-parity.test.ts`) import from a single source instead of re-parsing config text. GLM round-1 + Kimi round-1 both flagged the parsing fragility; the extraction touches Next's build pipeline so it deserves its own scoped plan.
