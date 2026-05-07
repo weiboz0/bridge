@@ -38,7 +38,7 @@ Review 011 §1.3 recommendation, verbatim:
 
 ## Current state — three call patterns observed
 
-After reading all 13 call sites, the inline checks fall into three buckets:
+After reading all 14 call sites in the four named handler files, the inline checks fall into three buckets:
 
 ### Pattern A — "any active member" (read access)
 - `orgs.go:161` (`GetOrg`)
@@ -63,12 +63,36 @@ Decision: any role with `Role == "org_admin"` → grant; else 403.
 
 Decision: any role with `Role == "teacher"` OR `Role == "org_admin"` → grant; else 403.
 
+### Out of scope — intentionally NOT migrated in plan 075
+
+A grep of the broader handler tree turns up 7+ additional sites that call
+`GetUserRolesInOrg`:
+
+- `teacher.go:55, 108` (teacher dashboard org filter)
+- `unit_ai.go:592` (unit AI auth)
+- `schedule.go:73` (schedule create/edit)
+- `sessions.go:343, 1033, 1082, 1128, 1392` (session-access fallback paths)
+
+Each of these is a CLASS-or-ORG fallback pattern — the handler checks
+class-membership FIRST, then falls back to org_admin as a secondary pathway.
+Migrating them to `RequireOrgAuthority` would be wrong: the helper grants on
+EVERY org_admin path, but in these contexts the inline check is a deliberate
+secondary fallback inside a larger composite auth decision. They need their
+own consolidation (potentially a `RequireClassOrOrgAccess` composed helper),
+which is a separate plan. The review 011 §1.3 recommendation explicitly named
+the handlers in scope ("org dashboard, membership, courses/classes,
+parent-link handlers") — this plan honors that scope.
+
+`access.go:103, 190` also call `GetUserRolesInOrg`. Those are inside
+`RequireClassAuthority` and `CanViewUnit` respectively — internal to other
+auth helpers, not handler-level auth gates. Out of scope.
+
 ## Approach
 
 Introduce `RequireOrgAuthority` in `access.go` mirroring the
 `RequireClassAuthority` shape. Three levels matching the three call patterns.
-Migrate all 13 call sites. Delete the local `requireOrgAdmin` helper in
-`org_parent_links.go`.
+Migrate all 14 call sites in the four named handler files. Delete the local
+`requireOrgAdmin` helper in `org_parent_links.go`.
 
 ### API shape
 
@@ -201,7 +225,7 @@ Documented in §Decisions.
 |---|---|---|
 | Status-filter tightening breaks an existing test that relied on suspended-member-passes-`OrgRead` | low | Pre-impl grep planned: `grep -rn "suspended" platform/internal/handlers/*_test.go` to enumerate. Expected zero hits where a suspended member is asserted to PASS a read check. If any exists, evaluate before merging. |
 | Impersonator-bypass extension changes behavior in production for impersonating admins | medium | The class-side helper already does this (plan 039); adding it to org-side is correctness, not regression. Document in §Decisions; mention in the PR body. No production user has reported a bug from the asymmetric behavior, so latent. |
-| Migrating 13 call sites in one PR risks a typo (wrong level chosen) silently widening or narrowing access | medium | Each call site replacement is a SMALL diff (3-4 lines per site). The new `access_org_test.go` covers level semantics; per-handler integration tests still pass with the new helper because the contract is identical for the happy path. Cross-phase consistency check (CLAUDE.md Step 4) catches level mismatches by re-reading the diff. |
+| Migrating 14 call sites in one PR risks a typo (wrong level chosen) silently widening or narrowing access | medium | Each call site replacement is a SMALL diff (3-4 lines per site). The new `access_org_test.go` covers level semantics; per-handler integration tests still pass with the new helper because the contract is identical for the happy path. Cross-phase consistency check (CLAUDE.md Step 4) catches level mismatches by re-reading the diff. |
 | `requireOrgAdmin` deletion exposes a subtle behavior difference in `org_parent_links.go` (e.g., the local helper logged differently) | low | Read the local helper's body in detail before deletion; confirm the replacement has identical observable behavior (same status code, same error message format). Plan 075 phase 2 starts with this confirmation step. |
 | The `RequireClassAuthority` precedent uses a `Status == "active"` filter only inside the class-membership branch (`access.go:108`), not on the org_admin branch. Mirroring "everywhere" is a slight deviation from precedent | low | Both behaviors are correct in intent; the more uniform "active everywhere" matches user expectations (suspended ≠ allowed). Document the deviation explicitly in `RequireOrgAuthority`'s doc comment so future readers don't think it's a copy-paste bug. |
 | Tests dispatched to a Sonnet subagent might subtly miss the impersonator-bypass case since plan 039 is recent and the pattern isn't in muscle memory | low | Plan 075's own test list (in §Files) explicitly enumerates `impersonator-of-admin bypasses` for `OrgRead`. Dispatch brief includes the §Files test list verbatim. |
@@ -255,8 +279,12 @@ Documented in §Decisions.
 
 - Run full Go test suite + Vitest suite.
 - Pre-impl grep `grep -rn "GetUserRolesInOrg" platform/internal/handlers/`
-  should return ONLY `access.go` (the helper itself) + any non-handler
-  internal callers (e.g., the unit-view check). 13 handler call sites are gone.
+  should return EXACTLY: 2 hits in `access.go` (lines 103 + 190 — internal
+  to `RequireClassAuthority`/`CanViewUnit`, out of scope), 1 hit in
+  `access.go` for the new `RequireOrgAuthority` body, plus 7 hits across
+  the documented out-of-scope files (`teacher.go`, `unit_ai.go`,
+  `schedule.go`, `sessions.go`). The 14 in-scope handler call sites in
+  `orgs.go`, `org_parent_links.go`, `classes.go`, `courses.go` are gone.
 - Update plan file's post-execution report.
 - Commit: `docs: plan 075 post-execution report`.
 
