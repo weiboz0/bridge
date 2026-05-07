@@ -38,7 +38,7 @@ Review 011 §1.3 recommendation, verbatim:
 
 ## Current state — three call patterns observed
 
-After reading all 14 call sites in the four named handler files, the inline checks fall into three buckets:
+After reading all 16 call sites in the SIX handler files now in scope (Codex round-1 BLOCKER: original draft missed `org_dashboard.go` and `topic_problems.go`), the inline checks fall into three buckets:
 
 ### Pattern A — "any active member" (read access)
 - `orgs.go:161` (`GetOrg`)
@@ -48,44 +48,45 @@ After reading all 14 call sites in the four named handler files, the inline chec
 
 Decision: `len(roles) > 0` → grant; else 403.
 
+(`org_dashboard.go:69` is `OrgAdmin`, not Read — the dashboard auth helper requires org_admin specifically.)
+
 ### Pattern B — "org_admin only" (admin access)
 - `orgs.go:187` (`UpdateOrg`)
 - `orgs.go:283` (`AddMember`)
 - `orgs.go:361` (`UpdateMember`)
 - `orgs.go:442` (`RemoveMember`)
 - `org_parent_links.go:88` (inside the local `requireOrgAdmin` helper, used 4 times)
+- `org_dashboard.go:69` (inside the `authorizeOrgAdmin` helper used by the dashboard handlers — already correctly bypasses on `IsPlatformAdmin || ImpersonatedBy != ""`, so impersonator semantics ARE consistent here; just missing the helper consolidation)
 
 Decision: any role with `Role == "org_admin"` → grant; else 403.
 
 ### Pattern C — "teacher or org_admin" (teach access)
 - `classes.go:74` (`CreateClass`)
 - `courses.go:72` (`CreateCourse`)
+- `topic_problems.go:69` (problem-access auth helper — checks `m.Status == "active" && (m.Role == "org_admin" || m.Role == "teacher")`)
 
 Decision: any role with `Role == "teacher"` OR `Role == "org_admin"` → grant; else 403.
 
 ### Out of scope — intentionally NOT migrated in plan 075
 
-A grep of the broader handler tree turns up 7+ additional sites that call
-`GetUserRolesInOrg`:
+A full grep `grep -rn "GetUserRolesInOrg" platform/internal/handlers/` (excluding `_test.go`) returns 30 hits. After in-scope cleanup the remaining ~14 hits are all out of scope, in three buckets:
 
-- `teacher.go:55, 108` (teacher dashboard org filter)
-- `unit_ai.go:592` (unit AI auth)
+**Bucket 1: class-or-org fallback patterns** — handler checks class-membership FIRST, then falls back to `org_admin` as a secondary pathway. Migrating to `RequireOrgAuthority` would be wrong: the helper grants on every `org_admin` path, but here the inline check is a deliberate secondary fallback inside a composite auth decision. Needs a separate `RequireClassOrOrgAccess` plan.
 - `schedule.go:73` (schedule create/edit)
-- `sessions.go:343, 1033, 1082, 1128, 1392` (session-access fallback paths)
+- `sessions.go:343, 1033, 1082, 1128, 1392` (session-access composite paths)
 
-Each of these is a CLASS-or-ORG fallback pattern — the handler checks
-class-membership FIRST, then falls back to org_admin as a secondary pathway.
-Migrating them to `RequireOrgAuthority` would be wrong: the helper grants on
-EVERY org_admin path, but in these contexts the inline check is a deliberate
-secondary fallback inside a larger composite auth decision. They need their
-own consolidation (potentially a `RequireClassOrOrgAccess` composed helper),
-which is a separate plan. The review 011 §1.3 recommendation explicitly named
-the handlers in scope ("org dashboard, membership, courses/classes,
-parent-link handlers") — this plan honors that scope.
+**Bucket 2: scope-discriminating helpers** (Codex round-1 audit caught these). Each is inside a function like `canViewCollection`, `canEditUnit`, `problemAccessForRole`, etc. that handles multiple scopes (`platform`/`org`/`personal`) via a `switch scope` — only the `case "org":` branch reads org-roles. Migrating these to `RequireOrgAuthority(... OrgTeach)` is conceptually correct, but the helper signature is `(bool, error)` while these helpers return different shapes (e.g., `bool`, `(bool, int)`, `(string, *authDecision)`); migration touches helper signatures, not just one inline block. Reserve for a separate per-helper migration plan.
+- `unit_collections.go:61, 87` (`canViewCollection`, `canEditCollection`)
+- `unit_ai.go:592` (`canEditScopedUnit`)
+- `realtime_token.go:491` (token-mint scope check)
+- `topics.go:366` (`canEditTopic` org branch)
+- `problem_access.go:34, 144` (`canViewProblemAtScope`, `canEditProblemAtScope`)
+- `teaching_units.go:164, 871` (`canEditUnit`, `canViewUnit` org branches)
 
-`access.go:103, 190` also call `GetUserRolesInOrg`. Those are inside
-`RequireClassAuthority` and `CanViewUnit` respectively — internal to other
-auth helpers, not handler-level auth gates. Out of scope.
+**Bucket 3: internal to other auth helpers** — not handler-level gates.
+- `access.go:103, 190` (inside `RequireClassAuthority`/`CanViewUnit` — these consume `GetUserRolesInOrg` as part of their own decision logic).
+
+The review 011 §1.3 recommendation explicitly named the handlers in scope ("org dashboard, membership, courses/classes, parent-link handlers") — plan 075 honors that scope and adds the two pure-handler-level sites Codex caught (`org_dashboard.go`, `topic_problems.go`).
 
 ## Approach
 
@@ -173,7 +174,7 @@ Documented in §Decisions.
 
 ## Files
 
-**Modify (5 files):**
+**Modify (6 files in scope + 7 files for TODO-comment-only insertion):**
 
 - `platform/internal/handlers/access.go` — add `OrgAccessLevel` type, three
   level constants, and `RequireOrgAuthority` function. Mirrors
@@ -186,12 +187,24 @@ Documented in §Decisions.
 - `platform/internal/handlers/org_parent_links.go` — delete `requireOrgAdmin`
   helper (lines 76-103); replace 4 call sites (lines 65, 116, 148, 221) with
   inline calls to `RequireOrgAuthority(... OrgAdmin)`.
+  - **Special migration note for `CreateLink` (line 148)** (Kimi K2.6 round-1 NIT): the local helper returned `(*auth.Claims, bool)` and `CreateLink` consumes the claims at line 197 (`claims.UserID` as the `created_by` value when inserting the parent link). Post-migration, `RequireOrgAuthority` returns `(bool, error)` only — the caller must fetch claims separately via `claims := auth.GetClaims(r.Context())` BEFORE the auth check, then nil-guard. Verify the `claims.UserID` reference at the original line 197 still resolves correctly after the helper is replaced.
 - `platform/internal/handlers/classes.go` — replace inline blocks at
   lines 70-89 (`CreateClass`, `OrgTeach`) and 121-131 (`ListClassesByOrg`,
   `OrgRead`).
 - `platform/internal/handlers/courses.go` — replace inline blocks at
   lines 68-87 (`CreateCourse`, `OrgTeach`) and 117-127 (`ListCoursesByOrg`,
   `OrgRead`).
+- `platform/internal/handlers/org_dashboard.go` — replace inline block at
+  line 69 (inside the `authorizeOrgAdmin` helper, `OrgAdmin`). This file's
+  helper ALREADY has `IsPlatformAdmin || ImpersonatedBy != ""` bypass, so
+  no semantic change there; the migration just consolidates with the new
+  shared helper.
+- `platform/internal/handlers/topic_problems.go` — replace inline block at
+  line 69 (`OrgTeach`).
+
+**TODO-comment-only insertions (7 files for Phase 5)** to prevent future devs from "cleaning up" out-of-scope inline checks (Kimi K2.6 round-1 NIT):
+- `sessions.go`, `schedule.go` (Bucket 1, class-or-org fallback) — `// TODO(plan-NNN): class-or-org fallback, migrate to RequireClassOrOrgAccess`
+- `unit_collections.go`, `unit_ai.go`, `realtime_token.go`, `topics.go`, `problem_access.go`, `teaching_units.go` (Bucket 2, scope-discriminating helpers) — `// TODO(plan-NNN): scope-discriminating helper, separate per-helper migration plan`
 
 **Create (1 file):**
 
@@ -230,6 +243,9 @@ Documented in §Decisions.
 | The `RequireClassAuthority` precedent uses a `Status == "active"` filter only inside the class-membership branch (`access.go:108`), not on the org_admin branch. Mirroring "everywhere" is a slight deviation from precedent | low | Both behaviors are correct in intent; the more uniform "active everywhere" matches user expectations (suspended ≠ allowed). Document the deviation explicitly in `RequireOrgAuthority`'s doc comment so future readers don't think it's a copy-paste bug. |
 | Tests dispatched to a Sonnet subagent might subtly miss the impersonator-bypass case since plan 039 is recent and the pattern isn't in muscle memory | low | Plan 075's own test list (in §Files) explicitly enumerates `impersonator-of-admin bypasses` for `OrgRead`. Dispatch brief includes the §Files test list verbatim. |
 | The "any active member" check at `orgs.go:161` (`GetOrg`) currently grants access to anyone with at least one role row, regardless of whether ALL their roles are suspended (e.g., a former teacher whose teacher row is suspended but whose org_admin row is also suspended — both count). Tightening to active-only flips this | low | This is a real behavior change but represents a security improvement: a fully-suspended user should NOT pass `OrgRead`. Document in §Decisions; verify no existing test relies on the old behavior. |
+| Status-tightening is UNEVEN across current sites (GLM 5.1 round-1 NIT). `UpdateOrg`/`AddMember`/`UpdateMember`/`RemoveMember` currently check `Role == "org_admin"` WITHOUT a status filter; a suspended org_admin could still mutate the org. The new helper's `OrgAdmin` level requires `Status == "active"` AND `Role == "org_admin"`. Tightens these 4 sites at the same time as the GetOrg/ListMembers Read tightening | low (security improvement) | A suspended org_admin should NOT be able to mutate the org — the existing inline checks were incorrect. The migration unifies this with `org_parent_links.go`'s existing helper which already filtered on active status. Pre-impl grep `Status.*suspended` in handler tests confirms no existing test relies on suspended-org_admin-passes-mutation. Document in the commit message. |
+| Inter-phase drift: a NEW handler with inline `GetUserRolesInOrg` lands between Phase 1 (helper exists) and Phase 5 (verification grep). The Phase 5 grep expectation would silently pass at the moment Phase 4 ships but be inaccurate by Phase 5 | low | (Kimi K2.6 round-1 NIT.) Run the Phase 5 grep IMMEDIATELY before opening the PR — not just after Phase 4 — so any new inline check added during PR review fires a fresh delta. The plan's single-PR-per-plan policy keeps the window narrow; this plan is also small enough that no concurrent feature work is expected to land. |
+| No persistent enforcement once plan 075 ships — a future PR adds a new handler with inline `GetUserRolesInOrg` and the lint silently lets it through | low (deferred) | (Kimi K2.6 round-1 NIT.) Out of scope for plan 075. A follow-up plan could add a Vitest/Go-vet style guard that asserts no NEW handler-level `GetUserRolesInOrg` calls outside of `access.go`. Mirror plan 074's `shadow-routes.test.ts` pattern. Add to TODO.md tech-debt section as part of Phase 5. |
 
 ## Phases
 
@@ -259,32 +275,50 @@ Documented in §Decisions.
 
 ### Phase 3 — Migrate `org_parent_links.go` + delete local helper (commit 3)
 
-- First confirm the local `requireOrgAdmin` body matches the helper's
-  behavior (status code, error message). Adjust if needed; the new helper's
-  error message is generic ("Access denied") so callers may prefer to write
-  their own 403 with a more specific message — that's fine.
-- Replace 4 call sites with `RequireOrgAuthority(... OrgAdmin)`.
+**Signature contract differences (GLM 5.1 round-1 NIT)**: the local
+`requireOrgAdmin` helper writes HTTP responses directly and returns
+`(*auth.Claims, bool)`. The new `RequireOrgAuthority` returns `(bool, error)`
+and leaves response writing to the caller. Two concrete migration deltas at
+each of the 4 call sites:
+
+1. **401 handling**: local helper writes 401 on nil claims; new helper
+   returns `(false, nil)` — each caller must already have a nil-claims guard
+   above the call (verify all 4 call sites have one before deletion).
+2. **403 message**: local helper writes "Only org admins can manage parent
+   links"; new helper writes nothing — caller writes their own 403. Use the
+   same wording at each call site to preserve external-facing error text;
+   this is documented in the commit message.
+
+Steps:
+- Read each of the 4 call sites (`org_parent_links.go:65, 116, 148, 221`)
+  and confirm a nil-claims guard exists above (the local helper's nil-claims
+  401 path is otherwise relied on).
+- For each call site: replace `h.requireOrgAdmin(...)` with the new helper +
+  inline 403 with the preserved error message.
 - Delete `requireOrgAdmin` (lines 76-103).
-- Run org-parent-links integration tests.
-- Commit: `plan 075 phase 3: migrate org_parent_links.go + remove local requireOrgAdmin`.
+- Run `cd platform && go test ./internal/handlers/... -run "ParentLink" -count=1 -v`.
+- Commit: `plan 075 phase 3: migrate org_parent_links.go + remove local requireOrgAdmin`. Commit body notes the signature contract changes for future grep-ability.
 
-### Phase 4 — Migrate `classes.go` + `courses.go` (commit 4)
+### Phase 4 — Migrate `classes.go` + `courses.go` + `org_dashboard.go` + `topic_problems.go` (commit 4)
 
-- Replace 2 sites in each (`CreateClass`/`ListClassesByOrg`,
-  `CreateCourse`/`ListCoursesByOrg`).
-- Run handler tests for both.
-- Commit: `plan 075 phase 4: migrate classes/courses.go to RequireOrgAuthority`.
+(Kimi K2.6 round-1 NIT: phases 3 and 4 were originally split per-file but all are small, mechanical, single-file replacements; merging them keeps bisectability and reduces ceremony.)
 
-### Phase 5 — Verify + post-execution report (commit 5)
+- Replace 2 sites in `classes.go` (`CreateClass` `OrgTeach`, `ListClassesByOrg` `OrgRead`).
+- Replace 2 sites in `courses.go` (`CreateCourse` `OrgTeach`, `ListCoursesByOrg` `OrgRead`).
+- Replace `org_dashboard.go:69` (the `authorizeOrgAdmin` helper body — `OrgAdmin`). Note: this helper already had `IsPlatformAdmin || ImpersonatedBy != ""` bypass, so impersonator semantics are NOT changing here, only the helper consolidation.
+- Replace `topic_problems.go:69` (`OrgTeach`).
+- Run handler tests for all four files.
+- Commit: `plan 075 phase 4: migrate classes/courses/org_dashboard/topic_problems to RequireOrgAuthority`.
+
+### Phase 5 — Verify + out-of-scope TODO comments + post-execution report (commit 5)
 
 - Run full Go test suite + Vitest suite.
-- Pre-impl grep `grep -rn "GetUserRolesInOrg" platform/internal/handlers/`
-  should return EXACTLY: 2 hits in `access.go` (lines 103 + 190 — internal
-  to `RequireClassAuthority`/`CanViewUnit`, out of scope), 1 hit in
-  `access.go` for the new `RequireOrgAuthority` body, plus 7 hits across
-  the documented out-of-scope files (`teacher.go`, `unit_ai.go`,
-  `schedule.go`, `sessions.go`). The 14 in-scope handler call sites in
-  `orgs.go`, `org_parent_links.go`, `classes.go`, `courses.go` are gone.
+- Run `grep -rn "GetUserRolesInOrg" platform/internal/handlers/ --include="*.go" | grep -v "_test.go"` and assert the EXACT enumerated set remains (Codex round-1 BLOCKER + DeepSeek round-1 NIT — earlier draft missed sites):
+  - `access.go`: 3 hits (lines 103 + 190 internal to existing helpers; 1 new hit inside `RequireOrgAuthority` body).
+  - **Class-or-org fallback** (Bucket 1, deferred): `schedule.go` (1), `sessions.go` (5).
+  - **Scope-discriminating helpers** (Bucket 2, deferred): `unit_collections.go` (2), `unit_ai.go` (1), `realtime_token.go` (1), `topics.go` (1), `problem_access.go` (2), `teaching_units.go` (2).
+  - Total expected hits = 18 (3 access + 6 bucket-1 + 9 bucket-2). The 16 in-scope handler call sites in `orgs.go`, `org_parent_links.go`, `classes.go`, `courses.go`, `org_dashboard.go`, `topic_problems.go` are GONE.
+- Insert a `// TODO(plan-NNN): migrate to RequireClassOrOrgAccess` comment at each of the 6 Bucket-1 sites (sessions/schedule), and a `// TODO(plan-NNN): scope-discriminating helper, separate per-helper migration plan` at each of the 9 Bucket-2 sites — Kimi K2.6 round-1 NIT, prevents a future dev from "cleaning up" the inline code thinking it was missed.
 - Update plan file's post-execution report.
 - Commit: `docs: plan 075 post-execution report`.
 
@@ -293,7 +327,47 @@ diff (single-PR-per-plan policy), fold findings, open the PR via Step 6.
 
 ## Plan Review
 
-(pending — 5-way before implementation)
+### Round 1 (2026-05-06)
+
+#### Self-review (Opus 4.7) — clarifications
+
+Folded two clarifications at `7a538de`: count fix (13 → 14 call sites verified); explicit §Out of scope analysis enumerating 7 sites in `sessions.go`/`schedule.go`/`teacher.go`/`unit_ai.go` that are class-or-org fallback patterns (need a separate `RequireClassOrOrgAccess` plan).
+
+#### Codex — BLOCKER (FIXED)
+
+`[FIXED]` BLOCKER: Phase 5 verification grep claimed an exact remaining count, but Codex's audit found ~10 additional `GetUserRolesInOrg` sites the plan didn't enumerate (`unit_collections.go:61,87`, `topics.go:366`, `problem_access.go:34,144`, `org_dashboard.go:69`, `realtime_token.go:491`, `teaching_units.go:164,871`, `topic_problems.go:69`). → **Response**: full audit + classification:
+  - **Promoted IN-scope**: `org_dashboard.go:69` (pure handler-level org_admin gate, mentioned by review §1.3) and `topic_problems.go:69` (pure handler-level OrgTeach gate). Plan now migrates 16 call sites across 6 files.
+  - **Out of scope, Bucket 1** (class-or-org fallback): `sessions.go` (5), `schedule.go` (1) — composite class-or-org auth decisions; need a separate `RequireClassOrOrgAccess` plan.
+  - **Out of scope, Bucket 2** (scope-discriminating helpers): `unit_collections.go` (2), `unit_ai.go` (1), `realtime_token.go` (1), `topics.go` (1), `problem_access.go` (2), `teaching_units.go` (2) — inline checks live inside helpers like `canViewUnit` that handle multiple scopes; migrating them touches helper signatures, not just inline blocks.
+  - Phase 5 grep expectation rewritten with explicit per-file remaining counts (18 total expected hits).
+
+#### DeepSeek V4 Pro — CONCUR (2 NITs, both FIXED, partial overlap with Codex)
+
+1. `[FIXED]` `org_dashboard.go` should be migrated, not deferred. Independently surfaced the same scope gap as Codex's BLOCKER. → **Response**: promoted IN-scope (now part of Phase 4).
+2. `[FIXED]` Phase 5 grep count inaccurate. Same finding as Codex's BLOCKER. → **Response**: rewrote with explicit per-file enumeration.
+
+DeepSeek round-1 also CONCURRED on direction: "The three buckets (Read/Teach/Admin) faithfully categorize all 14 call sites" + "Both behavior changes are documented, well-reasoned, and match class-side precedent. No separate RFC needed."
+
+#### GLM 5.1 — CONCUR (2 NITs, both FIXED)
+
+1. `[FIXED]` Phase 3 needs explicit signature-contract delta for the `requireOrgAdmin` deletion. Local helper returns `(*auth.Claims, bool)` and writes HTTP responses; new helper returns `(bool, error)` and leaves response writing to the caller. → **Response**: expanded Phase 3 with two-bullet migration delta (401 nil-claims handling, 403 error-message preservation) and a verify-step for the nil-claims guard at each call site.
+2. `[FIXED]` §Risks should also flag that `UpdateOrg`/`AddMember`/`UpdateMember`/`RemoveMember` currently check `Role == "org_admin"` WITHOUT a status filter. The new helper tightens this — suspended org_admins won't pass mutation. → **Response**: added new §Risks row covering uneven-tightening; classified as low-severity security improvement. `org_parent_links.go`'s local helper already filters on active status, so this just unifies behavior across the org-admin sites.
+
+GLM round-1 also confirmed direction: "Three levels match the three patterns. Phase ordering is clean rollback granularity. No regressions found in the line-numbered references."
+
+#### Kimi K2.6 — CONCUR (4 NITs, 4 FIXED + 1 deferred)
+
+1. `[FIXED]` Inter-phase drift risk: a new handler could land between Phase 1 and Phase 5. → **Response**: added §Risks row; Phase 5 grep runs immediately before PR open, not just after Phase 4.
+2. `[DEFERRED]` Persistent enforcement (CI lint to prevent future inline `GetUserRolesInOrg` calls). → **Response**: added §Risks row noting follow-up plan possibility (mirror plan 074's `shadow-routes.test.ts` pattern). Out of scope for plan 075.
+3. `[FIXED]` Add inline `// TODO(plan-NNN)` comments at the 15 out-of-scope sites. → **Response**: added Phase 5 step + §Files §"TODO-comment-only insertions" listing all 7 files with comment templates per bucket.
+4. `[FIXED]` Merge phases 3 and 4 — both small mechanical replacements. → **Response**: merged. Phase 4 now covers `classes.go` + `courses.go` + `org_dashboard.go` + `topic_problems.go` in one commit.
+5. `[FIXED]` `CreateLink` at `org_parent_links.go:148` consumes `claims` returned by the local helper (used at line 197 for `created_by`). After migration, caller must fetch claims separately. → **Response**: added explicit migration note in §Files Phase 3 entry detailing the claims-consumption pattern.
+
+Kimi round-1 also CONCURRED on direction including the status-filter tightening verification: "Grepped Go handler tests and Vitest/e2e: no test creates a suspended member and then calls `GetOrg`/`ListMembers`/`ListClassesByOrg`/`ListCoursesByOrg` as that suspended user expecting success."
+
+### Convergence
+
+All 5 reviewers concur after the Codex BLOCKER fix expanded scope from 14 → 16 call sites and the Kimi NIT-fix merged Phase 3+4. Plan 075 ready for implementation.
 
 ## Code Review
 
