@@ -186,8 +186,12 @@ const (
 //   - (true,  nil) — access granted.
 //   - (false, nil) — access denied. Caller writes the 403 (or 404 if
 //     the subsystem prefers, per plan 052's deny convention).
-//   - (false, err) — DB error or `ErrAccessHelperMisconfigured` (when
-//     `orgs == nil`). Caller writes the 500.
+//   - (false, err) — DB error from `GetUserRolesInOrg`, OR
+//     `ErrAccessHelperMisconfigured` when `orgs == nil` AND the caller is
+//     not bypassing via `IsPlatformAdmin`/`ImpersonatedBy`. The bypass
+//     fires before the nil-orgs guard (lines 206-215), so platform admins
+//     can reach downstream input validation even when a unit-test handler
+//     is wired without a store. Callers writes the 500.
 //
 // Plan 075: replaces the inline `GetUserRolesInOrg` + role-loop pattern
 // repeated across `OrgHandler`, `OrgParentLinksHandler`, `ClassHandler`,

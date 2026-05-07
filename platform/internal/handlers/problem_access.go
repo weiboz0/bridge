@@ -8,11 +8,11 @@ import (
 	"github.com/weiboz0/bridge/platform/internal/store"
 )
 
-// TODO(plan-075-followup): canViewProblemAtScope (line ~34) and
-// canEditProblemAtScope (line ~144) each have an inline GetUserRolesInOrg in
-// the org-scope branch of a switch over scope. Migrating to RequireOrgAuthority
-// touches helper signatures (returns bool, not (bool, error)). See plan-075
-// §Out of scope, Bucket 2.
+// TODO(plan-075-followup): authorizedForScope (line 34) and canViewProblemRow
+// (line 144) each have an inline GetUserRolesInOrg in the org-scope branch of
+// a switch over scope. Migrating to RequireOrgAuthority touches helper
+// signatures (each returns bool, not (bool, error)). See plan-075 §Out of
+// scope, Bucket 2.
 
 // problemAccessDeps bundles the stores needed for the shared problem-access
 // helpers. ProblemHandler, SolutionHandler, and TopicProblemHandler each
