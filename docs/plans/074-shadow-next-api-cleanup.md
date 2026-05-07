@@ -22,7 +22,10 @@ Review 011 §1.2 recommendation, verbatim:
   - `tests/integration/orgs-api.test.ts`
   - `tests/integration/org-members-api.test.ts`
 
-- 39 total Next API route files (per `find src/app/api -name route.ts | wc -l`); ~33 sit under proxied paths and are similarly stale (next.config.ts comment estimates "~42").
+- 39 total Next API route files (verified: `find src/app/api -name route.ts | wc -l = 39`). Breakdown after the /api/orgs deletion:
+  - 31 shadow files under proxied prefixes: `/api/admin` (4), `/api/ai` (2), `/api/assignments` (4), `/api/classes` (3 — including `classes/join` which has Go parity at `platform/internal/handlers/classes.go:239`), `/api/courses` (6), `/api/documents` (3), `/api/parent` (1), `/api/sessions` (7), `/api/submissions` (1).
+  - 4 legitimate-Next files NOT under any GO_PROXY_ROUTES prefix: `/api/auth/[...nextauth]`, `/api/auth/debug`, `/api/auth/logout-cleanup`, `/api/auth/signup-intent`. (`/api/auth/register` IS proxied but no Next file exists at that path, so nothing to allowlist there.)
+  - The next.config.ts comment estimate of "~42" predates plan 069's drift work; actual is 39.
 
 - Go has full parity for the `/api/orgs/...` surface:
   - Routes registered at `platform/internal/handlers/orgs.go:29-34` (ListMembers GET, AddMember POST, UpdateMember PATCH, RemoveMember DELETE).
@@ -51,7 +54,7 @@ Add `tests/unit/shadow-routes.test.ts` that:
 2. Walks `src/app/api/` recursively for `route.ts` files.
 3. For each route file, derives its URL path (`src/app/api/orgs/[id]/route.ts` → `/api/orgs/:id`) and checks whether it matches any proxied prefix from `GO_PROXY_ROUTES`.
 4. Fails if a route file sits under a proxied prefix UNLESS it is in an explicit `KNOWN_SHADOW_ALLOWLIST` array.
-5. The allowlist enumerates every remaining shadow file as of this PR (~33 paths), each with a one-line comment noting "covered by plan 074-followup".
+5. The allowlist enumerates every remaining shadow file as of this PR (~35 paths total: 31 shadow + 4 legitimate-Next), each with a one-line comment noting "shadow: pending plan-NNN cleanup" or "legitimate-next: <reason>".
 
 This makes the existing tech debt grep-able and reducible plan-by-plan: future plans (075+) shrink the allowlist as they migrate each surface. NEW shadow routes added by mistake fail the test immediately.
 
