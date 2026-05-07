@@ -13,7 +13,7 @@ export default async function OrgCoursesPage({
   const ctx = await resolveOrgContext(sp);
   const handled = handleOrgContext(ctx);
   if (handled.kind === "guard") return handled.element;
-  const { orgId } = handled;
+  const { orgId, orgName } = handled;
 
   let data: OrgCourseRow[] | null = null;
   let error: OrgListError | null = null;
@@ -29,7 +29,7 @@ export default async function OrgCoursesPage({
 
   return (
     <div className="p-6 space-y-6">
-      <h1 className="text-2xl font-bold">Courses{data ? ` (${data.length})` : ""}</h1>
+      <h1 className="text-2xl font-bold">{orgName} — Courses{data ? ` (${data.length})` : ""}</h1>
       <CoursesList data={data} error={error} />
     </div>
   );

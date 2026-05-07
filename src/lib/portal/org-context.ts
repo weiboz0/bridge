@@ -70,8 +70,12 @@ export type OrgContext =
  * both call `/api/orgs` to render the org-switcher and resolve context)
  * share the result within one render. `api()` uses `cache: "no-store"`,
  * so without `cache()` each page render would double-fetch.
+ *
+ * Exported (Plan 077 code-review BLOCKER fix): `src/app/(portal)/org/layout.tsx`
+ * also calls `/api/orgs` to render the OrgSwitcher. The layout uses this
+ * exported helper so both code paths share the cached result.
  */
-const fetchMyOrgs = cache(async (): Promise<OrgMembership[]> => {
+export const fetchMyOrgs = cache(async (): Promise<OrgMembership[]> => {
   return api<OrgMembership[]>("/api/orgs");
 });
 

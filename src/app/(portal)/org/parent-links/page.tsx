@@ -1,3 +1,4 @@
+import { redirect } from "next/navigation";
 import { api, ApiError } from "@/lib/api-client";
 import { resolveOrgContext } from "@/lib/portal/org-context";
 import { handleOrgContext } from "@/components/portal/org-context-guard";
@@ -78,6 +79,12 @@ export default async function OrgParentLinksPage({
       };
     }
   } catch (e) {
+    // Plan 077 code-review NIT (Kimi K2.6): the original page redirected
+    // to /login on 401 from the downstream parent-links / eligible-children
+    // fetches. resolveOrgContext at the top of this render already
+    // confirmed the session was valid, so a 401 here means the session
+    // expired mid-render. Rare, but preserve the explicit redirect.
+    if (e instanceof ApiError && e.status === 401) redirect("/login");
     error = {
       status: e instanceof ApiError ? e.status : null,
       message: e instanceof Error ? e.message : String(e),
