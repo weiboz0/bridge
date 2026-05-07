@@ -191,7 +191,28 @@ All 5 reviewers concur after fold-in. Codex round-2 dispatch needed to confirm b
 
 ## Code Review
 
-(pending — 5-way at branch-diff time)
+5-way code review against branch HEAD `929714d` (consolidated branch diff vs main; static-only — orchestrator can't run live e2e).
+
+### Self (Opus 4.7) — clean
+
+`bunx tsc --noEmit` 10 errors (pre-existing baseline). `grep -c "test.skip" e2e/hocuspocus-auth.spec.ts e2e/session-flow.spec.ts` returns 0 in both files. Working tree clean. No commit-gap incidents.
+
+### Codex — CONCUR (0 BLOCKERS, 0 NITS)
+
+All 6 review questions confirmed clean: `HOCUSPOCUS_TOKEN_SECRET` assertion at `seed.setup.ts:72`; round-1 citation BLOCKER resolved (error message at `:83` cites `scripts/seed_problem_demo.sql` + python-101 import fallback); cleanup recipe at `:183-189`; `grep -c test.skip` returns 0; conversions semantically correct; deferred unit-creation defensible (`/api/me/units` empty → hard-fail at `hocuspocus-auth.spec.ts:120`, not silent pass). Playwright config wired correctly: `seed` at `:21`, `auth-setup` depends on seed at `:29`, `tests` depends on auth at `:34`. `.gitignore:45` covers `e2e/.fixture/`.
+
+### DeepSeek V4 Flash — CONCUR with 2 minor NITs (acknowledged, not blocking)
+
+1. `[ACKNOWLEDGED]` Q1: pre-check is technically a try/catch around login, not a true pre-check. Catches the symptom (login failure) rather than the root (users not seeded). Error message IS actionable, so spirit of the original NIT is satisfied. → No fix.
+2. `[ACKNOWLEDGED]` Q2: no CSRF tokens on the seed's POST calls. Relies on Playwright `page.request` cookie context. Bridge's API uses cookie-based auth without CSRF tokens for non-browser flows; expected to work. If a 403 surfaces, switch to UI-driven flow.
+
+DeepSeek confirmed all other claims: project ordering (`seed` first at `:22`, `auth-setup` deps at `:29`), three actionable error variants in `fixture-state.ts`, all 14 skip-to-fail conversions semantically correct.
+
+### GLM 5.1 — CONCUR (0 BLOCKERS, 0 NITS)
+
+Confirmed all 5 plan-review NITs landed correctly in code: cleanup recipe at `seed.setup.ts:182-209` uses `GET /api/sessions/active/{classId}` → `POST end` with try/catch + `console.warn` non-200 tolerance; class-matching at `:95` uses `title.startsWith("e2e-fixture")` (units at `:229`); fixture-state error at `helpers/fixture-state.ts:29-35` is developer-actionable with exact commands + handles invalid JSON + missing classId; playwright config dependency chain `seed → auth-setup → tests` correctly at `:29,34`; session-flow.spec.ts reads `classId` from fixture state at test-start instead of clicking a class card.
+
+### Kimi K2.6 — pending
 
 ## Post-execution report
 
