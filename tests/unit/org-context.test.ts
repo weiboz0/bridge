@@ -13,7 +13,6 @@ vi.mock("@/lib/api-client", () => ({
 }));
 
 import {
-  parseOrgIdFromSearchParams,
   appendOrgId,
   resolveOrgContext,
 } from "@/lib/portal/org-context";
@@ -23,26 +22,6 @@ const VALID_UUID = "f47ac10b-58cc-4372-a567-0e02b2c3d479";
 const OTHER_UUID = "12345678-1234-1234-1234-123456789012";
 
 const mockedApi = vi.mocked(api);
-
-describe("parseOrgIdFromSearchParams", () => {
-  it("returns the value when valid", () => {
-    expect(parseOrgIdFromSearchParams({ orgId: VALID_UUID })).toBe(VALID_UUID);
-  });
-
-  it("returns undefined for missing param", () => {
-    expect(parseOrgIdFromSearchParams({})).toBeUndefined();
-    expect(parseOrgIdFromSearchParams(undefined)).toBeUndefined();
-  });
-
-  it("rejects non-UUID strings", () => {
-    expect(parseOrgIdFromSearchParams({ orgId: "not-a-uuid" })).toBeUndefined();
-    expect(parseOrgIdFromSearchParams({ orgId: "12345" })).toBeUndefined();
-  });
-
-  it("picks the first value when given an array", () => {
-    expect(parseOrgIdFromSearchParams({ orgId: [VALID_UUID, "other"] })).toBe(VALID_UUID);
-  });
-});
 
 describe("appendOrgId", () => {
   it("appends ?orgId= when the path has no query", () => {
@@ -161,6 +140,20 @@ describe("resolveOrgContext", () => {
     ]);
     const ctx = await resolveOrgContext({});
     expect(ctx).toEqual({ kind: "no-org", reason: "no-active-admin-membership" });
+  });
+
+  it("picks the first value when ?orgId= is delivered as an array (Next.js duplicate-query case)", async () => {
+    mockedApi.mockResolvedValueOnce([
+      {
+        orgId: VALID_UUID,
+        orgName: "Acme School",
+        role: "org_admin",
+        status: "active",
+        orgStatus: "active",
+      },
+    ]);
+    const ctx = await resolveOrgContext({ orgId: [VALID_UUID, "other"] });
+    expect(ctx).toEqual({ kind: "ok", orgId: VALID_UUID, orgName: "Acme School" });
   });
 
   it("falls back to first-admin when ?orgId= is malformed (treats invalid as missing)", async () => {
