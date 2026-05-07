@@ -149,7 +149,7 @@ The dev/test escape hatch from Phase 1 also goes away in this phase. With the le
 - Run full `bun run test` + Go `go test ./...` to confirm no regressions.
 - Commit: `plan 072 phase 3: tests + docs`.
 
-After Phase 3, run the 4-way code review against the consolidated branch diff (single-PR-per-plan policy), fold findings, open the PR.
+After Phase 3, run the 5-way code review against the consolidated branch diff (single-PR-per-plan policy), fold findings, open the PR.
 
 ## Plan Review
 
