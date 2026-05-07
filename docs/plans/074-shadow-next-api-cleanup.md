@@ -211,7 +211,21 @@ All 5 reviewers concur after fold-in (DeepSeek round-2 confirmed BLOCKER closed 
 
 ## Code Review
 
-(pending — 5-way at branch-diff time)
+5-way code review against branch `feat/074-shadow-next-api-cleanup` HEAD `9ba9493` (consolidated branch diff vs main; 3 phases).
+
+### Self (Opus 4.7) — clean
+
+`bun run test` 634 passed / 11 skipped / 0 failed. `cd platform && go test ./... -count=1 -timeout 120s` all packages OK. `bunx tsc --noEmit` returns 10 errors, all pre-existing (verified via `git stash` comparison against main). Sanity-checked `tests/unit/shadow-routes.test.ts` forward + reverse directions during Phase 2 implementation.
+
+### Codex — pending
+
+### DeepSeek V4 Flash — pending
+
+### GLM 5.1 — CONCUR (0 BLOCKERS, 0 NITS)
+
+Confirmed all 4 round-1 plan-review NITs landed: typed `ShadowEntry` shape (lines 123-129 of test file), TODO comment on `GO_PROXY_ROUTES` extraction (lines 3-8), `// @vitest-environment node` pin (line 1), no broken imports. Allowlist contents match on-disk routes exactly (31 entries). Phase 1 test deletions defensible — coverage inventory in commit body comprehensive.
+
+### Kimi K2.6 — pending
 
 ## Post-execution report
 
