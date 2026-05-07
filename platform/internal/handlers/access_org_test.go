@@ -242,3 +242,32 @@ func TestRequireOrgAuthority_NilOrgsReturnsMisconfigured(t *testing.T) {
 	assert.False(t, ok)
 	assert.True(t, errors.Is(err, ErrAccessHelperMisconfigured), "expected ErrAccessHelperMisconfigured, got %v", err)
 }
+
+func TestRequireOrgAuthority_PlatformAdminBypassesEvenWithNilOrgs(t *testing.T) {
+	// Bypass-order regression test (plan 075 phase 2): the platform-admin
+	// bypass must fire BEFORE the nil-orgs guard, so handlers wired without
+	// a store under test still allow platform admins through to downstream
+	// validation. Phase 2 caught this when TestAddMember_MissingEmail and
+	// TestAddMember_InvalidRole (which build h := &OrgHandler{} with nil
+	// Orgs and platform-admin claims) returned 500 instead of 400.
+	claims := &auth.Claims{UserID: "any-admin-id", IsPlatformAdmin: true}
+	orgID := uuid.NewString()
+
+	for _, level := range []OrgAccessLevel{OrgRead, OrgTeach, OrgAdmin} {
+		ok, err := RequireOrgAuthority(context.Background(), nil, claims, orgID, level)
+		require.NoError(t, err, "level=%s: platform admin must bypass nil-orgs", level)
+		assert.True(t, ok, "level=%s: platform admin grant must reach true", level)
+	}
+}
+
+func TestRequireOrgAuthority_ImpersonatorBypassesEvenWithNilOrgs(t *testing.T) {
+	// Same bypass-order regression for impersonator-of-admin (plan 039 carve-out).
+	claims := &auth.Claims{UserID: "any-user-id", ImpersonatedBy: "admin-id"}
+	orgID := uuid.NewString()
+
+	for _, level := range []OrgAccessLevel{OrgRead, OrgTeach, OrgAdmin} {
+		ok, err := RequireOrgAuthority(context.Background(), nil, claims, orgID, level)
+		require.NoError(t, err, "level=%s: impersonator must bypass nil-orgs", level)
+		assert.True(t, ok, "level=%s: impersonator grant must reach true", level)
+	}
+}
