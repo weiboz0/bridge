@@ -115,12 +115,10 @@ test.describe("Plan 053 phase 3 — realtime token mint (HTTP)", () => {
     await loginWithCredentials(page, ACCOUNTS.teacher.email, ACCOUNTS.teacher.password);
 
     const unitsRes = await page.request.get("/api/me/units");
-    if (!unitsRes.ok()) {
-      test.skip(true, "teacher has no units accessible — skipping mint spec");
-    }
+    expect(unitsRes.ok()).toBeTruthy();
     const unitsBody = (await unitsRes.json()) as { units?: Array<{ id: string }> };
     const unitId = unitsBody.units?.[0]?.id;
-    test.skip(!unitId, "teacher has no units — skipping mint spec");
+    expect(unitId).toBeDefined();
 
     const documentName = `unit:${unitId}`;
     const res = await page.request.post("/api/realtime/token", {
@@ -173,7 +171,7 @@ test.describe("Plan 053 phase 3 — realtime token mint (HTTP)", () => {
 
 test.describe("Plan 053 phase 3 — Hocuspocus WebSocket auth", () => {
   test.beforeAll(async () => {
-    test.skip(!TOKEN_SECRET, "HOCUSPOCUS_TOKEN_SECRET unset — skipping WS auth ratchet");
+    expect(TOKEN_SECRET).toBeTruthy();
   });
 
   test("VALID JWT — connection accepted", async ({ page }) => {
@@ -181,10 +179,10 @@ test.describe("Plan 053 phase 3 — Hocuspocus WebSocket auth", () => {
 
     // Resolve a unit the teacher can edit.
     const unitsRes = await page.request.get("/api/me/units");
-    test.skip(!unitsRes.ok(), "/api/me/units unavailable");
+    expect(unitsRes.ok()).toBeTruthy();
     const { units } = (await unitsRes.json()) as { units?: Array<{ id: string }> };
     const unitId = units?.[0]?.id;
-    test.skip(!unitId, "no units to test against");
+    expect(unitId).toBeDefined();
 
     const documentName = `unit:${unitId}`;
 
