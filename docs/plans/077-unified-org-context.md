@@ -54,17 +54,39 @@ Three discriminated outcomes, each carrying enough data for the caller:
 - `no-org` — the operator has NO active admin membership matching the request. Distinct from "API failed". Caller renders a "you're not an admin of any active org" state.
 - `error` — the resolver itself failed (5xx, network, etc.). Caller can render a retry CTA or surface the error.
 
-### Resolution rules (preserve current behavior)
+### Resolution rules — `org_admin` only (Codex round-1 BLOCKER fix)
+
+The 7 pages this plan migrates are ALL org-admin pages — their underlying API endpoints (`/api/org/dashboard`, `/api/org/teachers`, `/api/orgs/{id}/parent-links`, etc.) gate on active `org_admin` authority via plan 075's `RequireOrgAuthority(... OrgAdmin)`. Original draft said "any role at the org → ok"; that would let a teacher pass `resolveOrgContext` and then hit a 403 from the gated API — confusing UX. Tighten to org_admin only:
 
 1. If `?orgId=<uuid>` is present and valid:
    1. Fetch `/api/orgs` to look up `orgName` for that id.
-   2. If the operator has an active `org_admin` membership at that org → `ok`.
-   3. If the operator has any other active membership at that org (teacher/student/parent) → `ok` with that role (matches Pattern A's accept-anything behavior; gives the helper room to also serve teacher/student pages, but they keep their existing flows for now).
-   4. If the operator has NO membership at that org → `no-org` (was previously silently passed to the API, which would 403).
-   5. If `/api/orgs` itself fails → `error`.
-2. If no `?orgId=` (or invalid) — fall back to the caller's first active `org_admin` membership. If none → `no-org`. If `/api/orgs` fails → `error`.
+   2. If the operator has an **active `org_admin`** membership at that org → `kind: "ok"` with `{orgId, orgName, role: "org_admin"}`.
+   3. If the operator has membership at that org but NOT as active `org_admin` (teacher / student / parent / suspended admin) → `kind: "no-org", reason: "not-org-admin-at-this-org"`. Distinct from "no admin anywhere" so the page can show a more accurate message ("You're a teacher here, not an admin — check `/teacher/...` instead").
+   4. If the operator has NO membership at that org → `kind: "no-org", reason: "not-a-member"`. Was previously silently passed to the API, which would 403 — no-org rendering is clearer.
+   5. If `/api/orgs` itself fails → `kind: "error"`.
+2. If no `?orgId=` (or invalid) — fall back to the caller's first active `org_admin` membership. If none → `kind: "no-org", reason: "no-active-admin-membership"`. If `/api/orgs` fails → `kind: "error"`.
 
-The "look up orgName by orgId" step is the one place behavior expands beyond the existing helpers — Pattern B pages currently don't do this lookup at all, and Pattern A pages don't expose orgName. Cost: one extra call per page render, but most pages already call `/api/orgs` in some form (the existing `resolveOrgIdServerSide` does it for fallback-resolution).
+This matches Pattern A's existing behavior (`resolveOrgIdServerSide` filters on `org_admin` + `active` + `orgStatus: "active"`). Pattern B pages were silently letting non-admins through to the API; the migration tightens that path to fail explicitly client-side. **No new behavior — just enforced consistently.**
+
+The "look up orgName by orgId" step is the one place behavior expands beyond the existing helpers — Pattern B pages currently don't do this lookup at all, and Pattern A pages don't expose orgName. Cost: see §Caching below.
+
+### Caching: React `cache()` to avoid double-fetch (Codex round-1 BLOCKER fix)
+
+Original draft mentioned React `cache()` as an "out of scope" option. **Wrong** — Codex's audit found `src/lib/api-client.ts:69-73` uses `cache: "no-store"`, AND `src/app/(portal)/org/layout.tsx:26-29` already fetches `/api/orgs` for the org-switcher. Without dedup, every page render hits `/api/orgs` TWICE (layout + new helper).
+
+Fix: wrap the `/api/orgs` call with React's `cache()` (the render-scoped memo, not Next's `unstable_cache`):
+
+```ts
+import { cache } from "react";
+
+const fetchMyOrgs = cache(async (): Promise<OrgMembership[]> => {
+  return api<OrgMembership[]>("/api/orgs");
+});
+```
+
+`cache()` memoizes within a single React tree's render, so layout + page share the result. Impersonation safety: `api()` reads session + impersonation cookies (`src/lib/api-client.ts:33-65`); switching impersonation invalidates the request anyway (new cookies → new render → fresh cache key). The cache lives only within one render, so cross-request leakage is impossible.
+
+The org layout's existing `/api/orgs` call should ALSO use the same wrapper to actually share the result. Mention as a Phase-2 follow-up step in §Phases.
 
 ### Why not preserve Pattern B's "no fallback, defer to API" path?
 
@@ -85,7 +107,7 @@ The existing `resolveOrgIdServerSide` catches every exception and returns `null`
 ## Decisions to lock in
 
 1. **One helper, one return type.** Don't keep both `parseOrgIdFromSearchParams` and `resolveOrgIdServerSide` as alternatives. The bare URL parser becomes a private internal of `resolveOrgContext`. Re-exported names: `resolveOrgContext` only. (Existing imports that consumed the old helpers will be updated.)
-2. **Discriminated union** rather than `{orgId, orgName, error}`. The tagged shape forces callers to handle each case explicitly — TypeScript's exhaustiveness check catches missed branches. Aligns with Bridge's existing patterns (e.g., `Result<T, E>` style).
+2. **Discriminated union** rather than `{orgId, orgName, error}`. The tagged shape forces callers to handle each case explicitly — TypeScript's exhaustiveness check catches missed branches. Aligns with Bridge's existing patterns (e.g., `Result<T, E>` style). **Codex round-1 NIT** clarification: `if (ctx.kind !== "ok") return ...` only narrows the happy path; it doesn't force per-branch handling of `no-org` vs `error`. The shared `handleOrgContext(ctx)` helper (§Files) closes that gap — it returns either `{kind: "render", orgId, orgName}` (page proceeds) or `{kind: "guard", element: <NoOrgState/> | <ErrorState/>}` (page returns the element). Pages do `if (handled.kind === "guard") return handled.element` and the type system guarantees the rest of the function has `orgId, orgName`. Per-branch handling lives once in `handleOrgContext`, not 7 times across pages.
 3. **Server-side resolution always**. No client-side fallback. The helper runs in the page component (server component) on every render. Cost is tolerable; Next.js caches the `/api/orgs` response within a single request via React's `cache()` if needed (out of scope for this plan).
 4. **Preserve `appendOrgId`.** That helper is still used by API URL builders and serves a distinct purpose. No change.
 5. **No API-side changes**. The `/api/org/<resource>` endpoints' own fallback logic stays for now — a follow-up plan can tighten them to require explicit orgId. Keeping API behavior unchanged scopes plan 077 to the frontend.
@@ -163,6 +185,17 @@ The existing `resolveOrgIdServerSide` catches every exception and returns `null`
 - Run `bunx tsc --noEmit` — no new errors.
 - Commit: `plan 077 phase 2: migrate 7 org portal pages to resolveOrgContext`.
 
+### Phase 2.5 — Dev-mode smoke pass (Codex round-1 NIT, before Phase 3)
+
+- Run `PORT=3003 bun run dev` (Next) + `cd platform && air` (Go) + `bun run hocuspocus`.
+- Visit each migrated page in a browser:
+  - `/org` (dashboard) — renders org-admin's first active org or no-org state.
+  - `/org/teachers`, `/org/students`, `/org/classes`, `/org/courses`, `/org/settings`, `/org/parent-links` — same.
+  - For each: try `?orgId=<not-a-uuid>`, `?orgId=<unknown-uuid>`, `?orgId=<valid-but-not-admin>` — confirm no-org / error states render correctly.
+- Spot-check the org-switcher in the layout still works (the layout's existing `/api/orgs` call should now share the cached result via `cache()`).
+- This step is NOT codified as a vitest assertion — too brittle for the page-level interaction. The smoke pass IS the verification. If a regression is found, fix Phase 2 commits before deleting legacy helpers in Phase 3.
+- No commit; the smoke pass either passes (proceed) or fails (revert / iterate Phase 2).
+
 ### Phase 3 — Delete legacy helpers (commit 3)
 
 - Delete `parseOrgIdFromSearchParams` and `resolveOrgIdServerSide` exports from `src/lib/portal/org-context.ts` (the URL-parsing logic stays as a private internal of `resolveOrgContext`).
@@ -186,7 +219,23 @@ After Phase 4, run the 5-way code review against the consolidated branch diff (s
 
 Folded one correction at `b74f35b`: the existing `tests/unit/org-context.test.ts` covers `parseOrgIdFromSearchParams` + `appendOrgId` (10 tests). Plan now describes Phase 3 as REPLACING the parsing tests with `resolveOrgContext` tests, not creating a new file.
 
-#### Codex — pending
+#### Codex — 2 BLOCKERS (FIXED) + 2 NITs (FIXED)
+
+1. `[FIXED]` BLOCKER Q2: Authorization semantics muddy. Original draft said "any active membership at the org → ok" which would let teachers/students pass `resolveOrgContext` then hit a 403 from the gated API endpoints. → **Response**: tightened §Resolution rules to require **active org_admin** for `kind: "ok"`. Non-admin members at the resolved org now map to `kind: "no-org", reason: "not-org-admin-at-this-org"` (distinct from `"no-active-admin-membership"` for "no admin anywhere"). Matches Pattern A's existing `org_admin`-only filter.
+
+2. `[FIXED]` BLOCKER Q4: Cache claim was false. `src/lib/api-client.ts:69-73` uses `cache: "no-store"`, AND the org layout already fetches `/api/orgs` (`src/app/(portal)/org/layout.tsx:26-29`). Without dedup, every page render hits `/api/orgs` TWICE. → **Response**: added §Caching section using React's `cache()` (the render-scoped memo, not Next's `unstable_cache`). Wraps the `/api/orgs` call so layout + page share the result within one render.
+
+3. `[FIXED]` NIT Q1 (exhaustiveness): the `if (ctx.kind !== "ok") return ...` pattern only narrows the happy path. → **Response**: clarified §Decisions #2 — the `handleOrgContext()` helper from §Files closes the gap, returning `{kind: "render", ...} | {kind: "guard", element: ...}` so per-branch handling lives once.
+
+4. `[FIXED]` NIT Q5 (Phase ordering): no explicit dev-mode smoke step before deleting legacy helpers. → **Response**: added new `Phase 2.5 — Dev-mode smoke pass` between Phase 2 and Phase 3. Visits all 7 migrated routes with valid / invalid / unknown / not-admin orgIds.
+
+Codex round-1 also confirmed direction: "Two-step migrate-then-delete is defensible. Phase 1 keeps legacy exports, Phase 2 migrates all seven pages, and Phase 3 deletes only after grep confirms no remaining imports."
+
+#### DeepSeek V4 Pro — CONCUR (1 NIT, FIXED — overlap with Codex BLOCKER 4)
+
+DeepSeek independently surfaced the same React `cache()` opportunity as Codex BLOCKER 4. Already folded.
+
+DeepSeek round-1 also confirmed: discriminated union shape correct, API-side fallback scoping appropriate, page-component complexity reduces (not increases), grep audit robustness sufficient.
 
 #### DeepSeek V4 Pro — pending
 
