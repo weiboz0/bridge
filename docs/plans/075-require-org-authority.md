@@ -174,7 +174,7 @@ Documented in §Decisions.
 
 ## Files
 
-**Modify (6 files in scope + 7 files for TODO-comment-only insertion):**
+**Modify (6 files in scope + 8 files for TODO-comment-only insertion):**
 
 - `platform/internal/handlers/access.go` — add `OrgAccessLevel` type, three
   level constants, and `RequireOrgAuthority` function. Mirrors
@@ -202,7 +202,7 @@ Documented in §Decisions.
 - `platform/internal/handlers/topic_problems.go` — replace inline block at
   line 69 (`OrgTeach`).
 
-**TODO-comment-only insertions (7 files for Phase 5)** to prevent future devs from "cleaning up" out-of-scope inline checks (Kimi K2.6 round-1 NIT):
+**TODO-comment-only insertions (8 files for Phase 5)** to prevent future devs from "cleaning up" out-of-scope inline checks (Kimi K2.6 round-1 NIT):
 - `sessions.go`, `schedule.go` (Bucket 1, class-or-org fallback) — `// TODO(plan-NNN): class-or-org fallback, migrate to RequireClassOrOrgAccess`
 - `unit_collections.go`, `unit_ai.go`, `realtime_token.go`, `topics.go`, `problem_access.go`, `teaching_units.go` (Bucket 2, scope-discriminating helpers) — `// TODO(plan-NNN): scope-discriminating helper, separate per-helper migration plan`
 
@@ -313,7 +313,7 @@ Steps:
 ### Phase 5 — Verify + out-of-scope TODO comments + post-execution report (commit 5)
 
 - Run full Go test suite + Vitest suite.
-- Run `grep -rn "GetUserRolesInOrg" platform/internal/handlers/ --include="*.go" | grep -v "_test.go"` and assert the EXACT enumerated set remains (Codex round-1 BLOCKER + DeepSeek round-1 NIT — earlier draft missed sites):
+- Run `grep -rn "GetUserRolesInOrg" platform/internal/handlers/ --include="*.go" | grep -v "_test.go"` (Codex round-2 NIT: explicitly exclude test files; the broader `grep -rn` would also count test-suite usage in `platform/internal/store/orgs_test.go` and `platform/internal/handlers/org_parent_links_test.go` which are not part of the migration). Assert the EXACT enumerated set of NON-test hits remains (Codex round-1 BLOCKER + DeepSeek round-1 NIT — earlier draft missed sites):
   - `access.go`: 3 hits (lines 103 + 190 internal to existing helpers; 1 new hit inside `RequireOrgAuthority` body).
   - **Class-or-org fallback** (Bucket 1, deferred): `schedule.go` (1), `sessions.go` (5).
   - **Scope-discriminating helpers** (Bucket 2, deferred): `unit_collections.go` (2), `unit_ai.go` (1), `realtime_token.go` (1), `topics.go` (1), `problem_access.go` (2), `teaching_units.go` (2).
@@ -365,9 +365,14 @@ GLM round-1 also confirmed direction: "Three levels match the three patterns. Ph
 
 Kimi round-1 also CONCURRED on direction including the status-filter tightening verification: "Grepped Go handler tests and Vitest/e2e: no test creates a suspended member and then calls `GetOrg`/`ListMembers`/`ListClassesByOrg`/`ListCoursesByOrg` as that suspended user expecting success."
 
+### Codex round-2 — 2 NITs (both FIXED)
+
+1. `[FIXED]` File count typo: "7 files for TODO-comment-only insertion" but the buckets enumerate 8 (2 in Bucket 1 + 6 in Bucket 2). → **Response**: corrected to "8 files".
+2. `[FIXED]` Phase 5 grep doesn't exclude test files; the broader grep would count test-suite usage. → **Response**: explicitly added `| grep -v "_test.go"` to the grep command and called out that test-file usage in `platform/internal/store/orgs_test.go` and `platform/internal/handlers/org_parent_links_test.go` is intentionally not part of the migration.
+
 ### Convergence
 
-All 5 reviewers concur after the Codex BLOCKER fix expanded scope from 14 → 16 call sites and the Kimi NIT-fix merged Phase 3+4. Plan 075 ready for implementation.
+All 5 reviewers concur after Codex round-1 BLOCKER (audit gap, 14 → 16 in-scope) and Codex round-2 NITs (file count + test-file exclusion). Plan 075 ready for implementation.
 
 ## Code Review
 
