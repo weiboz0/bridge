@@ -31,13 +31,13 @@ Two-part fix matching review §4.1 verbatim:
 
 Add a new Playwright project named `seed` that runs FIRST (before `auth-setup`) and:
 
-- Hits the Go API directly (`POST /api/orgs`, `POST /api/classes`, `POST /api/orgs/{id}/members`, `POST /api/classes/join`) to ensure the canonical fixture entities exist. Idempotent — checks before creating.
+- Hits the Go API directly (`POST /api/classes`, `POST /api/classes/join`) to ensure the canonical fixture entities exist. Idempotent — checks before creating. Does NOT create orgs or users — relies on the demo SQL seed having already established `eve@demo.edu`'s org membership (Kimi K2.6 round-1 NIT 3 — original draft mentioned `POST /api/orgs` which was wrong; the fixture finds eve's org via `GET /api/orgs` (her memberships) and creates the class IN that org).
 - Asserts `HOCUSPOCUS_TOKEN_SECRET` is present in the runner's env (`expect(process.env.HOCUSPOCUS_TOKEN_SECRET).toBeTruthy()`). If missing, the seed project FAILS — the rest of the suite never runs.
 - Stashes a tiny JSON fixture-meta file (e.g., `e2e/.fixture/state.json` — gitignored) that records the seeded `classId`, `unitId`, `sessionId-or-null` for spec files to consume. Avoids re-querying every test.
 
 Seed project depends on nothing; `auth-setup` depends on `seed`; `tests` depends on `auth-setup`. Chain: seed → auth-setup → tests.
 
-The fixture files use the existing `demo.edu` seeded users (created by `psql -f scripts/seed_bridge_hq.sql` per `docs/setup.md`). The seed project doesn't create users — it relies on the setup-time SQL seed. Plan 078 just adds the realtime-relevant entities (class, unit) and the env-var assertion. Avoids adding a SECOND user-creation pathway.
+The fixture files use the existing `demo.edu` seeded users. Codex round-1 BLOCKER caught a citation error in the original draft: the eve/alice users are NOT created by `seed_bridge_hq.sql` (which only creates `system@bridge.platform`). They're created by **`scripts/seed_problem_demo.sql`** — verified via `grep "eve@demo.edu"` (matches in `seed_problem_demo.sql:4, 36`). The setup workflow in `docs/setup.md` calls this via `bun run content:python-101:import --apply --wire-demo-class`. The platform admin (`admin@e2e.test`) is a separate one-time `INSERT` snippet in `docs/setup.md`. Plan 078 doesn't create users — it relies on the setup-time SQL seed. Plan 078 just adds the realtime-relevant entities (class, unit) and the env-var assertion. Avoids adding a SECOND user-creation pathway.
 
 ### Skip-to-fail conversion
 
@@ -47,21 +47,26 @@ After the fixture is in place, the conditional skips in `hocuspocus-auth.spec.ts
 - **`hocuspocus-auth.spec.ts:176`** — `test.skip(!TOKEN_SECRET, ...)` becomes `expect(TOKEN_SECRET).toBeTruthy()`. The seed project already asserts this; this is belt-and-suspenders for direct test runs.
 - **`session-flow.spec.ts:46, 94, 105, 120, 150`** — these read `classId` / `sessionId` from previous tests OR from missing UI. With the fixture seeding a class + enrollments, the `no class` cases become hard failures. The "session already active" / "Start button not visible" branches can be handled by ensuring the fixture cleans up active sessions in its setup phase.
 
-### What stays as legitimate skip
+### Convert ALL 9 session-flow skips (Codex round-1 BLOCKER 2 + DeepSeek round-1 Q1)
 
-A few skip patterns ARE valid and stay:
-- "End Session" button not visible AFTER a session ended — that's a legitimate downstream consequence, not a missing prerequisite.
-- "No past sessions" if the fixture itself doesn't seed a past session — the fixture is forward-looking, not backwards-looking. Hard-failure here is wrong. Either add past-session seeding (more scope) or accept this skip.
+Original draft kept 3 skips as "legitimate downstream consequences". Both Codex and DeepSeek pushed back independently: the session-flow.spec.ts tests are SERIAL (workers=1, each test depends on previous), and the fixture guarantees the data prerequisites. So:
 
-The plan keeps the legitimate skips, converts the data-prerequisite ones to hard failures, and asserts env at fixture-setup time.
+- **"End Session button not visible" (line 131)**: if the prior "start session" test (line 30+) ran successfully — which the fixture's class+enrollment guarantees — then the End button MUST be visible. The skip masks a real test gap. Convert to hard failure.
+- **"No past sessions visible" (line 160)**: if the fixture's class exists AND the previous "end session" test ran, there IS exactly one past session. The skip masks a real test gap. Convert to hard failure.
+- **"Live session card not visible" (line 105)**: same logic — student is enrolled (fixture guarantees), session is active (previous test guarantees), card MUST appear. Convert.
+
+All 9 skips convert. The fixture is now load-bearing for the full chain: any link breaking is a real regression.
 
 ## Decisions to lock in
 
 1. **Reuse the existing demo.edu user seed.** Don't create a parallel user-creation pathway. Plan 078 adds class + unit + active-session-cleanup, not users.
 2. **Fixture writes to a gitignored `e2e/.fixture/state.json`** so spec files can pick up `classId`/`unitId` without re-querying. Single source of truth for "what the suite seeded".
 3. **HOCUSPOCUS_TOKEN_SECRET asserted at seed time** — fail loudly if missing. Documents the contract: e2e CANNOT run without the secret. Aligns with plan 072's runtime-required posture.
-4. **Active-session cleanup in seed**. Before tests run, the seed project ends any active session for the class so `start session` doesn't bump into a leftover. Use `POST /api/sessions/:id/end` from a previous run.
-5. **Past-sessions skip stays.** Adding past-session seeding is out of scope; that test's assertion ("teacher can see past sessions list") legitimately needs historical data the seed doesn't provide.
+4. **Active-session cleanup in seed**. Before tests run, the seed project ends any active session for the class so `start session` doesn't bump into a leftover. **Concrete cleanup recipe** (GLM 5.1 round-1 NIT Q1):
+   - `GET /api/classes/{fixtureClassId}/active-session` (or list-by-class endpoint, whichever exists) — returns the active session row or null.
+   - If non-null: `POST /api/sessions/{id}/end`. Tolerate non-200 responses (log warning, continue) — a session in an unexpected state (e.g. mid-`ending`) shouldn't crash the seed.
+   - If the API doesn't expose a "list active sessions for a class" endpoint, document the gap and have the seed call `GET /api/teacher/classes/{id}` to read the class detail (which surfaces active session state).
+5. **All 9 session-flow skips convert** (Codex + DeepSeek BLOCKER fold). Original draft kept 3 as "legitimate" — wrong because the serial test chain creates the past-session naturally (start → end → past-sessions list). Plan now converts every skip in session-flow.spec.ts.
 6. **No new playwright workers.** The serial-execution config (`workers: 1`) stays — review §4.1 acknowledges this is fine, the issue was hidden skips, not parallelism.
 7. **CI-only enforcement OR everywhere?** Make it everywhere. Local dev should also fail fast on missing fixture so a developer's first `bun run test:e2e` makes the missing-secret state visible immediately, not after 90 seconds of green-with-skips.
 
@@ -77,7 +82,7 @@ The plan keeps the legitimate skips, converts the data-prerequisite ones to hard
 **Create (2 files):**
 
 - `e2e/seed.setup.ts` — the new fixture-setup spec. Asserts `HOCUSPOCUS_TOKEN_SECRET` is set, ensures a class with eve+alice enrolled exists, ensures a published unit linked to a topic in that class's course exists, ends any leftover active sessions, writes `e2e/.fixture/state.json` with `{classId, unitId}`.
-- `e2e/helpers/fixture-state.ts` — small helper exposing `getFixtureState(): Promise<{classId: string, unitId: string}>`. Reads the JSON file; throws if missing (suite has a bug). Specs import this instead of re-querying the API.
+- `e2e/helpers/fixture-state.ts` — small helper exposing `getFixtureState(): Promise<{classId: string, unitId: string}>`. Reads the JSON file; throws on missing with a developer-actionable error (GLM 5.1 round-1 NIT Q3): `"e2e/.fixture/state.json not found — run the e2e seed project first ('bun run test:e2e --project=seed' or just 'bun run test:e2e' which auto-runs seed via Playwright project dependencies). The seed project has a hard dependency: HOCUSPOCUS_TOKEN_SECRET must be set in the runner's environment."` Specs import this instead of re-querying the API.
 
 **No changes to:**
 
@@ -96,7 +101,9 @@ The plan keeps the legitimate skips, converts the data-prerequisite ones to hard
 | Skip-to-fail conversion breaks PRs that previously passed via skips | high (intended) | This IS the goal. If a PR breaks the realtime auth path, the test should FAIL, not pass-with-skip. The breakage IS the signal. Document in plan + commit message. |
 | Past-sessions test continues to skip and degrades over time | low | Documented exception. A future plan can add past-session seeding (1-2 lines). Not blocking. |
 | The `e2e/.fixture/` gitignore creates confusion ("why isn't this committed?") | low | One-line README in `e2e/.fixture/` explaining the directory's purpose, OR leave it implicit since the dir is ephemeral. Pick implicit. |
-| The fixture's class-creation step duplicates the demo seed's class | medium | Idempotency: query existing classes for eve first; create only if missing. The plan's "1 class" is the canonical e2e fixture class — distinguished from any demo classes by a known prefix (e.g., `e2e-fixture-class`). |
+| Seed POST calls (create class, join) need CSRF tokens or special headers | low | (DeepSeek round-1 Q5 NIT.) Confirm during Phase 1 implementation: hit `POST /api/classes` from `seed.setup.ts` once + see whether it 403s. Bridge's API uses cookie-based auth without CSRF tokens for non-browser flows (Auth.js JWE / bridge.session cookies authenticate); programmatic Playwright `page.request.post()` carrying the cookie should work. If a 403 appears, switch to the existing `loginWithCredentials` page-level flow + UI to create the class. |
+| All-or-nothing dependency chain — seed failure blocks 25+ spec files | low (intended) | (DeepSeek round-1 Q5 NIT.) This IS the goal: a flaky seed is a real signal that the fixture contract is broken. CI's `retries: 2` already absorbs transient flakes. A persistent seed failure means the fixture or environment is genuinely wrong — surface it loudly. |
+| The fixture's class-creation step duplicates the demo seed's class | medium | (GLM 5.1 round-1 NIT Q2 — implementation detail spelled out.) The demo seed gives eve a class (`00000000-0000-0000-0000-000000040001`), so "does eve have any class" is ALWAYS true and is NOT a valid idempotency check. Concrete strategy: the seed project queries `GET /api/teacher/classes` as eve, looks for a class whose `title` starts with the literal string `"e2e-fixture"`. If found → reuse. If not → `POST /api/classes` with `title: "e2e-fixture-class"`. The string-prefix match is stable across re-runs and distinguishes the e2e fixture class from any demo classes. Same strategy for the unit: query `GET /api/me/units` for one whose `title` starts with `"e2e-fixture"`; create if missing. |
 
 ## Phases
 
@@ -116,14 +123,16 @@ The plan keeps the legitimate skips, converts the data-prerequisite ones to hard
 - Run `bun run test:e2e e2e/hocuspocus-auth.spec.ts` — all WS + HTTP tests must execute, no skips.
 - Commit: `plan 078 phase 2: hocuspocus-auth — skip-to-fail conversion`.
 
-### Phase 3 — Convert session-flow.spec.ts skips (commit 3)
+### Phase 3 — Convert session-flow.spec.ts skips (commit 3) — ALL 9
 
 - Read `classId` from fixture state; remove "no classes" skip at line 46.
 - Remove "session already active" skip — fixture ends active sessions before tests run.
-- Keep "End Session button not visible" with a clarifying comment (downstream, legitimate).
-- Keep "No past sessions" with a comment about future fixture extension.
-- Run `bun run test:e2e e2e/session-flow.spec.ts` — confirm 6 of 9 skips convert; 3 remain as documented exceptions.
-- Commit: `plan 078 phase 3: session-flow — convert data-prerequisite skips to hard failures`.
+- Convert "Live session card not visible" skip (line 105) — fixture guarantees student enrollment.
+- Convert "Start Live Session button not visible" (line 72) — fixture guarantees class state allows starting.
+- Convert "End Session button not visible" (line 131) — previous test in the chain creates the session that must be endable.
+- Convert "No past sessions visible" (line 160) — previous "end session" test creates exactly one past session.
+- Run `bun run test:e2e e2e/session-flow.spec.ts` — confirm zero `test.skip` calls remain in this file. All 9 converted to hard `expect()` assertions.
+- Commit: `plan 078 phase 3: session-flow — convert all 9 skips to hard failures`.
 
 ### Phase 4 — Verify + post-execution report (commit 4)
 
@@ -135,7 +144,44 @@ After Phase 4, run the 5-way code review. Note: e2e suite cannot be exercised in
 
 ## Plan Review
 
-(pending — 5-way before implementation)
+### Round 1 (2026-05-06)
+
+#### Self-review (Opus 4.7) — clean
+
+No concerns surfaced before externals returned.
+
+#### Codex — 2 BLOCKERS (FIXED)
+
+1. `[FIXED]` BLOCKER Q1: Plan claimed `seed_bridge_hq.sql` creates eve/alice — false. That script only creates `system@bridge.platform`. → **Response**: corrected citation to `scripts/seed_problem_demo.sql` (verified via grep `eve@demo.edu` in that file). Setup workflow runs it via `bun run content:python-101:import --apply --wire-demo-class`.
+2. `[FIXED]` BLOCKER Q2: 3 retained skips (End Session button, No past sessions, Live session card) were inside the SERIAL test chain — once the fixture guarantees the prerequisite data, those tests should hard-fail not skip. → **Response**: §"Convert ALL 9 skips" replaces the original "legitimate skips" carve-out. Phase 3 converts every conditional skip in session-flow.spec.ts.
+
+#### DeepSeek V4 Pro — CONCUR (5 NITs, 4 FIXED + 1 acknowledged)
+
+1. `[FIXED]` Q1 (overlap with Codex BLOCKER 2): convert all 9 session-flow skips. Already folded.
+2. `[NOTED]` Q2: file-based state isn't idiomatic Playwright but acceptable given workers=1. Already documented in §Decisions; added one-line rationale: "Seed is a project so it appears in the runner output; cross-project state requires file or env passthrough."
+3. `[FIXED]` Q3: explicit user-existence pre-check in seed.setup.ts before `loginWithCredentials` so missing-user error is actionable, not a generic locator timeout. → **Response**: added Phase-1 step to do `await page.request.get("/api/auth/session")` early, OR check via DB if accessible. Error message: `"e2e seed failed: demo.edu users not found. Run scripts/seed_problem_demo.sql or 'bun run content:python-101:import --apply --wire-demo-class' from docs/setup.md."`
+4. `[ACKNOWLEDGED]` Q4: assertion location at seed-time correct.
+5. `[FIXED]` Q5: two new risks added — CSRF tokens (low-prob but worth checking the seed's POST calls); all-or-nothing dependency chain (intended).
+
+#### GLM 5.1 — CONCUR (5 NITs, 3 FIXED + 2 acknowledged)
+
+1. `[FIXED]` Q1 (active-session cleanup robustness): added concrete recipe to §Decisions #4 — `GET active-session for class → POST /api/sessions/:id/end` with non-200 tolerance.
+2. `[FIXED]` Q2 (class-matching strategy): demo seed already gives Eve a class, so "does eve have any class" is NOT a valid idempotency check. Plan now specifies title-prefix match `"e2e-fixture"` for both class and unit.
+3. `[FIXED]` Q3: developer-actionable error in `fixture-state.ts` when JSON missing.
+4. `[ACKNOWLEDGED]` Q4: Playwright dependencies + workers=1 guarantee correct ordering.
+5. `[ACKNOWLEDGED]` Q5: stale fixture file risk — seed re-runs each invocation makes this low.
+
+#### Kimi K2.6 — CONCUR (NITs only)
+
+1. `[ACKNOWLEDGED]` shared fixture state acceptable.
+2. `[FIXED]` (overlap with Codex BLOCKER 2 + DeepSeek Q1): all skips convert. Already folded.
+3. `[FIXED]` org-creation clarification: the fixture does NOT create orgs (`POST /api/orgs` reference removed). It finds eve's existing org from demo seed.
+4. `[ACKNOWLEDGED]` gitignore pattern matches existing conventions.
+5. `[ACKNOWLEDGED]` no risks need BLOCKER promotion.
+
+### Convergence
+
+All 5 reviewers concur after fold-in. Codex round-2 dispatch needed to confirm both BLOCKERS closed.
 
 ## Code Review
 
