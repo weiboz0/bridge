@@ -212,7 +212,19 @@ DeepSeek confirmed all other claims: project ordering (`seed` first at `:22`, `a
 
 Confirmed all 5 plan-review NITs landed correctly in code: cleanup recipe at `seed.setup.ts:182-209` uses `GET /api/sessions/active/{classId}` → `POST end` with try/catch + `console.warn` non-200 tolerance; class-matching at `:95` uses `title.startsWith("e2e-fixture")` (units at `:229`); fixture-state error at `helpers/fixture-state.ts:29-35` is developer-actionable with exact commands + handles invalid JSON + missing classId; playwright config dependency chain `seed → auth-setup → tests` correctly at `:29,34`; session-flow.spec.ts reads `classId` from fixture state at test-start instead of clicking a class card.
 
-### Kimi K2.6 — pending
+### Kimi K2.6 — CONCUR with 1 real bug + 2 NITs (1 FIXED + 2 ACKNOWLEDGED)
+
+1. `[FIXED]` **Real runtime bug** at `hocuspocus-auth.spec.ts:137`. Playwright `APIResponse` body can be read only once. The template-literal eagerly awaits `res.text()` for the assertion message, consuming the body. The subsequent `res.json()` throws "body already consumed" on the 200 (success) path. **Pre-existing from plan 072** (commit `498ce7d`) — plan 078 didn't introduce it, but plan 078's skip-to-fail conversion makes it MUCH more likely to fire (the test now ALWAYS runs instead of sometimes-skipping). → **Response (e5e1dd6)**: read body once into a string, use it for both assertion message and JSON parse: `const rawBody = await res.text(); expect(...).toBe(200); const body = JSON.parse(rawBody)`. Other 3 code reviewers missed this.
+2. `[FIXED]` Unused `type Page` import in `session-flow.spec.ts:1`. Removed at `e5e1dd6`.
+3. `[ACKNOWLEDGED]` Redundant double-visibility-assertions in session-flow at lines 87/89, 132/134. Stylistic only; no behavior impact. Left for a future cleanup pass.
+
+Kimi confirmed all other claims: hocuspocus-auth mint tests query `/api/me/units` at test time (don't depend on fixture-seeded units, so deferred unit-creation is non-blocking); seed uses hardcoded demo org UUID (verified stable from `scripts/seed_problem_demo.sql`); `.gitignore:45` covers `e2e/.fixture/`; session-flow's "session already active" branch correctly uses negative assertion; no syntax errors / broken imports / unhandled promises.
+
+### Convergence
+
+All 5 reviewers concur after the Kimi-caught bug fix. Plan 078 ready to ship.
+
+**Multi-reviewer ensemble value, plan 078 edition**: Kimi K2.6 caught a real runtime bug that Codex, DeepSeek, and GLM all missed despite Codex's deep static-analysis passes and explicit prompts about "regressions / broken imports / lost behavior". The bug was subtle — JS engineers (and presumably the reviewing models) often assume `await` in a template literal is benign. Body-consumed semantics specific to Playwright's `APIResponse` are easy to overlook. Pattern: **specialized API knowledge wins over general code-review heuristics for framework-specific bugs.** Logged for future plan reviews.
 
 ## Post-execution report
 
