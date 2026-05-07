@@ -10,6 +10,12 @@ import (
 	"github.com/weiboz0/bridge/platform/internal/store"
 )
 
+// TODO(plan-075-followup): canViewCollection (line ~61) and canEditCollection
+// (line ~87) each have an inline GetUserRolesInOrg in the org-scope branch of
+// a switch over scope (platform/org/personal). Migrating to RequireOrgAuthority
+// touches helper signatures, not just the inline block. See plan-075 §Out of
+// scope, Bucket 2 — needs a separate per-helper migration plan.
+
 // UnitCollectionHandler serves collection CRUD and item management endpoints.
 // Access follows the same scope-based pattern as teaching units.
 type UnitCollectionHandler struct {

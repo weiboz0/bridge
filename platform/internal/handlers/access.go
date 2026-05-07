@@ -140,6 +140,115 @@ func RequireClassAuthority(
 	return nil, false, nil
 }
 
+// OrgAccessLevel describes how privileged the caller must be to pass
+// a `RequireOrgAuthority` check. Plan 075.
+//
+// Levels are NOT a hierarchy in the strict sense — each level has its
+// own membership rule. The names describe the *use case*:
+//
+//   - OrgRead:  "view org metadata or list members"
+//               any active member of any role; plus platform admin and
+//               impersonator-of-admin.
+//   - OrgTeach: "create classes/courses scoped to this org"
+//               active teacher OR active org_admin; plus platform admin
+//               and impersonator-of-admin. Students and parents do NOT
+//               pass — class/course creation is a teaching action.
+//   - OrgAdmin: "mutate org metadata or manage memberships and parent links"
+//               active org_admin only; plus platform admin and
+//               impersonator-of-admin.
+//
+// Bypass order:
+//
+//  1. claims == nil  → deny (caller writes 401 separately).
+//  2. claims.IsPlatformAdmin → grant.
+//  3. claims.ImpersonatedBy != "" → grant (per plan 039 — the underlying
+//     admin retained these privileges before they impersonated).
+//  4. otherwise: scan the caller's roles in the target org and apply the
+//     level rule below. EVERY level requires `Status == "active"` —
+//     suspended members do not pass any check, mirroring the
+//     class-side helper's class-membership branch and plan 069 phase 4's
+//     self-action guard.
+//
+// Note: `RequireClassAuthority` filters on `Status == "active"` only
+// inside its class-membership branch; this helper applies the active
+// filter uniformly across all org-role checks. The uniform behavior is
+// more correct (suspended ≠ allowed) and matches user expectations.
+type OrgAccessLevel string
+
+const (
+	OrgRead  OrgAccessLevel = "read"
+	OrgTeach OrgAccessLevel = "teach"
+	OrgAdmin OrgAccessLevel = "admin"
+)
+
+// RequireOrgAuthority applies the access rule for `level`. Returns:
+//
+//   - (true,  nil) — access granted.
+//   - (false, nil) — access denied. Caller writes the 403 (or 404 if
+//     the subsystem prefers, per plan 052's deny convention).
+//   - (false, err) — DB error from `GetUserRolesInOrg`, OR
+//     `ErrAccessHelperMisconfigured` when `orgs == nil` AND the caller is
+//     not bypassing via `IsPlatformAdmin`/`ImpersonatedBy`. The bypass
+//     fires before the nil-orgs guard (lines 206-215), so platform admins
+//     can reach downstream input validation even when a unit-test handler
+//     is wired without a store. Callers writes the 500.
+//
+// Plan 075: replaces the inline `GetUserRolesInOrg` + role-loop pattern
+// repeated across `OrgHandler`, `OrgParentLinksHandler`, `ClassHandler`,
+// `CourseHandler`, `OrgDashboardHandler`, and `TopicProblemsHandler`.
+func RequireOrgAuthority(
+	ctx context.Context,
+	orgs *store.OrgStore,
+	claims *auth.Claims,
+	orgID string,
+	level OrgAccessLevel,
+) (bool, error) {
+	if claims == nil {
+		return false, nil
+	}
+
+	// Platform admin / impersonator-of-admin bypass at every level —
+	// checked before the nil-orgs guard so that platform admins can
+	// reach downstream input validation even when the handler under
+	// test is wired without a store.
+	// Plan 039 carved out impersonator access for the class subsystem;
+	// extending it to org-side is consistent with that intent — the
+	// underlying admin retained these privileges before impersonating.
+	if claims.IsPlatformAdmin || claims.ImpersonatedBy != "" {
+		return true, nil
+	}
+
+	if orgs == nil {
+		return false, ErrAccessHelperMisconfigured
+	}
+
+	roles, err := orgs.GetUserRolesInOrg(ctx, orgID, claims.UserID)
+	if err != nil {
+		return false, err
+	}
+
+	for _, m := range roles {
+		if m.Status != "active" {
+			continue
+		}
+		switch level {
+		case OrgRead:
+			// Any active member passes.
+			return true, nil
+		case OrgTeach:
+			if m.Role == "teacher" || m.Role == "org_admin" {
+				return true, nil
+			}
+		case OrgAdmin:
+			if m.Role == "org_admin" {
+				return true, nil
+			}
+		}
+	}
+
+	return false, nil
+}
+
 // CanViewUnit reports whether `claims` may view `unit`. The rules
 // mirror spec 012 §Access:
 //

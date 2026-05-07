@@ -62,22 +62,16 @@ func (h *OrgDashboardHandler) authorizeOrgAdmin(w http.ResponseWriter, r *http.R
 		}
 	}
 
-	if claims.IsPlatformAdmin || claims.ImpersonatedBy != "" {
-		return orgID, true
-	}
-
-	roles, err := h.Orgs.GetUserRolesInOrg(r.Context(), orgID, claims.UserID)
+	ok, err := RequireOrgAuthority(r.Context(), h.Orgs, claims, orgID, OrgAdmin)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return "", false
 	}
-	for _, m := range roles {
-		if m.Role == "org_admin" {
-			return orgID, true
-		}
+	if !ok {
+		writeError(w, http.StatusForbidden, "Not an org admin")
+		return "", false
 	}
-	writeError(w, http.StatusForbidden, "Not an org admin")
-	return "", false
+	return orgID, true
 }
 
 // Dashboard handles GET /api/org/dashboard?orgId=...

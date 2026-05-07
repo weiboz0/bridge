@@ -147,6 +147,12 @@ func (h *TeachingUnitHandler) canViewUnit(ctx context.Context, c *auth.Claims, u
 	return CanViewUnit(ctx, h.Orgs, h.Units, c, u)
 }
 
+// TODO(plan-075-followup): canEditUnit (line ~164) and resolveViewerRole
+// (line ~871) each have an inline GetUserRolesInOrg in the org-scope branch
+// of a switch over scope. Migrating to RequireOrgAuthority touches helper
+// signatures (returns bool / projection.ViewerRole). See plan-075 §Out of
+// scope, Bucket 2.
+
 // canEditUnit checks whether the caller may create, update, or delete a unit
 // in the given scope. Platform requires platform admin; org requires an active
 // org_admin or teacher; personal requires the caller to be the scope owner.

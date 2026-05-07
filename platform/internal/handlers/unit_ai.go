@@ -577,6 +577,11 @@ func (h *UnitAIHandler) buildDraftContext(ctx context.Context, unitID string, un
 	return strings.Join(parts, "")
 }
 
+// TODO(plan-075-followup): canEditUnit (line ~592) has an inline
+// GetUserRolesInOrg in the org-scope branch of a switch over scope. Migrating
+// to RequireOrgAuthority touches helper signature (returns bool, not
+// (bool, error)). See plan-075 §Out of scope, Bucket 2.
+
 // canEditUnit delegates to the same access logic as TeachingUnitHandler.
 func (h *UnitAIHandler) canEditUnit(ctx context.Context, c *auth.Claims, scope string, scopeID *string) bool {
 	if c.IsPlatformAdmin {

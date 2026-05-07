@@ -156,17 +156,15 @@ func (h *OrgHandler) GetOrg(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check membership (platform admins bypass)
-	if !claims.IsPlatformAdmin {
-		roles, err := h.Orgs.GetUserRolesInOrg(r.Context(), orgID, claims.UserID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "Database error")
-			return
-		}
-		if len(roles) == 0 {
-			writeError(w, http.StatusForbidden, "Not a member")
-			return
-		}
+	// Check membership (platform admins and impersonators bypass via RequireOrgAuthority)
+	ok, err := RequireOrgAuthority(r.Context(), h.Orgs, claims, orgID, OrgRead)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if !ok {
+		writeError(w, http.StatusForbidden, "Not a member")
+		return
 	}
 
 	writeJSON(w, http.StatusOK, org)
@@ -182,24 +180,15 @@ func (h *OrgHandler) UpdateOrg(w http.ResponseWriter, r *http.Request) {
 
 	orgID := chi.URLParam(r, "orgID")
 
-	// Only org_admin or platform admin
-	if !claims.IsPlatformAdmin {
-		roles, err := h.Orgs.GetUserRolesInOrg(r.Context(), orgID, claims.UserID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "Database error")
-			return
-		}
-		isOrgAdmin := false
-		for _, m := range roles {
-			if m.Role == "org_admin" {
-				isOrgAdmin = true
-				break
-			}
-		}
-		if !isOrgAdmin {
-			writeError(w, http.StatusForbidden, "Only org admins can update")
-			return
-		}
+	// Only org_admin or platform admin (impersonators bypass via RequireOrgAuthority)
+	ok, err := RequireOrgAuthority(r.Context(), h.Orgs, claims, orgID, OrgAdmin)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if !ok {
+		writeError(w, http.StatusForbidden, "Only org admins can update")
+		return
 	}
 
 	var body struct {
@@ -249,16 +238,14 @@ func (h *OrgHandler) ListMembers(w http.ResponseWriter, r *http.Request) {
 
 	orgID := chi.URLParam(r, "orgID")
 
-	if !claims.IsPlatformAdmin {
-		roles, err := h.Orgs.GetUserRolesInOrg(r.Context(), orgID, claims.UserID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "Database error")
-			return
-		}
-		if len(roles) == 0 {
-			writeError(w, http.StatusForbidden, "Not a member")
-			return
-		}
+	ok, err := RequireOrgAuthority(r.Context(), h.Orgs, claims, orgID, OrgRead)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if !ok {
+		writeError(w, http.StatusForbidden, "Not a member")
+		return
 	}
 
 	members, err := h.Orgs.ListOrgMembers(r.Context(), orgID)
@@ -279,23 +266,14 @@ func (h *OrgHandler) AddMember(w http.ResponseWriter, r *http.Request) {
 
 	orgID := chi.URLParam(r, "orgID")
 
-	if !claims.IsPlatformAdmin {
-		roles, err := h.Orgs.GetUserRolesInOrg(r.Context(), orgID, claims.UserID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "Database error")
-			return
-		}
-		isOrgAdmin := false
-		for _, m := range roles {
-			if m.Role == "org_admin" {
-				isOrgAdmin = true
-				break
-			}
-		}
-		if !isOrgAdmin {
-			writeError(w, http.StatusForbidden, "Only org admins can add members")
-			return
-		}
+	ok, err := RequireOrgAuthority(r.Context(), h.Orgs, claims, orgID, OrgAdmin)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if !ok {
+		writeError(w, http.StatusForbidden, "Only org admins can add members")
+		return
 	}
 
 	var body struct {
@@ -357,23 +335,14 @@ func (h *OrgHandler) UpdateMember(w http.ResponseWriter, r *http.Request) {
 	orgID := chi.URLParam(r, "orgID")
 	memberID := chi.URLParam(r, "memberID")
 
-	if !claims.IsPlatformAdmin {
-		roles, err := h.Orgs.GetUserRolesInOrg(r.Context(), orgID, claims.UserID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "Database error")
-			return
-		}
-		isOrgAdmin := false
-		for _, m := range roles {
-			if m.Role == "org_admin" {
-				isOrgAdmin = true
-				break
-			}
-		}
-		if !isOrgAdmin {
-			writeError(w, http.StatusForbidden, "Only org admins can update members")
-			return
-		}
+	ok, err := RequireOrgAuthority(r.Context(), h.Orgs, claims, orgID, OrgAdmin)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if !ok {
+		writeError(w, http.StatusForbidden, "Only org admins can update members")
+		return
 	}
 
 	// Verify membership belongs to this org
@@ -438,23 +407,14 @@ func (h *OrgHandler) RemoveMember(w http.ResponseWriter, r *http.Request) {
 	orgID := chi.URLParam(r, "orgID")
 	memberID := chi.URLParam(r, "memberID")
 
-	if !claims.IsPlatformAdmin {
-		roles, err := h.Orgs.GetUserRolesInOrg(r.Context(), orgID, claims.UserID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "Database error")
-			return
-		}
-		isOrgAdmin := false
-		for _, m := range roles {
-			if m.Role == "org_admin" {
-				isOrgAdmin = true
-				break
-			}
-		}
-		if !isOrgAdmin {
-			writeError(w, http.StatusForbidden, "Only org admins can remove members")
-			return
-		}
+	ok, err := RequireOrgAuthority(r.Context(), h.Orgs, claims, orgID, OrgAdmin)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if !ok {
+		writeError(w, http.StatusForbidden, "Only org admins can remove members")
+		return
 	}
 
 	membership, err := h.Orgs.GetOrgMembership(r.Context(), memberID)

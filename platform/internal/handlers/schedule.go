@@ -64,6 +64,10 @@ func (h *ScheduleHandler) Create(w http.ResponseWriter, r *http.Request) {
 	classID := chi.URLParam(r, "classId")
 
 	// Auth: verify user is teacher/org_admin in the class's org, or platform admin
+	// TODO(plan-075-followup): org-authority-via-class pattern (line ~73 fetches
+	// class to derive cls.OrgID, then checks org teacher/admin). Migrate to
+	// RequireOrgAuthority(... OrgTeach) once the helper accepts orgID derived
+	// from class lookup. See plan-075 §Out of scope, Bucket 1.
 	if !claims.IsPlatformAdmin {
 		cls, err := h.Classes.GetClass(r.Context(), classID)
 		if err != nil || cls == nil {
