@@ -1,17 +1,20 @@
 import { api, ApiError } from "@/lib/api-client";
 import { CoursesList, type OrgCourseRow } from "@/components/org/courses-list";
 import type { OrgListError } from "@/components/org/org-list-state";
-import {
-  parseOrgIdFromSearchParams,
-  appendOrgId,
-} from "@/lib/portal/org-context";
+import { resolveOrgContext, appendOrgId } from "@/lib/portal/org-context";
+import { handleOrgContext } from "@/components/portal/org-context-guard";
 
 export default async function OrgCoursesPage({
   searchParams,
 }: {
   searchParams?: Promise<{ orgId?: string }>;
 }) {
-  const orgId = parseOrgIdFromSearchParams(await searchParams);
+  const sp = await searchParams;
+  const ctx = await resolveOrgContext(sp);
+  const handled = handleOrgContext(ctx);
+  if (handled.kind === "guard") return handled.element;
+  const { orgId, orgName } = handled;
+
   let data: OrgCourseRow[] | null = null;
   let error: OrgListError | null = null;
   try {
@@ -26,7 +29,7 @@ export default async function OrgCoursesPage({
 
   return (
     <div className="p-6 space-y-6">
-      <h1 className="text-2xl font-bold">Courses{data ? ` (${data.length})` : ""}</h1>
+      <h1 className="text-2xl font-bold">{orgName} — Courses{data ? ` (${data.length})` : ""}</h1>
       <CoursesList data={data} error={error} />
     </div>
   );

@@ -1,14 +1,7 @@
 import { PortalShell } from "@/components/portal/portal-shell";
-import { api, ApiError } from "@/lib/api-client";
+import { ApiError } from "@/lib/api-client";
 import { OrgSwitcher } from "@/components/portal/org-switcher";
-
-interface OrgMembership {
-  orgId: string;
-  orgName: string;
-  role: string;
-  status: string;
-  orgStatus: string;
-}
+import { fetchMyOrgs } from "@/lib/portal/org-context";
 
 /**
  * Plan 043 phase 3: render the OrgSwitcher above the org-portal content
@@ -17,6 +10,10 @@ interface OrgMembership {
  * first paint (no client-side flicker).
  *
  * The switcher itself is hidden when the user has fewer than 2 options.
+ *
+ * Plan 077 code-review BLOCKER fix: use the cached `fetchMyOrgs` helper
+ * (via React's `cache()`) so this layout fetch and the page-level
+ * `resolveOrgContext` fetch share one round-trip per render.
  */
 export default async function OrgPortalLayout({
   children,
@@ -25,7 +22,7 @@ export default async function OrgPortalLayout({
 }) {
   let orgAdminOptions: { orgId: string; orgName: string }[] = [];
   try {
-    const memberships = await api<OrgMembership[]>("/api/orgs");
+    const memberships = await fetchMyOrgs();
     const seen = new Set<string>();
     for (const m of memberships) {
       if (
