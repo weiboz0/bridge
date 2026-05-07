@@ -202,16 +202,20 @@ func RequireOrgAuthority(
 	if claims == nil {
 		return false, nil
 	}
-	if orgs == nil {
-		return false, ErrAccessHelperMisconfigured
-	}
 
-	// Platform admin / impersonator-of-admin bypass at every level.
+	// Platform admin / impersonator-of-admin bypass at every level —
+	// checked before the nil-orgs guard so that platform admins can
+	// reach downstream input validation even when the handler under
+	// test is wired without a store.
 	// Plan 039 carved out impersonator access for the class subsystem;
 	// extending it to org-side is consistent with that intent — the
 	// underlying admin retained these privileges before impersonating.
 	if claims.IsPlatformAdmin || claims.ImpersonatedBy != "" {
 		return true, nil
+	}
+
+	if orgs == nil {
+		return false, ErrAccessHelperMisconfigured
 	}
 
 	roles, err := orgs.GetUserRolesInOrg(ctx, orgID, claims.UserID)
