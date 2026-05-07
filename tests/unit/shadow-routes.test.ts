@@ -181,16 +181,35 @@ describe("shadow-routes contract-parity", () => {
   const apiDir = path.join(repoRoot, "src/app/api");
   const routeFiles = walkRouteFiles(apiDir);
 
-  // Derive URL paths; catch-all routes (e.g. [...nextauth]) are excluded from
-  // the shadow check because they are legitimate-Next files not under any
-  // proxied prefix — but routeFileToUrlPath would throw on them. We skip them
-  // here; the reverse check handles stale allowlist entries regardless.
+  // Derive URL paths. Catch-all routes (e.g. [...nextauth]) and optional-catch-all
+  // routes ([[...slug]]) cannot be converted by routeFileToUrlPath, but we must
+  // not silently exempt them — a future catch-all under a proxied prefix would
+  // bypass the guard the test is supposed to enforce (Codex code-review NIT).
+  // For each catch-all file, derive the parent URL prefix (everything up to the
+  // catch-all segment) and check whether THAT prefix is under a proxied route;
+  // if so, fail loudly with explicit handling guidance.
   type RouteEntry = { filePath: string; urlPath: string };
   const routeEntries: RouteEntry[] = [];
   for (const filePath of routeFiles) {
     const rel = path.relative(repoRoot, filePath).replace(/\\/g, "/");
-    // Skip known catch-all routes that are legitimately NOT under any proxied prefix
-    if (rel.includes("[...")) {
+    const hasCatchAll = /\[\.\.\./.test(rel) || /\[\[/.test(rel);
+    if (hasCatchAll) {
+      // Compute the URL prefix up to (but not including) the catch-all segment
+      const segments = rel.replace(/^src\/app/, "").replace(/\/route\.ts$/, "").split("/");
+      const safeSegments: string[] = [];
+      for (const seg of segments) {
+        if (seg.startsWith("[...") || seg.startsWith("[[")) break;
+        safeSegments.push(seg.replace(/\[([^\]]+)\]/g, ":$1"));
+      }
+      const parentPrefix = safeSegments.join("/");
+      if (isUnderProxiedPrefix(parentPrefix)) {
+        throw new Error(
+          `tests/unit/shadow-routes.test.ts: catch-all route ${rel} is under a Go-proxied prefix (${parentPrefix}). ` +
+            `routeFileToUrlPath does not handle catch-all segments. Either delete the file (Go has parity) or ` +
+            `extend the conversion + matching logic to support this Next.js routing pattern.`
+        );
+      }
+      // Catch-all NOT under a proxied prefix → legitimate-Next (e.g., /api/auth/[...nextauth]); skip
       continue;
     }
     routeEntries.push({ filePath: rel, urlPath: routeFileToUrlPath(rel) });
