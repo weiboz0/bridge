@@ -226,7 +226,15 @@ The most important finding of the entire plan-076 review cycle:
 
 **NIT Q3**: cleanup DDL in `schema_probe_integration_test.go:95` matched 0024_parent_links.sql semantically but not exactly (missing `IF NOT EXISTS` on column ADD + index CREATE). **Fix**: tightened at `d7672b3` so cleanups match drizzle line-for-line where Postgres allows (constraint ADD has no `IF NOT EXISTS` form).
 
-### Codex round-2 — pending against `d7672b3`
+### Codex round-2 — CONCUR (all 4 fixes confirmed)
+
+Verified at HEAD `d7672b3`:
+- SchemaSentinels type + ExpectedSchemaSentinels const present in migrations.go (lines 74, 102).
+- Extended CheckSchemaProbe + ErrSchemaSentinelMissing present in schema_probe.go (lines 31, 152).
+- `go build ./...` exits 0.
+- Cleanup DDL in integration test now carries `IF NOT EXISTS` matching drizzle/0024 where PG syntax allows.
+
+No new issues. Plan 076 ready to ship.
 
 ### DeepSeek V4 Flash — CONCUR clean (BUT MISSED THE BLOCKER)
 
