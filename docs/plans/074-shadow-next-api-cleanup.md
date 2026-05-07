@@ -207,7 +207,7 @@ Kimi round-1 also confirmed direction: "Test deletion is defensible... allowlist
 
 ### Convergence
 
-All 5 reviewers concur after fold-in. Plan 074 ready for implementation.
+All 5 reviewers concur after fold-in (DeepSeek round-2 confirmed BLOCKER closed at `fd90894`). Plan 074 ready for implementation.
 
 ## Code Review
 
