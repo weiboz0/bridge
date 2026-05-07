@@ -134,8 +134,13 @@ test.describe("Plan 053 phase 3 — realtime token mint (HTTP)", () => {
       );
     }
 
-    expect(res.status(), `mint should return 200, got ${res.status()} (${await res.text()})`).toBe(200);
-    const body = (await res.json()) as { token: string; expiresAt: string };
+    // Plan 078 + Kimi K2.6 code-review: a Playwright APIResponse body can be
+    // read only once. Original code awaited res.text() inside the assertion
+    // message AND res.json() afterwards — on the 200 path, json() throws
+    // "body already consumed". Read once into a string, parse based on status.
+    const rawBody = await res.text();
+    expect(res.status(), `mint should return 200, got ${res.status()} (${rawBody})`).toBe(200);
+    const body = JSON.parse(rawBody) as { token: string; expiresAt: string };
 
     expect(body.token).toMatch(/^ey[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
     const exp = new Date(body.expiresAt).getTime();
