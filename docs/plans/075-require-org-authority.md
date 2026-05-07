@@ -382,7 +382,15 @@ All 5 reviewers concur after Codex round-1 BLOCKER (audit gap, 14 → 16 in-scop
 
 `go build ./...` clean. Full Go test suite (15 packages) PASS. New `access_org_test.go` 19 tests PASS. Bypass-order regression caught + fixed mid-Phase-2 with 2 new dedicated tests so future refactors can't drift the order.
 
-### Codex — pending
+### Codex — CONCUR (3 cosmetic NITs, all FIXED)
+
+All 6 review questions confirmed clean. Three cosmetic NITs:
+
+1. `[FIXED]` `access.go:189` doc-comment said `(false, err)` returns `ErrAccessHelperMisconfigured` when `orgs == nil`, but the bypass at lines 213 returns first. Reconciled the godoc to clarify that nil-orgs misconfig only fires when the caller isn't bypassing via IsPlatformAdmin/ImpersonatedBy. Fixed at `6012fb9`.
+2. `[FIXED]` `schedule.go:67` TODO labeled "class-or-org fallback" but the code is actually "org-authority-via-class" (fetches class for orgID, then checks org). Relabeled + cited call-site line. Fixed at `6012fb9`.
+3. `[FIXED]` `problem_access.go:11` TODO named speculative function names `canViewProblemAtScope`/`canEditProblemAtScope` but the actual functions are `authorizedForScope` (line 34) / `canViewProblemRow` (line 144). Corrected. Fixed at `6012fb9`.
+
+Codex round-1 also confirmed: bypass ordering correct (admin/impersonator before nil-orgs); orgs.go 403 messages verbatim; CreateLink claims threading correct; org_dashboard.go and topic_problems.go return shapes preserved; all 8 out-of-scope files carry TODO annotations.
 
 ### DeepSeek V4 Flash — CONCUR (1 edge-note, no action)
 
@@ -394,7 +402,15 @@ Edge note (no action): `isTopicEditor` previously did an early-return on `IsPlat
 
 Confirmed Phase 3 CreateLink claims-consumption (line 144 fetch, line 203 use), uniform Status==active filter at access.go:227-229, all 16 in-scope sites migrated (zero `GetUserRolesInOrg` hits in the 6 in-scope files), `(bool, error)` return shape consistent with class-side precedent, `requireOrgAdmin` fully deleted with no dead imports. `org_dashboard.go`'s `authorizeOrgAdmin` retains its orgID-resolution before delegating; `topic_problems.go`'s `isTopicEditor` cleanly maps `(bool, error)` → `(bool, int)`.
 
-### Kimi K2.6 — pending
+### Kimi K2.6 — CONCUR (1 NIT, FIXED — overlap with Codex)
+
+Confirmed CreateLink claims-consumption (claims.UserID at line 203 unmodified); zero new inline GetUserRolesInOrg in migrated files; all 8 out-of-scope files annotated; bypass-order regression documented in helper godoc + Phase-2 regression tests at `access_org_test.go` lines 247-273; `TestRequireOrgAuthority_Admin_SuspendedOrgAdminDenies` confirms the suspended-org_admin case at OrgAdmin level; full test matrix complete (3 levels × roles + 4 bypass paths + nil-orgs + misconfig = 19 tests).
+
+`[FIXED]` NIT (overlap with Codex round-1 NIT 2): `schedule.go` TODO didn't cite the exact call-site line. Now cites line ~73 with the relabeled "org-authority-via-class pattern" wording. Fixed at `6012fb9`.
+
+### Convergence
+
+All 5 reviewers concur. 3 plan-review BLOCKER fixes (Codex audit gap + count typos). 4 code-review NITs all cosmetic and folded. Multi-reviewer ensemble caught real issues: Codex caught the audit gap (org_dashboard + topic_problems should be in scope) AND the 3 cosmetic doc-comment / TODO inaccuracies; Kimi independently caught the schedule.go line-number gap AND the inter-phase drift risk; DeepSeek caught the next.config.ts importability blocker (in plan 074, validating in plan 075 the precedent test pattern works); GLM independently surfaced the same Phase-3 signature contract delta.
 
 ## Post-execution report
 
