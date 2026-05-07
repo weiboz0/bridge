@@ -42,6 +42,7 @@ yarn-error.log*
 
 # playwright
 e2e/.auth/
+e2e/.fixture/
 e2e/test-results/
 e2e/playwright-report/
 test-results/

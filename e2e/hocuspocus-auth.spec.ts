@@ -115,12 +115,10 @@ test.describe("Plan 053 phase 3 — realtime token mint (HTTP)", () => {
     await loginWithCredentials(page, ACCOUNTS.teacher.email, ACCOUNTS.teacher.password);
 
     const unitsRes = await page.request.get("/api/me/units");
-    if (!unitsRes.ok()) {
-      test.skip(true, "teacher has no units accessible — skipping mint spec");
-    }
+    expect(unitsRes.ok()).toBeTruthy();
     const unitsBody = (await unitsRes.json()) as { units?: Array<{ id: string }> };
     const unitId = unitsBody.units?.[0]?.id;
-    test.skip(!unitId, "teacher has no units — skipping mint spec");
+    expect(unitId).toBeDefined();
 
     const documentName = `unit:${unitId}`;
     const res = await page.request.post("/api/realtime/token", {
@@ -136,8 +134,13 @@ test.describe("Plan 053 phase 3 — realtime token mint (HTTP)", () => {
       );
     }
 
-    expect(res.status(), `mint should return 200, got ${res.status()} (${await res.text()})`).toBe(200);
-    const body = (await res.json()) as { token: string; expiresAt: string };
+    // Plan 078 + Kimi K2.6 code-review: a Playwright APIResponse body can be
+    // read only once. Original code awaited res.text() inside the assertion
+    // message AND res.json() afterwards — on the 200 path, json() throws
+    // "body already consumed". Read once into a string, parse based on status.
+    const rawBody = await res.text();
+    expect(res.status(), `mint should return 200, got ${res.status()} (${rawBody})`).toBe(200);
+    const body = JSON.parse(rawBody) as { token: string; expiresAt: string };
 
     expect(body.token).toMatch(/^ey[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
     const exp = new Date(body.expiresAt).getTime();
@@ -173,7 +176,7 @@ test.describe("Plan 053 phase 3 — realtime token mint (HTTP)", () => {
 
 test.describe("Plan 053 phase 3 — Hocuspocus WebSocket auth", () => {
   test.beforeAll(async () => {
-    test.skip(!TOKEN_SECRET, "HOCUSPOCUS_TOKEN_SECRET unset — skipping WS auth ratchet");
+    expect(TOKEN_SECRET).toBeTruthy();
   });
 
   test("VALID JWT — connection accepted", async ({ page }) => {
@@ -181,10 +184,10 @@ test.describe("Plan 053 phase 3 — Hocuspocus WebSocket auth", () => {
 
     // Resolve a unit the teacher can edit.
     const unitsRes = await page.request.get("/api/me/units");
-    test.skip(!unitsRes.ok(), "/api/me/units unavailable");
+    expect(unitsRes.ok()).toBeTruthy();
     const { units } = (await unitsRes.json()) as { units?: Array<{ id: string }> };
     const unitId = units?.[0]?.id;
-    test.skip(!unitId, "no units to test against");
+    expect(unitId).toBeDefined();
 
     const documentName = `unit:${unitId}`;
 
