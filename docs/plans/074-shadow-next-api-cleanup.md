@@ -217,7 +217,11 @@ All 5 reviewers concur after fold-in (DeepSeek round-2 confirmed BLOCKER closed 
 
 `bun run test` 634 passed / 11 skipped / 0 failed. `cd platform && go test ./... -count=1 -timeout 120s` all packages OK. `bunx tsc --noEmit` returns 10 errors, all pre-existing (verified via `git stash` comparison against main). Sanity-checked `tests/unit/shadow-routes.test.ts` forward + reverse directions during Phase 2 implementation.
 
-### Codex — pending
+### Codex — CONCUR (1 NIT, FIXED)
+
+Confirmed Phase 1 deletion list matches diff; Phase 2 matches §Files spec; Phase 3 next.config.ts comment accurate; no terminology/import/test-infra/allowlist regressions.
+
+`[FIXED]` NIT (long-term guard tightening): catch-all skip via `includes("[...")` exempted ANY route file with `[...` BEFORE checking whether it's under a proxied prefix. Current tree only has `/api/auth/[...nextauth]` (legitimate-Next, not proxied), but a future catch-all under `/api/orgs`, `/api/classes`, etc. would be silently exempted. → **Response**: rewritten at `1ab2534` to derive the parent URL prefix (everything up to the catch-all segment) and `throw` if THAT prefix is under a proxied route. Sanity-checked by temporarily adding `src/app/api/courses/[...slug]/route.ts` — test fails loudly with explicit guidance ("either delete the file (Go has parity) or extend the conversion + matching logic"). Removed → PASS.
 
 ### DeepSeek V4 Flash — CONCUR (0 BLOCKERS, 0 NITS)
 
