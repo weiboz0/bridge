@@ -104,9 +104,12 @@ The existing `resolveOrgIdServerSide` catches every exception and returns `null`
 - `src/app/(portal)/org/settings/page.tsx` — same. (Settings page already shows orgName fetched from the dashboard endpoint; can keep that or use ctx.orgName directly. Pick the simpler.)
 - `src/app/(portal)/org/parent-links/page.tsx` — drop the hand-rolled fallback; use `resolveOrgContext`. The `OrgMembership` interface declared inline at line 37 becomes unused (deletable).
 
-**Create (1 file):**
+**Modify (1 existing test file):**
 
-- `tests/unit/org-context.test.ts` — Vitest unit tests for `resolveOrgContext`. Mock `api()` to cover:
+- `tests/unit/org-context.test.ts` — already exists and covers `parseOrgIdFromSearchParams` + `appendOrgId` (10 tests, last verified 2026-05-06). Two concrete updates:
+  - The `parseOrgIdFromSearchParams` tests stay valid AS LONG AS that function survives Phase 3. After Phase 3, the export is gone — the existing tests will be REPLACED with `resolveOrgContext` tests covering the same parsing semantics through the new helper.
+  - The `appendOrgId` tests stay (export unchanged).
+  - **Net change**: replace the `describe("parseOrgIdFromSearchParams")` block with a `describe("resolveOrgContext")` block covering:
   - Valid `?orgId=<uuid>` with active admin membership → `ok`.
   - Valid `?orgId=` with no membership at that org → `no-org`.
   - No `?orgId=`, has active admin membership → `ok` with first match.
@@ -133,7 +136,7 @@ The existing `resolveOrgIdServerSide` catches every exception and returns `null`
 | Pages that previously rendered with `orgId === undefined` and let the API fallback now render no-org states inappropriately | medium | The new resolver implements the SAME fallback logic the API endpoints had (first active org_admin membership). Behavior preserved when `?orgId=` is absent. The difference is when `?orgId=` is present but the operator has NO membership at that org — Pattern B previously let the API 403; the new resolver returns `no-org` cleanly. That's a UX improvement, not a regression. |
 | TypeScript narrowing on the discriminated union confuses page authors | low | Exhaustive switch on `ctx.kind` is the standard pattern; an `if (ctx.kind !== "ok") return <ErrorOrNoOrg/>` early-return narrows the rest of the function to `ok`. Same idiom Bridge uses elsewhere. |
 | The "look up orgName by orgId" step uses the existing `/api/orgs` (returns the operator's memberships only). If the operator passes `?orgId=<some-other-org>` they're not a member of, the orgName won't be found | low | Already covered: that case maps to `no-org` reason `no-active-admin-membership`. The orgName lookup short-circuits to "irrelevant" because we render the no-org state without it. |
-| Existing tests reference the old `parseOrgIdFromSearchParams` export | low | Pre-impl grep planned: `grep -rln "parseOrgIdFromSearchParams\|resolveOrgIdServerSide" tests/` returns 0 hits today (verified during plan drafting). |
+| Existing tests reference the old `parseOrgIdFromSearchParams` export | medium | (Self-review correction — original draft claimed 0 hits in tests, false.) `tests/unit/org-context.test.ts` exists and currently exercises `parseOrgIdFromSearchParams` + `appendOrgId` (10 tests). Phase 1 keeps the existing exports working so existing tests pass; Phase 2 leaves them; Phase 3 replaces the `parseOrgIdFromSearchParams` describe-block with a `resolveOrgContext` describe-block. The `appendOrgId` block is untouched. Net: 10 tests → ~12 tests (more coverage). |
 | Hard-fail tests that mock `/api/orgs` and expect specific 401 redirect handling at the helper level | medium | The current `parent-links/page.tsx` redirects on 401. After migration, the page-level caller still does the redirect; the helper returns `error{status:401}` instead of swallowing. Page-level test (Playwright e2e) confirms redirect still fires. Specifically: `e2e/org-portal/parent-links.spec.ts` if it exists. |
 
 ## Phases
