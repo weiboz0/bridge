@@ -39,14 +39,16 @@ Replace the two-helper status quo (`parseOrgIdFromSearchParams` + `resolveOrgIdS
 
 ```ts
 export type OrgContext =
-  | { kind: "ok"; orgId: string; orgName: string; role: string }
-  | { kind: "no-org"; reason: "no-active-admin-membership" }
+  | { kind: "ok"; orgId: string; orgName: string }
+  | { kind: "no-org"; reason: "no-active-admin-membership" | "not-org-admin-at-this-org" | "not-a-member" }
   | { kind: "error"; status: number; message: string };
 
 export async function resolveOrgContext(
   searchParams: { orgId?: string | string[] | undefined } | undefined,
 ): Promise<OrgContext>;
 ```
+
+(Kimi K2.6 round-1 NIT 2: `role` field dropped. After Codex BLOCKER 2 fix tightened `kind: "ok"` to require active org_admin, `role` would always be `"org_admin"` — dead weight. None of the 7 migrated pages consume it. The helper can be generalized when a future non-admin portal needs it.)
 
 Three discriminated outcomes, each carrying enough data for the caller:
 
@@ -60,7 +62,7 @@ The 7 pages this plan migrates are ALL org-admin pages — their underlying API 
 
 1. If `?orgId=<uuid>` is present and valid:
    1. Fetch `/api/orgs` to look up `orgName` for that id.
-   2. If the operator has an **active `org_admin`** membership at that org → `kind: "ok"` with `{orgId, orgName, role: "org_admin"}`.
+   2. If the operator has an **active `org_admin`** membership at that org → `kind: "ok"` with `{orgId, orgName}`.
    3. If the operator has membership at that org but NOT as active `org_admin` (teacher / student / parent / suspended admin) → `kind: "no-org", reason: "not-org-admin-at-this-org"`. Distinct from "no admin anywhere" so the page can show a more accurate message ("You're a teacher here, not an admin — check `/teacher/...` instead").
    4. If the operator has NO membership at that org → `kind: "no-org", reason: "not-a-member"`. Was previously silently passed to the API, which would 403 — no-org rendering is clearer.
    5. If `/api/orgs` itself fails → `kind: "error"`.
@@ -132,7 +134,7 @@ The existing `resolveOrgIdServerSide` catches every exception and returns `null`
 
 **Modify (1 existing test file):**
 
-- `tests/unit/org-context.test.ts` — already exists and covers `parseOrgIdFromSearchParams` + `appendOrgId` (10 tests, last verified 2026-05-06). Two concrete updates:
+- `tests/unit/org-context.test.ts` — already exists and covers `parseOrgIdFromSearchParams` + `appendOrgId` (10 tests, last verified 2026-05-06). Test mocking strategy (Kimi K2.6 round-1 NIT 4): use `vi.mock("@/lib/api-client", () => ({ api: vi.fn() }))` at module level, then per-test `vi.mocked(api).mockResolvedValueOnce([...memberships])` or `mockRejectedValueOnce(new ApiError(401, ...))`. Cleaner than threading an injectable `api` dep through page signatures. Two concrete updates:
   - The `parseOrgIdFromSearchParams` tests stay valid AS LONG AS that function survives Phase 3. After Phase 3, the export is gone — the existing tests will be REPLACED with `resolveOrgContext` tests covering the same parsing semantics through the new helper.
   - The `appendOrgId` tests stay (export unchanged).
   - **Net change**: replace the `describe("parseOrgIdFromSearchParams")` block with a `describe("resolveOrgContext")` block covering:
@@ -247,7 +249,19 @@ DeepSeek round-1 also confirmed: discriminated union shape correct, API-side fal
 
 GLM round-1 also confirmed direction: "Discriminated union forces callers to distinguish 'no org' from 'API broke'... the new error semantics is strictly better."
 
-#### Kimi K2.6 — pending
+#### Kimi K2.6 — CONCUR with 1 BLOCKER overlap (FIXED) + 4 NITs (3 FIXED, 1 acknowledged)
+
+1. `[FIXED]` BLOCKER (overlap with Codex BLOCKER Q2): `kind: "ok"` should not include `role` because the helper requires active org_admin and the field is constant. Worse, the original "any active membership → ok" rule didn't match the underlying API's org_admin gating. → **Response**: Codex's fix tightened to org_admin only; Kimi's corollary is to drop `role` entirely. Both folded — `role` removed from the `kind: "ok"` shape.
+2. `[FIXED]` NIT 1 (overlap with GLM's OrgContextGuard NIT): per-page conditional rendering should be consolidated. Already folded via §Files `handleOrgContext` helper.
+3. `[FIXED]` NIT 2: `role` is dead weight. → **Response**: removed (see fold #1).
+4. `[ACKNOWLEDGED]` NIT 3: stale-cache risk is not a regression — status quo already has `cache: "no-store"` on every `/api/orgs` call, helper doesn't make it worse. → **Response**: noted in §Caching that React `cache()` is an IMPROVEMENT over status quo, not a regression mitigation.
+5. `[FIXED]` NIT 4: test mocking strategy not specified. → **Response**: §Files now explicitly says `vi.mock("@/lib/api-client", () => ({ api: vi.fn() }))` with per-test `mockResolvedValueOnce` / `mockRejectedValueOnce`. Cleaner than dep injection.
+
+Kimi round-1 also confirmed direction: "discriminated union is justified — fixes the error-swallowing bug review 011 flagged and removes the broken-URL bug class."
+
+### Convergence
+
+All 5 reviewers concur after fold-in. Codex round-2 dispatch needed to confirm both BLOCKERS closed.
 
 ## Code Review
 
