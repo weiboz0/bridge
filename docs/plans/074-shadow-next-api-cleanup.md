@@ -54,7 +54,7 @@ Add `tests/unit/shadow-routes.test.ts` that:
 2. Walks `src/app/api/` recursively for `route.ts` files.
 3. For each route file, derives its URL path (`src/app/api/orgs/[id]/route.ts` → `/api/orgs/:id`) and checks whether it matches any proxied prefix from `GO_PROXY_ROUTES`.
 4. Fails if a route file sits under a proxied prefix UNLESS it is in an explicit `KNOWN_SHADOW_ALLOWLIST` array.
-5. The allowlist enumerates every remaining shadow file as of this PR (~35 paths total: 31 shadow + 4 legitimate-Next), each with a one-line comment noting "shadow: pending plan-NNN cleanup" or "legitimate-next: <reason>".
+5. The allowlist enumerates only shadow files (~31 paths) — files that sit under a proxied prefix but haven't been deleted yet. Each entry has a one-line comment noting "shadow: pending plan-NNN cleanup". Files NOT under any proxied prefix (e.g., `/api/auth/[...nextauth]`, `/api/auth/debug`) are never inspected by the test, so they don't need allowlist entries.
 
 This makes the existing tech debt grep-able and reducible plan-by-plan: future plans (075+) shrink the allowlist as they migrate each surface. NEW shadow routes added by mistake fail the test immediately.
 
@@ -109,23 +109,38 @@ This makes the existing tech debt grep-able and reducible plan-by-plan: future p
 | Deleting the Vitest integration tests reduces overall test count and looks like coverage regression | low | Document in the post-execution report that the tests exercised dead code; Go-side coverage is the canonical suite. |
 | The allowlist grows stale (reviewers add new shadow files with allowlist entries to silence the test) | medium | Allowlist entries require a comment with a plan number reference. PR review catches "added without justification" cases. Same pattern Bridge already uses for skipped tests. |
 | Other test files (e2e, etc.) reference the deleted files | low | Pre-impl grep planned for Phase 1: `grep -rln "@/app/api/orgs" tests/ e2e/` returns only the two files being deleted (verified during plan drafting). |
+| Dynamic / catch-all path matcher in the contract-parity test breaks on edge cases (`[...slug]`, `[[id]]`, multiple `[id]` segments, nested dynamic) | medium | (Codex round-1 NIT.) Phase 2 adds explicit unit-test fixtures inside `shadow-routes.test.ts`: one for static path, one for single dynamic `[id]`, one for nested dynamic, one for catch-all `[...slug]`, one for `:path*` matcher. The fixtures live in the same test file so any matcher-conversion bug fails CI immediately. |
 
 ## Phases
 
 ### Phase 1 — Delete `/api/orgs` shadow routes + their tests (commit 1)
 
 - Pre-impl verification: re-run `grep -rln "@/app/api/orgs" tests/ e2e/ src/` to confirm zero unexpected importers.
+- **Coverage equivalence inventory** (Codex round-1 NIT): for each `it(...)` block in `tests/integration/orgs-api.test.ts` and `tests/integration/org-members-api.test.ts`, document the equivalent Go test that covers the same behavior. Acceptable forms: same-test-name in `platform/internal/handlers/orgs_test.go`, same-behavior in `platform/internal/handlers/org_self_action_guard_test.go`, or same-behavior in `platform/internal/store/orgs_test.go`. If any vitest assertion has NO Go counterpart, surface it before deleting — either add the missing Go test as a same-PR side-effect or carve the assertion out for separate follow-up. Document the inventory inline in the Phase 1 commit message body.
 - Delete the 4 route files + 2 vitest integration tests listed in §Files.
 - Remove now-empty `src/app/api/orgs/` directory tree.
 - Run `bun run test` (Vitest) — expect the two deleted test files gone from the run, all other suites pass.
 - Run `bunx tsc --noEmit` — expect 0 errors (no TS reference to the deleted files anywhere).
-- Commit: `plan 074 phase 1: delete /api/orgs shadow Next routes + their vitest integration tests`.
+- Run `cd platform && go test ./... -count=1 -timeout 120s` — confirm the Go-side coverage cited in the inventory is actually green.
+- Commit: `plan 074 phase 1: delete /api/orgs shadow Next routes + their vitest integration tests` (commit body includes the coverage inventory).
 
 ### Phase 2 — Add contract-parity test (commit 2)
 
 - Create `tests/unit/shadow-routes.test.ts`.
-- Implementation: import the rewrites array from next.config.ts; walk `src/app/api/` for `route.ts` files using `node:fs`; convert each path to a URL pattern; match against `GO_PROXY_ROUTES`; assert each match is in `KNOWN_SHADOW_ALLOWLIST`.
-- Allowlist initial population: enumerate remaining ~33 shadow paths verbatim, each with a `// shadow: pending plan-NNN cleanup` or `// legitimate-next: <reason>` comment.
+- Implementation: import `GO_PROXY_ROUTES` from `next.config.ts` (it's a plain const, not the rewrites function); walk `src/app/api/` for `route.ts` files using `node:fs`; convert each path to a URL pattern; match against `GO_PROXY_ROUTES`; assert each match is in `KNOWN_SHADOW_ALLOWLIST`.
+- **Typed allowlist entries** (GLM 5.1 round-1 NIT): use a typed shape, not bare strings.
+  ```ts
+  type ShadowEntry = {
+    path: string;        // canonical URL path, e.g. "/api/courses/:id"
+    cleanupPlan: string; // future plan that will delete this, e.g. "075" or "TBD"
+    note?: string;       // optional clarification (e.g., complex Go parity status)
+  };
+  const KNOWN_SHADOW_ALLOWLIST: ShadowEntry[] = [...];
+  ```
+  Prevents typos and makes the structure self-documenting. Allowlist contains ONLY shadow files (under proxied prefixes); legitimate-Next files (e.g., `/api/auth/[...nextauth]`) are never inspected by the test.
+- **Matcher fixtures** (Codex round-1 NIT): include explicit fixtures inside the same test file covering: (a) static path, (b) single dynamic `[id]`, (c) nested dynamic, (d) catch-all `[...slug]`, (e) `:path*` matcher. The fixtures live next to the production assertions so any conversion bug fails CI immediately.
+- **TODO comment** (GLM 5.1 round-1 NIT, low-urgency): note in the test file's header comment that a future plan should extract `GO_PROXY_ROUTES` to `src/lib/go-proxy-routes.ts` so both `next.config.ts` and the test import the same source. Not in scope for plan 074 — it's a config refactor that touches Next's build pipeline.
+- Allowlist initial population: enumerate remaining 31 shadow paths verbatim, each with `cleanupPlan: "TBD"` until follow-up plans claim them.
 - Run `bun run test tests/unit/shadow-routes.test.ts` — expect PASS (allowlist exhaustively covers current state).
 - Sanity check: temporarily add a fake route at `src/app/api/orgs/test-shadow/route.ts`, re-run the test, expect FAIL with a clear "unallowlisted shadow path" message; remove the fake route, expect PASS.
 - Commit: `plan 074 phase 2: add shadow-routes contract-parity test + initial allowlist`.
@@ -141,7 +156,30 @@ After Phase 3, run the 5-way code review against the consolidated branch diff (s
 
 ## Plan Review
 
-(pending — 5-way before implementation)
+### Round 1 (2026-05-06)
+
+#### Self-review (Opus 4.7) — clarification
+
+Folded one precision update at `ce48069`: tightened §Current state file counts (39 total, 31 shadow + 4 legitimate-Next after /api/orgs deletion); confirmed `/api/auth/register` has no Next file (Go-only); verified `/api/classes/join` has Go parity at `platform/internal/handlers/classes.go:239`.
+
+#### Codex — CONCUR (3 NITs, all FIXED)
+
+1. `[FIXED]` Coverage equivalence inventory — Phase 1 needs to enumerate which Go test covers each deleted vitest assertion. → **Response**: added "Coverage equivalence inventory" step at the top of Phase 1 with explicit inline-in-commit-body documentation; pre-impl now requires per-`it()` mapping to a Go test, with fail-loud if any vitest assertion has no Go counterpart.
+2. `[FIXED]` Allowlist framing contradiction — earlier text mixed "shadow files only" with "shadow + legitimate-Next" framing. → **Response**: tightened §Approach Phase 2 description to "allowlist contains ONLY shadow files (~31 paths); files NOT under any proxied prefix are never inspected by the test". Removes the contradiction.
+3. `[FIXED]` Missing risk for dynamic/catch-all matcher edge cases. → **Response**: added new risk row covering `[...slug]`, `[[id]]`, nested dynamic, `:path*`; mitigation is in-test fixtures for each pattern type.
+
+Codex round-1 also confirmed direction: "Phase order is correct. Deleting the acute /api/orgs files first, then adding the allowlist guard, then updating docs follows a sound dependency order and keeps the 0.5-day scope intact."
+
+#### DeepSeek V4 Pro — pending
+
+#### GLM 5.1 — CONCUR (2 NITs, 1 FIXED, 1 deferred-to-test-comment)
+
+1. `[FIXED]` Typed allowlist entries (`{path, cleanupPlan, note?}`) instead of bare strings — prevents typos, machine-checkable. → **Response**: added typed `ShadowEntry` shape to Phase 2.
+2. `[DEFERRED]` Extract `GO_PROXY_ROUTES` to a shared `src/lib/go-proxy-routes.ts` module — eliminates import-coupling risk between next.config.ts and the test. GLM marked as low urgency. → **Response**: added a TODO comment in the test file header pointing to a future config-refactor plan; the extraction itself is out of scope (touches Next's build pipeline; deserves its own plan).
+
+GLM round-1 also confirmed direction: "Defensible. The allowlist makes tech debt grep-able and shrinkable per-plan; a 31-file sweep would need individual Go-parity verification for each surface and bloats review."
+
+#### Kimi K2.6 — pending
 
 ## Code Review
 
