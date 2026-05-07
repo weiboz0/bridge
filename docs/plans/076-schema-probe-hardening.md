@@ -23,8 +23,8 @@ This plan implements the "multi-sentinel probe" the comment defers, scoped per r
 Augment `CheckSchemaProbe` with three additional categories of presence checks against the LATEST schema-affecting migration's outputs. Keep the existing `to_regclass` table check; layer on:
 
 1. **Columns** — query `information_schema.columns` for each declared column on the probe table. Catches DROP COLUMN / partial ALTER.
-2. **Constraints** — query `pg_constraint` joined to `pg_class` for each named CHECK / unique constraint. Catches missing CHECK and partial ALTER ADD CONSTRAINT.
-3. **Indexes** — query `pg_indexes` for each declared index name. Catches missing CREATE INDEX (partial-unique included).
+2. **Constraints** — query `pg_constraint` joined to `pg_class` for each named CHECK / unique constraint, **filtering by `pg_class.relname = sentinels.Table`** so the probe doesn't accidentally match a same-named constraint on a different table (DeepSeek round-1 NIT). Catches missing CHECK and partial ALTER ADD CONSTRAINT.
+3. **Indexes** — query `pg_indexes` for each declared index name, filtering by `tablename = sentinels.Table` for the same reason. Catches missing CREATE INDEX (partial-unique included).
 
 Foreign-key actions (`ON DELETE CASCADE` etc.) are NOT verified at this layer — the FK constraint NAME presence is enough; the action is structural and rarely the failure mode. This matches the review's wording ("constraints, enum values, and indexes") without overreaching.
 
@@ -77,7 +77,8 @@ When a new schema-affecting migration adds a table (and so bumps `ExpectedSchema
 
 1. **Probe the LATEST migration only**, not every milestone. The doc comment in `migrations.go` floats "one column from each milestone migration"; that scope is wider than this plan needs. Latest-only catches the high-probability failure mode (operator forgot to apply the most recent migration) without expanding the maintenance surface across 24+ migrations. Future plans can broaden if needed.
 2. **Columns / constraints / indexes are NAME-presence only.** Verifying CHECK expressions, FK actions, or index DDL would require parsing `pg_constraint.consrc` / `pg_indexes.indexdef` and comparing strings — fragile and beyond review §2.1's scope. Name presence catches the realistic failure mode (whole `CREATE` statement missing).
-3. **No "enum values" check.** Review §2.1 mentions "enum values"; the current schema doesn't declare any PostgreSQL enums (status fields use `varchar` + CHECK constraints instead — see `parent_links.sql:16-21`). Defer enum support to the first plan that introduces an enum.
+   - DeepSeek round-1 NIT: `parent_links_active_uniq` is a partial-unique INDEX that ALSO functions as a constraint (at-most-one-active-link-per-(parent,child) — see migration line 35-37). It lives in `Indexes` (not `Constraints`) because its DDL is `CREATE UNIQUE INDEX`, but the absence is a correctness issue, not just a performance one. Future readers wondering why partial-uniques aren't promoted to `Constraints`: PostgreSQL's catalog records them under `pg_indexes`, not `pg_constraint`, so the probe's category mirrors the catalog — not the conceptual layer.
+3. **No "enum values" check.** Review §2.1 mentions "enum values". (Codex round-1 BLOCKER correction: earlier migrations DO declare enums — `0000_abandoned_blackheart.sql` creates `auth_provider`, `editor_mode`, `grade_level`, `user_role`; `0021_user_intended_role.sql` creates `signup_intent`; `0023_create_scheduled_sessions.sql` creates `schedule_status`.) But the LATEST migration `0024_parent_links.sql` uses varchar + CHECK constraints, not an enum. Since the probe is latest-migration-only (Decision #1), there's no enum sentinel to track in this plan. When a future migration adds a new enum (or modifies an existing one's values), extend `SchemaSentinels` with an `Enums []EnumValueCheck` field. The deferral is a SCOPE choice, not a "no enums exist" claim.
 4. **Boot fail-fast.** Any sentinel miss is a fatal startup error. No degraded mode. Mirrors the existing `to_regclass` failure semantics.
 5. **No store-level changes.** Sentinel maintenance lives in `platform/internal/db/`. Handlers and stores are unchanged.
 
@@ -88,6 +89,7 @@ When a new schema-affecting migration adds a table (and so bumps `ExpectedSchema
 - `platform/internal/db/migrations.go` — add `SchemaSentinels` type, declare `ExpectedSchemaSentinels` constant for the current latest migration (`parent_links`). Update header doc comment to mention the multi-sentinel probe (replacing "If a stronger check is needed later" forecast wording).
 - `platform/internal/db/schema_probe.go` — extend `CheckSchemaProbe` to walk sentinels after the table check. Add `ErrSchemaSentinelMissing` typed error. Operator-facing error messages preserve the existing format ("table %q does not exist...") and add similar wording for column/constraint/index misses.
 - `platform/internal/db/schema_probe_parity_test.go` — extend the existing parity test (currently asserts `ExpectedSchemaProbe` matches the latest CREATE TABLE in drizzle) to ALSO assert that `ExpectedSchemaSentinels.Constraints` matches the latest migration's `CONSTRAINT <name>` declarations and `ExpectedSchemaSentinels.Indexes` matches the latest migration's `CREATE INDEX <name>` / `CREATE UNIQUE INDEX <name>` declarations. Columns are harder to parse robustly (multi-line column definitions, inline constraints) — fall back to "every NOT NULL column declared in the CREATE TABLE block must be in `Columns`", which catches the high-value cases without a full SQL parser.
+  - **Skip comment lines** when extracting CONSTRAINT/INDEX names (DeepSeek round-1 NIT): the regex must guard against commented-out DDL like `-- CONSTRAINT parent_links_old`. Apply `^\s*--` skip before the constraint/index name match, OR strip line-comments from the source before scanning.
 
 **Create (1 file):**
 
@@ -96,7 +98,8 @@ When a new schema-affecting migration adds a table (and so bumps `ExpectedSchema
   - `TestCheckSchemaProbe_MissingColumn` — drop a column, expect `ErrSchemaSentinelMissing{Kind: "column"}`.
   - `TestCheckSchemaProbe_MissingConstraint` — drop a constraint, expect `ErrSchemaSentinelMissing{Kind: "constraint"}`.
   - `TestCheckSchemaProbe_MissingIndex` — drop an index, expect `ErrSchemaSentinelMissing{Kind: "index"}`.
-  - `t.Cleanup` re-creates the dropped object so subsequent tests aren't affected.
+
+**Test isolation** (Codex round-1 + GLM round-1 caught this): `CheckSchemaProbe` takes `*sql.DB` (a connection pool); a DDL change made via `BEGIN` on the test's connection is NOT visible to the probe's separate pool connection until COMMIT. So the original BEGIN/ROLLBACK design wouldn't have isolated the changes — the probe would see the un-dropped object regardless. **Fix**: each "missing X" test does the destructive DDL with COMMIT (so the probe sees it), then registers a `t.Cleanup` that runs the inverse DDL (re-CREATE INDEX / ALTER TABLE ADD CONSTRAINT / ALTER TABLE ADD COLUMN with the original definition) after the test. The cleanup is unconditional (deferred) so a panic mid-test still re-creates the object. Tests run sequentially within a package by default, so cleanup ordering is well-defined.
 
 **No changes to:**
 
@@ -109,12 +112,13 @@ When a new schema-affecting migration adds a table (and so bumps `ExpectedSchema
 | Risk | Severity | Mitigation |
 |---|---|---|
 | Sentinel list drifts when a future migration adds constraints/indexes but the maintainer forgets to update `ExpectedSchemaSentinels` | medium | Phase 2 extends the parity test to grep CONSTRAINT / INDEX declarations from the latest `drizzle/*.sql` file and assert each appears in the sentinel struct. CI catches forgotten bumps before merge. |
-| Adding 8-10 catalog queries to startup adds latency | low | Each query is sub-millisecond against `pg_constraint` / `pg_indexes` (in-memory catalogs). Total <100ms even with cold cache. Boot-time, runs once. |
+| Adding 8-10 catalog queries to startup adds latency | low | Each query is small against `pg_constraint` / `pg_indexes` (in-memory catalogs after the first read; cold-cache reads from disk are still O(1) per query). Total <100ms in practice (DeepSeek round-1 NIT corrected the original "sub-millisecond" overstatement to "small"). Boot-time, runs once. |
 | Operator drops a constraint manually for debugging and the server refuses to restart | low | Fail-fast IS the right behavior — debugging-mode schema state should not silently serve real traffic. Logged error message points at the manual-apply workflow. |
 | The drizzle file parser in the parity test mishandles edge cases (multi-line constraints, comments inside CREATE TABLE) | medium | Use a permissive line-based regex matching `CONSTRAINT <name>` and `CREATE (UNIQUE )?INDEX <name>` — same approach as the existing `0024_parent_links.sql:20-23` lookups. Test fixtures cover the current SQL style. If a future migration uses an unusual style, the parity test fails loudly with a clear message ("could not extract constraint names from drizzle/NNNN_...sql — update the parser or rename the constraint"). |
-| Tests that DROP and re-CREATE a constraint pollute the test DB if t.Cleanup fails between test runs | medium | Wrap each modification in BEGIN/ROLLBACK so the change never commits. The probe runs `SELECT` only — it sees uncommitted state inside the transaction. |
+| Tests that DROP and re-CREATE a constraint pollute the test DB if `t.Cleanup` fails between test runs | medium | (Codex round-1 + GLM round-1 BLOCKER fix.) Original draft proposed BEGIN/ROLLBACK isolation — that design is broken because `CheckSchemaProbe` takes a `*sql.DB` (connection pool), and uncommitted DDL on the test's connection isn't visible to the probe's separate pool connection. **Replaced with**: each test commits the destructive DDL, registers a `t.Cleanup` that runs the inverse DDL (re-CREATE INDEX / ALTER TABLE ADD CONSTRAINT). `t.Cleanup` is deferred so it runs even on panic. Tests run sequentially within the package; if cleanup itself crashes, a follow-up test would fail loudly. The pre-impl checklist in Phase 1 includes "verify cleanup runs even when the assertion fails" by intentionally seeding a failing assert. |
 | The integration test can't actually drop `parent_links_status_check` because the production data has rows that satisfy it | very low | DROP CONSTRAINT removes the rule; existing rows are unaffected. Re-adding the constraint may fail if data violates it, but the test re-creates a CHECK identical to the original DDL on a fresh test DB so this is moot. |
-| Future enum migration (none yet) can't be probed via this design | low | Plan 076 explicitly defers enum-value checks (Decisions §3). When the first enum lands, extend `SchemaSentinels` with an `Enums []EnumValueCheck` field. |
+| Future enum migration can't be probed via this design | low | Plan 076 explicitly defers enum-value checks (Decisions §3). Existing enums (in migrations 0000/0001/0003/0004/0021/0023) are out of latest-only scope. When a future migration adds a new enum or alters an existing one's values, extend `SchemaSentinels` with an `Enums []EnumValueCheck` field. |
+| Phase 2 column-completeness check skips nullable columns (focus is NOT NULL / PK only). A future migration could DROP a nullable column from `parent_links` AND remove it from `ExpectedSchemaSentinels.Columns` simultaneously, with the parity test silently approving | low | (Codex round-1 NIT.) Mitigation: rely on the integration test's `TestCheckSchemaProbe_MissingColumn` regressing. The "drop nullable column from sentinel list AND from prod schema together" scenario is a deliberate breaking change that should be reviewed at PR-time anyway. If higher coverage is needed later, switch the parity-test column extractor to "every column declared in the CREATE TABLE block" — feasible but requires a more careful SQL parser. |
 
 ## Phases
 
@@ -150,7 +154,35 @@ After Phase 3, run the 5-way code review against the consolidated branch diff (s
 
 ## Plan Review
 
-(pending — 5-way before implementation)
+### Round 1 (2026-05-06)
+
+#### Self-review (Opus 4.7) — clean
+
+No concerns surfaced before externals returned.
+
+#### Codex — 2 BLOCKERS (both FIXED) + 2 NITs (1 FIXED, 1 acknowledged)
+
+1. `[FIXED]` BLOCKER: §Decisions #3 claimed "no PostgreSQL enums exist" — false. Codex grep'd `CREATE TYPE`/`AS ENUM` and found enums in migrations 0000, 0001, 0003, 0004, 0021, 0023. → **Response**: rewrote §Decisions #3 to clarify enums DO exist in earlier migrations but are out of LATEST-only scope (Decision #1). Verified by my own grep: 8 migrations declare `CREATE TYPE`. The deferral is a scope choice.
+2. `[FIXED]` BLOCKER: integration-test isolation broken. `CheckSchemaProbe` takes `*sql.DB` (connection pool), so DDL inside a `BEGIN` on the test's connection isn't visible to the probe's separate pool connection until COMMIT. The original BEGIN/ROLLBACK design wouldn't have hidden the destructive changes from the probe. → **Response**: replaced with COMMIT + `t.Cleanup` re-CREATE pattern in §Files; updated the §Risks row with the technical explanation. GLM independently surfaced the same finding (NIT below).
+3. `[FIXED]` NIT (Codex Q4): the parity test's "every NOT NULL column" extractor would silently drop a nullable column from the sentinel list. → **Response**: added new §Risks row classifying as low-severity (deliberate-breaking-change scenario; integration test catches accidental case via `TestCheckSchemaProbe_MissingColumn`).
+4. `[ACKNOWLEDGED]` NIT (Codex Q2): SQL parser style varies across migrations. → **Response**: parity test is explicitly latest-migration-only (parses ONE drizzle/*.sql file), and §Risks calls out the "fail loudly on unsupported future styles" mitigation. No further change needed.
+
+#### DeepSeek V4 Pro — CONCUR (4 NITs, all FIXED)
+
+1. `[FIXED]` Table-qualified constraint/index lookup. Without joining `pg_constraint` to `pg_class` (and `pg_indexes` filter by tablename), the probe could match a same-named constraint on a different table. → **Response**: §Approach explicitly says `pg_class.relname = sentinels.Table` + `pg_indexes.tablename = sentinels.Table` filters.
+2. `[FIXED]` Comment lines in parity-test parser. Line-based regex would match commented-out DDL like `-- CONSTRAINT parent_links_old`. → **Response**: §Files Phase 2 adds explicit comment-line skip rule.
+3. `[FIXED]` `parent_links_active_uniq` is functionally a constraint, not just a perf index. Documented in §Decisions #2 — lives in `Indexes` because PostgreSQL's catalog records partial-unique under `pg_indexes`, but its absence is a correctness issue (the at-most-one-active-link invariant breaks).
+4. `[FIXED]` "sub-millisecond per catalog query" claim was optimistic. → **Response**: softened to "small" in §Risks.
+
+DeepSeek round-1 also explicitly addressed the soft-mode-for-indexes question (rejected: `parent_links_active_uniq` is a correctness boundary, not a perf-only index — fail-closed-at-boot is right). Confirmed direction: "well-scoped... realistic failure mode... avoids fragile string-matching."
+
+#### GLM 5.1 — CONCUR (1 NIT, FIXED — overlap with Codex)
+
+1. `[FIXED]` NIT (overlap with Codex BLOCKER 2): BEGIN/ROLLBACK design doesn't isolate DDL across pool connections. → **Response**: same fix as Codex BLOCKER 2 (COMMIT + `t.Cleanup` re-CREATE).
+
+GLM round-1 also confirmed direction: "Latest-migration-only scope catches the dominant failure mode without expanding maintenance surface across 24+ files. The plan leaves a clear extension point... Deferring enum checks is correct call." (Note: GLM said "no enums exist" which contradicted Codex's grep — Codex was correct; the deferral reasoning is correct but GLM's premise was wrong. My response §Decisions #3 reconciles.)
+
+#### Kimi K2.6 — pending
 
 ## Code Review
 
