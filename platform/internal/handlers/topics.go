@@ -341,6 +341,13 @@ var publishedPlatformUnitStatuses = map[string]bool{
 //
 // Returns (allowed, internalErr). internalErr is non-nil only when an
 // org-membership lookup fails — the handler should map that to 500.
+//
+// TODO(plan-075-followup): the org-scope branch (line ~366) has an inline
+// GetUserRolesInOrg call. Migrating to RequireOrgAuthority is conceptually
+// straightforward (OrgTeach level matches the role logic) but the function
+// is part of a free-helper family that mirrors the broader scope-discriminating
+// pattern; consolidating these as a group is cleaner than one-off migration.
+// See plan-075 §Out of scope, Bucket 2.
 func canLinkUnitToCourse(
 	ctx context.Context,
 	orgs *store.OrgStore,

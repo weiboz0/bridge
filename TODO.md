@@ -10,6 +10,7 @@ Outstanding tasks and technical debt. Check this file when planning new work.
 - [ ] **Database migrations** — Using direct SQL apply (`psql -f`); drizzle-kit migrate has issues, needs investigation. Only journal entries 0000-0002 exist; 0003+ are hand-applied.
 - [ ] **/login redirect loop** — Auth.js v5 + Next 16 combo causes `/login` to 302 to `/login?callbackUrl=/login`, blocking Playwright auth.setup. Likely related to the middleware-deprecation entry above.
 - [ ] **Shadow Next API allowlist shrinkage** — `tests/unit/shadow-routes.test.ts` `KNOWN_SHADOW_ALLOWLIST` enumerates 31 Next route files that sit under Go-proxied prefixes (post plan 074). Each entry has `cleanupPlan: "TBD"` until a follow-up plan claims the surface, verifies Go parity, and deletes the shadow file (which auto-fails the reverse-direction test until the allowlist entry is removed too). Tracked by plan 074-followups.
+- [ ] **`GetUserRolesInOrg` enforcement guard** — plan 075 migrated 16 handler-level call sites to `RequireOrgAuthority` but ~14 remain in out-of-scope files (sessions/schedule for class-or-org fallback; unit_collections/unit_ai/realtime_token/topics/problem_access/teaching_units for scope-discriminating helpers — each has a `TODO(plan-075-followup)` comment). A future plan could add a Vitest/Go-vet style guard that asserts no NEW handler-level `GetUserRolesInOrg` calls outside `access.go`. Mirror plan 074's `shadow-routes.test.ts` pattern. Tracked by plan 075-followups.
 
 ## Open security/correctness plans
 

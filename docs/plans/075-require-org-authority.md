@@ -380,4 +380,56 @@ All 5 reviewers concur after Codex round-1 BLOCKER (audit gap, 14 → 16 in-scop
 
 ## Post-execution report
 
-(pending)
+5-phase implementation shipped on a single branch. Final state at HEAD:
+
+### Phase 1 — `7a607d5` + `ec052db`
+
+Added `OrgAccessLevel` type + 3 constants + `RequireOrgAuthority` function in `platform/internal/handlers/access.go` (95 new lines). Added `platform/internal/handlers/access_org_test.go` (17 integration tests + 2 bypass-order regression tests added in Phase 2). All tests pass against `bridge_test`.
+
+One bypass-order tweak needed during Phase 2: original implementation checked `orgs == nil` BEFORE the `IsPlatformAdmin || ImpersonatedBy` bypass, breaking `TestAddMember_MissingEmail`/`TestAddMember_InvalidRole` which intentionally pass `nil` Orgs with admin claims. Moved the bypass to fire first (commit `ec052db`); added 2 regression tests so the order can't drift.
+
+### Phase 2 — `b99be14`
+
+Migrated 6 inline blocks in `orgs.go` (`GetOrg`, `UpdateOrg`, `ListMembers`, `AddMember`, `UpdateMember`, `RemoveMember`). 140 → 58 lines (net -82). Original 403 messages preserved verbatim. Plan 069 phase 4 self-action guards on `UpdateMember`/`RemoveMember` left intact.
+
+### Phase 3 — `3f5d676`
+
+Migrated 4 call sites in `org_parent_links.go` (`ListEligibleChildren`, `ListByOrg`, `CreateLink`, `RevokeLink`) and deleted the local `requireOrgAdmin` helper (25 lines removed). `CreateLink`'s `claims.UserID` consumption (Kimi K2.6 NIT) preserved by fetching claims via `auth.GetClaims` at the top of each handler. 401/403 response writing now caller-side; original `"Only org admins can manage parent links"` message preserved verbatim.
+
+### Phase 4 — `3508ecd`
+
+Migrated 6 sites across 4 files (Sonnet subagent):
+- `classes.go:74` (`CreateClass`, `OrgTeach`) and `classes.go:122` (`ListClassesByOrg`, `OrgRead`)
+- `courses.go:72` (`CreateCourse`, `OrgTeach`) and `courses.go:122` (`ListCoursesByOrg`, `OrgRead`)
+- `org_dashboard.go:69` (`authorizeOrgAdmin` helper body, `OrgAdmin`) — redundant `IsPlatformAdmin || ImpersonatedBy` short-circuit removed since helper handles it
+- `topic_problems.go:69` (`isTopicEditor`, `OrgTeach`) — `(bool, int)` return shape preserved
+
+### Phase 5 — TODO comments + post-execution report
+
+Inserted `TODO(plan-075-followup)` comments at the 8 out-of-scope files (Bucket 1: `schedule.go` + `sessions.go`; Bucket 2: `unit_collections.go`, `unit_ai.go`, `realtime_token.go`, `topics.go`, `problem_access.go`, `teaching_units.go`). For files with multiple call sites (`sessions.go` 5 sites, `unit_collections.go` 2, `problem_access.go` 2, `teaching_units.go` 2), used a single header comment naming all sites rather than spamming inline TODOs.
+
+### Final verification
+
+- `go build ./...` clean.
+- Full Go test suite: all 15 packages PASS (handlers 174s, store 30s, others sub-second).
+- Vitest: not affected (no JS/TS changes).
+- Final grep `grep -rn "GetUserRolesInOrg" platform/internal/handlers/ --include="*.go" | grep -v "_test.go"`:
+  - 3 hits in `access.go` (lines 103/221/295 — internal to `RequireClassAuthority`/`RequireOrgAuthority`/`CanViewUnit`).
+  - 1 hit in `schedule.go` + 5 in `sessions.go` (Bucket 1, all marked with TODO comments).
+  - 2 in `unit_collections.go` + 1 in `unit_ai.go` + 1 in `realtime_token.go` + 1 in `topics.go` + 2 in `problem_access.go` + 2 in `teaching_units.go` (Bucket 2, all marked with TODO comments).
+  - The 16 in-scope handler call sites are gone.
+
+### Behavior changes shipped (deliberate, documented)
+
+1. **Impersonator-of-admin bypass** extended to org-side checks — was class-side only. Plan 039's carve-out: admins inspecting an org while impersonating a student retain their access. Asymmetric class vs org behavior was a bug; this plan fixes it.
+2. **Status == "active"** filter applied uniformly. Suspended members no longer pass `OrgRead`; suspended teachers no longer pass `OrgTeach`; suspended org_admins no longer mutate via `UpdateOrg`/`AddMember`/`UpdateMember`/`RemoveMember`. The 4 `orgs.go` admin sites previously checked role-only without status; this is a security improvement.
+
+### No deviations from final plan
+
+All 16 in-scope sites migrated. All 8 out-of-scope files received TODO comments. Phase 1 had one bypass-order fix mid-Phase-2 (folded with 2 new regression tests). Phase 3+4 merged per Kimi NIT. The pre-existing `unit-org-A` slug-collision flake in `teaching_units_integration_test.go` was unrelated to this plan and required a one-time DB cleanup of leftover rows before tests could pass; the underlying bug (non-uniqueness-safe slug suffix) is on main and out of scope here.
+
+### Follow-ups
+
+- **Plan 076 (or beyond): `RequireClassOrOrgAccess`** — covers Bucket 1 (`schedule.go`, `sessions.go` × 5). The composite "class-membership-then-org_admin-fallback" pattern can't be expressed with the current `RequireOrgAuthority` shape.
+- **Plan 077 (or beyond): scope-discriminating helper migration** — covers Bucket 2 (`unit_collections.go`, `unit_ai.go`, `realtime_token.go`, `topics.go`, `problem_access.go`, `teaching_units.go`). Each helper has a `switch scope` over platform/org/personal; migrating the org branch to `RequireOrgAuthority` is conceptually correct but touches helper signatures (which are currently `bool`, `(bool, error)`, `(bool, int)`, `(string, *authDecision)`, etc.). Per-helper migration plan needed.
+- **Persistent enforcement** (Kimi NIT, deferred): a future plan could add a Vitest/Go-vet style guard that asserts no NEW handler-level `GetUserRolesInOrg` calls outside `access.go`. Mirror plan 074's `shadow-routes.test.ts` pattern. TODO entry added to `TODO.md` as part of this Phase 5.

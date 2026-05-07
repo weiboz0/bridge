@@ -466,6 +466,10 @@ func (h *RealtimeHandler) authorizeAttemptDoc(ctx context.Context, claims *auth.
 //	platform → platform admin only.
 //	org      → active teacher or org_admin in the unit's org.
 //	personal → owner.
+// TODO(plan-075-followup): authorizeUnitDoc (line ~491) has an inline
+// GetUserRolesInOrg in the org-scope branch of a switch over unit.Scope.
+// Migrating to RequireOrgAuthority touches the (string, *authDecision)
+// return shape. See plan-075 §Out of scope, Bucket 2.
 func (h *RealtimeHandler) authorizeUnitDoc(ctx context.Context, claims *auth.Claims, unitID string) (string, *authDecision) {
 	if h.TeachingUnits == nil {
 		return "", &authDecision{Status: http.StatusInternalServerError, Message: "Units store unavailable"}

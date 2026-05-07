@@ -16,6 +16,15 @@ import (
 	"github.com/weiboz0/bridge/platform/internal/store"
 )
 
+// TODO(plan-075-followup): this file has 5 inline GetUserRolesInOrg call sites
+// (around lines 343, 1033, 1082, 1128, 1392). Each is a class-or-org fallback
+// pattern — handler checks class-membership FIRST, then falls back to
+// org_admin as a secondary pathway. RequireOrgAuthority cannot replace these
+// directly because the helper grants on every org_admin path; here the inline
+// check is a deliberate secondary fallback inside a composite class-then-org
+// auth decision. Migrate to a future RequireClassOrOrgAccess helper. See
+// docs/plans/075-require-org-authority.md §Out of scope, Bucket 1.
+
 type SessionHandler struct {
 	Sessions      *store.SessionStore
 	Schedules     *store.ScheduleStore
