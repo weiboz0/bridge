@@ -376,7 +376,21 @@ All 5 reviewers concur after Codex round-1 BLOCKER (audit gap, 14 → 16 in-scop
 
 ## Code Review
 
-(pending — 5-way at branch-diff time)
+5-way code review against branch `feat/075-require-org-authority` HEAD `5cb409f` (consolidated branch diff vs main; 5 phases).
+
+### Self (Opus 4.7) — clean
+
+`go build ./...` clean. Full Go test suite (15 packages) PASS. New `access_org_test.go` 19 tests PASS. Bypass-order regression caught + fixed mid-Phase-2 with 2 new dedicated tests so future refactors can't drift the order.
+
+### Codex — pending
+
+### DeepSeek V4 Flash — pending
+
+### GLM 5.1 — CONCUR (0 BLOCKERS, 0 NITS)
+
+Confirmed Phase 3 CreateLink claims-consumption (line 144 fetch, line 203 use), uniform Status==active filter at access.go:227-229, all 16 in-scope sites migrated (zero `GetUserRolesInOrg` hits in the 6 in-scope files), `(bool, error)` return shape consistent with class-side precedent, `requireOrgAdmin` fully deleted with no dead imports. `org_dashboard.go`'s `authorizeOrgAdmin` retains its orgID-resolution before delegating; `topic_problems.go`'s `isTopicEditor` cleanly maps `(bool, error)` → `(bool, int)`.
+
+### Kimi K2.6 — pending
 
 ## Post-execution report
 
