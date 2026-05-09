@@ -169,4 +169,26 @@ All 5 reviewers concur. 1 BLOCKER (Codex Q5 / Kimi Q2 — same finding, child.na
 
 ## Post-execution report
 
-(pending)
+Single phase shipped at `b187d59`.
+
+### Changes
+
+- `src/app/(portal)/parent/reports/page.tsx` — server-side redirect to `/parent` + defensive header comment.
+- `src/app/(portal)/parent/children/[id]/reports/page.tsx` — removed 501 check, `notImplemented` state, Generate button + handler, stale copy block. Added header comment documenting the Go POST contract. Generic empty-state copy. Net diff: ~+10 / -40 lines.
+- `src/app/(portal)/parent/children/[id]/page.tsx` — added "Progress reports" section + link.
+- `tests/integration/parent-reports-page.test.tsx` — rewrote: deleted 2 dead-path tests, updated empty-state test, added report-list and fetch-error tests. 3 tests total (same count, different coverage).
+
+### Verification
+
+- `bun run test`: 646 PASS / 11 skipped / 0 failed (no net change from main baseline).
+- `bunx tsc --noEmit`: 10 errors, all pre-existing baseline.
+- Pre-impl grep `grep -rn "/parent/reports\|coming soon\|parent-child account linking" src/`: only the parent-report files (now updated). No remaining stale references.
+
+### No deviations from plan
+
+All 5 reviewer fold-ins applied: GLM (defensive comment + shadow risk), Codex/Kimi (generic empty-state copy — child data not available), DeepSeek (Go POST contract code comment), Kimi (mock Report shape in test).
+
+### Follow-ups
+
+- **Reports MVP** (browser review §P1 #4 deferred): attendance, live-session participation, recent code, completed problems, teacher notes — before AI-generated narrative. Backend aggregation work; needs its own plan.
+- **System-generated report pipeline**: scheduled job or LLM agent that POSTs to the existing Go endpoint with full content. Out of scope here.
