@@ -12,6 +12,17 @@ Outstanding tasks and technical debt. Check this file when planning new work.
 - [ ] **Shadow Next API allowlist shrinkage** — `tests/unit/shadow-routes.test.ts` `KNOWN_SHADOW_ALLOWLIST` enumerates 31 Next route files that sit under Go-proxied prefixes (post plan 074). Each entry has `cleanupPlan: "TBD"` until a follow-up plan claims the surface, verifies Go parity, and deletes the shadow file (which auto-fails the reverse-direction test until the allowlist entry is removed too). Tracked by plan 074-followups.
 - [ ] **`GetUserRolesInOrg` enforcement guard** — plan 075 migrated 16 handler-level call sites to `RequireOrgAuthority` but ~14 remain in out-of-scope files (sessions/schedule for class-or-org fallback; unit_collections/unit_ai/realtime_token/topics/problem_access/teaching_units for scope-discriminating helpers — each has a `TODO(plan-075-followup)` comment). A future plan could add a Vitest/Go-vet style guard that asserts no NEW handler-level `GetUserRolesInOrg` calls outside `access.go`. Mirror plan 074's `shadow-routes.test.ts` pattern. Tracked by plan 075-followups.
 
+## Browser review 011 (2026-05-09) — queued plans
+
+From `docs/reviews/011-comprehensive-browser-review-2026-05-09.md`. P0 #1 (browser/source revision mismatch) self-resolved by reviewer pulling main. Remaining items queued as separate plans:
+
+- [ ] **Plan 079** — Platform-admin unit detail (read-only). `/admin/units` links titles to `/teacher/units/{id}/edit` (`src/app/(portal)/admin/units/page.tsx:157`); platform admin gets bounced back to `/admin`. Add `/admin/units/{id}` read-only detail. P1.
+- [ ] **Plan 080** — Parent-report copy unstaling. `/parent/reports` says "AI-generated coming soon"; `parent/children/[id]/reports/page.tsx:73-80` says "blocked because parent-child linking still being built" — both stale now that linking works. Update copy to reflect actual blocker. P1.
+- [ ] **Plan 081** — Realtime-config health check + smoke. P0 #2 from review 011-2026-05-09. Configuration is environmental (set HOCUSPOCUS_TOKEN_SECRET on the deploy), but the operator-visible health check + smoke test are code. Plan 078 already converts e2e skip-on-503 to hard-fail; remaining work is `/api/health/realtime` and an in-app indicator.
+- [ ] **Plan 082** — Focus-area numbering deduplication. `teacher/courses/[id]/page.tsx:81-86` + `student/classes/[id]/page.tsx:132-139` both prefix display index while seed titles already include `1.`, `2.`. Renders `1. 1. Print & Comments`. Codify Course → Focus Area → Unit + Problems taxonomy in copy. P2.
+- [ ] **Plan 083** — Teacher /schedule + /reports decision (remove placeholder routes OR ship MVP). Currently single-line "Coming soon" pages; primary nav already excludes them. P2.
+- [ ] **Plan 084** — Parent-link child picker UX (placeholder text, open-on-focus list, disable Create until both parent email + child are set). P2.
+
 ## Open security/correctness plans
 
 Filed but pending implementation (each requires Phase 0 Codex review per CLAUDE.md):
