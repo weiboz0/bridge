@@ -138,7 +138,22 @@ No concerns surfaced before externals returned.
 4. `[FIXED]` NIT 4: impersonation clears `IsPlatformAdmin` so admin-impersonating-non-teacher would lose the bypass. → **Response**: added §Risks row; correct behavior, just worth stating.
 5. `[KEPT-AS-FOLLOWUP]` NIT 5: Codex disagreed with GLM that `/org/units/page.tsx:172` is a parallel bug (Codex said "org context, not admin"). → **Response**: GLM is correct — the link TARGET is `/teacher/units/...` which bounces org-admins without teacher role. Annotation in §Risks acknowledges Codex's view but keeps the TODO.
 
-#### DeepSeek V4 Pro — pending
+#### DeepSeek V4 Pro — CONCUR (3 NITs, all already addressed by overlapping folds)
+
+DeepSeek reviewed an earlier plan revision before the GLM + Kimi content-preview drop landed. Their Q5 NITs (a/b/c) all address content-preview safety:
+- (a) Large `body` payloads pulled into memory.
+- (b) `dangerouslySetInnerHTML` XSS vector.
+- (c) Malformed JSON fallback.
+
+All three are moot — content preview was dropped from §Approach in the GLM+Kimi fold. The detail page renders only metadata fields; no `unit.body` access in v1.
+
+`[ACKNOWLEDGED]` Q2: conditional editor link when admin also has teacher role would be a one-line `data.roles.some(r => r.role === "teacher")` check. Omitted in v1 per §Decisions #3; revisit post-v1 if friction emerges. Codex round-1 NIT 3 confirmed the correct shape (`.some(r => r.role === "teacher")` not `.includes("teacher")`).
+
+DeepSeek round-1 also confirmed direction: "tight, well-scoped, correctly solves the browser review finding... bespoke error panels are consistent with the existing admin portal pattern."
+
+### Convergence
+
+All 5 reviewers concur. Plan 079 ready for implementation.
 
 #### GLM 5.1 — CONCUR (1 NIT, FIXED + 1 out-of-scope flag noted)
 
