@@ -182,7 +182,9 @@ Kimi round-1 also confirmed direction: scope split is clean.
 
 ### Codex — pending
 
-### DeepSeek V4 Flash — pending
+### DeepSeek V4 Flash — CONCUR (0 BLOCKERS, 0 NITS)
+
+Confirmed: 404/5xx error handling clean (no 403 branch — 5xx and 403 both fall through to `ErrorState` with `HTTP ${status}`); malformed-UUID test explicitly asserts `expect(mockedApi).not.toHaveBeenCalled()`; no shared fixture state (`beforeEach` resets mock; fresh `renderPage` per test); list-page retarget verified by grep — no dangling `/teacher/units/` refs in admin dir.
 
 ### GLM 5.1 — CONCUR (0 BLOCKERS, 0 NITS)
 
