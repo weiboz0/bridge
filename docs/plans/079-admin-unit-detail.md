@@ -29,7 +29,7 @@ Add a read-only `/admin/units/[id]/page.tsx` that platform admins reach from the
 - Validates `id` looks like a UUID; renders 404 panel if not.
 - `await api<UnitDetail>("/api/units/" + id)` — returns the full unit row.
 - Renders structured panel: title, slug, scope/scopeId, status, materialType, gradeLevel, summary, createdAt, ownerScope label.
-- Optional: short content preview (first ~500 chars of `unit.body` if present), with a "Open in Yjs collaborative editor" affordance — but ONLY if the admin is also a teacher (and so won't bounce). Skip the affordance entirely if the admin lacks `teacher` role.
+- **No content preview in v1** (GLM 5.1 round-1 NIT). `unit.body` (or whatever the field is named) holds a Yjs document state — likely encoded JSON or base64 — NOT human-readable text. Naively slicing "first 500 chars" would surface raw binary/JSON, not a useful preview. Skip the preview entirely in plan 079; metadata fields alone resolve the immediate broken-UX. Defer the content-preview workflow (which needs a Yjs → plaintext extractor or a markdown projector) to a separate plan.
 - Back link to `/admin/units`.
 - ApiError 404 → render "Unit not found" panel; 403 → render "Not authorized" panel; 5xx → render error panel with retry hint. Distinct messages, not silent redirects.
 
@@ -79,6 +79,7 @@ One-line change. The `/admin/units/[id]` page handles the rest.
 | `GET /api/units/{id}` returns less data than the list endpoint expects (e.g., no `summary` or `gradeLevel` on the detail shape) | low | The list page already calls `/api/units/search` which returns rich data; the detail endpoint returns a fuller TeachingUnit. The fields needed for read-only display are a subset. Verify shape during impl. |
 | Admin opens a unit they don't have access to (theoretical — `canViewUnit` says platform admin bypasses everywhere) | low | If the bypass ever changes, the page renders the 403 state cleanly. No silent "redirect to /". |
 | Stale link — if any other Next page also links to `/teacher/units/...` for an admin context, this plan misses it | low | Pre-impl grep `grep -rn "/teacher/units/" src/app/\(portal\)/admin/` before commit. Expect 0 hits outside the list page. |
+| Parallel bug at `src/app/(portal)/org/units/page.tsx:172` — same `/teacher/units/{id}/edit` link, same bounce class for org admins without teacher role (GLM 5.1 round-1 flag, out of scope) | medium | Out of scope for plan 079 — needs an `/org/units/[id]` detail page following the same pattern. Filed as TODO.md follow-up; can be a thin parallel plan or fold into the same PR if the design transfers cleanly. |
 | The "open in editor" affordance is missing, leaving admins without an obvious next-step CTA | very low | Documented in §Decisions; admins navigate via role-switcher when they want edit. v1 trade-off. |
 | The detail page's status badge / scope label rendering drifts from the list page's | low | Reuse the same `SCOPE_LABELS` / `STATUS_LABELS` / `statusBadge` helpers from the list page. Either inline them in both pages (current pattern) or extract to `src/lib/portal/unit-display.ts`. Pick simpler: inline for now. |
 
@@ -103,7 +104,24 @@ After Phase 2, run the 5-way code review against the consolidated branch diff (s
 
 ## Plan Review
 
-(pending — 5-way before implementation)
+### Round 1 (2026-05-09)
+
+#### Self-review (Opus 4.7) — clean
+
+No concerns surfaced before externals returned.
+
+#### Codex — pending
+
+#### DeepSeek V4 Pro — pending
+
+#### GLM 5.1 — CONCUR (1 NIT, FIXED + 1 out-of-scope flag noted)
+
+1. `[FIXED]` NIT (Q3 risk gap): `unit.body` is a Yjs document snapshot, not human-readable text. Naively slicing "first 500 chars" would surface raw binary/JSON. → **Response**: dropped the content-preview affordance entirely in v1. §Approach now says "No content preview in v1"; metadata fields alone resolve the broken-UX. Yjs → plaintext / markdown projector deferred to a separate plan.
+2. `[NOTED, OUT-OF-SCOPE]` Parallel bug at `src/app/(portal)/org/units/page.tsx:172` — org admins without teacher role hit the same bounce. Added a §Risks row + TODO.md entry for a follow-up plan to add `/org/units/[id]` detail.
+
+GLM round-1 also confirmed direction: "Read-only deferral is the right call. The immediate bug is 'admin can't inspect a unit at all' — read-only solves that. Edit involves realtime-collab conflict design and deserves its own plan."
+
+#### Kimi K2.6 — pending
 
 ## Code Review
 
