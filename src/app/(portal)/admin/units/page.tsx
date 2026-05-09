@@ -154,7 +154,7 @@ export default async function AdminUnitsPage({
               {items.map((u) => (
                 <tr key={u.id} className="border-t hover:bg-muted/30">
                   <td className="px-4 py-2 font-medium">
-                    <Link href={`/teacher/units/${u.id}/edit`} className="text-primary underline-offset-2 hover:underline">
+                    <Link href={`/admin/units/${u.id}`} className="text-primary underline-offset-2 hover:underline">
                       {u.title}
                     </Link>
                   </td>
