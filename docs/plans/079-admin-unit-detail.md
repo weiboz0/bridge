@@ -180,7 +180,13 @@ Kimi round-1 also confirmed direction: scope split is clean.
 
 `bun run test` 646 PASS / 11 skipped / 0 failed (up 5 from baseline). `bunx tsc --noEmit` 10 errors (pre-existing baseline). All 5 plan-review folds verified in code: no 403 panel, no content preview, no owner display label, explicit `UnitDetail` interface, error-branch Vitest in place.
 
-### Codex — pending
+### Codex — CONCUR (4 NITs, 2 FIXED + 2 acknowledged)
+
+1. `[ACKNOWLEDGED]` Q1: `Created by` shows raw UUID, not a resolved name. Borderline — Codex calls it "probably acceptable for an admin read-only view". Already documented in §Decisions; future plan can add owner display.
+2. `[ACKNOWLEDGED]` Q2: UUID regex matches any v1-v8, not v4-specific. Minor — Go DB lookup fails-safe with 404 on unknown ID, so non-v4 UUIDs flow through to the 404 panel. Not worth tightening.
+3. `[ACKNOWLEDGED]` Q3: confirmed clean (single-line list page change).
+4. `[FIXED]` Q4: happy-path test missing back-link assertion. → **Response**: added `expect(getByRole("link", {name: /back to all units/i})).toHaveAttribute("href", "/admin/units")` to the happy-path test.
+5. `[FIXED]` Q5 (overlap with Kimi): `<dt>/<dd>` outside a `<dl>` is invalid HTML + a11y issue. → **Response**: replaced with plain `<div>` since the Card grid isn't semantically a definition list. Two reviewers caught the same finding — pattern Bridge has been seeing in other plans.
 
 ### DeepSeek V4 Flash — CONCUR (0 BLOCKERS, 0 NITS)
 
@@ -190,7 +196,17 @@ Confirmed: 404/5xx error handling clean (no 403 branch — 5xx and 403 both fall
 
 Confirmed all 5 questions: content-preview drop applied; list-page retarget at `:157` is correct; TODO.md has plan 079b entry for the parallel bug at `org/units/page.tsx:172`; Vitest covers 4 error branches + happy path with metadata assertions; no regressions — diff is purely additive.
 
-### Kimi K2.6 — pending
+### Kimi K2.6 — CONCUR (1 NIT, FIXED — same finding as Codex Q5)
+
+Confirmed: 403 path GONE; `UnitDetail` interface explicitly declared with all 11 fields; Vitest `vi.mock("@/lib/api-client")` correctly used; no unhandled promises / hydration risks.
+
+`[FIXED]` NIT: `<dt>/<dd>` outside a parent `<dl>` is invalid HTML + a11y gap. Codex independently flagged the same. → **Response**: replaced with plain `<div>` elements; the Card grid isn't semantically a definition list (arbitrary metadata pairs, not term/definition).
+
+### Convergence
+
+All 5 reviewers concur. Plan 079 ready to ship.
+
+**Multi-reviewer ensemble value, plan 079**: GLM caught the unsafe content-preview at plan-review time. Kimi caught the dead-code 403 panel + the dt/dd HTML semantics issue. Codex independently caught the dt/dd issue (validating Kimi's catch) plus the missing back-link assertion. DeepSeek's plan-review NITs were preemptively addressed by the GLM/Kimi folds. Each reviewer caught something the others missed.
 
 ## Post-execution report
 
