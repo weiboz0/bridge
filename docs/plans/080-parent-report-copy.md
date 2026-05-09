@@ -73,9 +73,14 @@ Per the reviewer's "Add a Reports affordance on the child profile only when the 
 - `src/app/(portal)/parent/children/[id]/reports/page.tsx` — delete `notImplemented` state, the 501 check, the stale copy block, the Generate button + handler. Update empty-state copy. Drop unused imports. Net diff: ~-30 lines / +5 lines.
 - `src/app/(portal)/parent/children/[id]/page.tsx` — add a "Progress reports" subsection with a link to `/parent/children/{id}/reports`. ~+8 lines.
 
-**Create (1 file):**
+**Modify (existing test file, NOT new):**
 
-- `tests/unit/parent-children-reports.test.tsx` — Vitest covering the empty-state and report-list render paths. The Generate button is gone; the test should assert it's NOT in the DOM.
+- `tests/integration/parent-reports-page.test.tsx` — already exists (66 lines, 3 tests). Two of its tests assert the EXACT paths plan 080 removes (the 501 "coming soon" copy + the Generate button presence). Self-review correction: the §Files originally said "Create (1 file)" — wrong. The plan rewrites this file:
+  - **Delete** the `'renders Reports coming soon when GET returns 501'` test (dead path; the 501 check is gone in production code).
+  - **Delete** the `'hides the Generate button when 501 is returned'` test (the Generate button is gone in BOTH branches now).
+  - **Update** the `'renders the empty state when 200 with []'` test: replace `expect(getByRole("button", {name: /generate weekly report/i})).toBeInTheDocument()` with `expect(queryByRole("button", {name: /generate weekly report/i})).toBeNull()`. Update the empty-state copy assertion to match the new accurate copy.
+  - **Add** a new test asserting the report-list render path (200 with non-empty array).
+  - File-level update: replace the `describe("ParentReportsPage — Plan 047 phase 2 disabled state")` header with `describe("ParentReportsPage")` since the disabled state no longer exists.
 
 **No changes to:**
 
@@ -116,7 +121,19 @@ After Phase 2, run the 5-way code review against the consolidated branch diff (s
 
 ## Plan Review
 
-(pending — 5-way before implementation)
+### Round 1 (2026-05-09)
+
+#### Self-review (Opus 4.7) — clarification
+
+Folded one correction at the §Files step: original draft said "Create (1 file)" for the test. Wrong — `tests/integration/parent-reports-page.test.tsx` already exists and directly tests the dead 501 path + Generate button presence. Plan now specifies REWRITING the file: delete the 501-path tests, update the empty-state test to expect Generate button is GONE, add a new test for the report-list render path.
+
+#### Codex — pending
+
+#### DeepSeek V4 Pro — pending
+
+#### GLM 5.1 — pending
+
+#### Kimi K2.6 — pending
 
 ## Code Review
 
