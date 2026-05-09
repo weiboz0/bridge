@@ -131,7 +131,14 @@ Folded one correction at the §Files step: original draft said "Create (1 file)"
 
 #### DeepSeek V4 Pro — pending
 
-#### GLM 5.1 — pending
+#### GLM 5.1 — CONCUR (5 NITs, 2 actionable, 1 misread, 2 acknowledged)
+
+1. `[FOLD-PENDING]` NIT 1: add a defensive comment in the redirect page (e.g., `// Plan 080: redirect — do not re-add a page here without …`) so future devs don't accidentally shadow it. Will fold during impl.
+2. `[ACKNOWLEDGED]` NIT 2: removing Generate button is "acceptable v1; honest not destructive."
+3. `[ACKNOWLEDGED]` NIT 3: child-profile "Progress reports" link reveals empty state — net positive, transparent beats hidden.
+4. `[ACKNOWLEDGED]` NIT 4: rewriting the test file is correct; `.skip` would mislead.
+5. `[FOLD-PENDING]` NIT 5a: future-dev shadow risk on the `/parent/reports` route segment. Will add §Risks row.
+6. `[REJECT-MISREAD]` NIT 5b: GLM claims the test file will need adjustment when the page goes client→server. This is a misread — `tests/integration/parent-reports-page.test.tsx` imports the PER-CHILD page (`/parent/children/[id]/reports/page.tsx`), not `/parent/reports`. The per-child page stays a client component; only `/parent/reports` becomes a server redirect, and that file has no test. No adjustment needed.
 
 #### Kimi K2.6 — pending
 
