@@ -59,14 +59,16 @@ test.describe("Parent Portal", () => {
     await expect(codeSection.first()).toBeVisible({ timeout: 5000 });
   });
 
-  test("parent can view reports page", async ({ page }) => {
+  test("/parent/reports redirects to /parent", async ({ page }) => {
+    // Plan 080 (browser review 011-2026-05-09 §P1 #4): the standalone
+    // /parent/reports page used to show "AI-generated coming soon" copy
+    // that contradicted the working parent-link flow. It's now a server
+    // redirect to /parent. Per-child reports live at
+    // /parent/children/[id]/reports.
     await page.goto("/parent/reports");
 
-    // Verify the reports page loads
-    await expect(page.getByRole("heading", { name: "Reports" })).toBeVisible();
-
-    // The reports page currently shows a "coming soon" message
-    await expect(page.locator("text=coming soon")).toBeVisible();
+    // Should land on /parent dashboard.
+    await expect(page).toHaveURL(/\/parent$/);
   });
 
   test("parent children route 404s (page removed in plan 040 phase 7)", async ({ page }) => {
