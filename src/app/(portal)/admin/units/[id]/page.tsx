@@ -155,10 +155,14 @@ function Field({
   value: string;
   mono?: boolean;
 }) {
+  // Plan 079 + Kimi K2.6 code-review: original used <dt>/<dd> without a
+  // parent <dl> (invalid HTML5). The card grid isn't semantically a
+  // definition list — these are arbitrary metadata pairs, not term/def.
+  // Use plain <div>s; pair label and value visually only.
   return (
     <div className="space-y-0.5">
-      <dt className="text-xs text-muted-foreground">{label}</dt>
-      <dd className={mono ? "font-mono text-xs break-all" : ""}>{value}</dd>
+      <div className="text-xs text-muted-foreground">{label}</div>
+      <div className={mono ? "font-mono text-xs break-all" : ""}>{value}</div>
     </div>
   );
 }

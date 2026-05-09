@@ -90,5 +90,11 @@ describe("AdminUnitDetailPage", () => {
     expect(screen.getByText("Platform")).toBeInTheDocument();
     expect(screen.getByText("K-5")).toBeInTheDocument();
     expect(screen.getByText("lesson")).toBeInTheDocument();
+    // Codex code-review NIT Q4: assert the back-link is present on the
+    // happy path (it's exercised in the 404 panel test but not here).
+    expect(screen.getByRole("link", { name: /back to all units/i })).toHaveAttribute(
+      "href",
+      "/admin/units",
+    );
   });
 });
