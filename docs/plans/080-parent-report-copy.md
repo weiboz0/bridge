@@ -171,15 +171,29 @@ All 5 reviewers concur. 1 BLOCKER (Codex Q5 / Kimi Q2 — same finding, child.na
 
 `bun run test` 646 PASS / 11 skipped / 0 failed. `bunx tsc --noEmit` 10 errors (pre-existing baseline). All 5 plan-review folds verified in code: defensive comment in redirect file; `{child.name}` replaced with generic copy; Generate button + handler + state + 501 check entirely removed; Go POST contract code comment present; test mock data matches `Report` interface.
 
-### Codex — pending
+### Codex — CONCUR with 1 BLOCKER (FIXED)
 
-### DeepSeek V4 Flash — pending
+`[FIXED]` BLOCKER Q5: `e2e/parent.spec.ts:62-69` still expected `/parent/reports` to render a "Reports" heading + "coming soon" copy. With the redirect, that e2e test would fail. → **Response (commit `19ee4ff`)**: rewrote the test as `"/parent/reports redirects to /parent"` asserting `await expect(page).toHaveURL(/\/parent$/)`. The other 4 reviewers (Self/Opus, GLM, DeepSeek, Kimi) all missed this because they didn't grep `e2e/` — only Codex's wider scan caught it.
+
+Codex round-1 also confirmed Q1-Q4 PASS: generic copy, no Generate button, defensive comment, test assertions correct.
+
+### DeepSeek V4 Flash — CONCUR clean (0 BLOCKERS, 0 NITS)
+
+Confirmed: Go POST contract block comment at `parent/children/[id]/reports/page.tsx:17-22`; `notImplemented`/`generating` state, `handleGenerate` function, `Button` import, 501 fetch path all gone — no leftovers; 3 tests pass (empty state, list rendering, error surface); no regression; redirect at `/parent/reports` works as intended.
 
 ### GLM 5.1 — CONCUR clean (0 BLOCKERS, 0 NITS)
 
 Confirmed: defensive comment present at lines 1-5 of redirect file (server component, no `"use client"`); child-profile "Progress reports" link targets `/parent/children/{id}/reports` correctly; reports page fully cleaned (no `notImplemented`, no Generate button, no 501 check, all imports used); generic empty-state copy (no `{child.name}`); no regressions.
 
-### Kimi K2.6 — pending
+### Kimi K2.6 — CONCUR clean (0 BLOCKERS, 1 minor NIT no-action)
+
+Confirmed: generic empty-state copy (BLOCKER resolved); test mock data matches `Report` interface (NIT Q5 resolved); redirect lands on `/parent` with linked-children grid; deleted assertions truly gone (no `.skip` / commented-out); no subtle bugs (try/catch wraps fetch, all awaits present, conditional render correct).
+
+NIT (no action): Unicode arrow `→` in child-profile link is fine for screen readers.
+
+### Convergence
+
+All 5 reviewers concur. Codex caught 1 BLOCKER (e2e test stale) that the other 4 missed — only Codex's wider scan included `e2e/`. Pattern lesson: review scope diversity matters as much as model diversity.
 
 ## Post-execution report
 
