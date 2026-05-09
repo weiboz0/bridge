@@ -178,4 +178,30 @@ Kimi round-1 also confirmed direction: scope split is clean.
 
 ## Post-execution report
 
-(pending)
+Single-phase implementation shipped at `8f1ade3`. Three files:
+
+- `src/app/(portal)/admin/units/[id]/page.tsx` (new, ~180 lines) — server component with metadata panel, UUID pre-validation, 404 + 5xx error panels. No 403 (dead code per Kimi). No content preview (Yjs body, not text).
+- `src/app/(portal)/admin/units/page.tsx:157` — retargeted list link from `/teacher/units/{id}/edit` to `/admin/units/{id}` (one-line change).
+- `tests/unit/admin-unit-detail.test.tsx` (new) — 5 tests covering all error branches + happy-path metadata rendering. Uses `// @vitest-environment jsdom` for `@testing-library/react` rendering.
+
+### Verification
+
+- `bun run test`: 646 PASS / 11 skipped / 0 failed (up 5 from main baseline).
+- `bunx tsc --noEmit`: 10 errors, all pre-existing baseline.
+- Pre-impl grep `grep -rn "/teacher/units/" src/app/(portal)/admin/`: only the list page hit (resolved by the retarget). No other callers.
+- Manual smoke (deferred to merge-time): platform admin → `/admin/units` → click unit row → expect detail panel without bounce.
+
+### No deviations from plan
+
+All §Files items shipped. All 5 reviewer fold-ins applied:
+- GLM: dropped content preview entirely.
+- Codex: dropped owner display label, added impersonation risk note.
+- Kimi: explicit `UnitDetail` interface declared, dropped 403 panel as dead code, added Vitest for error branches.
+- DeepSeek's NITs were already addressed by the GLM/Kimi folds.
+
+### Follow-ups (queued in TODO.md)
+
+- **Plan 079b**: parallel `/org/units/[id]` for org admins (GLM round-1 flag — same bounce class for org-admin without teacher role on `org/units/page.tsx:172`).
+- Future: edit affordance (`/admin/units/{id}/edit`) once realtime-collab semantics are designed.
+- Future: optional editor-link CTA when admin also has teacher role (use `data.roles.some(r => r.role === "teacher")`).
+- Future: extract `SCOPE_LABELS`/`STATUS_LABELS`/`statusBadge` to `src/lib/portal/unit-display.ts` if a fourth consumer appears (Rule of Three).
