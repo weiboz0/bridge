@@ -174,7 +174,21 @@ Kimi round-1 also confirmed direction: scope split is clean.
 
 ## Code Review
 
-(pending — 5-way at branch-diff time)
+5-way code review against branch `feat/079-admin-unit-detail` HEAD `c88f6fe`.
+
+### Self (Opus 4.7) — clean
+
+`bun run test` 646 PASS / 11 skipped / 0 failed (up 5 from baseline). `bunx tsc --noEmit` 10 errors (pre-existing baseline). All 5 plan-review folds verified in code: no 403 panel, no content preview, no owner display label, explicit `UnitDetail` interface, error-branch Vitest in place.
+
+### Codex — pending
+
+### DeepSeek V4 Flash — pending
+
+### GLM 5.1 — CONCUR (0 BLOCKERS, 0 NITS)
+
+Confirmed all 5 questions: content-preview drop applied; list-page retarget at `:157` is correct; TODO.md has plan 079b entry for the parallel bug at `org/units/page.tsx:172`; Vitest covers 4 error branches + happy path with metadata assertions; no regressions — diff is purely additive.
+
+### Kimi K2.6 — pending
 
 ## Post-execution report
 
