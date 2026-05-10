@@ -10,12 +10,15 @@ Bridge's highest-value Codex use cases are:
 
 ## Critical Rules
 
-- **Do not work directly on `main`.** Use a feature branch for implementation work.
+- **Always create a feature branch before implementation.** Do not work directly on `main`. Use `feature/plan-NNN-description` for plan work when practical.
+- **Plan review before code.** For substantial plan-driven work, confirm the plan has passed the five-way review gate before implementation begins.
 - **Review before ship.** For plan-driven work, record findings in the plan file's `## Code Review` section.
 - **Write a post-execution report** in the plan file before shipping substantial work.
-- **Run the relevant tests before handoff.** Do not claim completion without verification.
+- **Run the relevant tests before handoff.** For plan work, run the full applicable suite before shipping unless a blocker is documented in the plan.
 - **Do not push unless explicitly asked.**
 - **Do not trust old plan claims without code verification.** Comments, plans, and prior reviews are hints, not proof.
+- **Do not ship unplanned deferrals.** If a known issue is not fixed now, create a concrete follow-up plan in `docs/plans/` with scope and phases before treating it as deferred.
+- **Prefer the long-term fix over a workaround.** If the proper fix is too large, write the plan first and get approval before shipping a containment-only change.
 
 ## Working Style For Codex
 
@@ -37,6 +40,7 @@ Bridge's highest-value Codex use cases are:
 - `docs/` - Project docs
 - `docs/plans/` - Execution plans
 - `docs/specs/` - Design specs for large or novel features
+- `docs/reviews/` - Standalone reviews, audits, and handoffs when there is no plan file to embed findings in
 
 ## Run Commands
 
@@ -95,6 +99,7 @@ All three services are required for E2E tests: Next.js on port 3003, Go platform
 
 ## Testing Expectations
 
+- **Codex is the default independent test implementer when Claude delegates test work.** When acting in that role, write the test cases, keep production-code changes out of scope unless explicitly requested, and report exactly what was verified.
 - Add or update tests whenever behavior changes.
 - Cover happy paths, invalid input, missing data, unauthorized access, and isolation checks where relevant.
 - Prefer integration tests for API behavior.
@@ -123,17 +128,24 @@ Update relevant docs when changing:
 Likely doc targets:
 
 - matching plan/spec files
+- `docs/reviews/` when producing standalone audit or handoff material
 - relevant `README.md` files
 - `docs/api.md`
 - `docs/setup.md`
 - `docs/development-workflow.md` and `docs/code-review.md` for workflow changes
 
-## Plans And Specs
+## Plans, Specs, And Reviews
 
 For substantial work, use plan-first execution.
 
 - **Execution plans** go in `docs/plans/`
 - **Large design docs** go in `docs/specs/` only when a standalone design reference is actually needed
+- **Standalone reviews** go in `docs/reviews/` only when there is no plan file to hold the findings, or when producing a retrospective audit/handoff.
+
+Plan- and code-review verdicts for numbered plans are embedded inside the plan file (`## Plan Review` / `## Code Review`), not split into standalone review docs.
+
+Use semantic line breaks for new prose in new plans/specs: one sentence per line.
+Existing hard-wrapped plans can stay as-is to avoid churn; new sections in existing plans should use semantic line breaks where practical.
 
 Before creating a new plan:
 
@@ -162,17 +174,23 @@ Follow `docs/code-review.md`.
 - Use explicit statuses: `[OPEN]`, `[FIXED]`, `[WONTFIX]`.
 - Include concrete file and line references where possible.
 - Resolve every `[OPEN]` item before shipping.
+- When acting as the Codex reviewer in the five-way gate, focus on correctness, security, authorization/isolation, test gaps, and consistency with the plan and repo conventions.
+- Tag Codex-sourced findings clearly when the plan/review format asks for source tags.
 
 ## Git And Handoff
 
 - Do not commit unrelated noise.
 - Group related changes into meaningful commits.
+- Do not commit every small edit individually; commit logical units.
 - Do not commit secrets, `.env`, or large binaries.
+- Do not amend commits unless explicitly requested.
+- Do not push to remote unless explicitly requested.
 - If ending a session with useful unfinished work, leave the tree and docs in a state the next engineer can understand.
 
 For multi-session continuity:
 
 - check `git status` at start
+- commit useful work before ending a session when the repo workflow requires a handoff commit; use `WIP:` only for genuinely unfinished handoff commits
 - inspect existing plan files and recent review notes
 - do not assume prior work is complete just because a conversation said so
 - do not revert unrelated changes from another session
@@ -182,7 +200,17 @@ Recommended handoff artifacts for substantial work:
 - updated plan file
 - updated docs if behavior changed
 - review findings in the plan file
+- fresh review doc in `docs/reviews/` for audit-style work
 - clear note on what was verified and what was not
+
+## Codex-Specific Best Practices
+
+- Prefer small, auditable changes over wide speculative refactors.
+- Treat comments and plan claims as hints, not proof. Verify in code.
+- When delegated test implementation, write tests that would fail on the old behavior and exercise the public contract, not just the new helper path.
+- When reviewing, lead with concrete findings and file:line references; avoid broad style commentary unless it hides a real risk.
+- If an earlier audit is stale, write a fresh handoff in `docs/reviews/` rather than mutating history into ambiguity.
+- When editing, optimize for the next engineer reading the diff: clear names, minimal blast radius, tests near the behavior that changed, and docs that explain why behavior exists.
 
 ## Codex Checklists
 
@@ -192,6 +220,7 @@ Recommended handoff artifacts for substantial work:
 - Read nearby tests.
 - Read related plans/specs/docs.
 - Check sibling handlers, stores, API clients, and UI flows for the same behavior.
+- For plan-driven work, confirm the current branch and whether plan review has already passed.
 
 ### Before Claiming Completion
 

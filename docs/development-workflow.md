@@ -31,18 +31,21 @@ Write a concrete execution plan with phases, files, tests, and verification step
 1. Read existing plans in `docs/plans/` for reusable patterns and established conventions.
 2. Read `TODO.md` for outstanding items relevant to this work.
 3. Write a detailed plan with: phases, file lists, testing plan per phase (files, functions, expected coverage), and verification steps.
-4. Self-review the plan: check for inconsistencies, missing files, stale references, blast radius, naming conflicts, edge cases.
-5. Get user approval.
-6. Save to `docs/plans/` with the next sequential number (e.g., `docs/plans/024-feature-name.md`). Reference the design spec if one exists.
-7. **Commit the plan file before any implementation code.**
+4. Include a named integration-tests phase, or an explicit "Out of scope" callout explaining why integration coverage is not relevant. Plans touching Go API handlers/stores, auth, persistence, realtime collaboration, cross-user access, or frontend/API contracts need the phase.
+5. Self-review the plan: check for inconsistencies, missing files, stale references, blast radius, naming conflicts, edge cases.
+6. Get user approval.
+7. Save to `docs/plans/` with the next sequential number (e.g., `docs/plans/024-feature-name.md`). Reference the design spec if one exists.
+8. Use semantic line breaks for new prose: one sentence per line. Tables, code blocks, lists, and URLs follow their natural format.
+9. Run the five-way plan review gate described in `CLAUDE.md` / `CODEX.md` and record the verdicts in the plan file before implementation.
+10. **Commit the plan file before any implementation code.**
 
-**Output:** Committed plan file in `docs/plans/`.
+**Output:** Committed plan file in `docs/plans/` with plan-review verdicts and a named integration-tests phase, or a documented exemption.
 
 ---
 
 ## Step 3 — Build
 
-Implement the plan phase by phase on a **single plan branch** (`feat/NNN-description`). All phases share one branch and one PR — phase boundaries are commit-level subdivisions, not separate PRs.
+Implement the plan phase by phase on a **single plan branch** (`feature/plan-NNN-description`). All phases share one branch and one PR — phase boundaries are commit-level subdivisions, not separate PRs.
 
 For **each phase**:
 
@@ -68,8 +71,9 @@ After all phases are complete, verify the whole before moving on.
 
 1. Run the **full** test suite (not just changed tests). All must pass.
 2. Check cross-phase consistency: duplicated code, inconsistent patterns, missed edge cases.
-3. Compare actual test coverage against the plan's testing plan. Add any missing tests.
-4. If issues are found, fix them following the Build step's per-phase process.
+3. Confirm the integration-tests phase shipped what its acceptance criteria promised. Every test named in that phase must exist and pass, or the deviation must be recorded before review.
+4. Compare actual test coverage against the plan's testing plan. Add any missing tests.
+5. If issues are found, fix them following the Build step's per-phase process.
 
 Before claiming work is done, run the verification commands and confirm the actual output. Don't assert success without evidence.
 

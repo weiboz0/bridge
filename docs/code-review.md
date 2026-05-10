@@ -22,7 +22,8 @@ When performing a code review, append a new review round to the `## Code Review`
 
 Each finding gets a numbered item with `[OPEN]` status. Prioritize as Must Fix / Should Fix / Nice to Have. Include file paths and line numbers. End with a 2-4 sentence summary.
 
-If no plan file corresponds to the reviewed PR/branch, create a stub entry in the nearest matching plan file or note the absence explicitly.
+If no plan file corresponds to the reviewed PR/branch, the author should create a minimal numbered stub plan in `docs/plans/` before requesting review, with enough context to hold the `## Code Review` audit trail.
+For retrospective audits or broad handoffs that are not tied to a shippable branch, write a standalone document in `docs/reviews/` instead.
 
 ## For authors
 
