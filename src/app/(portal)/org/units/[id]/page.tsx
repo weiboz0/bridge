@@ -69,7 +69,7 @@ export default async function OrgUnitDetailPage({
     return (
       <ErrorState
         status={0}
-        message={e instanceof Error ? e.message : String(e)}
+        message="request failed"
       />
     );
   }
@@ -101,9 +101,9 @@ export default async function OrgUnitDetailPage({
         </CardHeader>
         <CardContent className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
           <Field label="Scope" value={SCOPE_LABELS[unit.scope] ?? unit.scope} />
-          <Field label="Scope ID" value={unit.scopeId ?? "-"} mono />
-          <Field label="Material type" value={unit.materialType || "-"} />
-          <Field label="Grade level" value={unit.gradeLevel ?? "-"} />
+          <Field label="Scope ID" value={unit.scopeId ?? "—"} mono />
+          <Field label="Material type" value={unit.materialType || "—"} />
+          <Field label="Grade level" value={unit.gradeLevel ?? "—"} />
           <Field label="Created by" value={unit.createdBy} mono />
           <Field
             label="Created at"
@@ -121,7 +121,7 @@ function BackLink() {
       href="/org/units"
       className="text-sm text-primary hover:underline inline-flex items-center gap-1"
     >
-      Back to org units
+      ← Back to org units
     </Link>
   );
 }

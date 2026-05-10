@@ -81,8 +81,36 @@ Record existing baseline failures instead of hiding them.
 
 ## Code Review
 
-Pending implementation.
+External review completed with GLM 5.1, DeepSeek V4 Flash, and Kimi K2.6 against branch `feature/plan-079b-org-unit-detail`.
+All three returned `ALLOW`.
+
+Process note: this follow-up used the already-reviewed Plan 079 implementation pattern as the design template and implemented directly after committing this plan file.
+The current review covered both the short 079b plan and the code diff.
+
+- [FIXED] `TODO.md` was listed in the plan but not updated. The browser-review queue now marks Plan 079, Plan 079b, and Plan 080 complete; 079 and 080 were already merged before this branch.
+- [FIXED] `## Code Review` and `## Post-execution Report` were pending. This section records the review disposition and execution evidence.
+- [FIXED] The org detail test originally missed the unexpected non-`ApiError` branch. Added a test that simulates a low-level network error and asserts the page renders `request failed` without leaking `localhost:8002`.
+- [FIXED] The org detail page originally rendered unexpected `Error.message` values. The page now renders a generic `request failed` for non-`ApiError` failures.
+- [FIXED] Minor sibling UI drift from Plan 079. The org detail page now uses the same em dash fallback style and a left-arrow back link.
+- [FIXED] Scoped eslint found a pre-existing `<a href="/">` in the touched org units page. Converted it to the already-imported Next `Link`.
+- [ACCEPTED] The branch adds no new backend endpoint. `GET /api/units/{id}` is intentionally reused because it already applies `canViewUnit` and returns 404 for missing or unauthorized rows.
+- [ACCEPTED] No content preview is rendered. Unit document contents are Yjs state and need a separate projection/preview design.
 
 ## Post-execution Report
 
-Pending implementation.
+Implemented:
+
+- Added `src/app/(portal)/org/units/[id]/page.tsx`, a read-only metadata detail page for org admins.
+- Retargeted `/org/units` unit title links from `/teacher/units/{id}/edit` to `/org/units/{id}` for both org-scope and platform-scope rows.
+- Added `tests/unit/org-unit-detail.test.tsx` with coverage for invalid UUID, 404, 5xx, unexpected fetch failure sanitization, happy-path metadata rendering, and the list-link retarget.
+- Marked Plan 079b complete in `TODO.md`; also marked stale Plan 079 and Plan 080 TODO rows complete because both are already merged on `main`.
+
+Verification:
+
+- RED: `/home/chris/.nvm/versions/node/v20.20.1/bin/node ./node_modules/.bin/vitest run tests/unit/org-unit-detail.test.tsx` failed before implementation because `@/app/(portal)/org/units/[id]/page` did not exist.
+- PASS: `/home/chris/.nvm/versions/node/v20.20.1/bin/node ./node_modules/.bin/vitest run tests/unit/org-unit-detail.test.tsx` — 5 tests before review fixes, then 6 after adding unexpected-error sanitization coverage.
+- PASS: `/home/chris/.nvm/versions/node/v20.20.1/bin/node ./node_modules/.bin/vitest run tests/unit/org-unit-detail.test.tsx tests/unit/admin-unit-detail.test.tsx` — 11 tests passed after review fixes.
+- PASS: `npx eslint --max-warnings 0 'src/app/(portal)/org/units/[id]/page.tsx' 'src/app/(portal)/org/units/page.tsx' 'tests/unit/org-unit-detail.test.tsx'`.
+- PASS: `cd platform && env GOCACHE=/tmp/magicburg-go-build-cache go test ./... -count=1 -timeout 120s`.
+- PASS: `env DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test /home/chris/.nvm/versions/node/v20.20.1/bin/node ./node_modules/.bin/vitest run` with escalated local database access — 86 files and 671 tests passed; 2 files and 11 tests skipped.
+- BASELINE FAIL: `/home/chris/.nvm/versions/node/v20.20.1/bin/node ./node_modules/typescript/bin/tsc --noEmit` still fails on existing unrelated errors in `src/app/(portal)/teacher/units/new/page.tsx`, `src/components/admin/user-actions.tsx`, and `tests/unit/identity-assert.test.ts`.

@@ -54,6 +54,17 @@ describe("OrgUnitDetailPage", () => {
     expect(screen.getByText(/Internal Server Error/)).toBeInTheDocument();
   });
 
+  it("sanitizes unexpected API failures", async () => {
+    mockedApi.mockRejectedValueOnce(new Error("connect ECONNREFUSED http://localhost:8002"));
+    await renderPage(VALID_UUID);
+
+    expect(
+      screen.getByRole("heading", { name: /couldn.t load unit/i }),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/request failed/)).toBeInTheDocument();
+    expect(screen.queryByText(/localhost:8002/)).not.toBeInTheDocument();
+  });
+
   it("renders 'Unit not found' for malformed UUID without calling api", async () => {
     await renderPage("not-a-uuid");
 

@@ -75,7 +75,13 @@ export default async function OrgUnitsPage({
               <CardTitle className="text-lg">Org admin access required</CardTitle>
             </CardHeader>
             <CardContent className="text-sm text-muted-foreground">
-              <p>This page is for org admins. Return to <a href="/" className="underline text-primary">your dashboard</a>.</p>
+              <p>
+                This page is for org admins. Return to{" "}
+                <Link href="/" className="underline text-primary">
+                  your dashboard
+                </Link>
+                .
+              </p>
             </CardContent>
           </Card>
         </div>
