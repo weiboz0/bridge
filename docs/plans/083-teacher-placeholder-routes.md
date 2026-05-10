@@ -51,7 +51,8 @@ Modify:
 
 Use TDD:
 
-1. Add a source-level test asserting the placeholder route files do not exist and the teacher nav does not link to `/teacher/schedule` or `/teacher/reports`.
+1. Add source-level tests asserting the placeholder route files do not exist and the teacher nav does not link to `/teacher/schedule` or `/teacher/reports`.
+   Extend `tests/unit/nav-config.test.ts` for the nav assertion, and add `tests/unit/teacher-placeholder-routes.test.ts` for the route-file absence assertion.
 2. Verify RED before deleting the pages:
    ```bash
    /home/chris/.nvm/versions/node/v20.20.1/bin/node ./node_modules/.bin/vitest run tests/unit/teacher-placeholder-routes.test.ts
@@ -71,7 +72,13 @@ Record existing baseline failures instead of hiding them.
 
 ## Plan Review
 
-Pending.
+External plan review completed with GLM 5.1, DeepSeek V4 Flash, and Kimi K2.6.
+All three returned `CONCUR`.
+
+- [ACCEPTED] Route removal is the right decision for this cleanup. The two pages are single-line placeholders, teacher nav already excludes them, and there are no source/test links to these routes outside docs and the route files themselves.
+- [FIXED] Reviewers suggested using the existing `tests/unit/nav-config.test.ts` for the teacher-nav assertion. The test plan now extends that file and keeps the route-file absence assertion in `tests/unit/teacher-placeholder-routes.test.ts`.
+- [ACCEPTED] `docs/plans/021-frontend-cleanup.md:82` is stale historical guidance that said placeholder pages should stay. This plan supersedes that older cleanup note for teacher schedule/reports; no edit to the historical plan is needed.
+- [FIXED] The workflow must mark `TODO.md` Plan 083 complete after implementation. `TODO.md` remains in the file list and the post-execution report will record the change.
 
 ## Code Review
 
