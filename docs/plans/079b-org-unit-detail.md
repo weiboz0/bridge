@@ -112,5 +112,5 @@ Verification:
 - PASS: `/home/chris/.nvm/versions/node/v20.20.1/bin/node ./node_modules/.bin/vitest run tests/unit/org-unit-detail.test.tsx tests/unit/admin-unit-detail.test.tsx` — 11 tests passed after review fixes.
 - PASS: `npx eslint --max-warnings 0 'src/app/(portal)/org/units/[id]/page.tsx' 'src/app/(portal)/org/units/page.tsx' 'tests/unit/org-unit-detail.test.tsx'`.
 - PASS: `cd platform && env GOCACHE=/tmp/magicburg-go-build-cache go test ./... -count=1 -timeout 120s`.
-- PASS: `env DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test /home/chris/.nvm/versions/node/v20.20.1/bin/node ./node_modules/.bin/vitest run` with escalated local database access — 86 files and 671 tests passed; 2 files and 11 tests skipped.
+- PASS: `env DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test /home/chris/.nvm/versions/node/v20.20.1/bin/node ./node_modules/.bin/vitest run` with escalated local database access — 86 files and 672 tests passed; 2 files and 11 tests skipped.
 - BASELINE FAIL: `/home/chris/.nvm/versions/node/v20.20.1/bin/node ./node_modules/typescript/bin/tsc --noEmit` still fails on existing unrelated errors in `src/app/(portal)/teacher/units/new/page.tsx`, `src/components/admin/user-actions.tsx`, and `tests/unit/identity-assert.test.ts`.
