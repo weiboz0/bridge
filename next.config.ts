@@ -44,6 +44,8 @@ const GO_PROXY_ROUTES = [
   // by the Hocuspocus Node process with the shared secret) and is
   // NOT proxied to the browser — it runs server-side only.
   "/api/realtime/:path*",
+  // Plan 081: operator-visible realtime configuration health.
+  "/api/health/:path*",
 ];
 
 // Plan 065 — /api/internal/sessions is the server-to-server bridge.session

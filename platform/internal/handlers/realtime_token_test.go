@@ -72,6 +72,54 @@ func TestMintToken_NoSecret_503(t *testing.T) {
 	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
 }
 
+func TestRealtimeHealth_MissingSecretIsDegraded(t *testing.T) {
+	h := &RealtimeHandler{
+		HocuspocusTokenSecret: "",
+		BridgeSessionSecrets: nil,
+		BridgeSessionInternalBearer: "",
+		BridgeSessionAuthFlag: false,
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/health/realtime", nil)
+	w := httptest.NewRecorder()
+	h.Health(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var body realtimeHealthResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	assert.Equal(t, "degraded", body.Status)
+	assert.Equal(t, "ok", body.GoAPI.Status)
+	assert.Equal(t, "misconfigured", body.Realtime.TokenMinting)
+	assert.Equal(t, "blocked", body.Realtime.Hocuspocus)
+	assert.Equal(t, "missing", body.Realtime.HocuspocusTokenSecret)
+	assert.Equal(t, "off", body.BridgeSession.AuthFlag)
+	assert.Equal(t, "missing", body.BridgeSession.Secrets)
+	assert.Equal(t, "missing", body.BridgeSession.InternalBearer)
+}
+
+func TestRealtimeHealth_ConfiguredIsOK(t *testing.T) {
+	h := &RealtimeHandler{
+		HocuspocusTokenSecret: "secret",
+		BridgeSessionSecrets: []string{"session-secret"},
+		BridgeSessionInternalBearer: "internal",
+		BridgeSessionAuthFlag: true,
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/health/realtime", nil)
+	w := httptest.NewRecorder()
+	h.Health(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var body realtimeHealthResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	assert.Equal(t, "ok", body.Status)
+	assert.Equal(t, "ok", body.GoAPI.Status)
+	assert.Equal(t, "ok", body.Realtime.TokenMinting)
+	assert.Equal(t, "configured", body.Realtime.Hocuspocus)
+	assert.Equal(t, "set", body.Realtime.HocuspocusTokenSecret)
+	assert.Equal(t, "on", body.BridgeSession.AuthFlag)
+	assert.Equal(t, "set", body.BridgeSession.Secrets)
+	assert.Equal(t, "set", body.BridgeSession.InternalBearer)
+}
+
 func TestMintToken_MissingDocumentName(t *testing.T) {
 	h := &RealtimeHandler{HocuspocusTokenSecret: rtSecret}
 	body, _ := json.Marshal(map[string]string{})
