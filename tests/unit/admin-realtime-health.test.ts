@@ -15,7 +15,7 @@ describe("Plan 081 admin realtime health indicator", () => {
   it("shows healthy and degraded realtime labels", () => {
     const text = source(adminPage);
     expect(text).toMatch(/Realtime health/);
-    expect(text).toMatch(/Ready/);
+    expect(text).toMatch(/Token minting ready/);
     expect(text).toMatch(/Needs configuration/);
   });
 

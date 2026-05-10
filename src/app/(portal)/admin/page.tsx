@@ -13,8 +13,9 @@ interface RealtimeHealthResponse {
   goApi: { status: string };
   realtime: {
     tokenMinting: "ok" | "misconfigured";
-    hocuspocus: "configured" | "blocked";
+    hocuspocus: "requires_matching_secret" | "blocked";
     hocuspocusTokenSecret: "set" | "missing";
+    hocuspocusProcess: "not_checked";
   };
   bridgeSession: {
     authFlag: "on" | "off";
@@ -44,7 +45,7 @@ export default async function AdminDashboard() {
   try {
     realtimeHealth = await api<RealtimeHealthResponse>("/api/health/realtime");
   } catch (err) {
-    realtimeHealthError = err instanceof Error ? err.message : String(err);
+    realtimeHealthError = err instanceof ApiError ? `API ${err.status}` : "request failed";
   }
 
   return (
@@ -65,7 +66,7 @@ export default async function AdminDashboard() {
                       : "border-amber-200 bg-amber-50 text-amber-800"
                   }`}
                 >
-                  {realtimeHealth.status === "ok" ? "Ready" : "Needs configuration"}
+                  {realtimeHealth.status === "ok" ? "Token minting ready" : "Needs configuration"}
                 </span>
                 <span className="inline-flex rounded-md border px-2 py-0.5 text-xs text-muted-foreground">
                   Go API {realtimeHealth.goApi.status}
@@ -76,7 +77,8 @@ export default async function AdminDashboard() {
               </div>
               {realtimeHealth.status === "ok" ? (
                 <p className="text-muted-foreground">
-                  Realtime token minting and the Hocuspocus shared secret are configured.
+                  The Go API can mint realtime tokens. Hocuspocus must run with the same
+                  <code> HOCUSPOCUS_TOKEN_SECRET</code>; this check does not probe the Node process.
                 </p>
               ) : (
                 <p className="text-amber-900">

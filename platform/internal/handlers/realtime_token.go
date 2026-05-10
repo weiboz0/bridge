@@ -64,6 +64,7 @@ type realtimeHealthRealtime struct {
 	TokenMinting          string `json:"tokenMinting"`
 	Hocuspocus            string `json:"hocuspocus"`
 	HocuspocusTokenSecret string `json:"hocuspocusTokenSecret"`
+	HocuspocusProcess     string `json:"hocuspocusProcess"`
 }
 
 type realtimeHealthBridgeAuth struct {
@@ -103,14 +104,16 @@ func (h *RealtimeHandler) Health(w http.ResponseWriter, r *http.Request) {
 		TokenMinting:          "misconfigured",
 		Hocuspocus:            "blocked",
 		HocuspocusTokenSecret: "missing",
+		HocuspocusProcess:     "not_checked",
 	}
 	status := "degraded"
 	if h.HocuspocusTokenSecret != "" {
 		status = "ok"
 		realtime = realtimeHealthRealtime{
 			TokenMinting:          "ok",
-			Hocuspocus:            "configured",
+			Hocuspocus:            "requires_matching_secret",
 			HocuspocusTokenSecret: "set",
+			HocuspocusProcess:     "not_checked",
 		}
 	}
 
