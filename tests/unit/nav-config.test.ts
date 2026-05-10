@@ -21,6 +21,15 @@ describe("nav-config", () => {
     expect(portalConfigs.parent.navItems[0].href).toBe("/parent");
   });
 
+  // Plan 083: Schedule and Reports are not real teacher product surfaces
+  // yet. Keep them out of primary nav until a real MVP ships.
+  it("teacher nav does not link to schedule or reports placeholders", () => {
+    const teacherHrefs = portalConfigs.teacher.navItems.map((item) => item.href);
+
+    expect(teacherHrefs).not.toContain("/teacher/schedule");
+    expect(teacherHrefs).not.toContain("/teacher/reports");
+  });
+
   // Plan 041 phase 3.1: every org_admin nav entry must have a backing
   // page file. Catches the "added a nav link, forgot the page" mistake.
   // Plan 043 phase 6.4: extended to cover the admin portal too.
