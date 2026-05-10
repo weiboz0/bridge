@@ -8,10 +8,28 @@ interface AdminStatsResponse {
   totalUsers: number;
 }
 
+interface RealtimeHealthResponse {
+  status: "ok" | "degraded";
+  goApi: { status: string };
+  realtime: {
+    tokenMinting: "ok" | "misconfigured";
+    hocuspocus: "requires_matching_secret" | "blocked";
+    hocuspocusTokenSecret: "set" | "missing";
+    hocuspocusProcess: "not_checked";
+  };
+  bridgeSession: {
+    authFlag: "on" | "off";
+    secrets: "set" | "missing";
+    internalBearer: "set" | "missing";
+  };
+}
+
 export default async function AdminDashboard() {
   let stats: AdminStatsResponse | null = null;
   let errorStatus: number | null = null;
   let errorMessage: string | null = null;
+  let realtimeHealth: RealtimeHealthResponse | null = null;
+  let realtimeHealthError: string | null = null;
 
   try {
     stats = await api<AdminStatsResponse>("/api/admin/stats");
@@ -24,9 +42,58 @@ export default async function AdminDashboard() {
     }
   }
 
+  try {
+    realtimeHealth = await api<RealtimeHealthResponse>("/api/health/realtime");
+  } catch (err) {
+    realtimeHealthError = err instanceof ApiError ? `API ${err.status}` : "request failed";
+  }
+
   return (
     <div className="p-6 space-y-6">
       <h1 className="text-2xl font-bold">Platform Admin</h1>
+      <Card className={realtimeHealth?.status === "ok" ? "" : "border-amber-300"}>
+        <CardHeader>
+          <CardTitle className="text-sm text-muted-foreground">Realtime health</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3 text-sm">
+          {realtimeHealth ? (
+            <>
+              <div className="flex flex-wrap gap-2">
+                <span
+                  className={`inline-flex rounded-md border px-2 py-0.5 text-xs font-medium ${
+                    realtimeHealth.status === "ok"
+                      ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                      : "border-amber-200 bg-amber-50 text-amber-800"
+                  }`}
+                >
+                  {realtimeHealth.status === "ok" ? "Token minting ready" : "Needs configuration"}
+                </span>
+                <span className="inline-flex rounded-md border px-2 py-0.5 text-xs text-muted-foreground">
+                  Go API {realtimeHealth.goApi.status}
+                </span>
+                <span className="inline-flex rounded-md border px-2 py-0.5 text-xs text-muted-foreground">
+                  Bridge session auth {realtimeHealth.bridgeSession.authFlag}
+                </span>
+              </div>
+              {realtimeHealth.status === "ok" ? (
+                <p className="text-muted-foreground">
+                  The Go API can mint realtime tokens. Hocuspocus must run with the same
+                  <code> HOCUSPOCUS_TOKEN_SECRET</code>; this check does not probe the Node process.
+                </p>
+              ) : (
+                <p className="text-amber-900">
+                  Set <code>HOCUSPOCUS_TOKEN_SECRET</code> on both the Go API and
+                  Hocuspocus processes, then reload this page.
+                </p>
+              )}
+            </>
+          ) : (
+            <p className="text-amber-900">
+              Couldn&rsquo;t check realtime health{realtimeHealthError ? `: ${realtimeHealthError}` : "."}
+            </p>
+          )}
+        </CardContent>
+      </Card>
       {stats ? (
         <div className="grid gap-4 md:grid-cols-3">
           <Card>

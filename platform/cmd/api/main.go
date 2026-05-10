@@ -168,16 +168,20 @@ func main() {
 	//     under RequireAuth would 401 the unauthenticated callback
 	//     before our handler could see the bearer.
 	realtimeH := &handlers.RealtimeHandler{
-		Sessions:              stores.Sessions,
-		Classes:               stores.Classes,
-		Orgs:                  stores.Orgs,
-		TeachingUnits:         stores.TeachingUnits,
-		Problems:              stores.Problems,
-		Attempts:              stores.Attempts,
-		Users:                 stores.Users,
-		ParentLinks:           stores.ParentLinks, // plan 053b phase 4
-		HocuspocusTokenSecret: cfg.Realtime.HocuspocusTokenSecret,
+		Sessions:                    stores.Sessions,
+		Classes:                     stores.Classes,
+		Orgs:                        stores.Orgs,
+		TeachingUnits:               stores.TeachingUnits,
+		Problems:                    stores.Problems,
+		Attempts:                    stores.Attempts,
+		Users:                       stores.Users,
+		ParentLinks:                 stores.ParentLinks, // plan 053b phase 4
+		HocuspocusTokenSecret:       cfg.Realtime.HocuspocusTokenSecret,
+		BridgeSessionSecrets:        cfg.BridgeSession.Secrets,
+		BridgeSessionInternalBearer: cfg.BridgeSession.InternalBearer,
+		BridgeSessionAuthFlag:       cfg.BridgeSession.AuthFlag,
 	}
+	realtimeH.HealthRoutes(r)
 	realtimeH.InternalRoutes(r)
 
 	// Plan 065 Phase 1 — Bridge session mint endpoint. Like the

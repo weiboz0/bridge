@@ -41,6 +41,36 @@ type RealtimeHandler struct {
 	// and the Hocuspocus Node process. Empty = realtime endpoints
 	// return 503 (server misconfigured).
 	HocuspocusTokenSecret string
+	// Bridge session health flags are reported for operators only.
+	// Values are never exposed; the health response only reports
+	// set/missing and whether the cutover flag is on.
+	BridgeSessionSecrets        []string
+	BridgeSessionInternalBearer string
+	BridgeSessionAuthFlag       bool
+}
+
+type realtimeHealthResponse struct {
+	Status        string                   `json:"status"`
+	GoAPI         realtimeHealthStatus     `json:"goApi"`
+	Realtime      realtimeHealthRealtime   `json:"realtime"`
+	BridgeSession realtimeHealthBridgeAuth `json:"bridgeSession"`
+}
+
+type realtimeHealthStatus struct {
+	Status string `json:"status"`
+}
+
+type realtimeHealthRealtime struct {
+	TokenMinting          string `json:"tokenMinting"`
+	Hocuspocus            string `json:"hocuspocus"`
+	HocuspocusTokenSecret string `json:"hocuspocusTokenSecret"`
+	HocuspocusProcess     string `json:"hocuspocusProcess"`
+}
+
+type realtimeHealthBridgeAuth struct {
+	AuthFlag       string `json:"authFlag"`
+	Secrets        string `json:"secrets"`
+	InternalBearer string `json:"internalBearer"`
 }
 
 // Routes registers the public mint endpoint. Must be mounted INSIDE
@@ -51,6 +81,12 @@ func (h *RealtimeHandler) Routes(r chi.Router) {
 	})
 }
 
+// HealthRoutes registers public operator diagnostics. This route
+// exposes readiness booleans only; it never returns secret values.
+func (h *RealtimeHandler) HealthRoutes(r chi.Router) {
+	r.Get("/api/health/realtime", h.Health)
+}
+
 // InternalRoutes registers the server-to-server callback endpoint.
 // Must be mounted OUTSIDE the user-auth group: Hocuspocus calls this
 // with a shared bearer secret, not a Bridge user session, and any
@@ -59,6 +95,50 @@ func (h *RealtimeHandler) Routes(r chi.Router) {
 func (h *RealtimeHandler) InternalRoutes(r chi.Router) {
 	r.Route("/api/internal/realtime", func(r chi.Router) {
 		r.Post("/auth", h.InternalAuth)
+	})
+}
+
+// Health reports realtime configuration state for operators.
+func (h *RealtimeHandler) Health(w http.ResponseWriter, r *http.Request) {
+	realtime := realtimeHealthRealtime{
+		TokenMinting:          "misconfigured",
+		Hocuspocus:            "blocked",
+		HocuspocusTokenSecret: "missing",
+		HocuspocusProcess:     "not_checked",
+	}
+	status := "degraded"
+	if h.HocuspocusTokenSecret != "" {
+		status = "ok"
+		realtime = realtimeHealthRealtime{
+			TokenMinting:          "ok",
+			Hocuspocus:            "requires_matching_secret",
+			HocuspocusTokenSecret: "set",
+			HocuspocusProcess:     "not_checked",
+		}
+	}
+
+	authFlag := "off"
+	if h.BridgeSessionAuthFlag {
+		authFlag = "on"
+	}
+	bridgeSecrets := "missing"
+	if len(h.BridgeSessionSecrets) > 0 {
+		bridgeSecrets = "set"
+	}
+	internalBearer := "missing"
+	if h.BridgeSessionInternalBearer != "" {
+		internalBearer = "set"
+	}
+
+	writeJSON(w, http.StatusOK, realtimeHealthResponse{
+		Status:   status,
+		GoAPI:    realtimeHealthStatus{Status: "ok"},
+		Realtime: realtime,
+		BridgeSession: realtimeHealthBridgeAuth{
+			AuthFlag:       authFlag,
+			Secrets:        bridgeSecrets,
+			InternalBearer: internalBearer,
+		},
 	})
 }
 
@@ -348,10 +428,10 @@ func roleForSessionMember(callerID, studentID string, session *store.LiveSession
 // broadcast:{sessionId} — broadcast docs are one-way: the teacher
 // writes, everyone-in-the-class reads. Two roles, two gates:
 //
-//   role="teacher" (write/start/stop): platform admin OR the
-//     session's teacher. Mirrors `SessionHandler.ToggleBroadcast`.
-//   role="user" (read-only viewer): any class member or session
-//     participant.
+//	role="teacher" (write/start/stop): platform admin OR the
+//	  session's teacher. Mirrors `SessionHandler.ToggleBroadcast`.
+//	role="user" (read-only viewer): any class member or session
+//	  participant.
 //
 // The Hocuspocus side doesn't distinguish reader vs writer for
 // broadcast docs (Yjs CRDTs are inherently bidirectional); the JWT
@@ -466,6 +546,7 @@ func (h *RealtimeHandler) authorizeAttemptDoc(ctx context.Context, claims *auth.
 //	platform → platform admin only.
 //	org      → active teacher or org_admin in the unit's org.
 //	personal → owner.
+//
 // TODO(plan-075-followup): authorizeUnitDoc (line ~491) has an inline
 // GetUserRolesInOrg in the org-scope branch of a switch over unit.Scope.
 // Migrating to RequireOrgAuthority touches the (string, *authDecision)

@@ -49,4 +49,5 @@ export const middlewareMatcher = [
   "/api/collections/:path*",
   "/api/uploads/:path*",
   "/api/realtime/:path*",
+  "/api/health/:path*",
 ] as const;
