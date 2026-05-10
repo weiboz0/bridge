@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { users } from "@/lib/db/schema";
@@ -51,6 +52,16 @@ export default async function ChildDetailPage({
             ))}
           </div>
         )}
+      </div>
+
+      <div>
+        <h2 className="text-lg font-semibold mb-3">Progress reports</h2>
+        <Link
+          href={`/parent/children/${id}/reports`}
+          className="text-sm text-primary hover:underline inline-flex items-center gap-1"
+        >
+          View progress reports →
+        </Link>
       </div>
 
       <div>
