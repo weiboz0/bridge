@@ -1,6 +1,6 @@
 id: cfaa9df8-0861-4042-ae81-3040191f9d9c
 slug: variables-and-types
-title: 2. Variables & Types
+title: Variables & Types
 description: |
   Store values in variables. Read input from the user. Tell apart
   numbers, text, and booleans, and convert between them.

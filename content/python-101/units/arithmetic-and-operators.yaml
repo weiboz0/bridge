@@ -1,6 +1,6 @@
 id: 1ee982b0-cacf-4cfd-a36e-b75556a5ab46
 slug: arithmetic-and-operators
-title: 3. Arithmetic & Operators
+title: Arithmetic & Operators
 description: |
   Integers and floats. The four basic operators, plus floor-division
   (`//`), modulo (`%`), and exponent (`**`). Operator precedence and

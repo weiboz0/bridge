@@ -121,7 +121,12 @@ export default async function StudentClassDetailPage({
       )}
 
       <div className="space-y-4">
-        <h2 className="text-lg font-semibold">Focus Areas</h2>
+        <div>
+          <h2 className="text-lg font-semibold">Focus Areas</h2>
+          <p className="text-sm text-muted-foreground">
+            Each focus area includes a linked unit and practice problems.
+          </p>
+        </div>
         {topics.length === 0 && (
           <Card>
             <CardContent className="py-6 text-center text-muted-foreground">

@@ -1,6 +1,6 @@
 id: 72ef6e72-e72e-4190-8515-66a59303dd8d
 slug: functions
-title: 9. Functions
+title: Functions
 description: |
   Define your own functions with `def`. Take parameters, return
   values, and call functions from other functions. Understand local

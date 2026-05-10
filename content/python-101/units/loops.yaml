@@ -1,6 +1,6 @@
 id: e0115fa5-8b58-40dd-a6f3-a63e0958b8dc
 slug: loops
-title: 6. Loops
+title: Loops
 description: |
   Repeat work with `for ... in range(...)` and `while`. Use `break` to
   stop early and `continue` to skip the rest of an iteration.

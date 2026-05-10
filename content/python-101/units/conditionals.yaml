@@ -1,6 +1,6 @@
 id: ec067d9a-9055-4000-b55c-03b00a0d7745
 slug: conditionals
-title: 5. Conditionals
+title: Conditionals
 description: |
   Make decisions with `if`, `elif`, and `else`. Compare values with
   `==`, `!=`, `<`, `>`, `<=`, `>=`. Combine conditions with `and`,

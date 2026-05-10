@@ -1,6 +1,6 @@
 id: e0b476c6-867b-4b59-96df-da0cc64cbf5c
 slug: strings
-title: 4. Strings
+title: Strings
 description: |
   Index, slice, and iterate strings. Common methods: `lower()`,
   `upper()`, `replace()`, `split()`, `count()`. Build new strings with

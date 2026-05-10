@@ -1,6 +1,6 @@
 id: f5ebe462-add5-497f-bc1a-2c064fabeb15
 slug: files-and-exceptions
-title: 10. Files & Exceptions
+title: Files & Exceptions
 description: |
   Read multi-line input. Handle bad input with `try` / `except`.
   (For the grader, "files" are simulated through stdin.)

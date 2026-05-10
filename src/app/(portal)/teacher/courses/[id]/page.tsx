@@ -70,7 +70,12 @@ export default async function TeacherCourseDetailPage({
 
       <div className="grid gap-6 md:grid-cols-2">
         <div className="space-y-4">
-          <h2 className="text-lg font-semibold">Focus Areas ({topicList.length})</h2>
+          <div>
+            <h2 className="text-lg font-semibold">Focus Areas ({topicList.length})</h2>
+            <p className="text-sm text-muted-foreground">
+              Course focus areas organize units and problems for students.
+            </p>
+          </div>
 
           <AddTopicForm courseId={id} />
 

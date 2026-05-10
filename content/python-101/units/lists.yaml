@@ -1,6 +1,6 @@
 id: 845f15c7-19e1-4740-9943-2919e4e461f4
 slug: lists
-title: 7. Lists
+title: Lists
 description: |
   Build, index, slice, and iterate lists. Mutate with `append()`,
   `pop()`, `remove()`. Build new lists with comprehensions.

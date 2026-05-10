@@ -1,6 +1,6 @@
 id: 162209c5-b1fa-4aa4-8a67-d1202b706db4
 slug: classes-and-objects
-title: 11. Classes & Objects
+title: Classes & Objects
 description: |
   Define your own type with `class`. Initialize state in `__init__`,
   add behavior with methods, and use `__str__` for friendly printing.

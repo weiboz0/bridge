@@ -35,6 +35,11 @@ describe("Plan 048 phase 5 — Topic → Focus Area rename", () => {
       expect(source(path)).toMatch(/No focus areas yet\. Add your first focus area above\./);
       expect(source(path)).not.toMatch(/No topics yet\. Add your first topic above\./);
     });
+    it("explains that course focus areas organize units and problems", () => {
+      expect(source(path)).toMatch(
+        /Course focus areas organize units and problems for students\./
+      );
+    });
   });
 
   describe("student classes/[id]/page.tsx", () => {
@@ -50,6 +55,11 @@ describe("Plan 048 phase 5 — Topic → Focus Area rename", () => {
     it("'No material yet for this focus area'", () => {
       expect(source(path)).toMatch(/No material yet for this focus area\./);
       expect(source(path)).not.toMatch(/No material yet for this topic\./);
+    });
+    it("explains that focus areas contain the linked unit and practice problems", () => {
+      expect(source(path)).toMatch(
+        /Each focus area includes a linked unit and practice problems\./
+      );
     });
   });
 

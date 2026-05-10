@@ -1,6 +1,6 @@
 id: bbd5212f-cb47-4ea5-a68f-a0ee04d95cd4
 slug: print-and-comments
-title: 1. Print & Comments
+title: Print & Comments
 description: |
   Your very first program. You'll see how Python's `print` function
   sends text to the screen, and how `#` comments let you leave notes

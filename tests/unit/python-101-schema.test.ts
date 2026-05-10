@@ -35,7 +35,7 @@ function validUnit(overrides: Partial<Record<string, unknown>> = {}): unknown {
   return {
     id: uuidv4(),
     slug: "print-and-comments",
-    title: "1. Print & Comments",
+    title: "Print & Comments",
     description: "Your first program: printing output.",
     gradeLevel: "9-12",
     subjectTags: ["python", "intro"],
@@ -107,6 +107,12 @@ describe("unitFileSchema", () => {
 
   it("rejects an upper-case slug", () => {
     const bad = validUnit({ slug: "Print-And-Comments" });
+    const result = unitFileSchema.safeParse(bad);
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects titles with embedded display numbers", () => {
+    const bad = validUnit({ title: "1. Print & Comments" });
     const result = unitFileSchema.safeParse(bad);
     expect(result.success).toBe(false);
   });
@@ -237,7 +243,7 @@ describe("validateContentTree", () => {
     const u2 = unitFileSchema.parse(
       validUnit({
         slug: "variables-and-types",
-        title: "2. Variables",
+        title: "Variables & Types",
         blocks: [
           { type: "heading", text: "Variables" },
           {

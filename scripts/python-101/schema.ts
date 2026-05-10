@@ -142,7 +142,10 @@ export const unitFileSchema = z
   .object({
     id: uuidV4,
     slug,
-    title: nonEmptyString.max(120),
+    title: nonEmptyString.max(120).refine(
+      (title) => !/^\d+\.\s+/.test(title),
+      "title must not include display order; course.yaml topic order is canonical",
+    ),
     description: nonEmptyString,
     gradeLevel,
     subjectTags: tagList,

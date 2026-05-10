@@ -1,6 +1,6 @@
 id: 3b7b1da8-70e1-4029-92f0-2d260f7130c3
 slug: dicts-and-sets
-title: 8. Dicts & Sets
+title: Dicts & Sets
 description: |
   Map keys to values with `dict`. Track unique items with `set`. Use
   `in` for fast membership checks; iterate keys, values, and items.
