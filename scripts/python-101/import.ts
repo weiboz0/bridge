@@ -65,6 +65,7 @@ import {
   parseAuthoringYaml,
   unitFileSchema,
   validateContentTree,
+  displayOrderPrefix,
   type CourseManifest,
   type UnitFile,
   type ContentTree,
@@ -850,6 +851,61 @@ interface DemoWireSummary {
   unitCount: number;
 }
 
+function withoutDisplayOrderPrefix(title: string, fallbackTitle: string): string {
+  const normalizedTitle = title.replace(displayOrderPrefix, "").trim();
+  return normalizedTitle || fallbackTitle;
+}
+
+async function normalizeExistingDemoCloneTitles(tx: Tx): Promise<number> {
+  const cloneTopics = await tx
+    .select({ id: topics.id, title: topics.title })
+    .from(topics)
+    .where(eq(topics.courseId, DEMO_CLONE_COURSE_ID));
+
+  for (const topic of cloneTopics) {
+    const normalizedTitle = withoutDisplayOrderPrefix(topic.title, "Untitled focus area");
+    if (normalizedTitle !== topic.title) {
+      await tx
+        .update(topics)
+        .set({ title: normalizedTitle, updatedAt: new Date() })
+        .where(eq(topics.id, topic.id));
+    }
+  }
+
+  if (cloneTopics.length === 0) {
+    return 0;
+  }
+
+  const cloneUnits = await tx
+    .select({
+      id: teachingUnits.id,
+      title: teachingUnits.title,
+    })
+    .from(teachingUnits)
+    .where(
+      and(
+        eq(teachingUnits.scope, "org"),
+        eq(teachingUnits.scopeId, BRIDGE_DEMO_SCHOOL_ORG_ID),
+        inArray(
+          teachingUnits.topicId,
+          cloneTopics.map((topic) => topic.id),
+        ),
+      ),
+    );
+
+  for (const unit of cloneUnits) {
+    const normalizedTitle = withoutDisplayOrderPrefix(unit.title, "Untitled unit");
+    if (normalizedTitle !== unit.title) {
+      await tx
+        .update(teachingUnits)
+        .set({ title: normalizedTitle, updatedAt: new Date() })
+        .where(eq(teachingUnits.id, unit.id));
+    }
+  }
+
+  return cloneTopics.length;
+}
+
 async function wireDemoClass(
   tx: Tx,
   sourceCourseId: string,
@@ -889,17 +945,12 @@ async function wireDemoClass(
     .where(eq(courses.id, DEMO_CLONE_COURSE_ID));
 
   if (existingClone) {
-    // Already cloned. Just ensure the demo class points at it.
-    // Important: re-runs of --wire-demo-class do NOT refresh the
-    // cloned course's content from the source. The clone is eve's
-    // editable copy — auto-refreshing would clobber any local
-    // edits she's made. To push source updates into the demo
-    // clone, delete the clone (e.g. DELETE FROM courses WHERE
-    // id = '<DEMO_CLONE_COURSE_ID>' CASCADE) and re-run the
-    // importer; a follow-up plan should add an explicit
-    // `--refresh-demo-clone` flag for content authors.
+    // Already cloned. Ensure the demo class points at it and strip
+    // legacy display-order prefixes from the clone's titles. This is
+    // deliberately narrower than a full content refresh so Eve's
+    // editable class content is not overwritten on every import.
     process.stderr.write(
-      `WARNING: demo clone ${DEMO_CLONE_COURSE_ID} already exists; --wire-demo-class is NOT refreshing its content from the source. Drop the clone and re-run if you want fresh content.\n`,
+      `WARNING: demo clone ${DEMO_CLONE_COURSE_ID} already exists; --wire-demo-class will reuse it and normalize legacy display-order title prefixes only.\n`,
     );
     if (demoClass.courseId !== DEMO_CLONE_COURSE_ID) {
       await tx
@@ -907,14 +958,11 @@ async function wireDemoClass(
         .set({ courseId: DEMO_CLONE_COURSE_ID, updatedAt: new Date() })
         .where(eq(classes.id, DEMO_CLASS_ID));
     }
-    const cloneTopics = await tx
-      .select({ id: topics.id })
-      .from(topics)
-      .where(eq(topics.courseId, DEMO_CLONE_COURSE_ID));
+    const unitCount = await normalizeExistingDemoCloneTitles(tx);
     return {
       cloned: false,
       cloneCourseId: DEMO_CLONE_COURSE_ID,
-      unitCount: cloneTopics.length,
+      unitCount,
     };
   }
 

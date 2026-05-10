@@ -42,6 +42,7 @@ const slug = z
   .max(80);
 
 const nonEmptyString = z.string().min(1);
+export const displayOrderPrefix = /^0?\d{1,2}(?:\.(?!\d)\s*|\)\s*|:(?:\s+|$))/;
 
 // gradeLevel matches the DB's grade_level enum (drizzle/0008+), which
 // is `["K-5", "6-8", "9-12"]`. The wider K-2/3-5 split that some
@@ -143,8 +144,8 @@ export const unitFileSchema = z
     id: uuidV4,
     slug,
     title: nonEmptyString.max(120).refine(
-      (title) => !/^\d+\.\s+/.test(title),
-      "title must not include display order; course.yaml topic order is canonical",
+      (title) => !displayOrderPrefix.test(title),
+      "title must not include a display-order prefix; course.yaml topic order is canonical",
     ),
     description: nonEmptyString,
     gradeLevel,

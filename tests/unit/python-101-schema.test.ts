@@ -111,10 +111,31 @@ describe("unitFileSchema", () => {
     expect(result.success).toBe(false);
   });
 
-  it("rejects titles with embedded display numbers", () => {
-    const bad = validUnit({ title: "1. Print & Comments" });
+  it.each([
+    "1. Print & Comments",
+    "01. Print & Comments",
+    "1.Print & Comments",
+    "1.",
+    "1) Print & Comments",
+    "01)",
+    "1: Print & Comments",
+    "1:",
+  ])("rejects titles with embedded display numbers: %s", (title) => {
+    const bad = validUnit({ title });
     const result = unitFileSchema.safeParse(bad);
     expect(result.success).toBe(false);
+  });
+
+  it.each([
+    "Python 3.12",
+    "Chapter 1: Intro",
+    "1x1 Matrix",
+    "2026. Annual Report",
+    "1:1 Mapping",
+    "101. Advanced Topics",
+  ])("accepts numeric text that is not a display-order prefix: %s", (title) => {
+    const result = unitFileSchema.safeParse(validUnit({ title }));
+    expect(result.success).toBe(true);
   });
 
   it("rejects duplicate problem slugs", () => {

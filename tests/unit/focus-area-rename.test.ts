@@ -37,7 +37,7 @@ describe("Plan 048 phase 5 — Topic → Focus Area rename", () => {
     });
     it("explains that course focus areas organize units and problems", () => {
       expect(source(path)).toMatch(
-        /Course focus areas organize units and problems for students\./
+        /Course focus areas organize the unit and practice problems students will use\./
       );
     });
   });
@@ -58,7 +58,7 @@ describe("Plan 048 phase 5 — Topic → Focus Area rename", () => {
     });
     it("explains that focus areas contain the linked unit and practice problems", () => {
       expect(source(path)).toMatch(
-        /Each focus area includes a linked unit and practice problems\./
+        /Each focus area in this course includes a linked unit and practice problems\./
       );
     });
   });

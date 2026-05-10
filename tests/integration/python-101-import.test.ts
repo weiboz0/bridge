@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { v4 as uuidv4 } from "uuid";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { testDb, cleanupDatabase } from "../helpers";
 import {
   classes,
@@ -84,6 +84,7 @@ async function writeTree(
   spec: {
     units: Array<{
       slug: string;
+      title?: string;
       problems: Array<{
         slug: string;
         solution: string;
@@ -122,7 +123,7 @@ async function writeTree(
     const unitLines: string[] = [
       `id: ${unitId}`,
       `slug: ${u.slug}`,
-      `title: Unit ${u.slug}`,
+      `title: ${u.title ?? `Unit ${u.slug}`}`,
       `description: Test unit ${u.slug}.`,
       `gradeLevel: 9-12`,
       `subjectTags: []`,
@@ -717,6 +718,100 @@ describe("python-101 importer", () => {
         .from(teachingUnits)
         .where(eq(teachingUnits.scopeId, BRIDGE_DEMO_SCHOOL_ORG_ID));
       expect(cloneUnits.filter((u) => u.slug?.endsWith("-demo"))).toHaveLength(1);
+    });
+
+    it("normalizes stale display-order prefixes when reusing an existing demo clone", async () => {
+      await ensureDemoFixtures();
+      const tree = await writeTree({
+        units: [
+          {
+            slug: "u1",
+            title: "Print & Comments",
+            problems: [
+              {
+                slug: "p1",
+                solution: 'print("hi")',
+                cases: [{ name: "ex", stdin: "", expected: "hi", isExample: true }],
+              },
+            ],
+          },
+        ],
+      });
+      await runImporter({
+        root: tree.root,
+        apply: true,
+        libraryOnly: false,
+        skipSandbox: true,
+        allowRename: false,
+        wireDemoClass: false,
+        targetDb: TARGET_DB,
+      });
+      await ensureDemoClass(tree.courseId);
+
+      const baseArgs = {
+        root: tree.root,
+        apply: true,
+        libraryOnly: false,
+        skipSandbox: true,
+        allowRename: false,
+        wireDemoClass: true,
+        targetDb: TARGET_DB,
+      };
+      await runImporter(baseArgs);
+
+      const cloneUnitsBeforeStaleWrite = await testDb
+        .select({ id: teachingUnits.id, topicId: teachingUnits.topicId })
+        .from(teachingUnits)
+        .where(
+          and(
+            eq(teachingUnits.scope, "org"),
+            eq(teachingUnits.scopeId, BRIDGE_DEMO_SCHOOL_ORG_ID),
+          ),
+        );
+      expect(cloneUnitsBeforeStaleWrite).toHaveLength(1);
+      const cloneUnit = cloneUnitsBeforeStaleWrite[0];
+      expect(cloneUnit.topicId).toBeTruthy();
+
+      await testDb
+        .update(teachingUnits)
+        .set({ title: "1. Print & Comments" })
+        .where(eq(teachingUnits.id, cloneUnit.id));
+      await testDb
+        .update(topics)
+        .set({ title: "1. Print & Comments" })
+        .where(eq(topics.id, cloneUnit.topicId!));
+
+      const second = await runImporter(baseArgs);
+      expect(second.demoWire?.cloned).toBe(false);
+
+      const [refreshedUnit] = await testDb
+        .select({ title: teachingUnits.title })
+        .from(teachingUnits)
+        .where(eq(teachingUnits.id, cloneUnit.id));
+      const [refreshedTopic] = await testDb
+        .select({ title: topics.title })
+        .from(topics)
+        .where(eq(topics.id, cloneUnit.topicId!));
+
+      expect(refreshedUnit.title).toBe("Print & Comments");
+      expect(refreshedTopic.title).toBe("Print & Comments");
+
+      const cloneUnits = await testDb
+        .select()
+        .from(teachingUnits)
+        .where(
+          and(
+            eq(teachingUnits.scope, "org"),
+            eq(teachingUnits.scopeId, BRIDGE_DEMO_SCHOOL_ORG_ID),
+          ),
+        );
+      expect(cloneUnits.filter((u) => u.slug?.endsWith("-demo"))).toHaveLength(1);
+
+      const cloneTopics = await testDb
+        .select()
+        .from(topics)
+        .where(eq(topics.courseId, DEMO_CLONE_COURSE_ID));
+      expect(cloneTopics).toHaveLength(1);
     });
 
     it("fails loudly if Bridge Demo School org is missing", async () => {

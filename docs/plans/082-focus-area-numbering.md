@@ -105,14 +105,15 @@ Commit the plan, tests, UI changes, and TODO update together as one logical unit
 
 ## Integration-Test Phase
 
-Out of scope.
-This is a content/schema/presentation change with no API, auth, persistence, realtime, or cross-user access behavior.
-The focused Vitest files cover the rendered copy and the authoring-schema guard.
+Amended after external code review.
+The original implementation treated this as out of scope, but the existing-demo-clone path is persistence behavior and can preserve stale numbered titles.
+Add an integration regression for `--wire-demo-class` reusing an existing demo clone whose cloned topic/unit titles still contain display-order prefixes.
 
 ## Plan Review
 
-Not run as a five-way gate because this is a low-risk P2 content/presentation fix with no runtime behavior beyond rendered copy and title formatting.
-Codex self-review checked the TODO item, the latest browser review section, affected pages, existing focus-area terminology tests, Python 101 content files, and Python 101 schema/import behavior.
+Process correction: the initial implementation was committed and pushed before the mandatory external code-review gate ran.
+That was a workflow miss; external implementation review is mandatory before PR.
+The gate was run post-push and before PR, and this follow-up commit records and resolves the review findings.
 
 ## Code Review
 
@@ -122,19 +123,47 @@ Reviewed the final diff against `docs/reviews/011-comprehensive-browser-review-2
 The implementation follows the review's preferred model: canonical order remains in `course.yaml topics[]` / `topics.sort_order`, Python 101 titles no longer embed display numbers, and UI copy names the Course -> Focus Area -> Unit + Problems taxonomy.
 No API, auth, persistence, realtime, or cross-user access behavior changed.
 
+### External code review round 1
+
+Reviewers: Codex subagent, GLM 5.1, DeepSeek V4 Flash, Kimi K2.6.
+
+- [FIXED] Existing Bridge Demo School Python 101 clones can keep the old numbered topic/unit titles because `--wire-demo-class` reused an existing clone without refreshing content. The importer now normalizes only legacy display-order prefixes on existing demo-clone topic/unit titles and keeps the clone idempotent.
+- [FIXED] Regression coverage missed the stale existing-clone path. `tests/integration/python-101-import.test.ts` now simulates an existing demo clone with `1. Print & Comments`, re-runs `--wire-demo-class`, and verifies the cloned topic/unit titles are normalized without duplicate cloned units.
+- [FIXED] The schema guard only rejected `N. ` prefixes. It now rejects one- or two-digit `N.`, `N)`, and `N:` display-order prefixes with or without a following space, with fixture coverage for `1. `, `01. `, `1.`, `1)`, and `1:` forms.
+- [FIXED] Taxonomy helper copy did not fully name the course/focus-area/unit/problems relationship. Teacher and student copy now explicitly ties focus areas to the course and the linked unit/practice problems.
+- [ACCEPTED] Render-level UI coverage would be stronger than source-level copy assertions, but this repository's existing focus-area terminology coverage is source-level and the changed JSX is static copy. The stale-clone persistence path now has integration coverage.
+- [KNOWN] `tsc --noEmit` still fails on unrelated baseline errors in `src/app/(portal)/teacher/units/new/page.tsx`, `src/components/admin/user-actions.tsx`, and `tests/unit/identity-assert.test.ts`.
+
+### External code review round 2
+
+Reviewers: Codex subagent, GLM 5.1, DeepSeek V4 Flash, Kimi K2.6.
+
+- [FIXED] **Integration test query diverged from production scope filtering.** The stale-clone integration test now filters cloned units by both `scope = "org"` and the Bridge Demo School `scopeId`, and asserts exactly one row before destructuring.
+- [FIXED] **DRY violation — duplicated prefix regex.** `displayOrderPrefix` is now exported from `scripts/python-101/schema.ts` and reused by `scripts/python-101/import.ts`.
+- [FIXED] **Schema regex false positives.** The shared regex now targets optional-leading-zero one- or two-digit display prefixes and avoids decimal/ratio titles such as `2026. Annual Report` and `1:1 Mapping`.
+- [FIXED] **Missing acceptance tests for boundary-case titles.** `tests/unit/python-101-schema.test.ts` now asserts acceptance for titles such as `Python 3.12`, `Chapter 1: Intro`, `1x1 Matrix`, `2026. Annual Report`, `1:1 Mapping`, and `101. Advanced Topics`.
+- [FIXED] **Empty-string normalization edge case.** Existing demo-clone title normalization now writes non-numbered fallback titles (`Untitled focus area` / `Untitled unit`) when a stale cloned title consists only of a display-order prefix.
+- [FIXED] **Integration test gap.** The stale-clone integration test now also asserts the existing-clone path did not create duplicate cloned topics.
+- [ACCEPTED] **Return-value semantic mismatch.** `normalizeExistingDemoCloneTitles` returns `cloneTopics.length` as `unitCount`. This is pre-existing and harmless given the 1:1 topic-unit invariant, but the naming is misleading.
+- [ACCEPTED] **N+1 normalization updates.** Existing demo clones have about 12 topics and 12 units; the simple loop keeps the behavior clear and is acceptable for this targeted maintenance path.
+
 ## Post-execution Report
 
 Implemented in one phase:
 
 - Added a Python 101 schema guard rejecting unit titles that start with a display-order prefix such as `1. `.
+- Broadened that guard after external review to reject `1.`, `01.`, `1)`, and `1:` style prefixes.
 - Normalized all 12 `content/python-101/units/*.yaml` titles by removing leading numeric prefixes.
 - Updated Python 101 schema test fixtures to use unnumbered titles.
 - Added source-level copy regression tests for the teacher course detail and student class detail pages.
 - Added concise taxonomy copy to those two pages while keeping the existing UI order prefix.
+- Added existing-demo-clone normalization for stale display-order prefixes in cloned topic/unit titles.
+- Added integration coverage for re-running `--wire-demo-class` against a stale existing demo clone.
+- Shared the display-order prefix regex between schema validation and demo-clone normalization, tightened it to avoid numeric-title false positives, and added acceptance coverage for numeric titles that are not display-order prefixes.
 - Marked the Plan 082 TODO item complete.
 
 Verification:
 
-- `/home/chris/.nvm/versions/node/v20.20.1/bin/node ./node_modules/.bin/vitest run tests/unit/focus-area-rename.test.ts tests/unit/python-101-schema.test.ts` — 2 files passed, 44 tests passed.
-- `rg -n "^title: [0-9]+\\." content/python-101/units tests/unit/python-101-schema.test.ts scripts/python-101/schema.ts docs/plans/082-focus-area-numbering.md` — no numbered unit-title matches.
+- `/home/chris/.nvm/versions/node/v20.20.1/bin/node ./node_modules/.bin/vitest run tests/unit/focus-area-rename.test.ts tests/unit/python-101-schema.test.ts tests/integration/python-101-import.test.ts` — 3 files passed, 67 tests passed.
+- `rg -n "^title: [0-9]+[.)]|Course focus areas organize units|Each focus area includes a linked|/\\^\\\\d\\+" content/python-101/units tests/unit/python-101-schema.test.ts scripts/python-101/schema.ts scripts/python-101/import.ts src/app docs/plans/082-focus-area-numbering.md` — no stale numbered-title, old-copy, or old-regex matches.
 - `/home/chris/.nvm/versions/node/v20.20.1/bin/node ./node_modules/typescript/bin/tsc --noEmit` — failed on 8 existing unrelated baseline errors in `src/app/(portal)/teacher/units/new/page.tsx`, `src/components/admin/user-actions.tsx`, and `tests/unit/identity-assert.test.ts`.

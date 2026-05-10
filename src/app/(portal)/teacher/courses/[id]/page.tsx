@@ -73,7 +73,7 @@ export default async function TeacherCourseDetailPage({
           <div>
             <h2 className="text-lg font-semibold">Focus Areas ({topicList.length})</h2>
             <p className="text-sm text-muted-foreground">
-              Course focus areas organize units and problems for students.
+              Course focus areas organize the unit and practice problems students will use.
             </p>
           </div>
 

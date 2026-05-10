@@ -124,7 +124,7 @@ export default async function StudentClassDetailPage({
         <div>
           <h2 className="text-lg font-semibold">Focus Areas</h2>
           <p className="text-sm text-muted-foreground">
-            Each focus area includes a linked unit and practice problems.
+            Each focus area in this course includes a linked unit and practice problems.
           </p>
         </div>
         {topics.length === 0 && (
