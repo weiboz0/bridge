@@ -154,7 +154,21 @@ All 5 reviewers concur. **Codex + DeepSeek + GLM all independently caught the AR
 
 ## Code Review
 
-(pending — 5-way at branch-diff time)
+5-way code review against branch HEAD `eec3e0e`.
+
+### Self (Opus 4.7) — clean
+
+`bun run test` 677 PASS / 11 skipped / 0 failed (+3 from new test file). `bunx tsc --noEmit` 10 errors (pre-existing baseline). All 5 plan-review folds verified in code.
+
+### Codex — pending
+
+### DeepSeek V4 Flash — CONCUR clean (0 BLOCKERS, 0 NITS)
+
+Confirmed: `AUTO_OPEN_THRESHOLD = 8` at line 10 (reused for both threshold and display cap); `listboxVisible` drives all three sites (render at L278, `aria-expanded` at L200, `aria-controls` at L201-203 — no drift); tests use `fireEvent` (no user-event dep); no regression.
+
+### GLM 5.1 — pending
+
+### Kimi K2.6 — pending
 
 ## Post-execution report
 
