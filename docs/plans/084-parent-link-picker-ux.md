@@ -160,15 +160,29 @@ All 5 reviewers concur. **Codex + DeepSeek + GLM all independently caught the AR
 
 `bun run test` 677 PASS / 11 skipped / 0 failed (+3 from new test file). `bunx tsc --noEmit` 10 errors (pre-existing baseline). All 5 plan-review folds verified in code.
 
-### Codex — pending
+### Codex round-1 — CONCUR with 1 BLOCKER (FIXED)
+
+`[FIXED]` Q5 BLOCKER: `aria-activedescendant` at L205-209 still referenced the highlighted option after blur collapsed the listbox. After keyboard ArrowDown → Tab away, screen readers would announce a focused item that's no longer visible — WAI-ARIA combobox spec violation.
+
+→ **Response (commit `6412f22`)**: blur's setTimeout now resets `highlightedIndex` to -1 alongside `setIsInputFocused(false)`. aria-activedescendant re-derives to `undefined` when highlightedIndex resets. Codex round-2 dispatched for confirmation.
+
+Codex round-1 also confirmed Q1-Q4 PASS: `listboxVisible` is the single source of truth for all 3 sites, 150ms blur delay correctly commented, submit gating exact, tests robust.
+
+### Codex round-2 — pending (BLOCKER fix at `6412f22`)
 
 ### DeepSeek V4 Flash — CONCUR clean (0 BLOCKERS, 0 NITS)
 
 Confirmed: `AUTO_OPEN_THRESHOLD = 8` at line 10 (reused for both threshold and display cap); `listboxVisible` drives all three sites (render at L278, `aria-expanded` at L200, `aria-controls` at L201-203 — no drift); tests use `fireEvent` (no user-event dep); no regression.
 
-### GLM 5.1 — pending
+### GLM 5.1 — CONCUR clean (0 BLOCKERS, 0 NITS)
 
-### Kimi K2.6 — pending
+Confirmed all 5 checks: `listboxVisible` single-source at L74, used in all 3 sites; full predicate matches; `AUTO_OPEN_THRESHOLD` extracted; WAI-ARIA combobox pattern clean; no regressions. (Reviewed at HEAD `eec3e0e`, BEFORE the Codex round-1 BLOCKER fix landed — GLM didn't catch the aria-activedescendant gap that Codex did. Both reviews valid.)
+
+### Kimi K2.6 — CONCUR with 1 NIT (non-blocking, batched for fix)
+
+Confirmed all 5 review checks: null-safety at L56, 150ms AT-only comment at L212-218, 3 test cases passing, fireEvent.mouseDown→click matches dual handlers, no unhandled promises / missing awaits / leaked timers in tests.
+
+`[FOLD-PENDING]` NIT: 150ms `setTimeout` in `onBlur` (L219-221) has no clearTimeout on unmount. React 19 swallows the post-unmount state update so it's a micro-leak, not a functional bug. Will fold with any remaining reviewer findings in one batch commit.
 
 ## Post-execution report
 
