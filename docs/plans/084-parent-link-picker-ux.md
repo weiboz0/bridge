@@ -158,4 +158,27 @@ All 5 reviewers concur. **Codex + DeepSeek + GLM all independently caught the AR
 
 ## Post-execution report
 
-(pending)
+Single phase shipped at `e807191`.
+
+### Changes
+
+- `src/components/org/create-parent-link-modal.tsx` — extracted `AUTO_OPEN_THRESHOLD = 8` constant; `isInputFocused` state + onFocus/onBlur handlers (150ms blur delay for AT click path); `listboxVisible` derived boolean used by listbox render + `aria-expanded` + `aria-controls`; submit button disabled when invalid. Memo uses `(students?.length ?? 0)` null-safety.
+
+- `tests/unit/create-parent-link-modal.test.tsx` (new, 100 lines) — 3 Vitest cases covering small-set focus opens list, large-set stays closed, submit disabled until valid. Uses `fireEvent` (no `@testing-library/user-event` dep) and `@vitest-environment jsdom`.
+
+### Verification
+
+- `bun run test`: 677 PASS / 11 skipped / 0 failed (+3 from new file).
+- `bunx tsc --noEmit`: 10 errors, all pre-existing baseline.
+
+### No deviations from plan
+
+All 5 reviewer fold-ins applied:
+- Codex/DeepSeek/GLM: `listboxVisible` extraction + ARIA-sync (BLOCKER).
+- DeepSeek: `AUTO_OPEN_THRESHOLD` constant; `<Input>` `{...props}` spread verified.
+- Kimi: null-safety on `students?.length`; AT-only timeout comment; new Vitest with 3 cases.
+
+### Follow-ups
+
+- The reviewer's "Define minimum report MVP" (browser review §P1 #4) remains as future product work — out of scope for plan 084.
+- Stashed `dev-server-unblockers v2` (api-error extraction + DropdownMenuTrigger `render` prop) still pending its own fix branch. Restore + ship as a separate small PR after plan 084 merges.
