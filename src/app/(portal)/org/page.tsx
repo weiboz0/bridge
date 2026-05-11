@@ -1,4 +1,5 @@
-import { api, ApiError } from "@/lib/api-client";
+import { api } from "@/lib/api-client";
+import { ApiError } from "@/lib/api-error";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { resolveOrgContext, appendOrgId } from "@/lib/portal/org-context";
 import { handleOrgContext } from "@/components/portal/org-context-guard";

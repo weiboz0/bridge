@@ -1,5 +1,6 @@
 import Link from "next/link";
-import { api, ApiError } from "@/lib/api-client";
+import { api } from "@/lib/api-client";
+import { ApiError } from "@/lib/api-error";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 // Plan 079 — read-only platform-admin unit detail. The list page at

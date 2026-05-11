@@ -1,5 +1,6 @@
 import { redirect, notFound } from "next/navigation";
-import { api, ApiError } from "@/lib/api-client";
+import { api } from "@/lib/api-client";
+import { ApiError } from "@/lib/api-error";
 import { getIdentity } from "@/lib/identity";
 import {
   TeacherProblemDetail,

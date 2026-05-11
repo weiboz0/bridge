@@ -1,5 +1,6 @@
 import Link from "next/link";
-import { api, ApiError } from "@/lib/api-client";
+import { api } from "@/lib/api-client";
+import { ApiError } from "@/lib/api-error";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 // Plan 079b — read-only org-admin unit detail. The org unit list used to

@@ -1,5 +1,5 @@
 import { PortalShell } from "@/components/portal/portal-shell";
-import { ApiError } from "@/lib/api-client";
+import { ApiError } from "@/lib/api-error";
 import { OrgSwitcher } from "@/components/portal/org-switcher";
 import { fetchMyOrgs } from "@/lib/portal/org-context";
 
