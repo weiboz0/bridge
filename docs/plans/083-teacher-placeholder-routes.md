@@ -82,8 +82,38 @@ All three returned `CONCUR`.
 
 ## Code Review
 
-Pending implementation.
+Implementation review completed after the branch diff was committed.
+
+Reviewers: self-review, DeepSeek V4 Flash, GLM 5.1, and Kimi K2.6.
+The external reviewers were redispatched on request; the redispatched pass is the source of record below.
+
+- [ACCEPTED] Self-review: the removed files were exactly the one-line `Coming soon` placeholder pages from `origin/main`; no real behavior was removed.
+- [ACCEPTED] DeepSeek V4 Flash redispatch: `ALLOW`. No blocking findings. Noted that the pending `TODO.md` checkmark and post-execution report were workflow items, and that unrelated dirty local files were outside the branch diff.
+- [ACCEPTED] GLM 5.1 redispatch: `ALLOW`. No blocking findings. Verified the targeted Vitest command with Node 20. Noted non-blocking empty local directories under `src/app/(portal)/teacher/schedule/` and `src/app/(portal)/teacher/reports/`; Git does not track or ship them after the page files are deleted.
+- [ACCEPTED] Kimi K2.6 redispatch: `ALLOW`. No blocking findings. Confirmed the branch deletes only the two placeholder routes, adds tests for file absence and teacher-nav exclusion, and leaves unrelated local edits out of the branch diff.
 
 ## Post-execution Report
 
-Pending implementation.
+Implemented the route-removal option from Plan 083:
+
+- Deleted `src/app/(portal)/teacher/schedule/page.tsx`.
+- Deleted `src/app/(portal)/teacher/reports/page.tsx`.
+- Added `tests/unit/teacher-placeholder-routes.test.ts` to assert the direct-access placeholder route files are absent.
+- Extended `tests/unit/nav-config.test.ts` to assert teacher nav does not link to `/teacher/schedule` or `/teacher/reports`.
+- Marked Plan 083 complete in `TODO.md`.
+
+TDD evidence:
+
+- RED: `tests/unit/teacher-placeholder-routes.test.ts` failed before deleting the pages because `src/app/(portal)/teacher/schedule/page.tsx` still existed.
+- GREEN: `/home/chris/.nvm/versions/node/v20.20.1/bin/node ./node_modules/.bin/vitest run tests/unit/teacher-placeholder-routes.test.ts tests/unit/nav-config.test.ts` passed with 2 files and 12 tests.
+
+Verification:
+
+- PASS: `/home/chris/.nvm/versions/node/v20.20.1/bin/node ./node_modules/.bin/vitest run tests/unit/teacher-placeholder-routes.test.ts tests/unit/nav-config.test.ts` — 2 files, 12 tests.
+- PASS: `env DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test /home/chris/.nvm/versions/node/v20.20.1/bin/node ./node_modules/.bin/vitest run` — 87 files passed, 2 skipped; 674 tests passed, 11 skipped.
+- PASS: `cd platform && env GOCACHE=/tmp/magicburg-go-build-cache go test ./... -count=1 -timeout 120s`.
+- BASELINE FAIL: `/home/chris/.nvm/versions/node/v20.20.1/bin/node ./node_modules/typescript/bin/tsc --noEmit` still fails on pre-existing issues in `src/app/(portal)/teacher/units/new/page.tsx` and `tests/unit/identity-assert.test.ts`; Plan 083 did not touch those files.
+
+Known local state:
+
+- The checkout still contains unrelated unstaged changes in `src/components/admin/user-actions.tsx`, `src/components/problem/problem-actions.tsx`, `src/components/problem/problem-form.tsx`, `src/lib/api-client.ts`, and untracked `src/lib/api-error.ts`. They are not part of Plan 083 and must not be staged with this branch.
