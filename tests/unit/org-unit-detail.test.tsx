@@ -6,14 +6,6 @@ import { render, screen } from "@testing-library/react";
 
 vi.mock("@/lib/api-client", () => ({
   api: vi.fn(),
-  ApiError: class ApiError extends Error {
-    status: number;
-    constructor(status: number, message: string) {
-      super(message);
-      this.status = status;
-      this.name = "ApiError";
-    }
-  },
 }));
 
 import OrgUnitDetailPage from "@/app/(portal)/org/units/[id]/page";
