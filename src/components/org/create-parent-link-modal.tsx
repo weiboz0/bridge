@@ -1,6 +1,14 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+
+// Plan 084 — open the suggestion list on focus for small orgs (browser
+// review 011 §P2 #7). AUTO_OPEN_THRESHOLD doubles as the display cap;
+// the threshold and the cap are deliberately the same so we never show
+// more than this many options at once. Larger orgs keep the existing
+// "type to search" behavior to avoid blasting 50+ names on focus.
+const AUTO_OPEN_THRESHOLD = 8;
+
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -35,20 +43,38 @@ export function CreateParentLinkModal({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [highlightedIndex, setHighlightedIndex] = useState<number>(-1);
+  const [isInputFocused, setIsInputFocused] = useState(false);
   const backdropRef = useRef<HTMLDivElement | null>(null);
 
-  // Autocomplete: case-insensitive match on name OR email.
+  // Autocomplete: case-insensitive match on name OR email. Plan 084 — for
+  // small orgs (<= AUTO_OPEN_THRESHOLD students), return the full list on
+  // empty query so the picker isn't a hidden-affordance on focus.
   const suggestions = useMemo(() => {
     const q = childQuery.trim().toLowerCase();
-    if (!q) return [];
+    const cap = AUTO_OPEN_THRESHOLD;
+    if (!q) {
+      const total = students?.length ?? 0;
+      if (total > 0 && total <= cap) return students.slice(0, cap);
+      return [];
+    }
     return students
       .filter(
         (s) =>
           s.name.toLowerCase().includes(q) ||
           s.email.toLowerCase().includes(q),
       )
-      .slice(0, 8);
+      .slice(0, cap);
   }, [childQuery, students]);
+
+  // Plan 084 — single source of truth for the listbox visibility. The
+  // `<ul>` render gate AND both `aria-expanded` and `aria-controls` MUST
+  // derive from this expression; if they drift, AT users see ARIA
+  // claiming an expanded listbox that isn't in the DOM (WAI-ARIA
+  // combobox spec violation — Codex + DeepSeek + GLM converged).
+  const listboxVisible =
+    (isInputFocused || childQuery.length > 0) &&
+    suggestions.length > 0 &&
+    !childUserId;
 
   // Close modal on Escape (the input's onKeyDown also handles Escape for
   // clearing the highlight, but window-level listener closes the dialog).
@@ -163,17 +189,17 @@ export function CreateParentLinkModal({
               <Input
                 id="childQuery"
                 role="combobox"
-                aria-expanded={suggestions.length > 0 && !childUserId}
-                // Codex / DeepSeek / GLM all flagged this: aria-controls
-                // pointed to the listbox id unconditionally, even when the
-                // <ul> wasn't in the DOM (no query, or child already
-                // selected). Stale id refs trigger validator warnings and
-                // confuse some AT. Only set the attribute when the
-                // listbox actually renders.
+                // Plan 084 — `aria-expanded` and `aria-controls` MUST
+                // derive from the same `listboxVisible` boolean as the
+                // <ul> render below. Earlier code used `suggestions.length
+                // > 0 && !childUserId` which fell out of sync the moment
+                // we added open-on-focus (the listbox would close on blur
+                // but ARIA would still claim expanded). Three external
+                // reviewers (Codex, DeepSeek, GLM) converged on this drift
+                // as a WAI-ARIA combobox spec violation.
+                aria-expanded={listboxVisible}
                 aria-controls={
-                  suggestions.length > 0 && !childUserId
-                    ? "child-autocomplete-listbox"
-                    : undefined
+                  listboxVisible ? "child-autocomplete-listbox" : undefined
                 }
                 aria-autocomplete="list"
                 aria-activedescendant={
@@ -182,6 +208,17 @@ export function CreateParentLinkModal({
                     : undefined
                 }
                 value={childQuery}
+                onFocus={() => setIsInputFocused(true)}
+                // Plan 084 — 150ms blur delay so the listbox stays open
+                // long enough for screen-reader virtual cursors to dispatch
+                // their `click` event (those don't emit a preceding
+                // `mousedown`, so the `<li onMouseDown={preventDefault}>`
+                // path doesn't cover them). Mouse users are already
+                // handled by the mousedown preventDefault. DO NOT optimize
+                // this timeout away — it's the AT path.
+                onBlur={() => {
+                  setTimeout(() => setIsInputFocused(false), 150);
+                }}
                 onChange={(e) => {
                   setChildQuery(e.target.value);
                   // GLM 5.1 post-impl NIT-2: reset the highlight inline
@@ -238,7 +275,7 @@ export function CreateParentLinkModal({
                   ×
                 </button>
               )}
-              {!childUserId && suggestions.length > 0 && (
+              {listboxVisible && (
                 <ul
                   id="child-autocomplete-listbox"
                   role="listbox"
@@ -312,7 +349,15 @@ export function CreateParentLinkModal({
             >
               Cancel
             </Button>
-            <Button type="submit" disabled={submitting}>
+            <Button
+              type="submit"
+              // Plan 084 — visible "form-not-ready" signal. The runtime
+              // check in handleSubmit stays as defense-in-depth (covers
+              // paste-and-submit / programmatic edge cases). This change
+              // shifts the UX from "click → error toast" to "can't click
+              // yet → fix the fields → can click" — standard form pattern.
+              disabled={submitting || !parentEmail.trim() || !childUserId}
+            >
               {submitting ? "Linking…" : "Create link"}
             </Button>
           </div>
