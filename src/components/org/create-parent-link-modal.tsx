@@ -45,6 +45,17 @@ export function CreateParentLinkModal({
   const [highlightedIndex, setHighlightedIndex] = useState<number>(-1);
   const [isInputFocused, setIsInputFocused] = useState(false);
   const backdropRef = useRef<HTMLDivElement | null>(null);
+  // Plan 084 + Kimi K2.6 code-review NIT: hold the blur timer so we can
+  // clear it on unmount (and on re-focus before the timer fires) to
+  // avoid the post-unmount state-update no-op. Functional behavior is
+  // unchanged either way — React 19 swallows post-unmount setters — but
+  // explicit cleanup is the textbook pattern.
+  const blurTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    return () => {
+      if (blurTimerRef.current) clearTimeout(blurTimerRef.current);
+    };
+  }, []);
 
   // Autocomplete: case-insensitive match on name OR email. Plan 084 — for
   // small orgs (<= AUTO_OPEN_THRESHOLD students), return the full list on
@@ -208,7 +219,15 @@ export function CreateParentLinkModal({
                     : undefined
                 }
                 value={childQuery}
-                onFocus={() => setIsInputFocused(true)}
+                onFocus={() => {
+                  // Cancel any pending blur-close so a re-focus while the
+                  // listbox is still visible doesn't subsequently collapse it.
+                  if (blurTimerRef.current) {
+                    clearTimeout(blurTimerRef.current);
+                    blurTimerRef.current = null;
+                  }
+                  setIsInputFocused(true);
+                }}
                 // Plan 084 — 150ms blur delay so the listbox stays open
                 // long enough for screen-reader virtual cursors to dispatch
                 // their `click` event (those don't emit a preceding
@@ -216,8 +235,18 @@ export function CreateParentLinkModal({
                 // path doesn't cover them). Mouse users are already
                 // handled by the mousedown preventDefault. DO NOT optimize
                 // this timeout away — it's the AT path.
+                //
+                // Also reset highlightedIndex on the delayed close (Codex
+                // code-review BLOCKER): otherwise the derived
+                // aria-activedescendant below would reference an option
+                // that's no longer rendered, which is a WAI-ARIA error AT
+                // users hear as "focused item that doesn't exist".
                 onBlur={() => {
-                  setTimeout(() => setIsInputFocused(false), 150);
+                  blurTimerRef.current = setTimeout(() => {
+                    setIsInputFocused(false);
+                    setHighlightedIndex(-1);
+                    blurTimerRef.current = null;
+                  }, 150);
                 }}
                 onChange={(e) => {
                   setChildQuery(e.target.value);
