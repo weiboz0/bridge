@@ -65,7 +65,7 @@ The runtime check at `:77-84` stays as a defense-in-depth (handles paste-and-sub
 
 | Risk | Severity | Mitigation |
 |---|---|---|
-| Existing tests assert "listbox hidden when query empty" — would break | medium | Pre-impl grep `grep -rn "listbox\|combobox" tests/` to inventory. Update assertions to match new behavior (visible on focus). If no tests exist, the test gap is real but pre-existing. |
+| Existing tests assert "listbox hidden when query empty" — would break | **MOOT** (self-review verified) | Pre-impl grep `grep -rln "create-parent-link-modal\|CreateParentLinkModal" tests/ e2e/` returns 0 hits. No existing test exercises the picker. The test gap is pre-existing but plan 084 isn't widening it. Consider a follow-up plan to add unit tests for the picker's open-on-focus + disable-until-valid behavior. |
 | Focus/blur delay (150ms) timing-dependent in tests — flaky | low | Use `vi.useFakeTimers()` if any test exercises the blur path. Most tests assert state, not async timing. |
 | User with 9+ students sees no list on first focus — confusing | low | Documented in §Decisions #1. Placeholder + "type to search" affordance is enough; large-org users learn quickly. A future plan could add a "view all students" toggle. |
 | Disabling submit hides validation errors for fields the user hasn't touched yet | low (positive) | Standard form pattern. Form validity is visible (disabled button) rather than reactive (error after click). Better UX. |
@@ -95,7 +95,19 @@ After Phase 2, run the 5-way code review against the consolidated branch diff (s
 
 ## Plan Review
 
-(pending — 5-way before implementation)
+### Round 1 (2026-05-10)
+
+#### Self-review (Opus 4.7) — 1 clarification folded
+
+Folded: pre-impl grep verified zero existing tests touch `create-parent-link-modal.tsx`. The §Risks row about "tests would break" is now MOOT (kept as a note for record + a follow-up suggestion to add unit tests).
+
+#### Codex — pending
+
+#### DeepSeek V4 Pro — pending
+
+#### GLM 5.1 — pending
+
+#### Kimi K2.6 — pending
 
 ## Code Review
 
