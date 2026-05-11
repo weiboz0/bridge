@@ -16,7 +16,8 @@ vi.mock("@/lib/api-client", () => ({
 }));
 
 import AdminUnitDetailPage from "@/app/(portal)/admin/units/[id]/page";
-import { api, ApiError } from "@/lib/api-client";
+import { api } from "@/lib/api-client";
+import { ApiError } from "@/lib/api-error";
 
 const VALID_UUID = "f47ac10b-58cc-4372-a567-0e02b2c3d479";
 const mockedApi = vi.mocked(api);

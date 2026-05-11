@@ -1,4 +1,5 @@
-import { api, ApiError } from "@/lib/api-client";
+import { api } from "@/lib/api-client";
+import { ApiError } from "@/lib/api-error";
 import { StudentsList } from "@/components/org/students-list";
 import type { OrgMemberRow } from "@/components/org/teachers-list";
 import type { OrgListError } from "@/components/org/org-list-state";

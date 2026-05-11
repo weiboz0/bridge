@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import { api, ApiError } from "@/lib/api-client";
+import { api } from "@/lib/api-client";
+import { ApiError } from "@/lib/api-error";
 import { getIdentity } from "@/lib/identity";
 import { ArchiveClassButton } from "@/components/org/archive-class-button";
 

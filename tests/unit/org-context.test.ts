@@ -16,7 +16,8 @@ import {
   appendOrgId,
   resolveOrgContext,
 } from "@/lib/portal/org-context";
-import { api, ApiError } from "@/lib/api-client";
+import { api } from "@/lib/api-client";
+import { ApiError } from "@/lib/api-error";
 
 const VALID_UUID = "f47ac10b-58cc-4372-a567-0e02b2c3d479";
 const OTHER_UUID = "12345678-1234-1234-1234-123456789012";

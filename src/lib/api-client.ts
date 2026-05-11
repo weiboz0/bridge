@@ -2,10 +2,6 @@ import { cookies } from "next/headers";
 import { getSessionCookieName, getOtherSessionCookieName } from "@/lib/auth-cookie";
 import { ApiError } from "@/lib/api-error";
 
-// Re-export for backwards compatibility with existing server-side imports.
-// Client components should import directly from @/lib/api-error.
-export { ApiError };
-
 const GO_API_URL = process.env.GO_API_URL || "http://localhost:8002";
 
 /**

@@ -1,4 +1,5 @@
-import { api, ApiError } from "@/lib/api-client";
+import { api } from "@/lib/api-client";
+import { ApiError } from "@/lib/api-error";
 import { OrgSettingsCard, type OrgSettingsData } from "@/components/org/org-settings-card";
 import type { OrgListError } from "@/components/org/org-list-state";
 import { resolveOrgContext, appendOrgId } from "@/lib/portal/org-context";

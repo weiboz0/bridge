@@ -1,7 +1,8 @@
 import { notFound } from "next/navigation";
 import { db } from "@/lib/db";
 import { getClassSettings } from "@/lib/classes";
-import { api, ApiError } from "@/lib/api-client";
+import { api } from "@/lib/api-client";
+import { ApiError } from "@/lib/api-error";
 import { TeacherWatchShell } from "@/components/problem/teacher-watch-shell";
 import type {
   Problem,

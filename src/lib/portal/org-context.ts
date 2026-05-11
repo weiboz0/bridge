@@ -28,7 +28,8 @@ export function appendOrgId(path: string, orgId: string | undefined): string {
 }
 
 import { cache } from "react";
-import { api, ApiError } from "@/lib/api-client";
+import { api } from "@/lib/api-client";
+import { ApiError } from "@/lib/api-error";
 
 interface OrgMembership {
   orgId: string;

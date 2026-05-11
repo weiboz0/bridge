@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { cookies, headers } from "next/headers";
 import { auth } from "@/lib/auth";
-import { api, ApiError } from "@/lib/api-client";
+import { api } from "@/lib/api-client";
+import { ApiError } from "@/lib/api-error";
 import {
   getSessionCookieName,
   getOtherSessionCookieName,

@@ -1,5 +1,6 @@
 import { cache } from "react";
-import { api, ApiError } from "@/lib/api-client";
+import { api } from "@/lib/api-client";
+import { ApiError } from "@/lib/api-error";
 
 // Plan 065 Phase 4 — Next-side identity helper.
 //

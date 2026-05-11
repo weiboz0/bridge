@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
-import { api, ApiError } from "@/lib/api-client";
+import { api } from "@/lib/api-client";
+import { ApiError } from "@/lib/api-error";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { CreateClassForm } from "@/components/teacher/create-class-form";
 import { isValidUUID } from "@/lib/utils";

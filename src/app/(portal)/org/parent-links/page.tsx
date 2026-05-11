@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
-import { api, ApiError } from "@/lib/api-client";
+import { api } from "@/lib/api-client";
+import { ApiError } from "@/lib/api-error";
 import { resolveOrgContext } from "@/lib/portal/org-context";
 import { handleOrgContext } from "@/components/portal/org-context-guard";
 import { OrgParentLinksView } from "@/components/org/parent-links-view";
