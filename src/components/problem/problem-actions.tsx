@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useState } from "react";
 import { Button, buttonVariants } from "@/components/ui/button";
-import { ApiError } from "@/lib/api-client";
+import { ApiError } from "@/lib/api-error";
 import type { ProblemDetailData } from "./teacher-problem-detail";
 
 // Plan 066 phase 2 — action buttons for the problem detail page.
