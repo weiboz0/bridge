@@ -168,7 +168,13 @@ All 5 reviewers concur. **Codex + DeepSeek + GLM all independently caught the AR
 
 Codex round-1 also confirmed Q1-Q4 PASS: `listboxVisible` is the single source of truth for all 3 sites, 150ms blur delay correctly commented, submit gating exact, tests robust.
 
-### Codex round-2 — pending (BLOCKER fix at `6412f22`)
+### Codex round-2 — CONCUR
+
+Confirmed all three checks: `setHighlightedIndex(-1)` fires inside the 150ms blur setTimeout (lines 244-249); `aria-activedescendant` gates on `highlightedIndex >= 0` and resolves to `undefined` when the index resets (lines 216-220); `blurTimerRef` defined + cleared on unmount + cleared on re-focus (lines 53-58 + 222-229). Round-1 BLOCKER resolved. No new issues.
+
+### Convergence
+
+All 5 reviewers concur at HEAD `6412f22`. Codex round-1 caught a real BLOCKER (aria-activedescendant) that the other 3 (DeepSeek, GLM, Kimi) missed — three reviewers had given clean CONCUR on the same code. Multi-reviewer ensemble pulling its weight again.
 
 ### DeepSeek V4 Flash — CONCUR clean (0 BLOCKERS, 0 NITS)
 
