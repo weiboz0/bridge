@@ -1,5 +1,6 @@
-import { test, expect, type BrowserContext, type Page } from "@playwright/test";
+import { test, expect, type BrowserContext } from "@playwright/test";
 import { ACCOUNTS, loginWithCredentials } from "./helpers";
+import { getFixtureState } from "./helpers/fixture-state";
 
 /**
  * Session Flow E2E — tests the core lifecycle:
@@ -36,43 +37,25 @@ test.describe.serial("Session Flow", () => {
   test("teacher can start a live session from class detail page", async () => {
     const page = await teacherContext.newPage();
 
-    // Navigate to teacher's classes page to find a class
-    await page.goto("/teacher/classes");
-    await expect(page.getByRole("heading", { name: "My Classes" })).toBeVisible();
+    // Read classId from fixture state written by seed.setup.ts
+    const fixtureState = getFixtureState();
+    classId = fixtureState.classId;
+    expect(classId).toBeDefined();
 
-    // Click the first class card
-    const classLink = page.locator("a[href*='/teacher/classes/']").first();
-    if (!(await classLink.isVisible({ timeout: 5000 }).catch(() => false))) {
-      test.skip(true, "No classes available for teacher");
-      await page.close();
-      return;
-    }
-
-    // Extract classId from the link href
-    const href = await classLink.getAttribute("href");
-    classId = href!.split("/teacher/classes/")[1];
-
-    await classLink.click();
+    // Navigate directly to the seeded class detail page
+    await page.goto(`/teacher/classes/${classId}`);
     await page.waitForURL(/\/teacher\/classes\//);
 
     // Verify join code is visible (confirms we're on class detail)
     await expect(page.locator("text=Join Code")).toBeVisible();
 
+    // The seed cleans up any active sessions — resume button must NOT be present
+    const resumeButton = page.locator("text=Resume Session");
+    await expect(resumeButton).not.toBeVisible({ timeout: 2000 });
+
     // Click "Start Live Session" button
     const startButton = page.getByRole("button", { name: "Start Live Session" });
-    if (!(await startButton.isVisible({ timeout: 3000 }).catch(() => false))) {
-      // Session may already be active — check for Resume button
-      const resumeButton = page.locator("text=Resume Session");
-      if (await resumeButton.isVisible({ timeout: 2000 }).catch(() => false)) {
-        // End existing session first via API
-        await page.close();
-        test.skip(true, "Session already active — cannot start a new one in this test run");
-        return;
-      }
-      test.skip(true, "Start Live Session button not visible");
-      await page.close();
-      return;
-    }
+    await expect(startButton).toBeVisible({ timeout: 5000 });
 
     await startButton.click();
 
@@ -91,21 +74,17 @@ test.describe.serial("Session Flow", () => {
   });
 
   test("student sees active session on class page", async () => {
-    test.skip(!classId || !sessionId, "No session was started in previous test");
+    expect(classId).toBeDefined();
+    expect(sessionId).toBeDefined();
 
     const page = await studentContext.newPage();
 
     // Navigate to student's class detail page
     await page.goto(`/student/classes/${classId}`);
 
-    // Verify "Live Session — Join Now" card is visible
+    // Verify "Live Session — Join Now" card is visible — fixture enrolls alice in the class
     const liveCard = page.locator("text=Live Session — Join Now");
-    if (!(await liveCard.isVisible({ timeout: 5000 }).catch(() => false))) {
-      // The student may not be enrolled in this class
-      test.skip(true, "Live session card not visible — student may not be enrolled in this class");
-      await page.close();
-      return;
-    }
+    await expect(liveCard).toBeVisible({ timeout: 5000 });
 
     await expect(liveCard).toBeVisible();
 
@@ -117,21 +96,16 @@ test.describe.serial("Session Flow", () => {
   });
 
   test("teacher can end a session", async () => {
-    test.skip(!sessionId, "No session was started");
+    expect(sessionId).toBeDefined();
 
     const page = await teacherContext.newPage();
 
     // Navigate to session dashboard
     await page.goto(`/teacher/classes/${classId}/session/${sessionId}/dashboard`);
 
-    // Look for "End Session" button
+    // Look for "End Session" button — must be present after the start-session test ran
     const endButton = page.getByRole("button", { name: "End Session" });
-    if (!(await endButton.isVisible({ timeout: 5000 }).catch(() => false))) {
-      // Session may have already ended
-      test.skip(true, "End Session button not visible");
-      await page.close();
-      return;
-    }
+    await expect(endButton).toBeVisible({ timeout: 5000 });
 
     await endButton.click();
 
@@ -147,20 +121,15 @@ test.describe.serial("Session Flow", () => {
   });
 
   test("teacher sees past sessions on class page", async () => {
-    test.skip(!classId, "No class available");
+    expect(classId).toBeDefined();
 
     const page = await teacherContext.newPage();
 
     await page.goto(`/teacher/classes/${classId}`);
 
-    // Verify past sessions section exists
+    // Verify past sessions section exists — the end-session test guarantees at least one past session
     const pastSessionsHeading = page.locator("text=Past Sessions");
-    if (!(await pastSessionsHeading.isVisible({ timeout: 5000 }).catch(() => false))) {
-      // May not have any past sessions if the session test was skipped
-      test.skip(true, "No past sessions visible");
-      await page.close();
-      return;
-    }
+    await expect(pastSessionsHeading).toBeVisible({ timeout: 5000 });
 
     await expect(pastSessionsHeading).toBeVisible();
 
