@@ -2,13 +2,13 @@
 
 ## Problem
 
-The platform-admin user list at `/admin/users` (`src/app/(portal)/admin/users/page.tsx`) currently shows: Name, Email, Admin (Yes/blank), Joined, Actions. The Actions menu (`src/components/admin/user-actions.tsx`) has exactly one item: "Login as {firstName}" (impersonate). Three operational gaps the user flagged:
+The platform-admin user list at `/admin/users` (`src/app/(portal)/admin/users/page.tsx`) currently shows: Name, Email, Admin (Yes/blank), Joined, Actions. The Actions menu (`src/components/admin/user-actions.tsx`) has exactly one item: "Login as {firstName}" (impersonate). Five operational gaps the user flagged across the brainstorming exchange:
 
 1. **No role visibility** — when scanning users, the admin can't see whether each row is a teacher, student, parent, or org-admin without clicking through to inspect their org membership. The most useful at-a-glance signal is missing.
 2. **No org visibility** — same problem for org affiliation. Multi-org future aside, every non-platform-admin user today belongs to exactly one org, and that name is the primary disambiguator.
 3. **No filters** — the page renders every user as one flat list. With even modest growth this becomes unscannable. The adjacent `/admin/orgs` page already has filter chips for status (`src/app/(portal)/admin/orgs/page.tsx:67-71`); applying the same pattern here is the natural fix.
 4. **No per-row operations beyond Impersonate.** When an admin needs to support a user (forgot password, account compromised, role change), there's no UI path. The Go backend doesn't currently support disabling a user at all (no `users.status` column — verified by grepping `drizzle/*.sql` and `src/lib/db/schema.ts`).
-5. **No user detail page.** Clicking on a user row goes nowhere. Even a thin placeholder route (rendering the user's metadata + "more details coming soon") would preserve the entry point so future detail features have a home — without it, the feature gets forgotten when v1 ships. (Five gaps in total — the §Problem heading "5 operational gaps" should be read literally; the earlier "4" was a stale count.)
+5. **No user detail page.** Clicking on a user row goes nowhere. Even a thin placeholder route (rendering the user's metadata + "more details coming soon") would preserve the entry point so future detail features have a home — without it, the feature gets forgotten when v1 ships.
 
 The Go API at `/api/admin/users` (`platform/internal/handlers/admin.go:67-75`) returns the `User` struct from `platform/internal/store/users.go:13-22`, which only surfaces id/name/email/avatar/isPlatformAdmin/timestamps. Role data lives in `org_memberships` (per `src/lib/db/schema.ts:99-104` — enum `org_admin`/`teacher`/`student`/`parent`). The intent column `users.intended_role` (signup_intent enum: `teacher`/`student`) is what the user said at signup but isn't authoritative — a "student" intent could later be upgraded to a teacher org membership. The org-membership role wins for display.
 
@@ -428,7 +428,7 @@ Direct adaptation of `src/components/admin/suspend-org-dialog.tsx` (PR #148). Sa
 | (Password-reset risk closed) | n/a | Decision finalized in §1g: deferred to follow-up plan. `hasPassword` field still ships in this plan's API response so the follow-up plan doesn't need a separate API change. |
 | No audit log for admin operations | low (v1) | Decision #20. Future plan adds an `admin_actions` table and retrofits the 3 new endpoints (suspend/reactivate, toggle-admin, get-user). Until then, `updated_at` is the only trail. |
 | (Password-reset risks — deferred to follow-up plan) | n/a | Endpoint and UI removed from plan 085 scope. The follow-up plan delivers: 400 on OAuth-only target, per-target rate-limit to prevent email-flooding, token table + email infra. See §1g. |
-| 3-action menu becomes cluttered on the row | low | Dropdown menu, not inline buttons — clutter is hidden behind the `...` trigger. |
+| 4-item action menu becomes cluttered on the row | low | Dropdown menu, not inline buttons — clutter is hidden behind the `...` trigger. Active row: View details / Login as / Toggle platform-admin / Suspend. Suspended row: View details / Reactivate / Toggle platform-admin. Self row: View details only. |
 | Toggle-admin without a strong confirmation | medium | Decision #12 — `window.confirm()`. Two-direction (promote / demote) so a misclick is easily reversed. Acceptable v1; can add type-to-confirm later if abuse surfaces. |
 | Suspend dialog "Existing sessions invalidated immediately" copy depends on cache invalidation actually firing | low | RequireAuth IS cached (60s TTL via `CachedAdminChecker` — verified by GLM + DeepSeek round-1, see `admin_check.go:31`). §1i extends the cache to carry status alongside is_admin; `UpdateUserStatus` handler calls `Purge(userID)` after the write. Handler test asserts `Purge` is invoked. Without the `Purge`, suspend would take up to 60s to bite. |
 | Reactivate via dropdown — no friction means a misclick on a recently-suspended account re-enables it | low | Reactivate is reversible (re-suspend). `window.confirm()` is sufficient. |
@@ -468,7 +468,7 @@ Direct adaptation of `src/components/admin/suspend-org-dialog.tsx` (PR #148). Sa
 ### Phase 3 — Verify + docs
 
 1. **Full test suite** — Vitest + Go.
-2. **Smoke-test in dev**: open `/admin/users`, try each filter, perform each operation against a non-admin test user. Verify suspended user is blocked from sign-in.
+2. **Smoke-test in dev**: open `/admin/users`, try each filter, perform each operation against a non-admin test user. Verify the suspended user gets **401 on every Go-proxied request** (the authoritative block point — see §Risks "NextAuth `authorize`"). The NextAuth sign-in itself may still succeed (acceptable v1, Kimi K2.6 round-2 nit); the user will see "Account suspended" copy from the 401 response the moment they hit any portal endpoint after sign-in.
 3. **Update `docs/api.md`** with the new endpoints + query params.
 4. **Self-review** the combined branch diff. Cross-phase consistency: TS field names ↔ Go JSON tags; schema migration ↔ Drizzle schema.
 5. **Commit** any docs/cleanup as `plan 085 phase 3 (verify + docs)`. Push.
