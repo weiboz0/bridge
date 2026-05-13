@@ -16,7 +16,6 @@ import { SuspendUserDialog } from "@/components/admin/suspend-user-dialog";
 interface UserActionsProps {
   userId: string;
   userName: string;
-  userEmail: string;
   status: "active" | "suspended";
   isPlatformAdmin: boolean;
   isSelf: boolean;
@@ -25,7 +24,6 @@ interface UserActionsProps {
 export function UserActions({
   userId,
   userName,
-  userEmail: _userEmail, // eslint-disable-line @typescript-eslint/no-unused-vars
   status,
   isPlatformAdmin,
   isSelf,

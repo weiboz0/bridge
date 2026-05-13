@@ -192,7 +192,6 @@ export default async function AdminUsersPage({
                   <UserActions
                     userId={user.id}
                     userName={user.name}
-                    userEmail={user.email}
                     status={user.status}
                     isPlatformAdmin={user.isPlatformAdmin}
                     isSelf={user.id === identity.userId}

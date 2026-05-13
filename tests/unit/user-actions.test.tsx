@@ -37,7 +37,6 @@ import { UserActions } from "@/components/admin/user-actions";
 const BASE_PROPS = {
   userId: "user-001",
   userName: "Alice Teacher",
-  userEmail: "alice@school.edu",
   status: "active" as const,
   isPlatformAdmin: false,
   isSelf: false,
