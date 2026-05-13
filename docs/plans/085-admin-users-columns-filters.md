@@ -8,7 +8,7 @@ The platform-admin user list at `/admin/users` (`src/app/(portal)/admin/users/pa
 2. **No org visibility** — same problem for org affiliation. Multi-org future aside, every non-platform-admin user today belongs to exactly one org, and that name is the primary disambiguator.
 3. **No filters** — the page renders every user as one flat list. With even modest growth this becomes unscannable. The adjacent `/admin/orgs` page already has filter chips for status (`src/app/(portal)/admin/orgs/page.tsx:67-71`); applying the same pattern here is the natural fix.
 4. **No per-row operations beyond Impersonate.** When an admin needs to support a user (forgot password, account compromised, role change), there's no UI path. The Go backend doesn't currently support disabling a user at all (no `users.status` column — verified by grepping `drizzle/*.sql` and `src/lib/db/schema.ts`).
-5. **No user detail page.** Clicking on a user row goes nowhere. Even a thin placeholder route (rendering the user's metadata + "more details coming soon") would preserve the entry point so future detail features have a home — without it, the feature gets forgotten when v1 ships.
+5. **No user detail page.** Clicking on a user row goes nowhere. Even a thin placeholder route (rendering the user's metadata + "more details coming soon") would preserve the entry point so future detail features have a home — without it, the feature gets forgotten when v1 ships. (Five gaps in total — the §Problem heading "5 operational gaps" should be read literally; the earlier "4" was a stale count.)
 
 The Go API at `/api/admin/users` (`platform/internal/handlers/admin.go:67-75`) returns the `User` struct from `platform/internal/store/users.go:13-22`, which only surfaces id/name/email/avatar/isPlatformAdmin/timestamps. Role data lives in `org_memberships` (per `src/lib/db/schema.ts:99-104` — enum `org_admin`/`teacher`/`student`/`parent`). The intent column `users.intended_role` (signup_intent enum: `teacher`/`student`) is what the user said at signup but isn't authoritative — a "student" intent could later be upgraded to a teacher org membership. The org-membership role wins for display.
 
@@ -31,13 +31,26 @@ Three thematic changes, organized into phases by domain (matching the new domain
 CREATE TYPE "public"."user_status" AS ENUM ('active', 'suspended');
 ALTER TABLE "users" ADD COLUMN "status" "user_status" DEFAULT 'active' NOT NULL;
 CREATE INDEX "users_status_idx" ON "users" USING btree ("status");
+
+-- Composite index serving the LATERAL `WHERE user_id = $1 AND status = 'active'
+-- ORDER BY created_at ASC LIMIT 1` lookup in ListUsers/GetAdminUserByID.
+-- Kimi K2.6 round-1: only `org_memberships_user_idx` (user_id alone) exists today.
+CREATE INDEX "org_memberships_user_status_created_idx"
+  ON "org_memberships" USING btree ("user_id", "status", "created_at");
 ```
 
 Update `src/lib/db/schema.ts` to add the enum + column. Existing rows backfill to `'active'` via DEFAULT. Drizzle `db:generate` should produce a clean migration matching the hand-written SQL.
 
-#### 1b. Extend `User` struct (`platform/internal/store/users.go`)
+#### 1b. Extend `User` struct minimally; introduce `AdminUser` for the enriched view
+
+Per Kimi K2.6 round-1 BLOCKER: putting the new fields on the shared `User` struct breaks the auth path. `GetUserByEmail` (used during login) would either need updating to populate them OR would return partially-valid structs that the new auth-status check would misread as `status=""`.
+
+Resolution: keep `User` lean (add only `Status` since it's needed everywhere — login auth needs it too), introduce a separate `AdminUser` struct for the enriched admin view.
 
 ```go
+// Base User struct — gets ONE new field (status). Every callsite already
+// touches password_hash via password verification, so HasPassword is NOT
+// added here.
 type User struct {
     ID              string    `json:"id"`
     Name            string    `json:"name"`
@@ -45,15 +58,26 @@ type User struct {
     AvatarURL       *string   `json:"avatarUrl"`
     IsPlatformAdmin bool      `json:"isPlatformAdmin"`
     Status          string    `json:"status"`   // NEW — 'active' | 'suspended'
-    OrgRole         *string   `json:"orgRole"`  // NEW — primary org_memberships.role
-    OrgID           *string   `json:"orgId"`    // NEW — primary org_memberships.org_id
-    OrgName         *string   `json:"orgName"`  // NEW — joined orgs.name
     CreatedAt       time.Time `json:"createdAt"`
     UpdatedAt       time.Time `json:"updatedAt"`
 }
+
+// AdminUser — enriched view for /admin/users list + detail endpoints.
+// Embeds User and adds the membership + has-password fields.
+type AdminUser struct {
+    User
+    OrgRole     *string `json:"orgRole"`     // primary org_memberships.role
+    OrgID       *string `json:"orgId"`       // primary org_memberships.org_id
+    OrgName     *string `json:"orgName"`     // joined organizations.name
+    HasPassword bool    `json:"hasPassword"` // password_hash IS NOT NULL
+}
 ```
 
-**Include `HasPassword bool \`json:"hasPassword"\`** computed as `password_hash IS NOT NULL` so the frontend can grey out the "Reset password" menu item for OAuth-only users instead of letting them click and surface a 400. Click-then-error is a worse UX than visibly-unavailable.
+**Why include `HasPassword`**: the frontend uses it to grey out the "Reset password" menu item for OAuth-only users. Click-then-error is a worse UX than visibly-unavailable.
+
+**Migration safety**: every existing store method that returns `User` (or `*User`) must select the new `status` column. That includes `GetUserByID`, `GetUserByEmail`, the auth-path lookup, and any test fixture builders. Pre-impl step: grep `SELECT.*FROM users` to inventory; update each.
+
+`ListUsers` and `GetUserByID` change return types — `ListUsers(...) ([]AdminUser, error)` and add `GetAdminUserByID(...) (*AdminUser, error)`. The existing `GetUserByID` stays on the lean `User` shape so the auth path isn't affected.
 
 #### 1c. Rewrite `ListUsers` with filters
 
@@ -70,6 +94,7 @@ SQL (LATERAL pulls the primary membership — earliest active by `created_at` fo
 
 ```sql
 SELECT u.id, u.name, u.email, u.avatar_url, u.is_platform_admin, u.status,
+       (u.password_hash IS NOT NULL) AS has_password,
        m.role, m.org_id, o.name AS org_name,
        u.created_at, u.updated_at
 FROM users u
@@ -80,7 +105,7 @@ LEFT JOIN LATERAL (
   ORDER BY created_at ASC
   LIMIT 1
 ) m ON TRUE
-LEFT JOIN orgs o ON o.id = m.org_id
+LEFT JOIN organizations o ON o.id = m.org_id
 WHERE (...filter clauses...)
 ORDER BY u.created_at DESC
 ```
@@ -145,7 +170,7 @@ Sends a password-reset email.
 - Use the existing password-reset email pathway (grep `passwordReset` / `ResetToken` to find it; if no admin-triggered path exists, add a helper that reuses the user-triggered flow).
 - Return 200 with `{ok: true}`. Don't include the token in the response.
 
-If Bridge has no existing password-reset infrastructure (verify during impl), defer this endpoint to a follow-up plan. Note this in the plan's §Decisions if discovered.
+**Pre-verified** by GLM round-1: grep of `platform/` for `passwordReset|ResetToken|recover_token|forgot` returned zero results. There is no existing password-reset infrastructure. Decision: **defer §1g (password-reset endpoint) to a follow-up plan**. The "Reset password" menu item is also dropped from §2b (UserActions). Document the deferral in the post-execution report. The other 3 new endpoints (get-user, suspend/reactivate, toggle-admin) ship in this plan.
 
 #### 1h. New endpoint — GET `/api/admin/users/{userID}`
 
@@ -156,17 +181,37 @@ Returns a single user enriched with org membership + status (same shape as the l
 - Return 404 if not found.
 - Return 200 with the enriched user.
 
-#### 1i. Update `RequireAuth` middleware
+#### 1i. Update `RequireAuth` middleware — share the admin-check cache for status
 
-Locate the function in `platform/internal/auth/middleware.go` (or wherever `mw.RequireAuth` is defined per the `_test.go` imports). Reject `status='suspended'` users:
+Per GLM 5.1 + Kimi K2.6 round-1 BLOCKERS: `RequireAuth` (`platform/internal/auth/middleware.go:147`) currently validates the JWT/bridge.session, calls `injectLiveAdmin` (line 289), and never loads the user row from the DB. `injectLiveAdmin` uses `CachedAdminChecker` with a **60-second TTL** (`admin_check.go:31`). A naive added-per-request DB lookup would regress auth performance by ~1 query/request on every authenticated path.
 
-- After validating session and loading user, if `user.Status == "suspended"` return 401 with body `{error: "Account suspended. Contact your administrator."}`.
-- Existing tests should still pass — `status` defaults to `active` so no existing fixture is affected.
-- Add a new test `TestRequireAuth_RejectsSuspended` covering the new branch.
+Resolution (GLM option A, Kimi option (i)): **extend the cached lookup to return both `is_admin` AND `status`**. Concretely:
+
+1. Rename `LookupIsAdmin` → `LookupAdminAndStatus` in `platform/internal/auth/admin_check.go`:
+   ```go
+   type AdminLookup interface {
+       LookupAdminAndStatus(ctx context.Context, userID string) (isAdmin bool, status string, err error)
+   }
+   ```
+2. Cache value becomes `struct { IsAdmin bool; Status string }` keyed by userID. TTL unchanged at 60s.
+3. `injectLiveAdmin` becomes `injectLiveStatus` — populates `claims.IsPlatformAdmin` AND `claims.Status` from the cache.
+4. `RequireAuth` checks `claims.Status == "suspended"` after `injectLiveStatus` and returns 401 with `{error: "Account suspended. Contact your administrator."}`.
+5. `Claims` struct (`platform/internal/auth/jwt.go` or equivalent) gets `Status string` field. JWT payload does NOT carry status — it's set from the live cache after verification.
+6. **Cache eviction on suspend/reactivate**: `UpdateUserStatus` handler calls `AdminChecker.Purge(userID)` after the UPDATE succeeds. `Purge` already exists on the checker (verified at `admin_check_test.go:134-150`). This makes suspend take effect IMMEDIATELY for new requests — not "on next request after 60s cache expiry".
+7. **Cache eviction on toggle-admin**: `UpdateUserPlatformAdmin` also calls `Purge(userID)` (same rationale — instant effect for security-sensitive ops).
+
+**Suspend-dialog UX copy update**: "Existing sessions are invalidated immediately — the user will be signed out on their next request."
+
+**Existing test impact**: tests that stub `LookupIsAdmin` need updating to the new signature (returning `(bool, string, error)`). Grep `LookupIsAdmin` to inventory. The 5 existing tests in `admin_check_test.go` all use a `stubLookup` — updating its return shape is mechanical.
+
+**New tests**:
+- `admin_check_test.go`: `TestCachedAdminChecker_StatusFieldCached` (verify status survives the cache hit path).
+- `middleware_test.go`: `TestRequireAuth_RejectsSuspended` — 401 returned when user.status='suspended' (Status field on claims).
+- `middleware_test.go`: `TestRequireAuth_ActiveStatusPasses` — control case.
 
 #### 1j. Tests
 
-- `platform/internal/store/users_test.go` (NEW) — happy-path coverage for `ListUsers` with each filter shape (8+ cases) + new status field assertions; new `UpdateStatus`, `UpdatePlatformAdmin` cases; `GetUserByID` returns the enriched shape (org membership + status).
+- `platform/internal/store/users_test.go` (EXTEND — already exists, contains `TestUserStore_GetUserByID_NotFound` etc.) — happy-path coverage for `ListUsers` with each filter shape (8+ cases including `role=platform_admin + orgId` combined SQL path) + new status field assertions; new `UpdateStatus`, `UpdatePlatformAdmin` cases; `GetAdminUserByID` returns the enriched shape (org membership + has_password + status); existing `GetUserByID` test fixtures updated for the new `status` column.
 - `platform/internal/handlers/admin_test.go` (extend) — 200/400/401/403 paths for all 4 new endpoints (suspend/reactivate, toggle-admin, password-reset, get-user-by-id). Self-target guards covered. Cross-user isolation.
 - `platform/internal/auth/middleware_test.go` (extend) — `TestRequireAuth_RejectsSuspended`.
 
@@ -186,6 +231,7 @@ interface UserItem {
   orgRole: string | null;            // NEW
   orgId: string | null;              // NEW
   orgName: string | null;            // NEW
+  hasPassword: boolean;              // NEW — greys "Reset password" for OAuth-only users
   createdAt: string;
 }
 
@@ -216,7 +262,7 @@ Display formatting: `orgRole` → "Org admin" / "Teacher" / "Student" / "Parent"
 <FilterChip current={role} value="unassigned" preserve={{ orgId }}>Unassigned</FilterChip>
 ```
 
-**Org filter** — `<select>` (chips don't scale past ~5 options). Implemented as a small `"use client"` component `src/components/admin/org-filter-select.tsx` that submits its form on change:
+**Org filter** — `<select>` (chips don't scale past ~5 options). Fetch `/api/admin/orgs?status=active` so only active orgs appear in the dropdown (filtering by a suspended org is rarely useful and may surprise an admin). Implemented as a small `"use client"` component `src/components/admin/org-filter-select.tsx` that submits its form on change:
 
 ```tsx
 "use client";
@@ -239,14 +285,14 @@ Extend props with `userStatus`, `isPlatformAdmin`, `isSelf` (already implicit vi
 
 | Status | Items |
 |--------|-------|
-| `active`, not self | View details · Login as {firstName} · Reset password · Toggle platform-admin · Suspend account… |
-| `suspended`, not self | View details · Reactivate account · Toggle platform-admin (greyed if reactivating first preferred) |
+| `active`, not self | View details · Login as {firstName} · Toggle platform-admin · Suspend account… |
+| `suspended`, not self | View details · Reactivate account (recommended first) · Toggle platform-admin (always enabled — independent of status) |
 | self | View details only (no destructive/impersonate ops on self) — render `<UserActions isSelf={true} />` with narrowed item set rather than hiding the component entirely as today |
 
 Behaviors:
 - **View details** — navigates to `/admin/users/{userID}` (the new detail page below). Available on every row including self.
 - **Login as** — existing impersonate path, unchanged.
-- **Reset password** — `window.confirm("Send password-reset email to {email}?")` → POST `/api/admin/users/{userID}/password-reset` → toast (inline) on success or error.
+- **Reset password** — **DEFERRED to follow-up plan** (no password-reset infra in Bridge today; verified by GLM round-1 grep). Not in this plan's UI. `hasPassword` field still ships on the API response so the future plan can use it.
 - **Toggle platform-admin** — `window.confirm("Make {name} a platform admin?" | "Remove {name}'s platform-admin role?")` → PATCH `/api/admin/users/{userID}/platform-admin`.
 - **Suspend account** — Open `SuspendUserDialog` (NEW, mirroring `SuspendOrgDialog` pattern from plan 084-equivalent / PR #148): type-to-confirm with the user's NAME.
 - **Reactivate account** — `window.confirm("Reactivate {name}? They will be able to sign in again.")` → PATCH `/api/admin/users/{userID}/status` with `{status: "active"}`.
@@ -268,7 +314,7 @@ Server component, matches the structure of `src/app/(portal)/admin/units/[id]/pa
 - Below the metadata, render a `<Card>` titled "Activity" with placeholder copy: "Session history, audit log, and per-user metrics will appear here." This makes the future-feature intent explicit so it isn't forgotten.
 - Top-right: a "Back to users" link → `/admin/users`.
 
-NOT in this plan (call out explicitly in §Decisions): no sessions list, no audit log, no per-user activity charts. The placeholder is the placeholder.
+NOT in this plan (call out explicitly in §Decisions): no sessions list, no audit log, no per-user activity charts, **no actions on the detail page** (Suspend/Reactivate/Toggle-admin live only on the list-page row dropdown). The detail page is read-only metadata in v1.
 
 #### 2d. New component — `src/components/admin/suspend-user-dialog.tsx`
 
@@ -279,7 +325,7 @@ Direct adaptation of `src/components/admin/suspend-org-dialog.tsx` (PR #148). Sa
 - `tests/unit/admin-users-page.test.tsx` (NEW) — render with mocked api: (a) all-users render with role+org+status columns; (b) filter chips render with active state matching the URL param; (c) chip hrefs preserve `orgId`; (d) org `<select>` renders all orgs with the right default selected; (e) suspended user shows the badge; (f) self-row hides destructive Actions but exposes View details.
 - `tests/unit/admin-user-detail-page.test.tsx` (NEW) — render with mocked api: (a) renders user metadata; (b) renders "Activity" placeholder card; (c) renders 400 card on malformed UUID; (d) renders 404 card when API returns 404; (e) renders 403 panel on platform-admin-required.
 - `tests/unit/suspend-user-dialog.test.tsx` (NEW) — direct adaptation of `tests/unit/suspend-org-dialog.test.tsx` (PR #148). 8 cases: closed-returns-null, disabled-on-mismatch, enabled-on-match, success-callbacks, HTTP-error inline, network-error inline + role="alert", reset-on-reopen, symmetric-trim.
-- `tests/unit/user-actions.test.tsx` (NEW) — verify each menu item appears / hides for each status; verify each action triggers the right confirm + fetch; verify View details appears for self.
+- `tests/unit/user-actions.test.tsx` (NEW) — verify each menu item appears / hides for each status; verify each action triggers the right confirm + fetch; verify View details appears for self. (Codex round-1 BLOCKER about testing greyed-out Reset Password is MOOT — Reset Password is deferred to a follow-up plan; the related test ships with that plan when it lands.)
 
 ### Phase 3 — Verify + docs
 
@@ -293,9 +339,9 @@ Direct adaptation of `src/components/admin/suspend-org-dialog.tsx` (PR #148). Sa
 **Modify (7):**
 - `src/lib/db/schema.ts` — add `userStatusEnum`, `users.status` column.
 - `platform/internal/store/users.go` — `User` struct + `ListUsers` filter signature + new SQL; `GetUserByID` returns enriched shape; add `UpdateStatus`, `UpdatePlatformAdmin` methods.
-- `platform/internal/handlers/admin.go` — `ListAllUsers` reads query params; add `GetAdminUser`, `UpdateUserStatus`, `UpdateUserPlatformAdmin`, `ResetUserPassword` handlers.
+- `platform/internal/handlers/admin.go` — `ListAllUsers` reads query params; add `GetAdminUser`, `UpdateUserStatus`, `UpdateUserPlatformAdmin` handlers. (Password-reset deferred.)
 - `platform/internal/auth/middleware.go` (or wherever `RequireAuth` lives) — reject suspended users.
-- `cmd/api/main.go` (or wherever admin routes mount) — register the 4 new endpoints.
+- `cmd/api/main.go` (or wherever admin routes mount) — register the 3 new endpoints (get-user, suspend/reactivate, toggle-admin).
 - `src/app/(portal)/admin/users/page.tsx` — fields + columns + filters + searchParams.
 - `src/components/admin/user-actions.tsx` — extend with the new menu items (View details + ops) + dialog wiring.
 
@@ -311,7 +357,8 @@ Direct adaptation of `src/components/admin/suspend-org-dialog.tsx` (PR #148). Sa
 - `tests/unit/user-actions.test.tsx` — action-menu state tests.
 
 **Extend (2):**
-- `platform/internal/handlers/admin_test.go` — coverage for the 3 new endpoints.
+- `platform/internal/handlers/admin_test.go` — coverage for the 4 new endpoints (get-user-by-id, suspend/reactivate, toggle-admin, password-reset).
+- `tests/unit/schema.test.ts` — update the users-table assertion to include the new `status` column (Kimi K2.6 round-1 nit).
 - `platform/internal/auth/middleware_test.go` (existing — confirm path) — `TestRequireAuth_RejectsSuspended`.
 
 **Touch (1):**
@@ -344,7 +391,7 @@ Direct adaptation of `src/components/admin/suspend-org-dialog.tsx` (PR #148). Sa
 
 | Risk | Severity | Mitigation |
 |---|---|---|
-| LATERAL JOIN performance on `org_memberships` for large user counts | low | Index on `(user_id, status, created_at)` likely exists per migration history; verify with `\d org_memberships` and EXPLAIN ANALYZE during impl. Add the index if missing. |
+| LATERAL JOIN performance on `org_memberships` for large user counts | low | Composite index `(user_id, status, created_at)` does NOT exist today (verified by Kimi: only `org_memberships_user_idx` on `userId` alone). The §1a migration MUST add this composite index. Without it, the LATERAL `ORDER BY created_at ASC LIMIT 1` does a per-user sort over all the user's membership rows. |
 | User has multiple active memberships in different orgs — primary pick is ambiguous | medium | LATERAL `ORDER BY created_at ASC LIMIT 1` is deterministic. Code comment in SQL: "earliest active membership wins." Future multi-org expansion needs a different display strategy. |
 | Existing `ListUsers` callers outside the admin handler | low | Pre-impl grep `grep -rn "\.ListUsers(" platform/`. If others exist, give them `ListUsersFilter{}` (no-op) or split into `ListUsers()` (compat) + `ListUsersFiltered(filter)`. |
 | Existing tests that mock the old `/api/admin/users` response shape | low | Pre-impl grep for `UserItem` and `admin/users` mocks. Update to include new fields. |
@@ -408,7 +455,7 @@ Direct adaptation of `src/components/admin/suspend-org-dialog.tsx` (PR #148). Sa
 | Layer | Test file | Cases |
 |-------|-----------|-------|
 | Go store | `platform/internal/store/users_test.go` (NEW) | `ListUsers` all-users; role=teacher; role=student; role=org_admin; role=parent; role=platform_admin; role=unassigned; orgId=X; role+orgId combined; `UpdateStatus` active→suspended; `UpdateStatus` suspended→active; `UpdatePlatformAdmin` true; `UpdatePlatformAdmin` false |
-| Go handler | `platform/internal/handlers/admin_test.go` (extend) | `ListAllUsers` 200 with filters; 400 on bad role; 400 on bad orgId; `GetAdminUser` 200; 404 missing; 400 bad UUID; suspend/reactivate 200; 400 on self-suspend; 400 on bad UUID; 401 unauth; 403 non-admin; toggle-admin 200; 400 on self-demote; password-reset 200; 400 on OAuth-only target; 404 on missing user; cross-user isolation |
+| Go handler | `platform/internal/handlers/admin_test.go` (extend) | `ListAllUsers` 200 with filters (including `role=platform_admin + orgId` combined SQL path); 400 on bad role; 400 on bad orgId; `GetAdminUser` 200; 404 missing; 400 bad UUID; suspend/reactivate 200; 400 on self-suspend; 400 on bad UUID; 401 unauth; 403 non-admin; toggle-admin 200; 400 on self-demote; 404 on missing user; cross-user isolation; admin-cache `Purge` is called on suspend + toggle-admin |
 | Go auth | `platform/internal/auth/middleware_test.go` (extend) | `TestRequireAuth_RejectsSuspended` — 401 returned when user.status='suspended' |
 | TS list page | `tests/unit/admin-users-page.test.tsx` (NEW) | columns render with API data; filter chips active state ↔ searchParam; chip hrefs preserve orgId; org `<select>` defaults + options; suspended badge renders; self-row hides destructive Actions; View details visible on self |
 | TS detail page | `tests/unit/admin-user-detail-page.test.tsx` (NEW) | metadata Card renders all fields; Activity placeholder Card renders; 400 on malformed UUID; 404 card on missing user; 403 panel on non-admin |
@@ -444,6 +491,18 @@ Remaining open concerns flagged for external reviewers to weigh in on:
 - **`<form method="get">` on `<select>` inside a server component** — pure HTML form should work but App Router behavior worth a second opinion. Mitigation: separate `"use client"` component (already planned), but the form itself is plain HTML.
 - **Self-suspend / self-demote** guards exist at handler level (400) but the UI's `isSelf` prop is a separate codepath — could drift. The plan calls out defense in depth; a reviewer may want explicit tests that the UI guard is consistent with the API guard.
 - **Migration ordering** — adding `users.status` with DEFAULT 'active' is safe for existing rows, but if Bridge has any unmigrated dev DBs the field will appear NULL when read by old code paths. Bridge tests run on `bridge_test` which is reset between runs, so dev DB hygiene is the user's concern. Worth a reviewer's eye.
+
+### Round 1 verdicts — 2026-05-12
+
+| Reviewer | Verdict | Blockers (resolved status) |
+|----------|---------|----------------------------|
+| Self (Opus 4.7) | CONCUR | (none) |
+| Codex | **BLOCKER** | (a) Table is `organizations`, not `orgs`. RESOLVED — all SQL refs updated. (b) `hasPassword` field on Go side but missing from TS `UserItem`. RESOLVED — added to interface in §2a. (c) No test for greyed-out reset for OAuth-only users. MOOT — Reset password is now deferred to a follow-up plan (zero infra). |
+| DeepSeek V4 Pro | pending | — |
+| GLM 5.1 | **BLOCKER** | (a) `RequireAuth` doesn't load user row; `injectLiveAdmin` is cached 60s. Suspend won't take effect for up to 60s. RESOLVED — §1i now extends `CachedAdminChecker` to carry status alongside admin; `Purge(userID)` on suspend/toggle-admin invalidates the entry. Plus 4 nits all resolved (HasPassword SQL, composite index, password-reset deferral wording, test matrix for combined filter). |
+| Kimi K2.6 | **BLOCKER** | (a) Same as GLM (a): RequireAuth DB-lookup mechanism unspecified. RESOLVED via the same fix in §1i. (b) Shared `User` struct scope: adding fields breaks the auth path. RESOLVED — §1b now splits into a lean `User` (status added) + a new enriched `AdminUser` for the admin view; `GetUserByEmail` and other lean callsites are unaffected by the membership/has-password additions. Plus 7 nits resolved (users_test.go is extend not create, composite index "add if missing", suspended-row menu clarified, gap count corrected, OrgFilterSelect filters to active, schema.test.ts noted, detail page explicitly read-only). |
+
+**Plan revised in commit ⟨pending⟩**. Re-dispatching Codex, GLM, Kimi to confirm resolution. DeepSeek V4 Pro's verdict still pending; will fold any new findings in round 2.
 
 ## Code Review
 
