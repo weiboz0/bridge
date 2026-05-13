@@ -1,6 +1,6 @@
 # Code Review Process
 
-Code review happens during Step 5 in `docs/development-workflow.md`. Bridge runs a **5-way review** on every PR — see `docs/reviewers.md` for the dispatch table and gate rules.
+Code review happens during Step 5 in `docs/development-workflow.md`. Bridge runs a **4-way review** on every PR — see `docs/reviewers.md` for the dispatch table and gate rules.
 
 The plan file's `## Code Review` section is the communication channel between reviewers and authors. Both parties use the same document — reviewers add findings, authors respond inline.
 

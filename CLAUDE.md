@@ -3,9 +3,9 @@
 ## Critical Rules
 
 - **Always create the feature branch BEFORE drafting the plan** (`git checkout -b feat/NNN-description`). All commits — plan file, review verdicts, implementation — land there. Never on `main`.
-- **Spawn subagents for coding work — domain-based dispatch.** Orchestrator stays on Opus 4.7 for planning + review + coordination. For implementation: **Codex** for backend (Go in `platform/`, Hocuspocus server); **Sonnet** for frontend (Next.js, React, `src/`); **Sonnet** for all test code regardless of domain; **Opus subagent** for complex cross-domain or new-pattern work. DeepSeek, GLM, Kimi remain review-only. Details: `docs/coding-agent.md`.
-- **Run the 5-way plan review** on every plan before any implementation. Capture all five verdicts in the plan's `## Plan Review` section. Gate + dispatch table: `docs/reviewers.md`.
-- **Run the 5-way code review** before merging any PR. Findings go in the plan's `## Code Review` section. Gate + dispatch table: `docs/reviewers.md`.
+- **Spawn subagents for coding work — domain-based dispatch.** Orchestrator stays on Opus 4.7 for planning + review + coordination. For implementation: **Codex** for backend (Go in `platform/`, Hocuspocus server); **Sonnet** for frontend (Next.js, React, `src/`); **Sonnet** for all test code regardless of domain; **Opus subagent** for complex cross-domain or new-pattern work. DeepSeek and GLM remain review-only. Details: `docs/coding-agent.md`.
+- **Run the 4-way plan review** on every plan before any implementation. Capture all four verdicts in the plan's `## Plan Review` section. Gate + dispatch table: `docs/reviewers.md`.
+- **Run the 4-way code review** before merging any PR. Findings go in the plan's `## Code Review` section. Gate + dispatch table: `docs/reviewers.md`.
 - **Always write a post-execution report** in the plan file before shipping.
 - **Run the full test suite before pushing.** Never push with failing tests.
 - **Never commit directly to `main`.** Always feature branch + PR via `gh pr create`.
@@ -67,7 +67,7 @@ When code affects behavior, APIs, architecture, or config, update `docs/` and af
 - Substantial code changes (new features, re-architecting, multi-file refactors, integrations) start with a plan in `docs/plans/` (sequential `NNN-feature-name.md`; sub-docs use letter suffixes `021a`, `021b`).
 - Design specs go in `docs/specs/` — only for large, novel, or cross-cutting designs that need a standalone reference. When brainstorming produces a concrete design (components, files, phases decided), skip the spec and go straight to a plan.
 - Before writing a new plan, review existing plans in `docs/plans/` for reusable patterns, architectural decisions, and existing implementations the new work should build on rather than duplicate.
-- Plans must pass the 5-way review before implementation. See `docs/reviewers.md`.
+- Plans must pass the 4-way review before implementation. See `docs/reviewers.md`.
 
 ## Multi-Agent Coordination
 
