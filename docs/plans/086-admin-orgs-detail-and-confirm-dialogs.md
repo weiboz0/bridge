@@ -12,7 +12,7 @@ Two related gaps surfaced after plan 085:
 
 Three thematic changes, three phases by domain (matching `docs/coding-agent.md` dispatch policy):
 
-- **Phase 1 — Backend (Codex)** — new admin org endpoints: `GET /api/admin/orgs/{orgID}` returning enriched org (with membership counts), `PATCH /api/admin/orgs/{orgID}/details` (name + contact email). Tests.
+- **Phase 1 — Backend (Codex)** — new admin org endpoints: `GET /api/admin/orgs/{orgID}` returning enriched org (with membership counts), `PATCH /api/admin/orgs/{orgID}/details` (name + contact name + contact email). Tests.
 - **Phase 2 — Frontend (Sonnet)** — new generic `<ConfirmDialog>` component; org detail placeholder page; org edit form; `UserActions` + `OrgActions` rewrite to use `ConfirmDialog` instead of `window.confirm`. Tests.
 - **Phase 3 — Verify + docs.**
 
@@ -63,17 +63,17 @@ LEFT JOIN LATERAL (
 WHERE o.id = $1
 ```
 
-The composite index `org_memberships_user_status_created_idx (user_id, status, created_at)` added in plan 085 doesn't serve this query (it's keyed on user_id, not org_id). An index on `(org_id, status)` likely exists already (verify pre-impl); if not, add `CREATE INDEX org_memberships_org_status_idx ON org_memberships (org_id, status)` in a new tiny migration.
+Performance: existing `org_memberships_org_idx (org_id)` from `drizzle/0003_org-and-roles.sql` covers `WHERE org_id = $1` for single-org reads. PostgreSQL index-scans to the org's memberships, then filters `status = 'active'` in memory. For typical org sizes (<1000 members) this is fine. A composite `(org_id, status)` index would help bulk org-list aggregation (not in scope here) but is NOT needed for single-org detail reads — GLM round-1 confirmed the existing index is sufficient. **No new migration in this plan.**
 
 #### 1c. New store method — `UpdateOrgDetails`
 
 ```go
-func (s *OrgStore) UpdateOrgDetails(ctx context.Context, orgID string, name, contactEmail string) (*AdminOrg, error)
+func (s *OrgStore) UpdateOrgDetails(ctx context.Context, orgID string, name, contactName, contactEmail string) (*AdminOrg, error)
 ```
 
 Returns `*AdminOrg` (enriched, including current membership counts) — same pattern as plan 085's `UpdateUserStatus` returning the enriched `*AdminUser`. Caller gets a consistent shape for both reads and writes.
 
-SQL: `UPDATE organizations SET name = $1, contact_email = $2, updated_at = NOW() WHERE id = $3`. After update, call `GetAdminOrgByID` internally to fetch the enriched row (counts come from a separate join — cheaper than `RETURNING` with a re-join). Both fields are required (no partial updates v1). Validate non-empty before calling.
+SQL: `UPDATE organizations SET name = $1, contact_name = $2, contact_email = $3, updated_at = NOW() WHERE id = $4`. Check rows-affected; if zero, return `(nil, nil)` (not-found, same nil-on-not-found semantic the rest of the store uses). On success, call `GetAdminOrgByID` internally to fetch the enriched row (counts come from a separate join — cheaper than `RETURNING` with a re-join). All three fields are required (no partial updates v1). Validate trimmed non-empty before calling.
 
 #### 1d. New handler — `GetAdminOrg` (`GET /api/admin/orgs/{orgID}`)
 
@@ -86,14 +86,17 @@ SQL: `UPDATE organizations SET name = $1, contact_email = $2, updated_at = NOW()
 ```go
 type updateOrgDetailsRequest struct {
     Name         string `json:"name"`
+    ContactName  string `json:"contactName"`
     ContactEmail string `json:"contactEmail"`
 }
 ```
 
 - Validate orgID as UUID.
-- Decode body; validate `Name` and `ContactEmail` are non-empty trimmed strings (400 otherwise).
-- Validate `ContactEmail` is a valid email format (use existing helper or `net/mail.ParseAddress`).
-- Call `UpdateOrgDetails`. 200 + updated `*AdminOrg` body (consistent with `GetAdminOrg` response shape; mirrors plan 085's UpdateUserStatus returning `*AdminUser`).
+- Decode body. For each of `Name`, `ContactName`, `ContactEmail`: apply `strings.TrimSpace` FIRST, THEN check the trimmed value is non-empty (400 otherwise). Don't reject leading/trailing whitespace — trim it.
+- Validate trimmed `ContactEmail` is a valid email format (use existing helper or `net/mail.ParseAddress`).
+- Call `UpdateOrgDetails` with the trimmed values.
+- If the store returns `(nil, nil)` (row not found at UPDATE time — org was deleted between request validation and now), return 404 with `{error: "Organization not found"}`. Mirrors `UpdateUserStatus`'s POST-UPDATE-race handling at `admin.go:137-139`.
+- 200 + updated `*AdminOrg` body on success (consistent with `GetAdminOrg` response shape; mirrors plan 085's UpdateUserStatus returning `*AdminUser`).
 
 #### 1f. Route registration
 
@@ -131,6 +134,7 @@ Behavior:
 - Escape + backdrop click close (suppressed while submitting).
 - `onCloseRef` stability so the Escape listener doesn't rebind on every parent render (same pattern as `suspend-user-dialog.tsx`).
 - Error from `onConfirm` (rejected promise) surfaces inline with `role="alert"` and does NOT close the dialog.
+- **Success → auto-close**: on `onConfirm` resolving without throwing, the dialog itself calls `onClose()` after the local `setSubmitting(false)`. Callers do NOT need to call `onClose` from their `onConfirm` impl — they just resolve. (Mirrors `SuspendOrgDialog`'s `onSuspended` + `onClose` pair, but collapses them so callers have one fewer hook.) Documented as the contract.
 - `succeeded` local + post-finally invocation to avoid dead state updates after unmount.
 - Confirm button auto-focused on open.
 - Reset error state each time the dialog re-opens.
@@ -192,6 +196,12 @@ Affected files:
 
 After any successful confirm: `router.refresh()`.
 
+**Scope boundary — NOT in this plan:** two other `window.confirm` calls exist in the codebase but are intentionally out of scope:
+- `src/components/org/invite-member-modal.tsx:76` — domain mismatch warning (user-facing, not admin auth-changing).
+- `src/components/org/archive-class-button.tsx:18` — archive class confirmation (destructive but not auth-changing).
+
+Both stay on `window.confirm` for plan 086. A follow-up plan may migrate them to `ConfirmDialog` once the generic component is proven in admin paths (Codex + GLM round-1 both noted this scope boundary).
+
 #### 2f. Tests
 
 - `tests/unit/confirm-dialog.test.tsx` (NEW) — generic dialog cases: closed-returns-null, body/title render, confirm callback fires, error surface, reset-on-reopen, Escape close suppressed while submitting, destructive=true → destructive button class.
@@ -218,7 +228,8 @@ After any successful confirm: `router.refresh()`.
 - `src/components/admin/user-actions.tsx` — replace `window.confirm` with ConfirmDialog for reactivate + toggle-admin.
 
 **Create (5 + tests):**
-- (Maybe) `drizzle/00XX_org_memberships_org_status_idx.sql` — only IF pre-impl verifies the index doesn't already exist.
+<!-- composite index migration dropped — GLM round-1 confirmed existing org_memberships_org_idx is sufficient for single-org detail reads -->
+
 - `src/components/ui/confirm-dialog.tsx` — generic Cancel/Confirm modal.
 - `src/app/(portal)/admin/orgs/[id]/page.tsx` — org detail page.
 - `src/components/admin/org-edit-dialog.tsx` — Name + Contact Email edit form modal.
@@ -237,7 +248,7 @@ After any successful confirm: `router.refresh()`.
 1. **`AdminOrg` struct mirrors plan 085's `AdminUser` split.** Base `Org` stays lean (auth path unaffected); enriched view for the admin endpoint. Same precedent.
 2. **Membership counts via FILTER aggregates in one LATERAL subquery.** Single round-trip; avoids N+1. Acceptable at current org sizes; if a single org grows past ~50k members the counts can be cached later.
 3. **Edit endpoint is `PATCH /api/admin/orgs/{orgID}/details`, distinct from `PATCH /api/admin/orgs/{orgID}` (status).** Keeps the status-change path narrowly scoped; avoids "what changed?" ambiguity in handler logic. Two endpoints, two concerns.
-4. **Edit accepts name + contact email only.** Slug change is destructive (breaks URLs / SEO); type and domain are larger decisions. Defer those to follow-up plans.
+4. **Edit accepts name + contact name + contact email only.** Slug change is destructive (breaks URLs / SEO); type and domain are larger decisions. Defer those to follow-up plans.
 5. **No partial-update support v1.** Admin submits both fields; both are required. Eliminates merge-semantics bugs.
 6. **`ConfirmDialog` lives in `src/components/ui/`** (not `admin/`) since it's app-wide reusable.
 7. **`ConfirmDialog` is for reversible auth-changing ops + low-risk admin operations.** Suspend-org and suspend-user keep their type-to-confirm dialogs — heavier friction for higher blast radius. Two patterns, deliberate by risk level.
@@ -269,7 +280,7 @@ After any successful confirm: `router.refresh()`.
 1. **Pre-impl audit**: confirm `organizations` table name (we know from plan 085 it's `organizations`, not `orgs`). Check whether `org_memberships(org_id, status)` index exists. Inventory existing callers of `GetOrg` / `ListOrgs` to ensure they don't need changes.
 2. **Store**: add `AdminOrg` struct, `GetAdminOrgByID` (LATERAL FILTER counts), `UpdateOrgDetails`.
 3. **Handlers**: `GetAdminOrg`, `UpdateAdminOrgDetails`. Wire routes.
-4. **(Conditional) Migration**: `drizzle/00XX_org_memberships_org_status_idx.sql` IF the index doesn't exist.
+4. **No migration in this plan** — composite `(org_id, status)` index unnecessary for single-org detail reads (existing `org_memberships_org_idx` is sufficient; GLM round-1 confirmed).
 5. **Tests**: store + handler. All happy + error paths.
 6. **Run** `cd platform && TEST_DATABASE_URL=... go test ./... -count=1 -timeout 180s`. Green.
 7. **Self-review** the Go diff on Opus.
@@ -301,7 +312,7 @@ After any successful confirm: `router.refresh()`.
 
 | Layer | Test file | Cases |
 |-------|-----------|-------|
-| Go store | `platform/internal/store/orgs_test.go` (EXTEND) | `GetAdminOrgByID` with zero memberships, mixed roles, suspended excluded, not-found nil; `UpdateOrgDetails` happy path + persistence |
+| Go store | `platform/internal/store/orgs_test.go` (EXTEND) | `GetAdminOrgByID` with zero memberships, mixed roles, suspended excluded, not-found nil; `UpdateOrgDetails` happy path + persistence; `UpdateOrgDetails` with same values as a no-op (still bumps `updated_at`, still returns the row); `UpdateOrgDetails` on a deleted/missing org returns `(nil, nil)` not a phantom success |
 | Go handler | `platform/internal/handlers/admin_test.go` (EXTEND) | `GetAdminOrg` 200/404/400/401/403; `UpdateAdminOrgDetails` 200, 400 (empty name / empty email / malformed email / bad UUID), 404, 401, 403 |
 | TS dialog | `tests/unit/confirm-dialog.test.tsx` (NEW) | closed-returns-null, body/title render, confirm fires async callback, error inline on rejected promise, reset on reopen, destructive prop styles confirm button, Escape suppressed during submit |
 | TS detail page | `tests/unit/admin-org-detail-page.test.tsx` (NEW) | renders metadata + member counts; 400/404/403 panels; Edit button visible |
@@ -336,6 +347,17 @@ Open concerns flagged for external reviewers:
 - **`ConfirmDialog` reuse across user-actions + org-actions + future plans** — interface drift risk. Listed in §Risks but worth a reviewer's eye for prop-interface stability.
 - **`Edit` doesn't change slug/type/domain in v1** — Decision #4. Slug change blocked on URL/SEO considerations; type is a deeper schema decision. If reviewers see a strong v1 case for any of these, raise it.
 - **`org_memberships(org_id, status)` index pre-impl check** — listed in §Risks; need to verify before the §1a SQL ships.
+
+### Round 1 verdicts — 2026-05-13
+
+| Reviewer | Verdict | Resolution |
+|----------|---------|------------|
+| Self (Opus 4.7) | CONCUR | (none) |
+| Codex | **BLOCKER (1) + 4 NITs** | BLOCKER: `contact_name` missing from edit form + `UpdateOrgDetails`. FIXED — added to struct, store signature, handler request, validation. NITs: (1) index migration "conditional" wording — RESOLVED differently per GLM: existing `org_memberships_org_idx` is sufficient for single-org reads; composite dropped entirely. (2) ConfirmDialog success→close flow ambiguity — FIXED with explicit "Success → auto-close" contract bullet. (3) Out-of-scope `window.confirm` (archive-class, invite-member) — FIXED with explicit §2e scope boundary callout. (4) Store test for update-on-missing-org — FIXED with new test row. |
+| DeepSeek V4 Pro | pending | — |
+| GLM 5.1 | **CONCUR** + 2 observations + 3 impl nits | Both observations (out-of-scope window.confirm + composite index) folded as scope notes. 3 impl nits folded into plan: trim-before-empty-check (§1e validation step), same-value no-op test case (testing matrix), POST-UPDATE-race 404 (§1e handler step). |
+
+**Plan revised in commits `5d30deb` → ⟨codex-round-1-fixes⟩**. Codex re-dispatch + DeepSeek pending. Re-dispatching Codex after the fixes land.
 
 ## Code Review
 
