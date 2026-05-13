@@ -53,7 +53,7 @@ type User struct {
 }
 ```
 
-Add `HasPassword bool \`json:"hasPassword"\`` IF the password-reset endpoint needs the frontend to know whether to grey out the menu item. Otherwise leave it out and have the endpoint return 400 on no-password.
+**Include `HasPassword bool \`json:"hasPassword"\`** computed as `password_hash IS NOT NULL` so the frontend can grey out the "Reset password" menu item for OAuth-only users instead of letting them click and surface a 400. Click-then-error is a worse UX than visibly-unavailable.
 
 #### 1c. Rewrite `ListUsers` with filters
 
@@ -241,7 +241,7 @@ Extend props with `userStatus`, `isPlatformAdmin`, `isSelf` (already implicit vi
 |--------|-------|
 | `active`, not self | View details · Login as {firstName} · Reset password · Toggle platform-admin · Suspend account… |
 | `suspended`, not self | View details · Reactivate account · Toggle platform-admin (greyed if reactivating first preferred) |
-| self | View details only (no destructive/impersonate ops on self) |
+| self | View details only (no destructive/impersonate ops on self) — render `<UserActions isSelf={true} />` with narrowed item set rather than hiding the component entirely as today |
 
 Behaviors:
 - **View details** — navigates to `/admin/users/{userID}` (the new detail page below). Available on every row including self.
@@ -263,7 +263,7 @@ Server component, matches the structure of `src/app/(portal)/admin/units/[id]/pa
   - Name (heading), Email
   - Status badge ("Active" / "Suspended")
   - Role (formatted org role + "Platform admin" badge if applicable)
-  - Org (name + small link to `/admin/orgs?orgId=...`)
+  - Org (name as plain text — the current `/admin/orgs` page filters by status, not orgId, so a deeplink would no-op. A future plan can add orgId filtering on admin/orgs then upgrade this to a link.)
   - Joined date, Last updated date
 - Below the metadata, render a `<Card>` titled "Activity" with placeholder copy: "Session history, audit log, and per-user metrics will appear here." This makes the future-feature intent explicit so it isn't forgotten.
 - Top-right: a "Back to users" link → `/admin/users`.
@@ -336,7 +336,9 @@ Direct adaptation of `src/components/admin/suspend-org-dialog.tsx` (PR #148). Sa
 15. **`SuspendUserDialog` is a copy of `SuspendOrgDialog`, not a shared abstraction.** Two ~130-line files are clearer than one parametrized component with title/copy props. If a third "suspend X" dialog appears later, refactor then.
 16. **`status` column on `users` is an enum, not a boolean.** Mirrors `orgs.status` precedent. Leaves room for future states (`pending_email_verification`, `pending_admin_approval`, etc.) without another migration.
 17. **Detail page is a placeholder route.** v1 renders only the user's metadata + a "Session history, audit log, and per-user metrics will appear here" placeholder card. No sessions/audit/charts in this plan — those need new infra (Bridge doesn't track last-seen yet). The placeholder exists so the entry point doesn't get forgotten and future plans have a home.
-18. **View details is the one non-destructive action available on the self row.** Other actions (impersonate, reset password, suspend, toggle admin) remain hidden on self per existing pattern.
+18. **View details is the one non-destructive action available on the self row.** Other actions (impersonate, reset password, suspend, toggle admin) remain hidden on self per existing pattern. Implementation: pass `isSelf={true}` to `<UserActions />` and let it render the narrowed set, rather than hiding the component entirely (the current row-level `user.id !== identity.userId` check at `page.tsx:84` becomes a prop-level branch).
+19. **`HasPassword` field surfaces in the API response** so the frontend can grey out "Reset password" for OAuth-only users — click-then-error is a worse UX than visibly-unavailable. The endpoint still returns 400 on no-password as defense in depth.
+20. **No audit log for admin operations in this plan.** Bridge has no audit-log infra today (verify in Phase 1 step 1). Suspend/reactivate/toggle-admin/password-reset are not recorded beyond `updated_at`. Acceptable v1 — a future plan can add an `admin_actions` table and retrofit. Flagged in §Risks.
 
 ## Risks
 
@@ -351,7 +353,8 @@ Direct adaptation of `src/components/admin/suspend-org-dialog.tsx` (PR #148). Sa
 | `users.status` rollout: existing OAuth + email users sign in normally | low | RequireAuth check is post-load; if `status='active'` (default), pass. No regression for existing users. |
 | RequireAuth change rejects users mid-session if admin suspends them | medium (intended) | This IS the feature — admin wants to lock out a compromised account immediately. Acceptable; surface to admin in the suspend-dialog copy: "Existing sessions will be invalidated on their next request." |
 | Self-suspend / self-demote: admin locks themselves out | high | Decision #11 — self-target guards both at handler (400) and at row level (Actions hidden for self). |
-| Password-reset infrastructure doesn't exist yet | medium | Pre-impl: grep `passwordReset`, `ResetToken`, `verifyToken`. If absent, defer 1g to a follow-up plan and update §Decisions. Document the deferral in the post-execution report. |
+| Password-reset infrastructure doesn't exist yet | medium | Pre-impl: grep `passwordReset`, `ResetToken`, `verifyToken`, `RecoverToken`. If absent, defer 1g to a follow-up plan and update §Decisions. The rest of the plan ships without it; the "Reset password" menu item is dropped from §2b. Document the deferral in the post-execution report. |
+| No audit log for admin operations | low (v1) | Decision #20. Future plan adds an `admin_actions` table and retrofits the 4 new endpoints. Until then, `updated_at` is the only trail. |
 | Password-reset endpoint sends to OAuth-only user accidentally | low | Decision #14 — endpoint returns 400 if `password_hash IS NULL`. Frontend surfaces. |
 | Password-reset endpoint can be used as an email-flooding vector | low | Same rate-limiting concerns as the user-initiated path. Reuse the same throttle if one exists; otherwise add a per-target rate limit. |
 | 3-action menu becomes cluttered on the row | low | Dropdown menu, not inline buttons — clutter is hidden behind the `...` trigger. |
@@ -424,7 +427,23 @@ Vitest baseline: 3 pre-existing failures in `tests/integration/auth-jwt-refresh.
 
 ## Plan Review
 
-(Placeholder — to be filled by 5-way plan review before implementation.)
+### Self-review (Opus 4.7) — 2026-05-12
+
+**Verdict: CONCUR with self-applied refinements.**
+
+Self-review concerns identified and folded into the plan before external dispatch:
+
+1. **`HasPassword` field decision was inconclusive** → locked in as Decision #19 (include the field, grey out menu item for OAuth-only).
+2. **"View details on self" implementation was ambiguous** → locked in as Decision #18 (pass `isSelf` prop, render narrowed set, vs. current hide-component pattern).
+3. **Detail page org link** → locked in as plain text rather than a deeplink (`/admin/orgs` doesn't filter by orgId today; a future plan can upgrade).
+4. **Password-reset infra unverified** → §Risks updated with explicit fallback (defer 1g to follow-up plan if grep finds nothing; rest of the plan ships unaffected).
+5. **No audit logging** → captured as Decision #20 + Risk row (acceptable v1; future plan retrofits).
+
+Remaining open concerns flagged for external reviewers to weigh in on:
+
+- **`<form method="get">` on `<select>` inside a server component** — pure HTML form should work but App Router behavior worth a second opinion. Mitigation: separate `"use client"` component (already planned), but the form itself is plain HTML.
+- **Self-suspend / self-demote** guards exist at handler level (400) but the UI's `isSelf` prop is a separate codepath — could drift. The plan calls out defense in depth; a reviewer may want explicit tests that the UI guard is consistent with the API guard.
+- **Migration ordering** — adding `users.status` with DEFAULT 'active' is safe for existing rows, but if Bridge has any unmigrated dev DBs the field will appear NULL when read by old code paths. Bridge tests run on `bridge_test` which is reset between runs, so dev DB hygiene is the user's concern. Worth a reviewer's eye.
 
 ## Code Review
 
