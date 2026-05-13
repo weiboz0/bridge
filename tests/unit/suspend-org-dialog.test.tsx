@@ -109,4 +109,58 @@ describe("SuspendOrgDialog", () => {
     expect(onSuspended).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
   });
+
+  it("surfaces a network error inline when fetch rejects", async () => {
+    (globalThis as unknown as { fetch: typeof fetch }).fetch = vi.fn(
+      async () => {
+        throw new Error("Network is unreachable");
+      }
+    ) as unknown as typeof fetch;
+    const onClose = vi.fn();
+    const onSuspended = vi.fn();
+
+    render(
+      <SuspendOrgDialog
+        {...defaultProps}
+        onClose={onClose}
+        onSuspended={onSuspended}
+      />
+    );
+
+    const input = screen.getByLabelText(/Type organization name to confirm/i);
+    fireEvent.change(input, { target: { value: "Riverdale School" } });
+    fireEvent.click(screen.getByRole("button", { name: /Suspend organization/i }));
+
+    await waitFor(() =>
+      expect(screen.getByText(/Network is unreachable/i)).toBeInTheDocument()
+    );
+    expect(onSuspended).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    // The error node is announced via role="alert" for screen readers.
+    expect(screen.getByRole("alert")).toHaveTextContent(/Network is unreachable/i);
+  });
+
+  it("resets typed input + error when reopened", () => {
+    const { rerender } = render(<SuspendOrgDialog {...defaultProps} />);
+
+    const input = screen.getByLabelText(/Type organization name to confirm/i) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "Riverdale School" } });
+    expect(input.value).toBe("Riverdale School");
+
+    // Close the dialog.
+    rerender(<SuspendOrgDialog {...defaultProps} open={false} />);
+    expect(screen.queryByLabelText(/Type organization name to confirm/i)).toBeNull();
+
+    // Reopen — the input should be cleared.
+    rerender(<SuspendOrgDialog {...defaultProps} open={true} />);
+    const reopened = screen.getByLabelText(/Type organization name to confirm/i) as HTMLInputElement;
+    expect(reopened.value).toBe("");
+  });
+
+  it("matches the gate even when orgName has trailing whitespace (symmetric trim)", () => {
+    render(<SuspendOrgDialog {...defaultProps} orgName="Riverdale School  " />);
+    const input = screen.getByLabelText(/Type organization name to confirm/i);
+    fireEvent.change(input, { target: { value: "Riverdale School" } });
+    expect(screen.getByRole("button", { name: /Suspend organization/i })).not.toBeDisabled();
+  });
 });

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -18,6 +18,13 @@ export function SuspendOrgDialog({ orgId, orgName, open, onClose, onSuspended }:
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Stable read of onClose from the keydown listener so the listener isn't
+  // re-bound every parent render (callers commonly pass an inline arrow).
+  const onCloseRef = useRef(onClose);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+
   // Reset state each time the dialog opens.
   useEffect(() => {
     if (open) {
@@ -30,21 +37,22 @@ export function SuspendOrgDialog({ orgId, orgName, open, onClose, onSuspended }:
   useEffect(() => {
     if (!open) return;
     function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape" && !submitting) onClose();
+      if (e.key === "Escape" && !submitting) onCloseRef.current();
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, submitting, onClose]);
+  }, [open, submitting]);
 
   if (!open) return null;
 
-  const confirmed = typed.trim() === orgName;
+  const confirmed = typed.trim() === orgName.trim();
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!confirmed || submitting) return;
     setSubmitting(true);
     setError(null);
+    let succeeded = false;
     try {
       const res = await fetch(`/api/admin/orgs/${orgId}`, {
         method: "PATCH",
@@ -56,10 +64,19 @@ export function SuspendOrgDialog({ orgId, orgName, open, onClose, onSuspended }:
         setError(body?.error ?? `Request failed (${res.status})`);
         return;
       }
-      onSuspended();
-      onClose();
+      succeeded = true;
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setSubmitting(false);
+    }
+    // Run callbacks AFTER state is settled so the synchronous
+    // setSubmitting(false) above isn't a dead update against an
+    // already-unmounted dialog (caller's onSuspended → router.refresh
+    // can re-render the parent, which then unmounts us via onClose).
+    if (succeeded) {
+      onSuspended();
+      onClose();
     }
   }
 
@@ -98,7 +115,9 @@ export function SuspendOrgDialog({ orgId, orgName, open, onClose, onSuspended }:
           </div>
 
           {error && (
-            <p className="text-sm text-destructive">{error}</p>
+            <p role="alert" className="text-sm text-destructive">
+              {error}
+            </p>
           )}
 
           <div className="flex justify-end gap-2 pt-2">

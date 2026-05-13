@@ -39,6 +39,8 @@ export function OrgActions({ orgId, orgName, status }: Props) {
         return;
       }
       router.refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setPending(false);
     }
@@ -55,7 +57,7 @@ export function OrgActions({ orgId, orgName, status }: Props) {
         <Button size="sm" disabled={pending} onClick={() => patch("active")}>
           Approve
         </Button>
-        {error && <span className="text-xs text-destructive">{error}</span>}
+        {error && <span role="alert" className="text-xs text-destructive">{error}</span>}
       </div>
     );
   }
@@ -111,7 +113,7 @@ export function OrgActions({ orgId, orgName, status }: Props) {
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
-        {error && <span className="text-xs text-destructive">{error}</span>}
+        {error && <span role="alert" className="text-xs text-destructive">{error}</span>}
       </div>
     );
   }
