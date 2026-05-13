@@ -12,7 +12,7 @@ The platform-admin user list at `/admin/users` (`src/app/(portal)/admin/users/pa
 
 The Go API at `/api/admin/users` (`platform/internal/handlers/admin.go:67-75`) returns the `User` struct from `platform/internal/store/users.go:13-22`, which only surfaces id/name/email/avatar/isPlatformAdmin/timestamps. Role data lives in `org_memberships` (per `src/lib/db/schema.ts:99-104` — enum `org_admin`/`teacher`/`student`/`parent`). The intent column `users.intended_role` (signup_intent enum: `teacher`/`student`) is what the user said at signup but isn't authoritative — a "student" intent could later be upgraded to a teacher org membership. The org-membership role wins for display.
 
-Auth middleware lives in `platform/internal/auth/` (per `grep RequireAuth` — `middleware_phase3_test.go` references `mw.RequireAuth`). Adding `users.status` means RequireAuth needs to reject `status='suspended'` users so disabling actually blocks sign-in.
+Auth middleware lives in `platform/internal/auth/` (per `grep RequireAuth` — `middleware_phase3_test.go` references `mw.RequireAuth`). Adding `users.status` means RequireAuth needs to return 401 on `status='suspended'` users so disabling actually denies portal access (every Go-proxied request hits this gate). NextAuth `authorize` itself is not gated on status in this plan — see §Risks for the v1-acceptable jarring-UX trade-off.
 
 ## Approach
 
