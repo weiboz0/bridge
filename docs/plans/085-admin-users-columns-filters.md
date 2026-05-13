@@ -556,4 +556,46 @@ Remaining open concerns flagged for external reviewers to weigh in on:
 
 ## Post-Execution Report
 
-(Placeholder — to be filled before opening the PR.)
+### Commits on the branch (in order)
+
+- Plan-review iterations: `35a4a7a` → `95b778e` → `cc1e759` → `6b3be8c` → `d55b1a2` → `0c44077` → `c2f252d` → `c57595f` → `83aaddb` → `a32c4fe`. Several rounds of cross-reference drift fixes (Codex caught 5 rounds; GLM caught the cache architecture gap; Kimi caught the shared-struct scope; DeepSeek confirmed late).
+- Policy change mid-plan (merged into branch via `09df6c8`): Kimi removed from ensemble, DeepSeek V4 Flash provider switched. Branch now ships under 4-way gate. Plan's §Plan Review records this transition.
+- Phase 1 (backend, `0a1eb5c`): 13 files, 910/71. Codex implemented in sandbox but stalled before commit (twice); orchestrator verified diff + ran tests with proper `TEST_DATABASE_URL` + committed inline.
+- Phase 2 (frontend, `0719c6d`): 9 files, ~1700+ added. Sonnet subagent dispatched cleanly + committed + pushed.
+- Phase 2 cleanup (`2dffb00`): dropped speculative `userEmail` prop on `UserActions` (CLAUDE.md no-speculative-future-props rule).
+- Phase 3 (this commit): `docs/api.md` Platform Admin section added.
+
+### Deviations from the plan
+
+- **Password-reset endpoint deferred** (§1g) — confirmed zero infra during the pre-impl audit (GLM + DeepSeek round-1 grep + Phase 1 Codex audit). Documented as deferred-to-follow-up; `hasPassword` field still ships in the API for the future plan.
+- **Codex sandbox stalls** — Codex hit a TCP socket restriction trying to run DB-backed Go tests in its sandbox. Both dispatches (initial + resume) stalled before committing. The orchestrator (on Opus) finalized the verify + commit step inline, which is consistent with CLAUDE.md "the orchestrator must verify the actual changes before reporting the work as done." No retries on Codex; verifying inline was cheaper than another dispatch round.
+- **Kimi round-3 dispatch was in flight at the moment Kimi was removed from the ensemble.** The verdict came back CONCUR (all 4 round-2 BLOCKERs verified resolved). Recorded in the plan's §Plan Review as historical-but-no-longer-load-bearing.
+
+### Verification (final)
+
+- Vitest: 709 passed + 3 pre-existing failures in `tests/integration/auth-jwt-refresh.test.ts` (unchanged from main; not introduced by this branch).
+- Go: ALL pass via `cd platform && TEST_DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test go test ./... -count=1 -timeout 180s`.
+- Lint: 101 errors / 45 warnings (1 BETTER than baseline of 102 / 45 — Phase 2 frontend used `<Link>` instead of bare `<a>`).
+- TSC: 7 errors (baseline unchanged — all pre-existing in `tests/unit/identity-assert.test.ts`).
+
+### Known limitations / follow-up work
+
+- **Password-reset menu item + endpoint** — deferred to a follow-up plan. Needs: `password_reset_tokens` table, email-sending infra, `POST /api/auth/password-reset/{request,confirm}` user-initiated flow, then the admin-triggered variant. `hasPassword` field is already exposed by plan 085's API response so the future plan doesn't need a separate backend pass.
+- **NextAuth `authorize()` doesn't check `users.status`** — a suspended user can complete sign-in then immediately 401 on the first Go request. Functionally safe (Go layer is authoritative) but jarring UX. Follow-up plan should add a `status` check to `src/lib/auth.ts` authorize for graceful "Account suspended" sign-in failure.
+- **Detail page is intentionally minimal** — no sessions list, no audit log, no per-user activity charts. Bridge doesn't track last-seen yet. Follow-up plans can fill in the Activity placeholder card.
+- **No audit log for admin operations** — suspend/reactivate/toggle-admin are not recorded beyond `updated_at`. Future plan can add an `admin_actions` table and retrofit the 3 endpoints.
+- **Org filter dropdown shows ALL active orgs** — fine at current scale; if org counts grow, switch to a typeahead search.
+
+### File census (branch vs main)
+
+23 files changed, 2645 insertions, 99 deletions:
+- 1 migration: `drizzle/0025_users_status.sql`
+- 1 schema update: `src/lib/db/schema.ts`
+- 7 backend Go files (auth + handlers + store, code)
+- 4 backend Go test files
+- 2 frontend pages (list + new detail) + 3 components (org-filter-select, suspend-user-dialog, updated user-actions)
+- 4 frontend test files (admin-users-page, admin-user-detail-page, suspend-user-dialog, user-actions)
+- 1 doc: `docs/api.md` Platform Admin section
+- 1 plan file: `docs/plans/085-admin-users-columns-filters.md` (including review history)
+
+Ready for the 4-way code review and PR.
