@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -17,7 +17,6 @@ export function SuspendOrgDialog({ orgId, orgName, open, onClose, onSuspended }:
   const [typed, setTyped] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
 
   // Reset state each time the dialog opens.
   useEffect(() => {
@@ -90,7 +89,6 @@ export function SuspendOrgDialog({ orgId, orgName, open, onClose, onSuspended }:
             </Label>
             <Input
               id="suspend-confirm-input"
-              ref={inputRef}
               autoFocus
               value={typed}
               onChange={(e) => setTyped(e.target.value)}
