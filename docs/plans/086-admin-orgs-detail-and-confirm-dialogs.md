@@ -160,7 +160,7 @@ A modal form with two text inputs (Name, Contact Email) and Cancel/Save buttons.
 Props:
 ```tsx
 interface Props {
-  org: { id: string; name: string; contactEmail: string };
+  org: { id: string; name: string; contactName: string; contactEmail: string };
   open: boolean;
   onClose: () => void;
   onSaved: () => void;  // caller calls router.refresh()
@@ -354,10 +354,22 @@ Open concerns flagged for external reviewers:
 |----------|---------|------------|
 | Self (Opus 4.7) | CONCUR | (none) |
 | Codex | **BLOCKER (1) + 4 NITs** | BLOCKER: `contact_name` missing from edit form + `UpdateOrgDetails`. FIXED — added to struct, store signature, handler request, validation. NITs: (1) index migration "conditional" wording — RESOLVED differently per GLM: existing `org_memberships_org_idx` is sufficient for single-org reads; composite dropped entirely. (2) ConfirmDialog success→close flow ambiguity — FIXED with explicit "Success → auto-close" contract bullet. (3) Out-of-scope `window.confirm` (archive-class, invite-member) — FIXED with explicit §2e scope boundary callout. (4) Store test for update-on-missing-org — FIXED with new test row. |
-| DeepSeek V4 Pro | pending | — |
+| DeepSeek V4 Pro | **CONCUR** + 1 suggestion + 3 notes | Suggestion (`contactName` omission) overlaps with Codex's BLOCKER — already FIXED. Notes: existing index sufficient (matched GLM); status-PATCH UUID validation asymmetry (cosmetic, accepted); toggle-admin without type-to-confirm (accepted v1 per Decision #7). |
+| Codex (round 2) | **CONCUR** | All 5 round-1 findings cleanly resolved. One tiny doc-precision note: §2c Props interface block missed `contactName` field — FIXED in `⟨codex-round-2-precision⟩`. No re-review needed. |
 | GLM 5.1 | **CONCUR** + 2 observations + 3 impl nits | Both observations (out-of-scope window.confirm + composite index) folded as scope notes. 3 impl nits folded into plan: trim-before-empty-check (§1e validation step), same-value no-op test case (testing matrix), POST-UPDATE-race 404 (§1e handler step). |
 
-**Plan revised in commits `5d30deb` → ⟨codex-round-1-fixes⟩**. Codex re-dispatch + DeepSeek pending. Re-dispatching Codex after the fixes land.
+**Plan revised in commits `5d30deb` → `24ff1c5` → ⟨codex-round-2-precision⟩**.
+
+### Final 4-way gate status
+
+| Reviewer | Final verdict |
+|----------|---------------|
+| Self (Opus 4.7) | CONCUR |
+| Codex | **CONCUR** (round 2) |
+| DeepSeek V4 Pro | CONCUR (round 1) |
+| GLM 5.1 | CONCUR (round 1) |
+
+**Gate is clean. Plan 086 ready for implementation.**
 
 ## Code Review
 
