@@ -18,7 +18,7 @@ Auth middleware lives in `platform/internal/auth/` (per `grep RequireAuth` — `
 
 Three thematic changes, organized into phases by domain (matching the new domain-based dispatch from `docs/coding-agent.md`):
 
-- **Phase 1 — Backend (Codex)** — all Go work: migration, struct/SQL extensions for columns + filters, three new admin endpoints (suspend/reactivate/toggle-admin/password-reset), RequireAuth update, tests.
+- **Phase 1 — Backend (Codex)** — all Go work: migration, struct/SQL extensions for columns + filters, three new admin endpoints (get-user-by-id, suspend/reactivate, toggle-admin), RequireAuth update with cached status, tests. (Password-reset endpoint deferred to follow-up — see §1g.)
 - **Phase 2 — Frontend (Sonnet)** — all TS work: page columns, filter chips, org dropdown, new action dropdown items + suspend dialog, tests.
 - **Phase 3 — Verify + docs** — full suite, smoke-test, docs.
 
@@ -161,16 +161,29 @@ type updatePlatformAdminRequest struct {
 - UPDATE users.is_platform_admin.
 - Return 200 with the updated user row.
 
-#### 1g. New endpoint — POST `/api/admin/users/{userID}/password-reset`
+#### 1g. (DEFERRED) POST `/api/admin/users/{userID}/password-reset`
 
-Sends a password-reset email.
+**This endpoint is NOT in plan 085.** Originally scoped, but pre-impl audit (GLM + DeepSeek round-1) confirmed Bridge has zero password-reset infrastructure: no token table, no email-sending integration, no user-initiated reset flow. Building the admin-triggered variant alone would require the whole stack — out of scope for plan 085.
+
+(Sketch retained below for the follow-up plan to inherit.)
 
 - Validate userID as UUID.
 - Look up user; check `password_hash IS NOT NULL`. If null (OAuth-only), return 400 with `{error: "User has no password to reset (OAuth-only account)"}`.
-- Use the existing password-reset email pathway (grep `passwordReset` / `ResetToken` to find it; if no admin-triggered path exists, add a helper that reuses the user-triggered flow).
+- Use the password-reset email pathway delivered by the follow-up plan.
 - Return 200 with `{ok: true}`. Don't include the token in the response.
 
-**Pre-verified** by GLM round-1: grep of `platform/` for `passwordReset|ResetToken|recover_token|forgot` returned zero results. There is no existing password-reset infrastructure. Decision: **defer §1g (password-reset endpoint) to a follow-up plan**. The "Reset password" menu item is also dropped from §2b (UserActions). Document the deferral in the post-execution report. The other 3 new endpoints (get-user, suspend/reactivate, toggle-admin) ship in this plan.
+**Pre-verified** by GLM + DeepSeek round-1: grep of `platform/` for `passwordReset|ResetToken|recover_token|forgot|ForgotPassword` returned zero results. There is no existing password-reset infrastructure. Decision: **defer §1g (password-reset endpoint) to a follow-up plan**. The "Reset password" menu item is also dropped from §2b (UserActions). Document the deferral in the post-execution report.
+
+**What the follow-up plan needs to deliver** (so it doesn't get re-discovered from scratch — DeepSeek round-1 nit):
+- A `password_reset_tokens` table (id, user_id, token_hash, expires_at, used_at, created_at) with appropriate indexes + cascade on user delete.
+- An email-sending integration (Bridge currently has none — check what's there before designing).
+- A user-initiated `POST /api/auth/password-reset/request` (creates token + sends email).
+- A user-initiated `POST /api/auth/password-reset/confirm` (validates token + sets new password).
+- The admin-triggered variant — `POST /api/admin/users/{userID}/password-reset` — which is what plan 085's §1g originally specified.
+- Frontend: a `/auth/reset/[token]` page for the confirm step.
+- The admin-side menu item ships then, gated on `hasPassword` per Decision #19.
+
+The other 3 new endpoints (get-user, suspend/reactivate, toggle-admin) ship in plan 085.
 
 #### 1h. New endpoint — GET `/api/admin/users/{userID}`
 
@@ -212,7 +225,7 @@ Resolution (GLM option A, Kimi option (i)): **extend the cached lookup to return
 #### 1j. Tests
 
 - `platform/internal/store/users_test.go` (EXTEND — already exists, contains `TestUserStore_GetUserByID_NotFound` etc.) — happy-path coverage for `ListUsers` with each filter shape (8+ cases including `role=platform_admin + orgId` combined SQL path) + new status field assertions; new `UpdateStatus`, `UpdatePlatformAdmin` cases; `GetAdminUserByID` returns the enriched shape (org membership + has_password + status); existing `GetUserByID` test fixtures updated for the new `status` column.
-- `platform/internal/handlers/admin_test.go` (extend) — 200/400/401/403 paths for all 4 new endpoints (suspend/reactivate, toggle-admin, password-reset, get-user-by-id). Self-target guards covered. Cross-user isolation.
+- `platform/internal/handlers/admin_test.go` (extend) — 200/400/401/403 paths for the 3 new endpoints (suspend/reactivate, toggle-admin, get-user-by-id). Self-target guards covered. Cross-user isolation. (Password-reset endpoint deferred to follow-up plan — see §1g.)
 - `platform/internal/auth/middleware_test.go` (extend) — `TestRequireAuth_RejectsSuspended`.
 
 ### Phase 2 — Frontend (Sonnet)
@@ -356,8 +369,9 @@ Direct adaptation of `src/components/admin/suspend-org-dialog.tsx` (PR #148). Sa
 - `tests/unit/suspend-user-dialog.test.tsx` — dialog tests, adapted from `suspend-org-dialog.test.tsx`.
 - `tests/unit/user-actions.test.tsx` — action-menu state tests.
 
-**Extend (2):**
-- `platform/internal/handlers/admin_test.go` — coverage for the 4 new endpoints (get-user-by-id, suspend/reactivate, toggle-admin, password-reset).
+**Extend (3):**
+- `platform/internal/handlers/admin_test.go` — coverage for the 3 new endpoints (get-user-by-id, suspend/reactivate, toggle-admin).
+- `platform/internal/auth/middleware_test.go` and `admin_check_test.go` — `TestRequireAuth_RejectsSuspended`, `TestRequireAuth_ActiveStatusPasses`, `TestCachedAdminChecker_StatusFieldCached`, and update existing `stubLookup` to the new `LookupAdminAndStatus` signature.
 - `tests/unit/schema.test.ts` — update the users-table assertion to include the new `status` column (Kimi K2.6 round-1 nit).
 - `platform/internal/auth/middleware_test.go` (existing — confirm path) — `TestRequireAuth_RejectsSuspended`.
 
@@ -377,15 +391,15 @@ Direct adaptation of `src/components/admin/suspend-org-dialog.tsx` (PR #148). Sa
 9. **Validation rejects unknown values with 400.** Don't silently ignore.
 10. **No pagination in this plan.** Out of scope; defer to a future plan when user counts warrant it.
 11. **Self-target guards in 3 places:** suspend, demote-from-admin, AND the page-level "hide Actions on self" check (existing). Defense in depth.
-12. **Suspend uses type-to-confirm; reactivate + admin-toggle use `window.confirm()`; reset-password uses `window.confirm()`.** Friction matches reversibility: suspend is hard to recover from a misclick + has user-facing impact; admin-toggle and reactivate are easily reversed; reset-password is read-only-side-effect from Bridge's perspective.
+12. **Suspend uses type-to-confirm; reactivate + admin-toggle use `window.confirm()`.** Friction matches reversibility: suspend is hard to recover from a misclick + has user-facing impact; admin-toggle and reactivate are easily reversed. (Reset-password is deferred to follow-up plan; its UX choice ships with that plan.)
 13. **Suspended users blocked at auth middleware, NOT at session creation.** Existing sessions go invalid on next request. Simpler than session revocation. Slight delay window (until next request) is acceptable for admin support flows.
-14. **OAuth-only users can't have password reset.** Return 400 from the endpoint; UI surfaces it inline. Don't try to be clever (no "send them an account-recovery email" alternative in v1).
+14. **OAuth-only users can't have password reset** (applies to the deferred follow-up plan, not v1 of plan 085). When the follow-up plan ships, the endpoint returns 400 if `password_hash IS NULL` and the UI greys the menu item via the `hasPassword` field already exposed by plan 085's API response.
 15. **`SuspendUserDialog` is a copy of `SuspendOrgDialog`, not a shared abstraction.** Two ~130-line files are clearer than one parametrized component with title/copy props. If a third "suspend X" dialog appears later, refactor then.
 16. **`status` column on `users` is an enum, not a boolean.** Mirrors `orgs.status` precedent. Leaves room for future states (`pending_email_verification`, `pending_admin_approval`, etc.) without another migration.
 17. **Detail page is a placeholder route.** v1 renders only the user's metadata + a "Session history, audit log, and per-user metrics will appear here" placeholder card. No sessions/audit/charts in this plan — those need new infra (Bridge doesn't track last-seen yet). The placeholder exists so the entry point doesn't get forgotten and future plans have a home.
 18. **View details is the one non-destructive action available on the self row.** Other actions (impersonate, reset password, suspend, toggle admin) remain hidden on self per existing pattern. Implementation: pass `isSelf={true}` to `<UserActions />` and let it render the narrowed set, rather than hiding the component entirely (the current row-level `user.id !== identity.userId` check at `page.tsx:84` becomes a prop-level branch).
 19. **`HasPassword` field surfaces in the API response** so the frontend can grey out "Reset password" for OAuth-only users — click-then-error is a worse UX than visibly-unavailable. The endpoint still returns 400 on no-password as defense in depth.
-20. **No audit log for admin operations in this plan.** Bridge has no audit-log infra today (verify in Phase 1 step 1). Suspend/reactivate/toggle-admin/password-reset are not recorded beyond `updated_at`. Acceptable v1 — a future plan can add an `admin_actions` table and retrofit. Flagged in §Risks.
+20. **No audit log for admin operations in this plan.** Bridge has no audit-log infra today (verify in Phase 1 step 1). Suspend/reactivate and toggle-admin are not recorded beyond `updated_at`. Acceptable v1 — a future plan can add an `admin_actions` table and retrofit. Flagged in §Risks.
 
 ## Risks
 
@@ -402,8 +416,7 @@ Direct adaptation of `src/components/admin/suspend-org-dialog.tsx` (PR #148). Sa
 | Self-suspend / self-demote: admin locks themselves out | high | Decision #11 — self-target guards both at handler (400) and at row level (Actions hidden for self). |
 | Password-reset infrastructure doesn't exist yet | medium | Pre-impl: grep `passwordReset`, `ResetToken`, `verifyToken`, `RecoverToken`. If absent, defer 1g to a follow-up plan and update §Decisions. The rest of the plan ships without it; the "Reset password" menu item is dropped from §2b. Document the deferral in the post-execution report. |
 | No audit log for admin operations | low (v1) | Decision #20. Future plan adds an `admin_actions` table and retrofits the 4 new endpoints. Until then, `updated_at` is the only trail. |
-| Password-reset endpoint sends to OAuth-only user accidentally | low | Decision #14 — endpoint returns 400 if `password_hash IS NULL`. Frontend surfaces. |
-| Password-reset endpoint can be used as an email-flooding vector | low | Same rate-limiting concerns as the user-initiated path. Reuse the same throttle if one exists; otherwise add a per-target rate limit. |
+| (Password-reset risks — deferred to follow-up plan) | n/a | Endpoint and UI removed from plan 085 scope. The follow-up plan delivers: 400 on OAuth-only target, per-target rate-limit to prevent email-flooding, token table + email infra. See §1g. |
 | 3-action menu becomes cluttered on the row | low | Dropdown menu, not inline buttons — clutter is hidden behind the `...` trigger. |
 | Toggle-admin without a strong confirmation | medium | Decision #12 — `window.confirm()`. Two-direction (promote / demote) so a misclick is easily reversed. Acceptable v1; can add type-to-confirm later if abuse surfaces. |
 | Suspend dialog "Existing sessions invalidated" copy may be wrong if RequireAuth caches user | low | Pre-impl: verify RequireAuth fetches user on every request (no cache). If it caches, suspend won't take effect until cache TTL. Likely fine (Bridge currently does per-request DB lookup for user). |
@@ -417,13 +430,13 @@ Direct adaptation of `src/components/admin/suspend-org-dialog.tsx` (PR #148). Sa
 
 1. **Pre-impl audit**: grep callers of `ListUsers`, hunt for existing password-reset infra (`passwordReset`/`ResetToken`/`recover_token`), confirm `users` table has no existing `status` column, locate RequireAuth implementation.
 2. **Migration**: add `drizzle/00XX_users_status.sql` + matching `schema.ts` change. Generate via `bun run db:generate` to confirm parity, apply to `bridge_test`.
-3. **Struct + ListUsers SQL**: extend `User` struct, replace `ListUsers` with filtered version, write SQL with LATERAL + LEFT JOIN orgs + filter clauses.
+3. **Structs + ListUsers SQL**: split `User` (lean — gets `Status` added) and `AdminUser` (enriched — embeds `User` + adds `OrgRole`/`OrgID`/`OrgName`/`HasPassword`). Replace `ListUsers` with filtered version returning `[]AdminUser`, SQL with LATERAL + LEFT JOIN organizations + filter clauses. Update existing `GetUserByID`/`GetUserByEmail` and other `User`-returning callsites to select the new `status` column.
 4. **Handler param parsing**: `ListAllUsers` reads + validates `role` and `orgId`.
-5. **GET single user**: extend `GetUserByID` to return enriched fields (or add `GetUserByIDWithMembership`). Add `GetAdminUser` handler + route.
-6. **New PATCH endpoints**: `UpdateUserStatus`, `UpdateUserPlatformAdmin`. Wire routes in `cmd/api/main.go`.
-7. **Password reset endpoint** (deferred to a follow-up plan if infra missing — verify in step 1).
-8. **RequireAuth update**: reject `status='suspended'`.
-9. **Tests**: store tests for all filter shapes + new methods + enriched `GetUserByID`; handler tests for 4 endpoints; auth middleware test for suspended-reject.
+5. **GET single user**: add `GetAdminUserByID` returning `*AdminUser`. Add `GetAdminUser` handler + route.
+6. **New PATCH endpoints**: `UpdateUserStatus`, `UpdateUserPlatformAdmin`. Wire routes in `cmd/api/main.go`. Both handlers call `AdminChecker.Purge(userID)` after a successful write.
+7. **Password reset endpoint**: NOT in this plan. Confirmed zero infra by round-1 audit (GLM + DeepSeek). Deferred to follow-up plan — see §1g for follow-up scope.
+8. **RequireAuth update**: rename `LookupIsAdmin` → `LookupAdminAndStatus` returning `(bool, string, error)`; extend `CachedAdminChecker` to store both fields; `Claims.Status` field added; `RequireAuth` 401s when `status='suspended'`.
+9. **Tests**: store tests for all filter shapes (incl. multi-org and zero-membership cases) + new methods + `GetAdminUserByID`; handler tests for 3 endpoints; `admin_check_test.go` updated stubLookup + new `StatusFieldCached` test; `middleware_test.go` `RejectsSuspended` + `ActiveStatusPasses` tests.
 10. **Run** `cd platform && go test ./... -count=1 -timeout 120s`. All green.
 11. **Self-review** the Go diff on Opus.
 12. **Commit** as `plan 085 phase 1 (backend)`. Push.
@@ -454,10 +467,10 @@ Direct adaptation of `src/components/admin/suspend-org-dialog.tsx` (PR #148). Sa
 
 | Layer | Test file | Cases |
 |-------|-----------|-------|
-| Go store | `platform/internal/store/users_test.go` (NEW) | `ListUsers` all-users; role=teacher; role=student; role=org_admin; role=parent; role=platform_admin; role=unassigned; orgId=X; role+orgId combined; `UpdateStatus` active→suspended; `UpdateStatus` suspended→active; `UpdatePlatformAdmin` true; `UpdatePlatformAdmin` false |
-| Go handler | `platform/internal/handlers/admin_test.go` (extend) | `ListAllUsers` 200 with filters (including `role=platform_admin + orgId` combined SQL path); 400 on bad role; 400 on bad orgId; `GetAdminUser` 200; 404 missing; 400 bad UUID; suspend/reactivate 200; 400 on self-suspend; 400 on bad UUID; 401 unauth; 403 non-admin; toggle-admin 200; 400 on self-demote; 404 on missing user; cross-user isolation; admin-cache `Purge` is called on suspend + toggle-admin |
+| Go store | `platform/internal/store/users_test.go` (EXTEND) | `ListUsers` all-users; role=teacher; role=student; role=org_admin; role=parent; role=platform_admin; role=unassigned; orgId=X; role+orgId combined; **multi-org user** (seed two active memberships for one user; assert LATERAL returns the earliest by `created_at` — verifies determinism per Decision #2); **zero-membership user** (assert orgRole/orgId/orgName all `nil`); `UpdateStatus` active→suspended; `UpdateStatus` suspended→active; `UpdatePlatformAdmin` true; `UpdatePlatformAdmin` false |
+| Go handler | `platform/internal/handlers/admin_test.go` (extend) | `ListAllUsers` 200 with filters (including `role=platform_admin + orgId` combined SQL path); 400 on bad role; 400 on bad orgId; `GetAdminUser` 200; 404 missing; 400 bad UUID; suspend/reactivate 200; 400 on self-suspend; 400 on bad UUID; 401 unauth; 403 non-admin; toggle-admin 200; 400 on self-demote; 404 on missing user; cross-user isolation; admin-cache `Purge` is called on suspend + toggle-admin. (Password-reset endpoint deferred — no handler tests in this plan.) |
 | Go auth | `platform/internal/auth/middleware_test.go` (extend) | `TestRequireAuth_RejectsSuspended` — 401 returned when user.status='suspended' |
-| TS list page | `tests/unit/admin-users-page.test.tsx` (NEW) | columns render with API data; filter chips active state ↔ searchParam; chip hrefs preserve orgId; org `<select>` defaults + options; suspended badge renders; self-row hides destructive Actions; View details visible on self |
+| TS list page | `tests/unit/admin-users-page.test.tsx` (NEW) | columns render with API data; filter chips active state ↔ searchParam; chip hrefs preserve orgId; org `<select>` defaults + options; suspended badge renders; **self-row shows only View details (hides Login as / Suspend / Toggle platform-admin)** per Decision #18 |
 | TS detail page | `tests/unit/admin-user-detail-page.test.tsx` (NEW) | metadata Card renders all fields; Activity placeholder Card renders; 400 on malformed UUID; 404 card on missing user; 403 panel on non-admin |
 | TS dialog | `tests/unit/suspend-user-dialog.test.tsx` (NEW) | closed-returns-null; disabled-on-mismatch; enabled-on-match; success-callbacks; HTTP-error inline; network-error inline + role="alert"; reset-on-reopen; symmetric-trim |
 | TS actions | `tests/unit/user-actions.test.tsx` (NEW) | items visible by status (active vs suspended); each action triggers right confirm + fetch; current user row hidden |
@@ -498,11 +511,11 @@ Remaining open concerns flagged for external reviewers to weigh in on:
 |----------|---------|----------------------------|
 | Self (Opus 4.7) | CONCUR | (none) |
 | Codex | **BLOCKER** | (a) Table is `organizations`, not `orgs`. RESOLVED — all SQL refs updated. (b) `hasPassword` field on Go side but missing from TS `UserItem`. RESOLVED — added to interface in §2a. (c) No test for greyed-out reset for OAuth-only users. MOOT — Reset password is now deferred to a follow-up plan (zero infra). |
-| DeepSeek V4 Pro | pending | — |
+| DeepSeek V4 Pro | **BLOCKER** (returned late — both BLOCKERs ALREADY RESOLVED in cc1e759 prior to verdict) | (a) RequireAuth design gap — same as GLM/Kimi (a); already resolved via §1i rewrite (extend CachedAdminChecker). (b) Composite index assumption wrong — already resolved via §1a migration adding `org_memberships_user_status_created_idx`. Plus 4 nits: multi-org test (added to test matrix), password-reset deferral docs (added to §1g), lint baseline capture (deferred — Phase 2 already runs lint), test description for self-row (updated). |
 | GLM 5.1 | **BLOCKER** | (a) `RequireAuth` doesn't load user row; `injectLiveAdmin` is cached 60s. Suspend won't take effect for up to 60s. RESOLVED — §1i now extends `CachedAdminChecker` to carry status alongside admin; `Purge(userID)` on suspend/toggle-admin invalidates the entry. Plus 4 nits all resolved (HasPassword SQL, composite index, password-reset deferral wording, test matrix for combined filter). |
 | Kimi K2.6 | **BLOCKER** | (a) Same as GLM (a): RequireAuth DB-lookup mechanism unspecified. RESOLVED via the same fix in §1i. (b) Shared `User` struct scope: adding fields breaks the auth path. RESOLVED — §1b now splits into a lean `User` (status added) + a new enriched `AdminUser` for the admin view; `GetUserByEmail` and other lean callsites are unaffected by the membership/has-password additions. Plus 7 nits resolved (users_test.go is extend not create, composite index "add if missing", suspended-row menu clarified, gap count corrected, OrgFilterSelect filters to active, schema.test.ts noted, detail page explicitly read-only). |
 
-**Plan revised in commit ⟨pending⟩**. Re-dispatching Codex, GLM, Kimi to confirm resolution. DeepSeek V4 Pro's verdict still pending; will fold any new findings in round 2.
+**Plan revised in commits `cc1e759` and ⟨nit-pass⟩**. Codex, GLM, Kimi round-2 reviews in flight against `cc1e759`. DeepSeek round-2 to be dispatched after the nit-pass commit lands; DeepSeek's round-1 BLOCKERs were already resolved in `cc1e759` (convergence with GLM + Kimi), so no architectural change needed for DeepSeek's verdict.
 
 ## Code Review
 
