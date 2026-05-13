@@ -79,7 +79,7 @@ Before claiming work is done, run the verification commands and confirm the actu
 
 Code review catches what self-review misses. The 5-way review fires **once per plan** against the consolidated branch diff, after Step 4 (Verify) and before the PR is opened. Findings go in the plan file's `## Code Review` section. Not after each phase.
 
-1. Request code review (5-way: self on Opus, Codex, DeepSeek V4 Flash, GLM 5.1, Kimi K2.6 — see CLAUDE.md `## Code Review`). Reviewers append findings to the plan file's `## Code Review` section, following `docs/code-review.md` format.
+1. Request code review (5-way: self on Opus, Codex, DeepSeek V4 Flash, GLM 5.1, Kimi K2.6 — see `docs/reviewers.md`). Reviewers append findings to the plan file's `## Code Review` section, following `docs/code-review.md` format.
 2. Each finding is numbered with `[OPEN]` status, file:line references, and Must Fix / Should Fix / Nice to Have priority.
 3. Author addresses each finding: fix the code or explain why not. Respond inline with `→ Response:` and update status to `[FIXED]` or `[WONTFIX]`.
 4. All `[OPEN]` items must be resolved before shipping.
