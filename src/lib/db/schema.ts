@@ -43,6 +43,8 @@ export const userRoleEnum = pgEnum("user_role", [
 // existing rows and OAuth signups with no explicit answer remain valid.
 export const signupIntentEnum = pgEnum("signup_intent", ["teacher", "student"]);
 
+export const userStatusEnum = pgEnum("user_status", ["active", "suspended"]);
+
 export const authProviderEnum = pgEnum("auth_provider", [
   "google",
   "microsoft",
@@ -159,11 +161,15 @@ export const users = pgTable(
     avatarUrl: text("avatar_url"),
     passwordHash: text("password_hash"),
     isPlatformAdmin: boolean("is_platform_admin").notNull().default(false),
+    status: userStatusEnum("status").notNull().default("active"),
     intendedRole: signupIntentEnum("intended_role"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
   },
-  (table) => [uniqueIndex("users_email_idx").on(table.email)]
+  (table) => [
+    uniqueIndex("users_email_idx").on(table.email),
+    index("users_status_idx").on(table.status),
+  ]
 );
 
 export const orgMemberships = pgTable(
@@ -184,6 +190,11 @@ export const orgMemberships = pgTable(
   (table) => [
     index("org_memberships_org_idx").on(table.orgId),
     index("org_memberships_user_idx").on(table.userId),
+    index("org_memberships_user_status_created_idx").on(
+      table.userId,
+      table.status,
+      table.createdAt
+    ),
     uniqueIndex("org_memberships_org_user_role_idx").on(
       table.orgId,
       table.userId,

@@ -8,6 +8,7 @@ import (
 	"net/url"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 
 	"github.com/weiboz0/bridge/platform/internal/auth"
 	"github.com/weiboz0/bridge/platform/internal/store"
@@ -35,6 +36,12 @@ func (h *AdminHandler) Routes(r chi.Router) {
 
 		r.Get("/stats", h.GetStats)
 		r.Get("/users", h.ListAllUsers)
+		r.Route("/users/{userID}", func(r chi.Router) {
+			r.Use(ValidateUUIDParam("userID"))
+			r.Get("/", h.GetAdminUser)
+			r.Patch("/status", h.UpdateUserStatus)
+			r.Patch("/platform-admin", h.UpdateUserPlatformAdmin)
+		})
 		r.Get("/orgs", h.ListAllOrgs)
 		r.Patch("/orgs/{orgID}", h.UpdateOrgStatus)
 
@@ -66,12 +73,148 @@ func (h *AdminHandler) GetStats(w http.ResponseWriter, r *http.Request) {
 
 // ListAllUsers handles GET /api/admin/users
 func (h *AdminHandler) ListAllUsers(w http.ResponseWriter, r *http.Request) {
-	users, err := h.Users.ListUsers(r.Context())
+	filter, ok := parseListUsersFilter(w, r)
+	if !ok {
+		return
+	}
+
+	users, err := h.Users.ListUsers(r.Context(), filter)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
 	}
 	writeJSON(w, http.StatusOK, users)
+}
+
+// GetAdminUser handles GET /api/admin/users/{userID}
+func (h *AdminHandler) GetAdminUser(w http.ResponseWriter, r *http.Request) {
+	userID := chi.URLParam(r, "userID")
+	user, err := h.Users.GetAdminUserByID(r.Context(), userID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if user == nil {
+		writeError(w, http.StatusNotFound, "User not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, user)
+}
+
+// UpdateUserStatus handles PATCH /api/admin/users/{userID}/status
+func (h *AdminHandler) UpdateUserStatus(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	userID := chi.URLParam(r, "userID")
+	if userID == claims.UserID {
+		writeError(w, http.StatusBadRequest, "Cannot change own status")
+		return
+	}
+
+	var body struct {
+		Status string `json:"status"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	if body.Status != "active" && body.Status != "suspended" {
+		writeError(w, http.StatusBadRequest, "Invalid input: status must be active or suspended")
+		return
+	}
+
+	if err := h.Users.UpdateStatus(r.Context(), userID, body.Status); err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	h.purgeAdminCache(userID)
+
+	user, err := h.Users.GetAdminUserByID(r.Context(), userID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if user == nil {
+		writeError(w, http.StatusNotFound, "User not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, user)
+}
+
+// UpdateUserPlatformAdmin handles PATCH /api/admin/users/{userID}/platform-admin
+func (h *AdminHandler) UpdateUserPlatformAdmin(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	userID := chi.URLParam(r, "userID")
+	var body struct {
+		IsPlatformAdmin bool `json:"isPlatformAdmin"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	if userID == claims.UserID && !body.IsPlatformAdmin {
+		writeError(w, http.StatusBadRequest, "Cannot demote self from platform admin")
+		return
+	}
+
+	if err := h.Users.UpdatePlatformAdmin(r.Context(), userID, body.IsPlatformAdmin); err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	h.purgeAdminCache(userID)
+
+	user, err := h.Users.GetAdminUserByID(r.Context(), userID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if user == nil {
+		writeError(w, http.StatusNotFound, "User not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, user)
+}
+
+func parseListUsersFilter(w http.ResponseWriter, r *http.Request) (store.ListUsersFilter, bool) {
+	var filter store.ListUsersFilter
+	if role := r.URL.Query().Get("role"); role != "" {
+		if !validUserRoleFilter(role) {
+			writeError(w, http.StatusBadRequest, "Invalid input: role filter is invalid")
+			return filter, false
+		}
+		filter.Role = &role
+	}
+	if orgID := r.URL.Query().Get("orgId"); orgID != "" {
+		if _, err := uuid.Parse(orgID); err != nil {
+			writeError(w, http.StatusBadRequest, "Invalid input: orgId must be a UUID")
+			return filter, false
+		}
+		filter.OrgID = &orgID
+	}
+	return filter, true
+}
+
+func validUserRoleFilter(role string) bool {
+	switch role {
+	case "org_admin", "teacher", "student", "parent", "platform_admin", "unassigned":
+		return true
+	default:
+		return false
+	}
+}
+
+func (h *AdminHandler) purgeAdminCache(userID string) {
+	if h.Mw == nil || h.Mw.AdminChecker == nil {
+		return
+	}
+	h.Mw.AdminChecker.Purge(userID)
 }
 
 // ListAllOrgs handles GET /api/admin/orgs

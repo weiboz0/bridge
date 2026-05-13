@@ -23,8 +23,8 @@ import (
 // enough (~1000) that the entire active set fits comfortably with
 // room to spare.
 //
-// On DB error with no recent cached value, IsAdmin returns
-// `(false, err)` so RequireAuth can fail-closed (no silent admin
+// On DB error with no recent cached value, AdminAndStatus returns
+// `(false, "", err)` so RequireAuth can fail-closed (no silent admin
 // grant during a DB outage). The caller logs and proceeds.
 
 const (
@@ -33,18 +33,19 @@ const (
 )
 
 // AdminChecker is the abstraction RequireAuth depends on for live
-// admin status. Inject a real DB-backed impl in production; tests
+// admin/status state. Inject a real DB-backed impl in production; tests
 // can use a stub.
 type AdminChecker interface {
 	IsAdmin(ctx context.Context, userID string) (bool, error)
+	AdminAndStatus(ctx context.Context, userID string) (isAdmin bool, status string, err error)
+	Purge(userID string)
 }
 
-// adminLookup is the lower-level interface IsAdmin uses to fetch
+// adminLookup is the lower-level interface AdminAndStatus uses to fetch
 // from Postgres on a cache miss. UserStore.GetUserByID matches
-// this signature in spirit; we narrow to "just the bool we care
-// about" to keep the test stub small.
+// this signature in spirit; we narrow to the fields auth cares about.
 type adminLookup interface {
-	LookupIsAdmin(ctx context.Context, userID string) (bool, error)
+	LookupAdminAndStatus(ctx context.Context, userID string) (isAdmin bool, status string, err error)
 }
 
 // userStoreAdminLookup adapts *store.UserStore to the adminLookup
@@ -60,25 +61,26 @@ type SQLAdminLookup struct {
 	DB *sql.DB
 }
 
-// LookupIsAdmin reads users.is_platform_admin for the given id.
-// Missing row returns (false, nil) so a deleted user is treated as
+// LookupAdminAndStatus reads users.is_platform_admin and users.status for the given id.
+// Missing row returns (false, "", nil) so a deleted user is treated as
 // non-admin (same as GetUserByID's nil-row → nil semantic).
-func (s *SQLAdminLookup) LookupIsAdmin(ctx context.Context, userID string) (bool, error) {
+func (s *SQLAdminLookup) LookupAdminAndStatus(ctx context.Context, userID string) (bool, string, error) {
 	if s == nil || s.DB == nil {
-		return false, errors.New("auth.SQLAdminLookup: DB is nil")
+		return false, "", errors.New("auth.SQLAdminLookup: DB is nil")
 	}
 	var isAdmin bool
+	var status string
 	err := s.DB.QueryRowContext(ctx,
-		`SELECT is_platform_admin FROM users WHERE id = $1`,
+		`SELECT is_platform_admin, status FROM users WHERE id = $1`,
 		userID,
-	).Scan(&isAdmin)
+	).Scan(&isAdmin, &status)
 	if err == sql.ErrNoRows {
-		return false, nil
+		return false, "", nil
 	}
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
-	return isAdmin, nil
+	return isAdmin, status, nil
 }
 
 // CachedAdminChecker wraps an adminLookup with a small TTL+LRU
@@ -101,6 +103,7 @@ type CachedAdminChecker struct {
 type adminCacheEntry struct {
 	userID    string
 	isAdmin   bool
+	status    string
 	expiresAt time.Time
 }
 
@@ -128,17 +131,18 @@ func NewCachedAdminCheckerWithSize(lookup adminLookup, ttl time.Duration, capaci
 	}
 }
 
-// IsAdmin returns the live admin status for userID, served from
-// cache when fresh.
-//
-// Cache miss + lookup success → cache the result and return.
-// Cache miss + lookup error → return (false, err). Caller decides
-// how to handle (Phase 3's RequireAuth fails closed).
-// Cache hit (fresh) → no DB call.
-// Cache hit (stale) → re-fetch and refresh.
+// IsAdmin returns the live admin status for userID, served from cache when
+// fresh. Use AdminAndStatus when the caller also needs account status.
 func (c *CachedAdminChecker) IsAdmin(ctx context.Context, userID string) (bool, error) {
+	isAdmin, _, err := c.AdminAndStatus(ctx, userID)
+	return isAdmin, err
+}
+
+// AdminAndStatus returns live admin and account status for userID, served from
+// cache when fresh.
+func (c *CachedAdminChecker) AdminAndStatus(ctx context.Context, userID string) (bool, string, error) {
 	if userID == "" {
-		return false, errors.New("auth.CachedAdminChecker: userID is empty")
+		return false, "", errors.New("auth.CachedAdminChecker: userID is empty")
 	}
 
 	now := c.now()
@@ -149,8 +153,9 @@ func (c *CachedAdminChecker) IsAdmin(ctx context.Context, userID string) (bool, 
 		if now.Before(entry.expiresAt) {
 			c.lru.MoveToFront(elem)
 			cached := entry.isAdmin
+			status := entry.status
 			c.mu.Unlock()
-			return cached, nil
+			return cached, status, nil
 		}
 		// Expired — drop and fall through to fetch.
 		c.lru.Remove(elem)
@@ -162,9 +167,9 @@ func (c *CachedAdminChecker) IsAdmin(ctx context.Context, userID string) (bool, 
 	// callers. A concurrent caller for the same userID may race
 	// to fetch as well; that's fine — last writer wins, both
 	// produce the same value.
-	isAdmin, err := c.lookup.LookupIsAdmin(ctx, userID)
+	isAdmin, status, err := c.lookup.LookupAdminAndStatus(ctx, userID)
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 
 	c.mu.Lock()
@@ -181,7 +186,7 @@ func (c *CachedAdminChecker) IsAdmin(ctx context.Context, userID string) (bool, 
 		entry := elem.Value.(*adminCacheEntry)
 		if now.Before(entry.expiresAt) {
 			c.lru.MoveToFront(elem)
-			return entry.isAdmin, nil
+			return entry.isAdmin, entry.status, nil
 		}
 		// Existing entry is stale → drop and insert ours.
 		c.lru.Remove(elem)
@@ -190,6 +195,7 @@ func (c *CachedAdminChecker) IsAdmin(ctx context.Context, userID string) (bool, 
 	entry := &adminCacheEntry{
 		userID:    userID,
 		isAdmin:   isAdmin,
+		status:    status,
 		expiresAt: now.Add(c.ttl),
 	}
 	elem := c.lru.PushFront(entry)
@@ -204,7 +210,17 @@ func (c *CachedAdminChecker) IsAdmin(ctx context.Context, userID string) (bool, 
 		delete(c.entries, oldest.Value.(*adminCacheEntry).userID)
 	}
 
-	return isAdmin, nil
+	return isAdmin, status, nil
+}
+
+// Purge removes a single user's cached admin/status state.
+func (c *CachedAdminChecker) Purge(userID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if elem, ok := c.entries[userID]; ok {
+		c.lru.Remove(elem)
+		delete(c.entries, userID)
+	}
 }
 
 // purge is exposed only for tests.

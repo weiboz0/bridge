@@ -13,17 +13,22 @@ import (
 
 // stubLookup is a hand-rolled adminLookup we can drive deterministically.
 type stubLookup struct {
-	calls atomic.Int32
-	value bool
-	err   error
+	calls  atomic.Int32
+	value  bool
+	status string
+	err    error
 }
 
-func (s *stubLookup) LookupIsAdmin(_ context.Context, _ string) (bool, error) {
+func (s *stubLookup) LookupAdminAndStatus(_ context.Context, _ string) (bool, string, error) {
 	s.calls.Add(1)
 	if s.err != nil {
-		return false, s.err
+		return false, "", s.err
 	}
-	return s.value, nil
+	status := s.status
+	if status == "" {
+		status = "active"
+	}
+	return s.value, status, nil
 }
 
 func TestCachedAdminChecker_HappyPath(t *testing.T) {
@@ -52,6 +57,38 @@ func TestCachedAdminChecker_CacheHitSkipsLookup(t *testing.T) {
 		assert.True(t, got)
 	}
 	assert.Equal(t, int32(1), stub.calls.Load(), "expected exactly one DB lookup across 5 calls")
+}
+
+func TestCachedAdminChecker_StatusFieldCached(t *testing.T) {
+	stub := &stubLookup{value: true, status: "suspended"}
+	checker := NewCachedAdminChecker(stub)
+
+	isAdmin, status, err := checker.AdminAndStatus(context.Background(), "user-1")
+	require.NoError(t, err)
+	assert.True(t, isAdmin)
+	assert.Equal(t, "suspended", status)
+
+	stub.status = "active"
+	isAdmin, status, err = checker.AdminAndStatus(context.Background(), "user-1")
+	require.NoError(t, err)
+	assert.True(t, isAdmin)
+	assert.Equal(t, "suspended", status, "status should be served from cache inside TTL")
+	assert.Equal(t, int32(1), stub.calls.Load())
+}
+
+func TestCachedAdminChecker_PurgeUserForcesRefetch(t *testing.T) {
+	stub := &stubLookup{value: true, status: "suspended"}
+	checker := NewCachedAdminChecker(stub)
+
+	_, _, err := checker.AdminAndStatus(context.Background(), "user-1")
+	require.NoError(t, err)
+	stub.status = "active"
+	checker.Purge("user-1")
+	_, status, err := checker.AdminAndStatus(context.Background(), "user-1")
+	require.NoError(t, err)
+
+	assert.Equal(t, "active", status)
+	assert.Equal(t, int32(2), stub.calls.Load())
 }
 
 func TestCachedAdminChecker_TTLExpiryRefetches(t *testing.T) {
@@ -144,11 +181,11 @@ func TestCachedAdminChecker_PurgeForcesRefetch(t *testing.T) {
 
 func TestSQLAdminLookup_NilDBReturnsError(t *testing.T) {
 	lookup := &SQLAdminLookup{}
-	_, err := lookup.LookupIsAdmin(context.Background(), "user-1")
+	_, _, err := lookup.LookupAdminAndStatus(context.Background(), "user-1")
 	require.Error(t, err)
 }
 
-// blockingLookup lets a test pause inside LookupIsAdmin so we can
+// blockingLookup lets a test pause inside LookupAdminAndStatus so we can
 // drive the cache-race scenario deterministically.
 type blockingLookup struct {
 	calls   atomic.Int32
@@ -156,13 +193,13 @@ type blockingLookup struct {
 	results []bool        // values to return on each call (sequential)
 }
 
-func (b *blockingLookup) LookupIsAdmin(_ context.Context, _ string) (bool, error) {
+func (b *blockingLookup) LookupAdminAndStatus(_ context.Context, _ string) (bool, string, error) {
 	idx := b.calls.Add(1) - 1
 	<-b.gate
 	if int(idx) < len(b.results) {
-		return b.results[idx], nil
+		return b.results[idx], "active", nil
 	}
-	return false, nil
+	return false, "active", nil
 }
 
 func TestCachedAdminChecker_RaceConcurrentFetchesConverge(t *testing.T) {
@@ -200,7 +237,7 @@ func TestCachedAdminChecker_RaceConcurrentFetchesConverge(t *testing.T) {
 	}()
 	time.Sleep(20 * time.Millisecond)
 
-	// Both goroutines are now parked inside LookupIsAdmin. Release.
+	// Both goroutines are now parked inside LookupAdminAndStatus. Release.
 	close(lookup.gate)
 
 	r1 := <-res

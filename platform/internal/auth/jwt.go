@@ -18,6 +18,7 @@ type Claims struct {
 	Email           string `json:"email"`
 	Name            string `json:"name"`
 	IsPlatformAdmin bool   `json:"isPlatformAdmin"`
+	Status          string `json:"status,omitempty"`
 	ImpersonatedBy  string `json:"impersonatedBy,omitempty"`
 }
 
