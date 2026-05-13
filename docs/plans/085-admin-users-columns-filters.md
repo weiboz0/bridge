@@ -200,22 +200,32 @@ Per GLM 5.1 + Kimi K2.6 round-1 BLOCKERS: `RequireAuth` (`platform/internal/auth
 
 Resolution (GLM option A, Kimi option (i)): **extend the cached lookup to return both `is_admin` AND `status`**. Concretely:
 
-1. Rename `LookupIsAdmin` → `LookupAdminAndStatus` in `platform/internal/auth/admin_check.go`:
+1. Rename `LookupIsAdmin` → `LookupAdminAndStatus` in `platform/internal/auth/admin_check.go`. The unexported lookup interface stays unexported (Go convention):
    ```go
-   type AdminLookup interface {
+   type adminLookup interface {
        LookupAdminAndStatus(ctx context.Context, userID string) (isAdmin bool, status string, err error)
    }
    ```
 2. Cache value becomes `struct { IsAdmin bool; Status string }` keyed by userID. TTL unchanged at 60s.
-3. `injectLiveAdmin` becomes `injectLiveStatus` — populates `claims.IsPlatformAdmin` AND `claims.Status` from the cache.
-4. `RequireAuth` checks `claims.Status == "suspended"` after `injectLiveStatus` and returns 401 with `{error: "Account suspended. Contact your administrator."}`.
-5. `Claims` struct (`platform/internal/auth/jwt.go` or equivalent) gets `Status string` field. JWT payload does NOT carry status — it's set from the live cache after verification.
-6. **Cache eviction on suspend/reactivate**: `UpdateUserStatus` handler calls `AdminChecker.Purge(userID)` after the UPDATE succeeds. `Purge` already exists on the checker (verified at `admin_check_test.go:134-150`). This makes suspend take effect IMMEDIATELY for new requests — not "on next request after 60s cache expiry".
-7. **Cache eviction on toggle-admin**: `UpdateUserPlatformAdmin` also calls `Purge(userID)` (same rationale — instant effect for security-sensitive ops).
+3. **Extend the public `AdminChecker` interface** (`admin_check.go:38-40`). Add a new method alongside `IsAdmin` (backward-compatible — existing call sites unchanged):
+   ```go
+   type AdminChecker interface {
+       IsAdmin(ctx context.Context, userID string) (bool, error)
+       AdminAndStatus(ctx context.Context, userID string) (isAdmin bool, status string, err error)
+   }
+   ```
+   `injectLiveStatus` calls `AdminAndStatus`; legacy callers continue using `IsAdmin`. All `stubAdminChecker` implementations in `middleware_phase3_test.go` etc. add the new method (mechanical).
+4. **Add a NEW exported `Purge(userID string)` method** on `CachedAdminChecker`. The existing unexported `purge()` at `admin_check.go:211` clears ALL entries (test-only) and is retained for that use. The new `Purge(userID)` removes a single entry under the same mutex; it's what `UpdateUserStatus` and `UpdateUserPlatformAdmin` handlers call after a successful write. (GLM round-2 spec gap: the round-1 plan claimed `Purge` already existed; the actual `purge()` is the wrong scope.)
+5. `injectLiveAdmin` becomes `injectLiveStatus` — populates `claims.IsPlatformAdmin` AND `claims.Status` from the cache via `AdminAndStatus`.
+6. **`RequireAuth` checks `claims.Status == "suspended"`** after `injectLiveStatus` and returns 401 with `{error: "Account suspended. Contact your administrator."}`.
+7. **`OptionalAuth` short-circuits on suspended** (GLM round-2 spec gap). `injectLiveStatus` runs in OptionalAuth too (so `claims.Status` is available to downstream handlers that want it), but if `claims.Status == "suspended"`, OptionalAuth sets claims to `nil` and proceeds as unauthenticated. This makes suspended users behave identically to logged-out users for all OptionalAuth-gated endpoints (`/api/me/roles`, `/api/me/portal-access`, etc.) — no data leakage, no contract-breaking 401 from an endpoint that promises pass-through.
+8. `Claims` struct (`platform/internal/auth/jwt.go` or equivalent) gets `Status string` field. JWT payload does NOT carry status — it's set from the live cache after verification.
+9. **DEV_SKIP_AUTH bypass** (`middleware.go:158-163`) constructs a `Claims` without going through cache fill. Set `Status: "active"` explicitly in that branch so the suspended check passes cleanly.
+10. **`GetIdentity` handler** (`/api/me/identity` per `me.go:37-50`) returns selected claim fields. After the `Claims.Status` addition, include `status` in the response so the frontend can confirm what status the Go layer sees. Small addition; surfaces in the `IdentityResponse` interface in TS.
 
 **Suspend-dialog UX copy update**: "Existing sessions are invalidated immediately — the user will be signed out on their next request."
 
-**Existing test impact**: tests that stub `LookupIsAdmin` need updating to the new signature (returning `(bool, string, error)`). Grep `LookupIsAdmin` to inventory. The 5 existing tests in `admin_check_test.go` all use a `stubLookup` — updating its return shape is mechanical.
+**Existing test impact**: tests that stub `LookupIsAdmin` and `AdminChecker.IsAdmin` need updating to the new signatures. Grep `LookupIsAdmin` and `IsAdmin(` to inventory. The 5 existing tests in `admin_check_test.go` use a `stubLookup` — updating its return shape is mechanical. `middleware_phase3_test.go` etc. use a `stubAdminChecker` — add the new `AdminAndStatus` method.
 
 **New tests**:
 - `admin_check_test.go`: `TestCachedAdminChecker_StatusFieldCached` (verify status survives the cache hit path).
@@ -352,7 +362,7 @@ Direct adaptation of `src/components/admin/suspend-org-dialog.tsx` (PR #148). Sa
 **Modify (8):**
 - `src/lib/db/schema.ts` — add `userStatusEnum`, `users.status` column.
 - `platform/internal/store/users.go` — `User` struct gets `Status`; add new `AdminUser` struct; replace `ListUsers` with filtered version returning `[]AdminUser`; add `GetAdminUserByID`, `UpdateStatus`, `UpdatePlatformAdmin` methods; existing `GetUserByID` / `GetUserByEmail` and other lean callsites add `status` to their SELECT.
-- `platform/internal/auth/admin_check.go` — rename `LookupIsAdmin` → `LookupAdminAndStatus`; extend cache value to `{IsAdmin, Status}`; existing `Purge` reused for invalidation.
+- `platform/internal/auth/admin_check.go` — rename `LookupIsAdmin` → `LookupAdminAndStatus`; extend cache value to `{IsAdmin, Status}`; add NEW exported `Purge(userID string)` method (the existing unexported `purge()` is clear-all + test-only and stays); extend `AdminChecker` interface with `AdminAndStatus`.
 - `platform/internal/handlers/admin.go` — `ListAllUsers` reads query params; add `GetAdminUser`, `UpdateUserStatus`, `UpdateUserPlatformAdmin` handlers. (Password-reset deferred.) `UpdateUserStatus` and `UpdateUserPlatformAdmin` call `AdminChecker.Purge(userID)` after the UPDATE.
 - `platform/internal/auth/middleware.go` (or wherever `RequireAuth` lives) — `injectLiveAdmin` becomes `injectLiveStatus` populating both `IsPlatformAdmin` and `Status` on Claims; `RequireAuth` 401s on `status='suspended'`.
 - `cmd/api/main.go` (or wherever admin routes mount) — register the 3 new endpoints (get-user, suspend/reactivate, toggle-admin).
@@ -515,7 +525,16 @@ Remaining open concerns flagged for external reviewers to weigh in on:
 | GLM 5.1 | **BLOCKER** | (a) `RequireAuth` doesn't load user row; `injectLiveAdmin` is cached 60s. Suspend won't take effect for up to 60s. RESOLVED — §1i now extends `CachedAdminChecker` to carry status alongside admin; `Purge(userID)` on suspend/toggle-admin invalidates the entry. Plus 4 nits all resolved (HasPassword SQL, composite index, password-reset deferral wording, test matrix for combined filter). |
 | Kimi K2.6 | **BLOCKER** | (a) Same as GLM (a): RequireAuth DB-lookup mechanism unspecified. RESOLVED via the same fix in §1i. (b) Shared `User` struct scope: adding fields breaks the auth path. RESOLVED — §1b now splits into a lean `User` (status added) + a new enriched `AdminUser` for the admin view; `GetUserByEmail` and other lean callsites are unaffected by the membership/has-password additions. Plus 7 nits resolved (users_test.go is extend not create, composite index "add if missing", suspended-row menu clarified, gap count corrected, OrgFilterSelect filters to active, schema.test.ts noted, detail page explicitly read-only). |
 
-**Plan revised in commits `cc1e759` and ⟨nit-pass⟩**. Codex, GLM, Kimi round-2 reviews in flight against `cc1e759`. DeepSeek round-2 to be dispatched after the nit-pass commit lands; DeepSeek's round-1 BLOCKERs were already resolved in `cc1e759` (convergence with GLM + Kimi), so no architectural change needed for DeepSeek's verdict.
+**Plan revised through commits `cc1e759` → `6b3be8c` → `d55b1a2` → ⟨GLM-round-2-nits⟩**.
+
+### Round 2 verdicts
+
+| Reviewer | Verdict | Notes |
+|----------|---------|-------|
+| Codex | **BLOCKER** (round 2) → resolved → **BLOCKER** (round 3) → resolved → round 4 in flight | Round 2 caught password-reset deferral inconsistency; round 3 caught 5 stale refs (GetUserByID enriched vs lean, "4 new endpoints" stale count, RequireAuth cache risk row stale, TS test "user row hidden" vs Decision #18, reset-password UI active in §1b/§2a/Decision #19). All folded in commits `6b3be8c` and `d55b1a2`. |
+| DeepSeek V4 Pro | **CONCUR with nits** (round 2) | 5 nits all folded into `d55b1a2` (Create count off-by-one, users_test.go Create→Extend, middleware_test.go duplicate, cache-risk text stale, TS actions row stale). |
+| GLM 5.1 | **CONCUR with nits** (round 2) | Round-1 cache BLOCKER cleanly resolved. 3 spec gaps folded into ⟨GLM-round-2-nits⟩ commit: (1) `Purge(userID)` is a NEW exported method (existing `purge()` is clear-all + test-only); (2) `AdminChecker` interface extends with `AdminAndStatus` (backward-compat with `IsAdmin`); (3) OptionalAuth short-circuits on suspended (null-claims pass-through). Plus minor nits (lowercase `adminLookup` interface, DEV_SKIP_AUTH explicit `Status: "active"`, `GetIdentity` includes status). |
+| Kimi K2.6 | round 2 in flight | — |
 
 ## Code Review
 
