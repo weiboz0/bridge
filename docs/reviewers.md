@@ -52,6 +52,7 @@ Code reviews use the same 5-way pattern but with a **flash-tier model for DeepSe
 ### Codex
 - Dispatch: `codex:codex-rescue` subagent.
 - Use for: plan reviews, code reviews, spec reviews, post-impl reviews.
+- **Also the default backend implementer** — see `docs/coding-agent.md`. When Codex wrote the code, it still runs as one of the five reviewers; ensemble independence comes from the other four.
 - Prompt style: under 500 words, focused questions, time-bounded.
 
 ### DeepSeek (via opencode)
@@ -68,4 +69,4 @@ Code reviews use the same 5-way pattern but with a **flash-tier model for DeepSe
 - Prompt style: same as above.
 - Added 2026-05-06 to broaden the multi-model ensemble; brings a different reasoning style (especially useful when GLM/DeepSeek converge on the same blind spots).
 
-**Do NOT use any external reviewer for implementation, debugging, refactoring, or coding.** Those belong to Claude Sonnet 4.6 (default) or Opus 4.7 (complex) — see `docs/coding-agent.md`.
+**DeepSeek, GLM, and Kimi are review-only — never use them for implementation.** Implementation is split by domain: Codex for backend, Sonnet for frontend + tests, Opus for complex/cross-domain — see `docs/coding-agent.md`.

@@ -3,7 +3,7 @@
 ## Critical Rules
 
 - **Always create the feature branch BEFORE drafting the plan** (`git checkout -b feat/NNN-description`). All commits — plan file, review verdicts, implementation — land there. Never on `main`.
-- **Spawn subagents for coding work.** Orchestrator stays on Opus 4.7. Dispatch `model: "sonnet"` for routine work, `model: "opus"` for complex. Do NOT delegate code generation to Codex, DeepSeek, GLM, or Kimi — they're review-only. Details: `docs/coding-agent.md`.
+- **Spawn subagents for coding work — domain-based dispatch.** Orchestrator stays on Opus 4.7 for planning + review + coordination. For implementation: **Codex** for backend (Go in `platform/`, Hocuspocus server); **Sonnet** for frontend (Next.js, React, `src/`); **Sonnet** for all test code regardless of domain; **Opus subagent** for complex cross-domain or new-pattern work. DeepSeek, GLM, Kimi remain review-only. Details: `docs/coding-agent.md`.
 - **Run the 5-way plan review** on every plan before any implementation. Capture all five verdicts in the plan's `## Plan Review` section. Gate + dispatch table: `docs/reviewers.md`.
 - **Run the 5-way code review** before merging any PR. Findings go in the plan's `## Code Review` section. Gate + dispatch table: `docs/reviewers.md`.
 - **Always write a post-execution report** in the plan file before shipping.
