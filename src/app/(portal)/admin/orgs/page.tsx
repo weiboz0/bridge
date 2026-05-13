@@ -92,7 +92,7 @@ export default async function AdminOrgsPage({
                   }`}>
                     {org.status}
                   </span>
-                  <OrgActions orgId={org.id} status={org.status} />
+                  <OrgActions orgId={org.id} orgName={org.name} status={org.status} />
                 </div>
               </CardContent>
             </Card>
