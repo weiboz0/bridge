@@ -472,7 +472,7 @@ Direct adaptation of `src/components/admin/suspend-org-dialog.tsx` (PR #148). Sa
 3. **Update `docs/api.md`** with the new endpoints + query params.
 4. **Self-review** the combined branch diff. Cross-phase consistency: TS field names ↔ Go JSON tags; schema migration ↔ Drizzle schema.
 5. **Commit** any docs/cleanup as `plan 085 phase 3 (verify + docs)`. Push.
-6. **Trigger 5-way code review** against the branch diff.
+6. **Trigger 4-way code review** against the branch diff (Self on Opus + Codex + DeepSeek V4 Flash + GLM 5.1 — Kimi was removed from the reviewer ensemble mid-plan; see §Plan Review note).
 
 ## Testing plan
 
@@ -526,7 +526,9 @@ Remaining open concerns flagged for external reviewers to weigh in on:
 | GLM 5.1 | **BLOCKER** | (a) `RequireAuth` doesn't load user row; `injectLiveAdmin` is cached 60s. Suspend won't take effect for up to 60s. RESOLVED — §1i now extends `CachedAdminChecker` to carry status alongside admin; `Purge(userID)` on suspend/toggle-admin invalidates the entry. Plus 4 nits all resolved (HasPassword SQL, composite index, password-reset deferral wording, test matrix for combined filter). |
 | Kimi K2.6 | **BLOCKER** | (a) Same as GLM (a): RequireAuth DB-lookup mechanism unspecified. RESOLVED via the same fix in §1i. (b) Shared `User` struct scope: adding fields breaks the auth path. RESOLVED — §1b now splits into a lean `User` (status added) + a new enriched `AdminUser` for the admin view; `GetUserByEmail` and other lean callsites are unaffected by the membership/has-password additions. Plus 7 nits resolved (users_test.go is extend not create, composite index "add if missing", suspended-row menu clarified, gap count corrected, OrgFilterSelect filters to active, schema.test.ts noted, detail page explicitly read-only). |
 
-**Plan revised through commits `cc1e759` → `6b3be8c` → `d55b1a2` → ⟨GLM-round-2-nits⟩**.
+**Plan revised through commits `cc1e759` → `6b3be8c` → `d55b1a2` → `0c44077` → `c2f252d` → `c57595f` → `83aaddb`** (each round addressed reviewer findings; Codex did 6 cross-reference rounds catching real plan-quality drift).
+
+**Policy change mid-plan**: Kimi K2.6 was removed from the reviewer ensemble (commit `6d7acc0` on main, merged into this branch). Gate becomes 4-way going forward. Kimi's round-1 + round-2 findings are preserved below as historical record; both rounds' BLOCKER items were resolved in revisions. Kimi's round-3 dispatch (in flight at the time of removal) is moot.
 
 ### Round 2 verdicts
 
@@ -535,7 +537,18 @@ Remaining open concerns flagged for external reviewers to weigh in on:
 | Codex | **BLOCKER** (round 2) → resolved → **BLOCKER** (round 3) → resolved → round 4 in flight | Round 2 caught password-reset deferral inconsistency; round 3 caught 5 stale refs (GetUserByID enriched vs lean, "4 new endpoints" stale count, RequireAuth cache risk row stale, TS test "user row hidden" vs Decision #18, reset-password UI active in §1b/§2a/Decision #19). All folded in commits `6b3be8c` and `d55b1a2`. |
 | DeepSeek V4 Pro | **CONCUR with nits** (round 2) | 5 nits all folded into `d55b1a2` (Create count off-by-one, users_test.go Create→Extend, middleware_test.go duplicate, cache-risk text stale, TS actions row stale). |
 | GLM 5.1 | **CONCUR with nits** (round 2) | Round-1 cache BLOCKER cleanly resolved. 3 spec gaps folded into ⟨GLM-round-2-nits⟩ commit: (1) `Purge(userID)` is a NEW exported method (existing `purge()` is clear-all + test-only); (2) `AdminChecker` interface extends with `AdminAndStatus` (backward-compat with `IsAdmin`); (3) OptionalAuth short-circuits on suspended (null-claims pass-through). Plus minor nits (lowercase `adminLookup` interface, DEV_SKIP_AUTH explicit `Status: "active"`, `GetIdentity` includes status). |
-| Kimi K2.6 | round 2 in flight | — |
+| Kimi K2.6 | **removed from ensemble** (policy change in commit `6d7acc0`) | Round-2 BLOCKERs were stale-against-prior-commits (all 4 already resolved); only the NextAuth `authorize` nit was new and folded. Round-3 dispatch in flight at removal time is moot. |
+
+### Final 4-way gate status (post-Kimi-removal)
+
+| Reviewer | Final verdict |
+|----------|---------------|
+| Self (Opus 4.7) | CONCUR |
+| Codex | **CONCUR** (round 7) |
+| DeepSeek V4 Pro | CONCUR (round 2) |
+| GLM 5.1 | CONCUR (round 2) |
+
+**Gate is clean. Plan ready for implementation.**
 
 ## Code Review
 
