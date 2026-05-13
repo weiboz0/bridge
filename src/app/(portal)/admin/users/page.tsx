@@ -137,8 +137,8 @@ export default async function AdminUsersPage({
         <h1 className="text-2xl font-bold">Users ({userList.length})</h1>
       </div>
 
-      {/* Filter row: role chips + org select */}
-      <div className="flex flex-wrap items-center gap-3">
+      {/* Filter row: role chips on the left, org select pinned right */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex gap-2 text-sm flex-wrap">
           {ROLE_CHIPS.map((chip) => (
             <FilterChip
