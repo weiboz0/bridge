@@ -103,11 +103,8 @@ func (h *AdminHandler) GetAdminUser(w http.ResponseWriter, r *http.Request) {
 
 // UpdateUserStatus handles PATCH /api/admin/users/{userID}/status
 func (h *AdminHandler) UpdateUserStatus(w http.ResponseWriter, r *http.Request) {
+	// Mounted under RequireAdmin → claims is non-nil when execution reaches here.
 	claims := auth.GetClaims(r.Context())
-	if claims == nil {
-		writeError(w, http.StatusUnauthorized, "Unauthorized")
-		return
-	}
 
 	userID := chi.URLParam(r, "userID")
 	if userID == claims.UserID {
@@ -146,11 +143,8 @@ func (h *AdminHandler) UpdateUserStatus(w http.ResponseWriter, r *http.Request) 
 
 // UpdateUserPlatformAdmin handles PATCH /api/admin/users/{userID}/platform-admin
 func (h *AdminHandler) UpdateUserPlatformAdmin(w http.ResponseWriter, r *http.Request) {
+	// Mounted under RequireAdmin → claims is non-nil when execution reaches here.
 	claims := auth.GetClaims(r.Context())
-	if claims == nil {
-		writeError(w, http.StatusUnauthorized, "Unauthorized")
-		return
-	}
 
 	userID := chi.URLParam(r, "userID")
 	var body struct {

@@ -158,6 +158,12 @@ func extractClaims(raw map[string]any) *Claims {
 		claims.IsPlatformAdmin = v
 	}
 
+	// Claims.Status is intentionally NOT extracted from the JWT payload.
+	// It's populated downstream by injectLiveStatus from the live cache so
+	// suspensions take effect within the cache TTL (and immediately on
+	// admin-handler Purge), not at JWT expiry. Leaving it as "" here keeps
+	// the JWT shape stable and signals "not yet known".
+
 	// Handle "picture" → ignore (not needed in Claims)
 	_ = strings.TrimSpace // ensure strings is used
 

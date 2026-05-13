@@ -552,7 +552,35 @@ Remaining open concerns flagged for external reviewers to weigh in on:
 
 ## Code Review
 
-(Placeholder — to be filled after Phase 3.)
+### Round 1 — 2026-05-13
+
+4-way gate against consolidated branch diff (commits `0a1eb5c` + `0719c6d` + `2dffb00` + `a84a269`). 24 files, 2776 insertions, 99 deletions.
+
+| Reviewer | Verdict | Findings |
+|----------|---------|----------|
+| Self (Opus 4.7) | CONCUR | — |
+| Codex | **CONCUR** | No blockers, no nits. Verified all 9 review questions cleanly against file:line refs. |
+| DeepSeek V4 Flash | **CONCUR with 3 NITs** | (a) `tests/unit/schema.test.ts:32` user-table assertion missing `status` column. (b) `admin.go:107-110, 149-152` 401-on-nil-claims branches are dead code (RequireAdmin already filters). (c) `jwt.go` `extractClaims` lacks comment about Status being from cache, not JWT. |
+| GLM 5.1 | **CONCUR with 3 NITs** | (a) `injectLiveStatus` on DB error sets `IsPlatformAdmin = false` (fail-closed) but leaves `claims.Status = ""` (fail-OPEN for status). Acceptable trade-off but undocumented — could mislead. (b) `OptionalAuth` suspended path relies on `next.ServeHTTP(w, r)` with unchanged `r` (no context injection) to drop claims; works but intent unclear without comment. (c) `applyImpersonationOverlay` hardcodes `Status: "active"` for impersonated target — acceptable but undocumented. |
+
+### Nit fixes (folded inline)
+
+All 6 nits resolved in a follow-up commit:
+
+- `[FIXED]` `tests/unit/schema.test.ts:32` — added `status` to the users-table `toContain` assertion.
+- `[FIXED]` `admin.go` — removed 2 dead `claims == nil → 401` branches in `UpdateUserStatus` and `UpdateUserPlatformAdmin`. Replaced with a single comment: "Mounted under RequireAdmin → claims is non-nil when execution reaches here."
+- `[FIXED]` `jwt.go:extractClaims` — added a 5-line comment explaining Status is set downstream by `injectLiveStatus` from the live cache (not from JWT), so suspensions take effect within cache TTL / immediately on Purge, not at JWT expiry.
+- `[FIXED]` `middleware.go:injectLiveStatus` — rewrote the docstring to call out the asymmetric failure mode explicitly: IsPlatformAdmin fail-closed, Status fail-OPEN. Logged-warning text updated to match.
+- `[FIXED]` `middleware.go:OptionalAuth` — added an inline comment explaining the suspended branch "treats as unauthenticated: pass through without injecting claims into the request context. Downstream handlers see no identity, same as a logged-out request."
+- `[FIXED]` `middleware.go:applyImpersonationOverlay` — added a 4-line comment explaining the hardcoded `Status: "active"` for the impersonated target ("admin support tool, not a way to 'experience' a suspended user's blocked state").
+
+### Convergence observations
+
+- Codex was the most thorough on plan-review drift (7 rounds) but came back clean on code review — the plan-review investment paid off.
+- DeepSeek + GLM converged on the schema-test miss and the documentation-clarity gaps; no architectural concerns.
+- Zero BLOCKERs in code review after 7 plan-review rounds + 1 code-review round + nit-pass. Multi-reviewer ensemble caught everything the plan didn't lock down.
+
+**All [OPEN] items resolved. Gate clean for merge.**
 
 ## Post-Execution Report
 
