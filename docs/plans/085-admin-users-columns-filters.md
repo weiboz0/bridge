@@ -73,11 +73,11 @@ type AdminUser struct {
 }
 ```
 
-**Why include `HasPassword`**: the frontend uses it to grey out the "Reset password" menu item for OAuth-only users. Click-then-error is a worse UX than visibly-unavailable.
+**Why include `HasPassword` despite the menu item being deferred**: the field ships on the API response so the follow-up plan (which delivers the password-reset endpoint + UI) can grey out the menu item for OAuth-only users without needing another API change. Cheap to compute in the existing SQL; no UI use in plan 085 itself.
 
 **Migration safety**: every existing store method that returns `User` (or `*User`) must select the new `status` column. That includes `GetUserByID`, `GetUserByEmail`, the auth-path lookup, and any test fixture builders. Pre-impl step: grep `SELECT.*FROM users` to inventory; update each.
 
-`ListUsers` and `GetUserByID` change return types — `ListUsers(...) ([]AdminUser, error)` and add `GetAdminUserByID(...) (*AdminUser, error)`. The existing `GetUserByID` stays on the lean `User` shape so the auth path isn't affected.
+`ListUsers` changes return type to `([]AdminUser, error)`. **Add** new `GetAdminUserByID(...) (*AdminUser, error)` for the admin detail endpoint. The existing `GetUserByID` stays on the lean `User` shape (just adds `status` to its SELECT) so the auth path isn't affected. Do NOT change `GetUserByID`'s return type.
 
 #### 1c. Rewrite `ListUsers` with filters
 
@@ -190,7 +190,7 @@ The other 3 new endpoints (get-user, suspend/reactivate, toggle-admin) ship in p
 Returns a single user enriched with org membership + status (same shape as the list endpoint per user).
 
 - Validate `userID` as UUID.
-- Reuse the LATERAL SQL from `ListUsers` filtered to a single user (or extend `GetUserByID` to do the LEFT JOIN itself — preferred, since `GetUserByID` is the canonical single-user fetch).
+- Add a new store method `GetAdminUserByID(ctx, userID) (*AdminUser, error)` that reuses the LATERAL SQL from `ListUsers` filtered to a single user. Do NOT modify the existing lean `GetUserByID` (it's on the auth path and adding fields would risk regressions).
 - Return 404 if not found.
 - Return 200 with the enriched user.
 
@@ -244,7 +244,7 @@ interface UserItem {
   orgRole: string | null;            // NEW
   orgId: string | null;              // NEW
   orgName: string | null;            // NEW
-  hasPassword: boolean;              // NEW — greys "Reset password" for OAuth-only users
+  hasPassword: boolean;              // NEW — shipped now for the deferred password-reset follow-up plan; unused in plan 085's UI
   createdAt: string;
 }
 
@@ -349,18 +349,18 @@ Direct adaptation of `src/components/admin/suspend-org-dialog.tsx` (PR #148). Sa
 
 ## Files
 
-**Modify (7):**
+**Modify (8):**
 - `src/lib/db/schema.ts` — add `userStatusEnum`, `users.status` column.
-- `platform/internal/store/users.go` — `User` struct + `ListUsers` filter signature + new SQL; `GetUserByID` returns enriched shape; add `UpdateStatus`, `UpdatePlatformAdmin` methods.
-- `platform/internal/handlers/admin.go` — `ListAllUsers` reads query params; add `GetAdminUser`, `UpdateUserStatus`, `UpdateUserPlatformAdmin` handlers. (Password-reset deferred.)
-- `platform/internal/auth/middleware.go` (or wherever `RequireAuth` lives) — reject suspended users.
+- `platform/internal/store/users.go` — `User` struct gets `Status`; add new `AdminUser` struct; replace `ListUsers` with filtered version returning `[]AdminUser`; add `GetAdminUserByID`, `UpdateStatus`, `UpdatePlatformAdmin` methods; existing `GetUserByID` / `GetUserByEmail` and other lean callsites add `status` to their SELECT.
+- `platform/internal/auth/admin_check.go` — rename `LookupIsAdmin` → `LookupAdminAndStatus`; extend cache value to `{IsAdmin, Status}`; existing `Purge` reused for invalidation.
+- `platform/internal/handlers/admin.go` — `ListAllUsers` reads query params; add `GetAdminUser`, `UpdateUserStatus`, `UpdateUserPlatformAdmin` handlers. (Password-reset deferred.) `UpdateUserStatus` and `UpdateUserPlatformAdmin` call `AdminChecker.Purge(userID)` after the UPDATE.
+- `platform/internal/auth/middleware.go` (or wherever `RequireAuth` lives) — `injectLiveAdmin` becomes `injectLiveStatus` populating both `IsPlatformAdmin` and `Status` on Claims; `RequireAuth` 401s on `status='suspended'`.
 - `cmd/api/main.go` (or wherever admin routes mount) — register the 3 new endpoints (get-user, suspend/reactivate, toggle-admin).
 - `src/app/(portal)/admin/users/page.tsx` — fields + columns + filters + searchParams.
 - `src/components/admin/user-actions.tsx` — extend with the new menu items (View details + ops) + dialog wiring.
 
 **Create (8):**
-- `drizzle/00XX_users_status.sql` — migration.
-- `platform/internal/store/users_test.go` — store integration tests for `ListUsers` filters + new methods + enriched `GetUserByID`.
+- `drizzle/00XX_users_status.sql` — migration (adds users.status enum + index + org_memberships composite index).
 - `src/app/(portal)/admin/users/[id]/page.tsx` — placeholder user detail page.
 - `src/components/admin/suspend-user-dialog.tsx` — type-to-confirm dialog, adapted from `suspend-org-dialog.tsx`.
 - `src/components/admin/org-filter-select.tsx` — `"use client"` org dropdown.
@@ -369,11 +369,11 @@ Direct adaptation of `src/components/admin/suspend-org-dialog.tsx` (PR #148). Sa
 - `tests/unit/suspend-user-dialog.test.tsx` — dialog tests, adapted from `suspend-org-dialog.test.tsx`.
 - `tests/unit/user-actions.test.tsx` — action-menu state tests.
 
-**Extend (3):**
-- `platform/internal/handlers/admin_test.go` — coverage for the 3 new endpoints (get-user-by-id, suspend/reactivate, toggle-admin).
-- `platform/internal/auth/middleware_test.go` and `admin_check_test.go` — `TestRequireAuth_RejectsSuspended`, `TestRequireAuth_ActiveStatusPasses`, `TestCachedAdminChecker_StatusFieldCached`, and update existing `stubLookup` to the new `LookupAdminAndStatus` signature.
+**Extend (4):**
+- `platform/internal/store/users_test.go` — already exists (`TestUserStore_GetUserByID_NotFound` etc.). Add `ListUsers` filter-matrix tests (all filter shapes + multi-org + zero-membership), new `UpdateStatus` / `UpdatePlatformAdmin` cases, `GetAdminUserByID` enriched-shape assertions; update existing `GetUserByID` fixtures for the new `status` column.
+- `platform/internal/handlers/admin_test.go` — coverage for the 3 new endpoints (get-user-by-id, suspend/reactivate, toggle-admin). Verify `Purge` is invoked on suspend + toggle-admin writes (via stubbed `AdminChecker`).
+- `platform/internal/auth/middleware_test.go` and `platform/internal/auth/admin_check_test.go` — `TestRequireAuth_RejectsSuspended`, `TestRequireAuth_ActiveStatusPasses`, `TestCachedAdminChecker_StatusFieldCached`; update existing `stubLookup` to the new `LookupAdminAndStatus` signature.
 - `tests/unit/schema.test.ts` — update the users-table assertion to include the new `status` column (Kimi K2.6 round-1 nit).
-- `platform/internal/auth/middleware_test.go` (existing — confirm path) — `TestRequireAuth_RejectsSuspended`.
 
 **Touch (1):**
 - `docs/api.md` — document the new endpoints + query params.
@@ -398,7 +398,7 @@ Direct adaptation of `src/components/admin/suspend-org-dialog.tsx` (PR #148). Sa
 16. **`status` column on `users` is an enum, not a boolean.** Mirrors `orgs.status` precedent. Leaves room for future states (`pending_email_verification`, `pending_admin_approval`, etc.) without another migration.
 17. **Detail page is a placeholder route.** v1 renders only the user's metadata + a "Session history, audit log, and per-user metrics will appear here" placeholder card. No sessions/audit/charts in this plan — those need new infra (Bridge doesn't track last-seen yet). The placeholder exists so the entry point doesn't get forgotten and future plans have a home.
 18. **View details is the one non-destructive action available on the self row.** Other actions (impersonate, reset password, suspend, toggle admin) remain hidden on self per existing pattern. Implementation: pass `isSelf={true}` to `<UserActions />` and let it render the narrowed set, rather than hiding the component entirely (the current row-level `user.id !== identity.userId` check at `page.tsx:84` becomes a prop-level branch).
-19. **`HasPassword` field surfaces in the API response** so the frontend can grey out "Reset password" for OAuth-only users — click-then-error is a worse UX than visibly-unavailable. The endpoint still returns 400 on no-password as defense in depth.
+19. **`HasPassword` field surfaces in the API response now** (despite the password-reset menu item being deferred to a follow-up plan). Cheap to compute in the existing SQL; ships now so the follow-up plan doesn't need a separate API change. When the follow-up ships, it greys the menu item for OAuth-only users (click-then-error is worse UX than visibly-unavailable) and the endpoint also returns 400 on no-password as defense in depth.
 20. **No audit log for admin operations in this plan.** Bridge has no audit-log infra today (verify in Phase 1 step 1). Suspend/reactivate and toggle-admin are not recorded beyond `updated_at`. Acceptable v1 — a future plan can add an `admin_actions` table and retrofit. Flagged in §Risks.
 
 ## Risks
@@ -414,12 +414,12 @@ Direct adaptation of `src/components/admin/suspend-org-dialog.tsx` (PR #148). Sa
 | `users.status` rollout: existing OAuth + email users sign in normally | low | RequireAuth check is post-load; if `status='active'` (default), pass. No regression for existing users. |
 | RequireAuth change rejects users mid-session if admin suspends them | medium (intended) | This IS the feature — admin wants to lock out a compromised account immediately. Acceptable; surface to admin in the suspend-dialog copy: "Existing sessions will be invalidated on their next request." |
 | Self-suspend / self-demote: admin locks themselves out | high | Decision #11 — self-target guards both at handler (400) and at row level (Actions hidden for self). |
-| Password-reset infrastructure doesn't exist yet | medium | Pre-impl: grep `passwordReset`, `ResetToken`, `verifyToken`, `RecoverToken`. If absent, defer 1g to a follow-up plan and update §Decisions. The rest of the plan ships without it; the "Reset password" menu item is dropped from §2b. Document the deferral in the post-execution report. |
-| No audit log for admin operations | low (v1) | Decision #20. Future plan adds an `admin_actions` table and retrofits the 4 new endpoints. Until then, `updated_at` is the only trail. |
+| (Password-reset risk closed) | n/a | Decision finalized in §1g: deferred to follow-up plan. `hasPassword` field still ships in this plan's API response so the follow-up plan doesn't need a separate API change. |
+| No audit log for admin operations | low (v1) | Decision #20. Future plan adds an `admin_actions` table and retrofits the 3 new endpoints (suspend/reactivate, toggle-admin, get-user). Until then, `updated_at` is the only trail. |
 | (Password-reset risks — deferred to follow-up plan) | n/a | Endpoint and UI removed from plan 085 scope. The follow-up plan delivers: 400 on OAuth-only target, per-target rate-limit to prevent email-flooding, token table + email infra. See §1g. |
 | 3-action menu becomes cluttered on the row | low | Dropdown menu, not inline buttons — clutter is hidden behind the `...` trigger. |
 | Toggle-admin without a strong confirmation | medium | Decision #12 — `window.confirm()`. Two-direction (promote / demote) so a misclick is easily reversed. Acceptable v1; can add type-to-confirm later if abuse surfaces. |
-| Suspend dialog "Existing sessions invalidated" copy may be wrong if RequireAuth caches user | low | Pre-impl: verify RequireAuth fetches user on every request (no cache). If it caches, suspend won't take effect until cache TTL. Likely fine (Bridge currently does per-request DB lookup for user). |
+| Suspend dialog "Existing sessions invalidated immediately" copy depends on cache invalidation actually firing | low | RequireAuth IS cached (60s TTL via `CachedAdminChecker` — verified by GLM + DeepSeek round-1, see `admin_check.go:31`). §1i extends the cache to carry status alongside is_admin; `UpdateUserStatus` handler calls `Purge(userID)` after the write. Handler test asserts `Purge` is invoked. Without the `Purge`, suspend would take up to 60s to bite. |
 | Reactivate via dropdown — no friction means a misclick on a recently-suspended account re-enables it | low | Reactivate is reversible (re-suspend). `window.confirm()` is sufficient. |
 | Schema migration mismatch: hand-written SQL vs. Drizzle `db:generate` output | low | Generate with `bun run db:generate` after editing schema.ts; if the output differs from the hand-written SQL, prefer the generated version and update the plan. |
 | Auth middleware test ordering: existing tests assume no `status` check | low | Add the `status='active'` field to test fixtures. RequireAuth test for suspended is additive. |
@@ -473,7 +473,7 @@ Direct adaptation of `src/components/admin/suspend-org-dialog.tsx` (PR #148). Sa
 | TS list page | `tests/unit/admin-users-page.test.tsx` (NEW) | columns render with API data; filter chips active state ↔ searchParam; chip hrefs preserve orgId; org `<select>` defaults + options; suspended badge renders; **self-row shows only View details (hides Login as / Suspend / Toggle platform-admin)** per Decision #18 |
 | TS detail page | `tests/unit/admin-user-detail-page.test.tsx` (NEW) | metadata Card renders all fields; Activity placeholder Card renders; 400 on malformed UUID; 404 card on missing user; 403 panel on non-admin |
 | TS dialog | `tests/unit/suspend-user-dialog.test.tsx` (NEW) | closed-returns-null; disabled-on-mismatch; enabled-on-match; success-callbacks; HTTP-error inline; network-error inline + role="alert"; reset-on-reopen; symmetric-trim |
-| TS actions | `tests/unit/user-actions.test.tsx` (NEW) | items visible by status (active vs suspended); each action triggers right confirm + fetch; current user row hidden |
+| TS actions | `tests/unit/user-actions.test.tsx` (NEW) | items visible by status (active vs suspended); each action triggers right confirm + fetch; self-row (`isSelf={true}`) shows only View details (hides Login as / Suspend / Toggle platform-admin) per Decision #18 |
 
 ## Verification steps
 
