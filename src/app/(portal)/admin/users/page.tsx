@@ -171,7 +171,14 @@ export default async function AdminUsersPage({
           <tbody>
             {userList.map((user) => (
               <tr key={user.id} className="border-t">
-                <td className="px-4 py-2">{user.name}</td>
+                <td className="px-4 py-2">
+                  <Link
+                    href={`/admin/users/${user.id}`}
+                    className="underline-offset-2 hover:underline hover:text-primary"
+                  >
+                    {user.name}
+                  </Link>
+                </td>
                 <td className="px-4 py-2 text-muted-foreground">{user.email}</td>
                 <td className="px-4 py-2">
                   {user.orgRole ? (ROLE_LABELS[user.orgRole] ?? user.orgRole) : "—"}
