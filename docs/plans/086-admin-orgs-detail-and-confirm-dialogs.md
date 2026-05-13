@@ -68,10 +68,12 @@ The composite index `org_memberships_user_status_created_idx (user_id, status, c
 #### 1c. New store method — `UpdateOrgDetails`
 
 ```go
-func (s *OrgStore) UpdateOrgDetails(ctx context.Context, orgID string, name, contactEmail string) (*Org, error)
+func (s *OrgStore) UpdateOrgDetails(ctx context.Context, orgID string, name, contactEmail string) (*AdminOrg, error)
 ```
 
-SQL: `UPDATE organizations SET name = $1, contact_email = $2, updated_at = NOW() WHERE id = $3 RETURNING ...`. Both fields are required (no partial updates v1 — admin enters the full pair in the UI). Validate both are non-empty before calling.
+Returns `*AdminOrg` (enriched, including current membership counts) — same pattern as plan 085's `UpdateUserStatus` returning the enriched `*AdminUser`. Caller gets a consistent shape for both reads and writes.
+
+SQL: `UPDATE organizations SET name = $1, contact_email = $2, updated_at = NOW() WHERE id = $3`. After update, call `GetAdminOrgByID` internally to fetch the enriched row (counts come from a separate join — cheaper than `RETURNING` with a re-join). Both fields are required (no partial updates v1). Validate non-empty before calling.
 
 #### 1d. New handler — `GetAdminOrg` (`GET /api/admin/orgs/{orgID}`)
 
@@ -91,7 +93,7 @@ type updateOrgDetailsRequest struct {
 - Validate orgID as UUID.
 - Decode body; validate `Name` and `ContactEmail` are non-empty trimmed strings (400 otherwise).
 - Validate `ContactEmail` is a valid email format (use existing helper or `net/mail.ParseAddress`).
-- Call `UpdateOrgDetails`. 200 + updated `*Org` body (or `*AdminOrg` if a follow-up GET is needed — either is fine; plan picks lean `*Org` since the membership counts haven't changed).
+- Call `UpdateOrgDetails`. 200 + updated `*AdminOrg` body (consistent with `GetAdminOrg` response shape; mirrors plan 085's UpdateUserStatus returning `*AdminUser`).
 
 #### 1f. Route registration
 
@@ -168,12 +170,12 @@ Submit: PATCH `/api/admin/orgs/{org.id}/details` with `{name, contactEmail}`. Di
 `src/app/(portal)/admin/orgs/page.tsx`:
 - Wrap each org name in a `<Link href={`/admin/orgs/${org.id}`}>` with the same hover treatment as the user list.
 
-`src/components/admin/org-actions.tsx` (REWRITE the menu structure to match user-actions pattern):
-- Add a **View details** item at the top of every menu (links to `/admin/orgs/{id}`).
-- Pending org menu: View details · **Approve organization**.
+`src/components/admin/org-actions.tsx` (REWRITE the menu structure):
+- Pending row: keep the inline `<Button>Approve</Button>` (high-discoverability primary action) — but route the click through `ConfirmDialog` instead of firing PATCH directly. The `...` menu shows only **View details** on pending rows so the menu doesn't feel empty without losing one-click Approve discoverability.
 - Active org menu: View details · **Edit organization…** · **Suspend organization…**.
 - Suspended org menu: View details · **Reactivate organization**.
-- Replace inline approve `<Button>` with a dropdown menu item — consistent with the rest of the table.
+
+Compromise on Decision #10: pending rows keep their distinctive primary-action shape (admins approve frequently right after onboarding); other rows route everything through the menu for table-density consistency.
 
 #### 2e. Replace `window.confirm` with `ConfirmDialog` everywhere
 
@@ -241,7 +243,7 @@ After any successful confirm: `router.refresh()`.
 7. **`ConfirmDialog` is for reversible auth-changing ops + low-risk admin operations.** Suspend-org and suspend-user keep their type-to-confirm dialogs — heavier friction for higher blast radius. Two patterns, deliberate by risk level.
 8. **`destructive: true` toggles the confirm button to `variant="destructive"`.** Used for "Remove platform-admin role" but NOT for "Reactivate" (constructive).
 9. **`window.confirm` is removed from `user-actions.tsx` and `org-actions.tsx` entirely.** No fallback path. The custom dialog is the only UX.
-10. **OrgActions adopts the menu pattern from UserActions** (everything behind `...` even for active orgs). Approve becomes a menu item, not an inline button. Consistent table density.
+10. **OrgActions mostly adopts the UserActions menu pattern** (everything behind `...`) — EXCEPT pending rows keep their inline `<Button>Approve</Button>` for discoverability (frequent admin operation right after onboarding). Approve's click is routed through `ConfirmDialog` instead of firing PATCH directly. Pending-row menu has View details only.
 11. **View details on every status.** Same as UserActions Decision #18 — read-only access shouldn't be gated.
 12. **Pending orgs do NOT show Edit.** Edit is for active orgs; pending orgs typically need Approve first. (If you want to fix a typo before approving, Approve the org with the typo and then Edit. Cheap; avoids state-explosion in the UI.)
 
@@ -255,7 +257,7 @@ After any successful confirm: `router.refresh()`.
 | Replacing `window.confirm` breaks any existing reactivate/toggle test that asserts `window.confirm` was called | low | Plan 085 used `vi.spyOn(window, 'confirm').mockReturnValue(true)` in tests. Those tests need updating to mock the ConfirmDialog open/close cycle instead. Listed under §2f. |
 | OrgActions test file doesn't exist today; plan 085 only had UserActions test | low | The plan creates `tests/unit/org-actions.test.tsx` from scratch. Pattern is established. |
 | Edit endpoint allows changing contact_email to anything — no domain check / disposable-email blocker | low (v1) | Accept any valid RFC 5322 email format. Validation tighter than that (DNS check, disposable-email blocklists) is out of scope. |
-| Approve flow currently uses `<Button size="sm">` inline; converting to menu item is a regression for one-click approve UX | low | Two reasonable views: (a) one-click Approve is faster, (b) menu-item Approve is consistent with other ops. The plan picks (b) for consistency. A "primary action" button could be added later if approving becomes a high-frequency operation. Acceptable v1. |
+| Approve flow's inline button vs menu | resolved | Self-review revised Decision #10: pending rows keep the inline `<Button>Approve</Button>` for discoverability, routed through ConfirmDialog. Pending-row menu shows only View details. Active/suspended rows still route everything through the menu (consistent). |
 | ConfirmDialog used for `Toggle platform-admin` doesn't gate via type-to-confirm — single-click can promote someone | medium | This is by design per the graded-pattern decision (Decision #7 / #8). Promotion is a sensitive op but reversible (Demote uses same dialog, `destructive=true`). If audit log is added later (deferred from plan 085), the cost of a misclick is recoverable. Acceptable v1 trade-off. |
 | Org detail "Activity" placeholder card may give the false impression that something will appear soon | low | Same risk as the user detail Activity card from plan 085. Acceptable — the placeholder signals intent without committing to a timeline. |
 | Slug-rename "broken URLs / SEO" risk from Decision #4 is currently theoretical — slugs aren't exposed in public URLs | low | Verify slug isn't in any user-facing URL. If it isn't, the deferral rationale weakens but the consistency-of-scope argument still holds. |
@@ -319,7 +321,21 @@ Vitest baseline: 709 pass + 3 pre-existing failures. Must not regress.
 
 ## Plan Review
 
-(Placeholder — to be filled by 4-way plan review before implementation.)
+### Self-review (Opus 4.7) — 2026-05-13
+
+**Verdict: CONCUR with self-applied refinements.**
+
+Self-review concerns folded into the plan before external dispatch:
+
+1. **`UpdateOrgDetails` return type was lean `*Org`** → contradicts plan 085's pattern of UPDATE handlers returning the enriched admin shape. Fixed: now returns `*AdminOrg` (re-fetch via internal `GetAdminOrgByID` call after UPDATE so counts are included).
+2. **Decision #10 lost the inline Approve button** for pending orgs. Approve is the highest-frequency org admin op (post-onboarding); burying it in a `...` menu trades discoverability for consistency. Fixed: pending rows keep `<Button>Approve</Button>` inline but route the click through `ConfirmDialog`. Pending-row menu shows only View details. Active/suspended rows still route everything through the menu. §Risks row resolved.
+
+Open concerns flagged for external reviewers:
+
+- **`UpdateOrgDetails` does UPDATE then GetAdminOrgByID** — two round-trips per write. Tolerable; the alternative (a single UPDATE...RETURNING with the FILTER subquery) is messier SQL. Reviewers may prefer the single-query form.
+- **`ConfirmDialog` reuse across user-actions + org-actions + future plans** — interface drift risk. Listed in §Risks but worth a reviewer's eye for prop-interface stability.
+- **`Edit` doesn't change slug/type/domain in v1** — Decision #4. Slug change blocked on URL/SEO considerations; type is a deeper schema decision. If reviewers see a strong v1 case for any of these, raise it.
+- **`org_memberships(org_id, status)` index pre-impl check** — listed in §Risks; need to verify before the §1a SQL ships.
 
 ## Code Review
 
