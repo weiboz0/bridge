@@ -17,6 +17,13 @@ interface OrgMembership {
   orgStatus: string
 }
 
+interface BookOption {
+  id: string
+  title: string
+  scope: "platform" | "org"
+  scopeId: string | null
+}
+
 type TabId = "all" | "personal" | "org" | "platform"
 
 const GRADE_LEVELS = ["", "K-5", "6-8", "9-12"] as const
@@ -118,6 +125,39 @@ export default function ChapterLibraryPage() {
   const [searchQuery, setSearchQuery] = useState("")
   const [gradeLevel, setGradeLevel] = useState("")
   const [tagsInput, setTagsInput] = useState("")
+
+  // Book filter state.
+  // TODO(plan 088 phase 3): backend GET /api/chapters/search doesn't accept
+  // a ?bookId= param yet. The state is wired in but not forwarded to the API
+  // until that backend gap is closed in a follow-up plan.
+  const [bookId, setBookId] = useState<string>("")
+  const [books, setBooks] = useState<BookOption[]>([])
+
+  // Load available books for the filter dropdown once.
+  useEffect(() => {
+    async function loadBooks() {
+      try {
+        const res = await fetch("/api/books?scope=platform")
+        if (res.ok) {
+          const data: { items: BookOption[] } = await res.json()
+          setBooks((prev) => {
+            const seen = new Set(prev.map((b) => b.id))
+            const next = [...prev]
+            for (const b of data.items ?? []) {
+              if (!seen.has(b.id)) {
+                seen.add(b.id)
+                next.push(b)
+              }
+            }
+            return next
+          })
+        }
+      } catch {
+        // Non-fatal; filter just won't show books.
+      }
+    }
+    loadBooks()
+  }, [])
 
   const [items, setItems] = useState<SearchResultItem[]>([])
   const [nextCursor, setNextCursor] = useState<string | null>(null)
@@ -348,6 +388,22 @@ export default function ChapterLibraryPage() {
           placeholder="Tags (comma-separated)"
           className="w-52"
         />
+        {books.length > 0 && (
+          <select
+            value={bookId}
+            onChange={(e) => setBookId(e.target.value)}
+            className="flex h-9 rounded-lg border border-input bg-transparent px-2.5 py-1 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+            aria-label="Filter by book"
+          >
+            <option value="">All books</option>
+            <option value="__unfiled__">Unfiled</option>
+            {books.map((b) => (
+              <option key={b.id} value={b.id}>
+                {b.title}
+              </option>
+            ))}
+          </select>
+        )}
       </div>
 
       {/* Results */}
