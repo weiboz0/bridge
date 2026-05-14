@@ -163,6 +163,7 @@ export function UserActions({
           body={toggleAdminBody}
           confirmLabel={toggleAdminConfirmLabel}
           destructive={toggleAdminDestructive}
+          typeToConfirm={userName}
         />
       )}
     </>

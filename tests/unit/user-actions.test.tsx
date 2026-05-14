@@ -125,7 +125,7 @@ describe("UserActions — Reactivate action (via ConfirmDialog)", () => {
 });
 
 describe("UserActions — Toggle platform-admin action (via ConfirmDialog)", () => {
-  it("opens ConfirmDialog (not window.confirm) and fires PATCH /platform-admin with {isPlatformAdmin: true}", async () => {
+  it("opens ConfirmDialog (not window.confirm) and fires PATCH /platform-admin with {isPlatformAdmin: true} after type-to-confirm", async () => {
     const fetchMock = mockFetch(200, { id: "user-001", isPlatformAdmin: true });
     render(<UserActions {...BASE_PROPS} isPlatformAdmin={false} />);
     openMenu();
@@ -138,8 +138,16 @@ describe("UserActions — Toggle platform-admin action (via ConfirmDialog)", () 
     expect(screen.getByText(/Grant platform-admin role/i)).toBeInTheDocument();
     expect(screen.getByText(/full access to \/admin/i)).toBeInTheDocument();
 
-    // Click the Grant button in the dialog.
-    fireEvent.click(screen.getByRole("button", { name: "Grant" }));
+    // Grant button starts DISABLED — type-to-confirm gate.
+    const grantBtn = screen.getByRole("button", { name: "Grant" });
+    expect(grantBtn).toBeDisabled();
+
+    // Type the user's name to enable.
+    const input = screen.getByLabelText(/Type Alice Teacher to confirm/i);
+    fireEvent.change(input, { target: { value: "Alice Teacher" } });
+    expect(grantBtn).not.toBeDisabled();
+
+    fireEvent.click(grantBtn);
 
     await waitFor(() => expect(mockRefresh).toHaveBeenCalledTimes(1));
     expect(fetchMock).toHaveBeenCalledWith(
@@ -151,7 +159,7 @@ describe("UserActions — Toggle platform-admin action (via ConfirmDialog)", () 
     );
   });
 
-  it("uses Remove platform-admin role copy and destructive confirm when user is already a platform admin", () => {
+  it("uses Remove platform-admin role copy and destructive confirm when user is already a platform admin (and requires type-to-confirm)", () => {
     render(<UserActions {...BASE_PROPS} isPlatformAdmin={true} />);
     openMenu();
 
@@ -163,9 +171,14 @@ describe("UserActions — Toggle platform-admin action (via ConfirmDialog)", () 
     expect(screen.getByText("Remove platform-admin role")).toBeInTheDocument();
     expect(screen.getByText(/lose access to \/admin/i)).toBeInTheDocument();
 
-    // The Remove button should use the destructive variant (bg-destructive/10).
+    // Remove button starts DISABLED — type-to-confirm gate.
     const removeBtn = screen.getByRole("button", { name: "Remove" });
+    expect(removeBtn).toBeDisabled();
+    // The Remove button uses the destructive variant.
     expect(removeBtn.className).toMatch(/bg-destructive/);
+
+    // Type-to-confirm input visible.
+    expect(screen.getByLabelText(/Type Alice Teacher to confirm/i)).toBeInTheDocument();
   });
 
   it("uses Grant platform-admin role copy (non-destructive) when user is not an admin", () => {
