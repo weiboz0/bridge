@@ -582,9 +582,15 @@ Running the Go suite with the correct env var (the suite was silently skipping p
 
 ### Round 3 — final confirmation
 
-Re-dispatched the 3 originally-blocking reviewers (Codex, DeepSeek V4 Flash, GLM 5.1) against `0d9a1ed` to confirm all round-1 BLOCKERs and round-2 GLM follow-up are cleanly resolved.
+Re-dispatched the 3 originally-blocking reviewers against `dddac16` (Codex with file:line cites for each round-1 BLOCKER; DeepSeek/GLM for their respective focus areas plus cascade integrity).
 
-(Verdicts pending — to be filled when round-3 returns.)
+| Reviewer | Verdict | Notes |
+|---|---|---|
+| Codex (round 3) | **CONCUR** | All 5 round-1 BLOCKERs cited resolved with file:line evidence: doc-name at `use-yjs-tiptap.ts:92`; books authz at `books.go:47, 109`; aliases gone from `src/lib/chapters.ts`; teacher route links via `detailBasePath` at `book-actions.tsx:66` + `/teacher/books` page exists; `UnitOverlay` tags at `chapters.go:1070-1071`. Cascade fixes all correct. No new BLOCKERs. |
+| DeepSeek V4 Flash (round 3) | **CONCUR** | `canViewBook`/`canEditBook` (books.go:34-74) mirror chapter semantics; books visibility filter is Go-level (no SQL existence leak); cascade fixes confirmed. `store/books.go:103-138` parameterized, no over-permissioning, no info leak. |
+| GLM 5.1 (round 3) | **CONCUR** | `unit:` doc-name prefix fully eradicated from frontend + tests + e2e. Backend allowlist (`server/hocuspocus.ts:140,165`) accepts only `broadcast:`, `chapter:`, `noop`. Cascade fixes correct — sentinel set targets `books`, relaxed index probe safe (pg_indexes.indexname unique per schema), parity test still enforces bidirectional alignment. |
+
+**Gate clean.** All originally-blocking reviewers confirmed clean. PR ready to open.
 
 ## Post-Execution Report
 
