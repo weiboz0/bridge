@@ -27,7 +27,7 @@ Four phases. Single-shot migration; no zero-downtime requirement.
 ```sql
 -- drizzle/00XX_books_and_chapters.sql
 
-CREATE TYPE "public"."book_scope" AS ENUM ('platform', 'org', 'personal');
+CREATE TYPE "public"."book_scope" AS ENUM ('platform', 'org');
 
 CREATE TABLE "books" (
   "id"          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -40,27 +40,55 @@ CREATE TABLE "books" (
   "updated_at"  timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT books_scope_id_required CHECK (
     (scope = 'platform' AND scope_id IS NULL) OR
-    (scope IN ('org', 'personal') AND scope_id IS NOT NULL)
+    (scope = 'org'      AND scope_id IS NOT NULL)
   )
 );
 
 CREATE INDEX books_scope_idx ON books(scope, scope_id);
 CREATE INDEX books_created_by_idx ON books(created_by);
 
--- Rename teaching_units → chapters (table + indexes + FK names + sequences).
+-- Rename teaching_units → chapters (table + indexes + checks).
 ALTER TABLE teaching_units RENAME TO chapters;
 ALTER INDEX teaching_units_pkey RENAME TO chapters_pkey;
--- Rename every other index that starts with `teaching_units_*` (audit pre-impl
--- via `psql -d bridge_test -c "\d chapters"` after the rename to inventory the
--- old names; spec the new names in the migration).
--- All FK constraints from other tables to teaching_units(id) keep their
--- existing names; Postgres FKs don't care about the target table's name in
--- the constraint name, just the OID. But the FK-target-side checks update
--- automatically (referencing the renamed table).
+ALTER INDEX teaching_units_created_by_idx RENAME TO chapters_created_by_idx;
+ALTER INDEX teaching_units_scope_scope_id_status_idx RENAME TO chapters_scope_scope_id_status_idx;
+ALTER INDEX teaching_units_scope_slug_uniq RENAME TO chapters_scope_slug_uniq;
+ALTER INDEX teaching_units_search_idx RENAME TO chapters_search_idx;
+ALTER INDEX teaching_units_standards_tags_gin_idx RENAME TO chapters_standards_tags_gin_idx;
+ALTER INDEX teaching_units_subject_tags_gin_idx RENAME TO chapters_subject_tags_gin_idx;
+ALTER INDEX teaching_units_topic_id_uniq RENAME TO chapters_topic_id_uniq;
+ALTER TABLE chapters RENAME CONSTRAINT teaching_units_scope_scope_id_chk TO chapters_scope_scope_id_chk;
+ALTER TABLE chapters RENAME CONSTRAINT teaching_units_status_chk TO chapters_status_chk;
+ALTER TABLE chapters RENAME CONSTRAINT teaching_units_created_by_fkey TO chapters_created_by_fkey;
+ALTER TABLE chapters RENAME CONSTRAINT teaching_units_topic_id_fkey TO chapters_topic_id_fkey;
+-- (Full enumeration verified by GLM round-1 against `\d teaching_units`. The
+-- pre-impl audit step re-runs `\d teaching_units` to catch any post-plan-088
+-- migrations that added new objects.)
+
+-- Rename the 4 satellite tables that share the unit_ prefix + carry unit_id
+-- columns (GLM round-1 BLOCKER):
+ALTER TABLE unit_documents       RENAME TO chapter_documents;
+ALTER TABLE unit_revisions       RENAME TO chapter_revisions;
+ALTER TABLE unit_overlays        RENAME TO chapter_overlays;
+ALTER TABLE unit_collection_items RENAME TO chapter_collection_items;
+ALTER TABLE unit_collections     RENAME TO chapter_collections;  -- already in §1c, restated here
+
+-- Rename the unit_id columns on those tables → chapter_id:
+ALTER TABLE chapter_documents       RENAME COLUMN unit_id        TO chapter_id;
+ALTER TABLE chapter_revisions       RENAME COLUMN unit_id        TO chapter_id;
+ALTER TABLE chapter_overlays        RENAME COLUMN parent_unit_id TO parent_chapter_id;
+ALTER TABLE chapter_overlays        RENAME COLUMN child_unit_id  TO child_chapter_id;
+ALTER TABLE chapter_collection_items RENAME COLUMN unit_id       TO chapter_id;
+
+-- Rename the satellite-table pk's + unit-prefixed indexes to chapter-prefixed.
+-- Pre-impl `\d` audit for each table enumerates exact names; spec all renames
+-- in this migration.
 
 ALTER TABLE chapters ADD COLUMN "book_id" uuid NULL REFERENCES books(id) ON DELETE SET NULL;
 CREATE INDEX chapters_book_idx ON chapters(book_id);
 ```
+
+**Inbound FK constraint names** on the 5 satellite tables (e.g., `unit_collection_items_unit_id_fkey`, `unit_documents_unit_id_fkey`) survive the column rename — Postgres FKs keep their CREATE-time name and the constraint behavior intact. Per Decision #13 (added below), these legacy-named FK constraints are left alone — cosmetic churn not worth the rename overhead. If any name lookup in app code matters (e.g., `dberr.go` sentinels keyed to constraint names), audit + rename those specific ones.
 
 **Migration safety**:
 - Existing chapters all get `book_id = NULL` (Decision #4). Library is empty; future UI/backfill scripts assign chapters to books.
@@ -168,7 +196,16 @@ Add `book_id` to `Chapter` JSON shape; not required in `Create` / `Update` input
 
 #### 1g. Hocuspocus / collab document keys
 
-`server/hocuspocus.ts` may reference unit IDs as document keys. Verify pre-impl: if keys are like `unit:{id}` or use a `unit-` prefix, those become `chapter:{id}` / `chapter-`. Existing in-flight collab sessions would lose their server-side document on key rename. Acceptable for a one-time migration since this is dev/test data only at current scale.
+**Verified by GLM round-1**: `server/hocuspocus.ts:140,164` use `documentName.startsWith("unit:")` to skip persistence. Go side at `realtime_token.go:308` resolves `"unit:{unitId}"` doc names; `realtime_token.go:335-340` has a `case "unit"` / `authorizeUnitDoc` branch. **DeepSeek round-1 also flagged**: the FRONTEND side that *generates* these document names (likely `src/hooks/use-realtime-token.ts` or wherever a Yjs provider is constructed for unit/chapter docs) must rename too — pre-impl grep `"unit:" + id` and similar template literals.
+
+Rename:
+
+- `server/hocuspocus.ts:140,164` — `"unit:"` → `"chapter:"`.
+- `platform/internal/handlers/realtime_token.go` — `case "unit"` → `case "chapter"`; `authorizeUnitDoc` → `authorizeChapterDoc`; doc-name parsing throughout the file.
+- Frontend Yjs provider construction sites — rename document-name template literals from `"unit:" + id` to `"chapter:" + id` (or template form). Pre-impl `grep -rn '"unit:"' src/` to inventory.
+- Tests `realtime_token_test.go` + `realtime_jwt_test.go` hardcode `"unit:"` prefixes (~33 occurrences across 4 files per DeepSeek count) — update.
+
+In-flight WebSocket sessions break (server-side document key changes). Acceptable per Decision #9; dev/test scale.
 
 #### 1h. Backend tests
 
@@ -332,7 +369,7 @@ Rename `tests/unit/*-unit-*.test.tsx` (where they refer to the entity, not "unit
 2. **API paths flip cleanly** (`/api/units/*` → `/api/chapters/*`); no API-level compat aliases. Frontend is the sole consumer; same-PR keeps them in sync.
 3. **Frontend page paths get 308 redirects** (Next.js `permanent: true`) from `/units/*` → `/chapters/*` so user bookmarks don't 404.
 4. **`chapters.book_id` is NULLABLE.** Migration leaves all existing chapters unfiled. Future plan can backfill (e.g., auto-create a default book per org and assign all that org's existing chapters to it). Tightening to NOT NULL is a future cleanup once UI surfaces all chapters into books.
-5. **Books scope mirrors chapter scope**: `platform` / `org` / `personal`. Same `canView` / `canEdit` rules apply (platform admin → platform-scope; org admin + teacher → org-scope; owner → personal-scope).
+5. **Books scope is `platform` or `org` only — no `personal`.** Both Codex round-1 and DeepSeek round-1 flagged personal-scope books as a v1 cut candidate with no validated use case. Cutting it now means fewer enum values, simpler CHECK constraint, smaller test matrix, less ambiguity in the UI ("my private library" wasn't a clear product fit). `canView` / `canEdit` mirror the existing unit rules for these two scopes (platform admin → platform-scope; org admin + teacher → org-scope). If personal-scope books become a real need later, a future plan can re-add — the `book_scope` enum is the only DDL-level expansion required.
 6. **Keep `chapters.topic_id` UNIQUE constraint**. Books and topics are orthogonal axes — book is library organization, topic is course curation. A chapter can live in a book AND be pinned to a course topic.
 7. **JSON field shapes don't change** outside of adding `bookId` to chapter responses. The `id`, `title`, `scope`, etc. fields stay the same names (they were never "unit"-prefixed).
 8. **No default book auto-created**. Migration leaves existing chapters with `book_id = NULL`. UI surfaces them as "Unfiled" until an admin assigns them. Simpler migration, no implicit org-modeling decisions.
@@ -365,11 +402,22 @@ Rename `tests/unit/*-unit-*.test.tsx` (where they refer to the entity, not "unit
 
 ### Phase 1 — Backend (Codex)
 
+**IMPORTANT — Intermediate state**: this plan's phase boundaries are mid-rename commits. Phase 1 flips backend routes to `/api/chapters/*` while the frontend still fetches `/api/units/*`. The app between Phase 1 and Phase 2 commits is INTENTIONALLY BROKEN at runtime. Don't try to run the full stack mid-PR; just verify type-checks + tests per phase. The 4-way code review fires after Phase 4 against the consolidated diff, not per-phase. (Codex round-1 + DeepSeek round-1 caveats.)
+
+**Push-timing constraint** (DeepSeek round-1): Phase 1 can be committed locally but should NOT be pushed to a shared branch before Phase 2 is also ready locally. The remote branch should never sit in the half-renamed state. Sequence:
+1. Implement Phase 1 + 2 locally as separate commits.
+2. Force-push both at once.
+3. Phase 3 (books UI) can ship later commits, since by then the rename is consistent.
+
+Phase 4 (verify + docs) is a small commit that can land separately.
+
 1. **Pre-impl audit**:
-   - `psql -d bridge_test -c "\d teaching_units"` to inventory all current indexes + constraints for the rename migration.
-   - `grep -rln "teaching_units\|TeachingUnit\|teachingUnits" platform/` to inventory every file needing touched.
-   - `grep -rn "/api/units" src/ platform/` to inventory route consumers.
-   - Verify Hocuspocus collab key pattern in `server/hocuspocus.ts`.
+   - `psql -d bridge_test -c "\d teaching_units"` to inventory all current indexes + constraints for the rename migration. Repeat for `unit_documents`, `unit_revisions`, `unit_overlays`, `unit_collection_items`, `unit_collections`.
+   - Also check for triggers, views, and functions referencing the old table names (DeepSeek round-1 nit): `psql -d bridge_test -c "SELECT triggername FROM pg_trigger WHERE tgrelid::regclass::text LIKE 'unit_%' OR tgrelid::regclass::text = 'teaching_units';"` and similar for `pg_views` / `pg_proc.prosrc LIKE '%teaching_units%'`.
+   - `grep -rln "teaching_units\|TeachingUnit\|teachingUnits\|unit_documents\|unit_revisions\|unit_overlays\|unit_collection" platform/ src/ tests/ e2e/ scripts/ server/` to inventory every file needing touched (Codex round-1 NIT: include tests, e2e, scripts, server — not just platform/src).
+   - `grep -rn "/api/units" src/ platform/ tests/ e2e/` to inventory route consumers.
+   - `grep -rn '"unit:"' src/ platform/ server/` to inventory Hocuspocus doc-name string literals (frontend + backend + collab server). DeepSeek round-1 emphasized ~33 occurrences across 4 test files — count them.
+   - **SQL string-literal trap** (DeepSeek round-1): Go SQL strings like `"SELECT ... FROM teaching_units"` survive compilation and only fail at test runtime. Pre-impl `grep -rn "teaching_units" platform/` is the critical safety net — every match is either a SQL string, a function/var name, or a comment, and ALL must be touched.
 2. **Migration**: write `drizzle/00XX_books_and_chapters.sql` per §1a. Update `src/lib/db/schema.ts` to match (`teachingUnits` export → `chapters` + new `books`). Run `bun run db:generate` to compare; reconcile.
 3. **Rename Go files + structs**: `teaching_units.go` → `chapters.go`, all symbol renames per §1c + §1e.
 4. **Routes flip**: `/api/units/*` → `/api/chapters/*` (no compat aliases).
@@ -461,6 +509,17 @@ Open concerns flagged for external reviewers:
 - **`book_id` NULLABLE leaves existing chapters unfiled** — UX implication: the new books UI will show every existing chapter as "unfiled" until manually assigned. Reviewer may want a backfill commitment (e.g., auto-create a "Legacy" book per org) — plan defers this to a future plan; reviewer should agree or push back.
 - **`unit_collections` rename to `chapter_collections`** — I haven't read this file in detail. If `unit_collections` is a course-pinned-collection concept distinct from chapters-in-a-book, the rename may be wrong. Reviewer should verify.
 - **Personal-scope books** (Decision #5) — may be unused in practice. Reviewer may push to drop personal scope to simplify.
+
+### Round 1 verdicts — 2026-05-14
+
+| Reviewer | Verdict | Resolution |
+|----------|---------|------------|
+| Self (Opus 4.7) | CONCUR | — |
+| Codex | **CONCUR + 3 NITs** | (a) Broaden rename grep to include `tests/`, `e2e/`, `scripts/` → FIXED in Phase 1 step 1. (b) Add phase-ordering broken-state callout → FIXED at top of Phase 1. (c) Decide explicitly on 4 satellite tables (`unit_documents`, etc.) → already FIXED in §1a per GLM BLOCKER. Confirmed `unit_collections` semantics are generic scope-based (not course-pinned) — rename is correct. Confirmed `docs/api.md` has no `/api/units/*` content. |
+| DeepSeek V4 Pro | **CONCUR + caveat** | Caveat: Phase 1/2 commit push-timing must not leave the remote branch in half-renamed state → FIXED with explicit push-timing instructions at top of Phase 1. Additional folds: (a) Pre-impl `\d` audit also covers triggers/views/functions; (b) Frontend Yjs provider sites generating `"unit:"` doc names also rename; (c) SQL string-literal trap callout in pre-impl audit (Go `"SELECT ... FROM teaching_units"` survives compilation). Suggested cutting personal-scope books → FIXED (Decision #5 narrowed). |
+| GLM 5.1 | **BLOCKER + nits** | BLOCKER: 4 satellite tables (`unit_documents`, `unit_revisions`, `unit_overlays`, `unit_collection_items`) + their `unit_id` columns must rename → FIXED in §1a with explicit ALTER TABLE statements. Confirmed Hocuspocus collab keys at specific line numbers (server/hocuspocus.ts:140/164, realtime_token.go:308/335-340); folded into §1g. Confirmed fixture helpers are `newUnitFixture`, `mkUnit`, `linkUnitFixture`, `collectionFixture` (not `seedUnit` as I assumed); plan rename audit step catches all. |
+
+**Plan revised in commits `cae482f` → ⟨round-1-folds⟩**. GLM BLOCKER cleanly resolved (satellite tables explicit). Codex + DeepSeek nits all folded. Re-dispatching GLM only since they were the BLOCKER reviewer.
 
 ## Code Review
 
