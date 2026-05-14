@@ -6,15 +6,15 @@ import Link from "next/link"
 import type { JSONContent } from "@tiptap/react"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { TeachingUnitViewer } from "@/components/editor/tiptap/teaching-unit-viewer"
-import { fetchUnit, fetchUnitDocument, forkUnit, type TeachingUnit } from "@/lib/teaching-units"
+import { fetchChapter, fetchChapterDocument, forkChapter, type Chapter } from "@/lib/chapters"
 import { isValidUUID } from "@/lib/utils"
 
 type LoadState =
   | { status: "loading" }
-  | { status: "ready"; unit: TeachingUnit; doc: JSONContent | null }
+  | { status: "ready"; chapter: Chapter; doc: JSONContent | null }
   | { status: "error"; message: string }
 
-export default function ViewUnitPage() {
+export default function ViewChapterPage() {
   const { id } = useParams<{ id: string }>()
   if (!isValidUUID(id)) notFound()
   const router = useRouter()
@@ -25,18 +25,18 @@ export default function ViewUnitPage() {
   useEffect(() => {
     async function load() {
       try {
-        const [unit, docData] = await Promise.all([
-          fetchUnit(id),
-          fetchUnitDocument(id),
+        const [chapter, docData] = await Promise.all([
+          fetchChapter(id),
+          fetchChapterDocument(id),
         ])
-        if (!unit) {
-          setState({ status: "error", message: "Unit not found." })
+        if (!chapter) {
+          setState({ status: "error", message: "Chapter not found." })
           return
         }
         const doc = docData?.blocks != null ? (docData.blocks as JSONContent) : null
-        setState({ status: "ready", unit, doc })
+        setState({ status: "ready", chapter, doc })
       } catch {
-        setState({ status: "error", message: "Failed to load unit." })
+        setState({ status: "error", message: "Failed to load chapter." })
       }
     }
     load()
@@ -46,8 +46,8 @@ export default function ViewUnitPage() {
     setForking(true)
     setForkError(null)
     try {
-      const child = await forkUnit(id, {})
-      router.push(`/teacher/units/${child.id}/edit`)
+      const child = await forkChapter(id, {})
+      router.push(`/teacher/chapters/${child.id}/edit`)
     } catch (err) {
       setForkError(err instanceof Error ? err.message : "Fork failed")
       setForking(false)
@@ -73,11 +73,11 @@ export default function ViewUnitPage() {
     )
   }
 
-  const { unit, doc } = state
+  const { chapter, doc } = state
 
-  const gradeBadge = unit.gradeLevel ?? null
-  const tags = unit.subjectTags ?? []
-  const mins = unit.estimatedMinutes ?? null
+  const gradeBadge = chapter.gradeLevel ?? null
+  const tags = chapter.subjectTags ?? []
+  const mins = chapter.estimatedMinutes ?? null
 
   return (
     <div className="p-6 space-y-6">
@@ -85,12 +85,12 @@ export default function ViewUnitPage() {
       <div className="flex items-start justify-between gap-4">
         <div className="space-y-1 min-w-0">
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Link href="/teacher/units" className="hover:text-foreground">
-              Units
+            <Link href="/teacher/chapters" className="hover:text-foreground">
+              Chapters
             </Link>
             <span>/</span>
           </div>
-          <h1 className="text-2xl font-bold">{unit.title}</h1>
+          <h1 className="text-2xl font-bold">{chapter.title}</h1>
         </div>
         <div className="flex items-center gap-2 shrink-0">
           {forkError && (
@@ -105,7 +105,7 @@ export default function ViewUnitPage() {
             {forking ? "Forking..." : "Fork"}
           </Button>
           <Link
-            href={`/teacher/units/${id}/edit`}
+            href={`/teacher/chapters/${id}/edit`}
             className={buttonVariants({ variant: "outline", size: "sm" })}
           >
             Edit
@@ -117,12 +117,12 @@ export default function ViewUnitPage() {
       <div className="flex flex-wrap gap-4 text-sm text-muted-foreground border-b border-zinc-200 pb-4">
         <span>
           Scope:{" "}
-          <span className="font-medium text-foreground capitalize">{unit.scope}</span>
+          <span className="font-medium text-foreground capitalize">{chapter.scope}</span>
         </span>
         <span>
           Status:{" "}
           <span className="font-medium text-foreground capitalize">
-            {unit.status.replace("_", " ")}
+            {chapter.status.replace("_", " ")}
           </span>
         </span>
         {gradeBadge && (
@@ -153,8 +153,8 @@ export default function ViewUnitPage() {
       </div>
 
       {/* Summary */}
-      {unit.summary && (
-        <p className="text-sm text-muted-foreground max-w-prose">{unit.summary}</p>
+      {chapter.summary && (
+        <p className="text-sm text-muted-foreground max-w-prose">{chapter.summary}</p>
       )}
 
       {/* Block document */}

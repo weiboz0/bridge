@@ -4,8 +4,8 @@
 // the item that "owns" the current pathname. The naive rule
 // (`pathname === item || pathname.startsWith(item + "/")`) collides
 // when one item's href is a prefix of another's — e.g., the teacher
-// portal has both "Dashboard" (`/teacher`) and "Units" (`/teacher/units`).
-// On `/teacher/units` the naive rule highlights both.
+// portal has both "Dashboard" (`/teacher`) and "Chapters" (`/teacher/chapters`).
+// On `/teacher/chapters` the naive rule highlights both.
 //
 // Longest-match wins: among all items whose href is a prefix of the
 // pathname, pick the one with the longest href. That uniquely

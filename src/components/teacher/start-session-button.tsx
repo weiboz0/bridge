@@ -112,7 +112,7 @@ export function StartSessionButton({
   }
 
   // Hand-rolled modal matches the project's existing pattern (see
-  // src/components/teacher/unit-picker-dialog.tsx and
+  // src/components/teacher/chapter-picker-dialog.tsx and
   // src/components/editor/tiptap/help-overlay.tsx).
   const guardDialog = guard ? (
     <div

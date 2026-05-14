@@ -55,10 +55,10 @@ import {
   courses,
   problems,
   problemSolutions,
-  teachingUnits,
+  chapters as teachingUnits,
   topicProblems,
   topics,
-  unitDocuments,
+  chapterDocuments as unitDocuments,
 } from "../../src/lib/db/schema";
 import {
   courseManifestSchema,
@@ -629,11 +629,11 @@ async function runLibraryPass(tx: Tx, tree: ContentTree): Promise<void> {
     await tx
       .insert(unitDocuments)
       .values({
-        unitId: unit.id,
+        chapterId: unit.id,
         blocks: docBlocks,
       })
       .onConflictDoUpdate({
-        target: unitDocuments.unitId,
+        target: unitDocuments.chapterId,
         set: {
           blocks: docBlocks,
           updatedAt: new Date(),
@@ -767,7 +767,7 @@ async function runLinkPass(tx: Tx, tree: ContentTree): Promise<void> {
           break;
         }
       }
-      if (needle.includes("teaching_units_topic_id_uniq")) {
+      if (needle.includes("chapters_topic_id_uniq")) {
         throw new Error(
           `link pass: topic ${topicEntry.id} is already claimed by another unit (uniq violation)`,
         );
@@ -1063,10 +1063,10 @@ async function wireDemoClass(
     const [sourceDoc] = await tx
       .select({ blocks: unitDocuments.blocks })
       .from(unitDocuments)
-      .where(eq(unitDocuments.unitId, sourceUnit.id));
+      .where(eq(unitDocuments.chapterId, sourceUnit.id));
     if (sourceDoc) {
       await tx.insert(unitDocuments).values({
-        unitId: clonedUnit.id,
+        chapterId: clonedUnit.id,
         blocks: sourceDoc.blocks,
       });
     }

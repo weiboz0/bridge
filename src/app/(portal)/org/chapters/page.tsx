@@ -4,7 +4,7 @@ import { api } from "@/lib/api-client";
 import { ApiError } from "@/lib/api-error";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
-interface Unit {
+interface Chapter {
   id: string;
   scope: string;
   scopeId: string | null;
@@ -18,7 +18,7 @@ interface Unit {
 }
 
 interface SearchResponse {
-  items: Unit[];
+  items: Chapter[];
   nextCursor: string | null;
 }
 
@@ -45,13 +45,13 @@ function statusBadge(status: string): string {
 }
 
 /**
- * Org-admin units browser. Lists units the caller can view: their org's
- * org-scope units plus all platform-scope units (per the
- * `canViewUnit` rules in
- * platform/internal/handlers/teaching_units.go). The Go handler does
+ * Org-admin chapters browser. Lists chapters the caller can view: their org's
+ * org-scope chapters plus all platform-scope chapters (per the
+ * `canViewChapter` rules in
+ * platform/internal/handlers/chapters.go). The Go handler does
  * the filtering — we just render whatever it returns.
  */
-export default async function OrgUnitsPage({
+export default async function OrgChaptersPage({
   searchParams,
 }: {
   searchParams: Promise<{ scope?: string; q?: string }>;
@@ -61,7 +61,7 @@ export default async function OrgUnitsPage({
   if (sp.scope) params.set("scope", sp.scope);
   if (sp.q) params.set("q", sp.q);
   params.set("limit", "100");
-  const path = `/api/units/search?${params.toString()}`;
+  const path = `/api/chapters/search?${params.toString()}`;
 
   let data: SearchResponse;
   try {
@@ -102,9 +102,9 @@ export default async function OrgUnitsPage({
   return (
     <div className="p-6 space-y-6">
       <div>
-        <h1 className="text-2xl font-bold">Units</h1>
+        <h1 className="text-2xl font-bold">Chapters</h1>
         <p className="text-sm text-muted-foreground">
-          Teaching units accessible to your org — your org&apos;s authored units
+          Chapters accessible to your org — your org&apos;s authored chapters
           plus the Bridge HQ platform library.
         </p>
       </div>
@@ -124,9 +124,9 @@ export default async function OrgUnitsPage({
             const href =
               t.id === ""
                 ? sp.q
-                  ? `/org/units?q=${encodeURIComponent(sp.q)}`
-                  : "/org/units"
-                : `/org/units?scope=${t.id}${sp.q ? `&q=${encodeURIComponent(sp.q)}` : ""}`;
+                  ? `/org/chapters?q=${encodeURIComponent(sp.q)}`
+                  : "/org/chapters"
+                : `/org/chapters?scope=${t.id}${sp.q ? `&q=${encodeURIComponent(sp.q)}` : ""}`;
             const active = scope === t.id;
             return (
               <Link
@@ -146,7 +146,7 @@ export default async function OrgUnitsPage({
       {items.length === 0 ? (
         <Card>
           <CardContent className="py-8 text-center text-sm text-muted-foreground">
-            No units match. Try a broader filter.
+            No chapters match. Try a broader filter.
           </CardContent>
         </Card>
       ) : (
@@ -167,7 +167,7 @@ export default async function OrgUnitsPage({
                 <tr key={u.id} className="border-t hover:bg-muted/30">
                   <td className="px-4 py-2 font-medium">
                     <Link
-                      href={`/org/units/${u.id}`}
+                      href={`/org/chapters/${u.id}`}
                       className="text-primary underline-offset-2 hover:underline"
                     >
                       {u.title}

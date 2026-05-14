@@ -18,32 +18,32 @@ import {
 } from "@/components/editor/tiptap/teaching-unit-editor"
 import { TeachingUnitViewer } from "@/components/editor/tiptap/teaching-unit-viewer"
 import {
-  fetchUnit,
-  fetchUnitDocument,
+  fetchChapter,
+  fetchChapterDocument,
   fetchProjectedDocument,
-  saveUnitDocument,
-  transitionUnit,
+  saveChapterDocument,
+  transitionChapter,
   fetchLineage,
   fetchOverlay,
   updateOverlay,
   listRevisions,
-  type TeachingUnit,
-  type UnitOverlay,
+  type Chapter,
+  type ChapterOverlay,
   type LineageEntry,
-} from "@/lib/teaching-units"
+} from "@/lib/chapters"
 import { isValidUUID } from "@/lib/utils"
 
 type LoadState =
   | { status: "loading" }
-  | { status: "ready"; unit: TeachingUnit; doc: JSONContent | null }
+  | { status: "ready"; chapter: Chapter; doc: JSONContent | null }
   | { status: "error"; message: string }
 
-type UnitStatus = "draft" | "reviewed" | "classroom_ready" | "coach_ready" | "archived"
+type ChapterStatus = "draft" | "reviewed" | "classroom_ready" | "coach_ready" | "archived"
 
 /**
  * Valid transitions per spec 012.
  */
-const VALID_TRANSITIONS: Record<UnitStatus, UnitStatus[]> = {
+const VALID_TRANSITIONS: Record<ChapterStatus, ChapterStatus[]> = {
   draft: ["reviewed"],
   reviewed: ["classroom_ready", "coach_ready", "archived"],
   classroom_ready: ["archived"],
@@ -51,7 +51,7 @@ const VALID_TRANSITIONS: Record<UnitStatus, UnitStatus[]> = {
   archived: ["classroom_ready"],
 }
 
-const STATUS_LABELS: Record<UnitStatus, string> = {
+const STATUS_LABELS: Record<ChapterStatus, string> = {
   draft: "Draft",
   reviewed: "Reviewed",
   classroom_ready: "Classroom Ready",
@@ -63,7 +63,7 @@ const STATUS_LABELS: Record<UnitStatus, string> = {
  * Tailwind classes for each status badge.
  * Using plain inline classes (no dynamic construction) so Tailwind picks them up.
  */
-function statusBadgeClass(status: UnitStatus): string {
+function statusBadgeClass(status: ChapterStatus): string {
   switch (status) {
     case "draft":
       return "inline-flex items-center rounded-md px-2.5 py-0.5 text-xs font-semibold border border-zinc-200 bg-zinc-100 text-zinc-700"
@@ -80,7 +80,7 @@ function statusBadgeClass(status: UnitStatus): string {
   }
 }
 
-function isKnownStatus(s: string): s is UnitStatus {
+function isKnownStatus(s: string): s is ChapterStatus {
   return s === "draft" || s === "reviewed" || s === "classroom_ready" || s === "coach_ready" || s === "archived"
 }
 
@@ -92,26 +92,26 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 interface TransitionButtonProps {
-  unit: TeachingUnit
-  onTransitioned: (updated: TeachingUnit) => void
+  chapter: Chapter
+  onTransitioned: (updated: Chapter) => void
 }
 
-function TransitionButton({ unit, onTransitioned }: TransitionButtonProps) {
+function TransitionButton({ chapter, onTransitioned }: TransitionButtonProps) {
   const [transitioning, setTransitioning] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const status = unit.status
+  const status = chapter.status
   const targets = isKnownStatus(status) ? VALID_TRANSITIONS[status] : []
 
   if (targets.length === 0) {
     return null
   }
 
-  const handleTransition = async (target: UnitStatus) => {
+  const handleTransition = async (target: ChapterStatus) => {
     setTransitioning(true)
     setError(null)
     try {
-      const updated = await transitionUnit(unit.id, target)
+      const updated = await transitionChapter(chapter.id, target)
       onTransitioned(updated)
     } catch (err) {
       setError(err instanceof Error ? err.message : "Transition failed")
@@ -151,7 +151,7 @@ type PreviewState =
   | { active: false }
   | { active: true; doc: JSONContent }
 
-export default function EditUnitPage() {
+export default function EditChapterPage() {
   const { id } = useParams<{ id: string }>()
   if (!isValidUUID(id)) notFound()
   const { data: session } = useSession()
@@ -163,25 +163,25 @@ export default function EditUnitPage() {
 
   // Lineage and overlay state
   const [lineage, setLineage] = useState<LineageEntry[] | null>(null)
-  const [overlay, setOverlay] = useState<UnitOverlay | null>(null)
+  const [overlay, setOverlay] = useState<ChapterOverlay | null>(null)
   const [pinBusy, setPinBusy] = useState(false)
   const [pinError, setPinError] = useState<string | null>(null)
 
   useEffect(() => {
     async function load() {
       try {
-        const [unit, docData] = await Promise.all([
-          fetchUnit(id),
-          fetchUnitDocument(id),
+        const [chapter, docData] = await Promise.all([
+          fetchChapter(id),
+          fetchChapterDocument(id),
         ])
-        if (!unit) {
-          setState({ status: "error", message: "Unit not found." })
+        if (!chapter) {
+          setState({ status: "error", message: "Chapter not found." })
           return
         }
         const doc = docData?.blocks != null ? (docData.blocks as JSONContent) : null
-        setState({ status: "ready", unit, doc })
+        setState({ status: "ready", chapter, doc })
       } catch {
-        setState({ status: "error", message: "Failed to load unit." })
+        setState({ status: "error", message: "Failed to load chapter." })
       }
     }
     load()
@@ -207,7 +207,7 @@ export default function EditUnitPage() {
   const handleSave = useCallback(
     async (doc: JSONContent) => {
       try {
-        await saveUnitDocument(id, doc)
+        await saveChapterDocument(id, doc)
         setSaveMessage("Saved")
         setTimeout(() => setSaveMessage(null), 2500)
       } catch (err) {
@@ -219,9 +219,9 @@ export default function EditUnitPage() {
     [id]
   )
 
-  const handleTransitioned = useCallback((updated: TeachingUnit) => {
+  const handleTransitioned = useCallback((updated: Chapter) => {
     setState((prev) =>
-      prev.status === "ready" ? { ...prev, unit: updated } : prev
+      prev.status === "ready" ? { ...prev, chapter: updated } : prev
     )
   }, [])
 
@@ -258,7 +258,7 @@ export default function EditUnitPage() {
     setPinError(null)
     try {
       // Fetch parent's revisions and pick the latest
-      const revisions = await listRevisions(overlay.parentUnitId)
+      const revisions = await listRevisions(overlay.parentChapterId)
       if (revisions.length === 0) {
         setPinError("No published revisions to pin to.")
         return
@@ -307,7 +307,7 @@ export default function EditUnitPage() {
     )
   }
 
-  const { unit, doc } = state
+  const { chapter, doc } = state
 
   return (
     <div className="p-6 space-y-4">
@@ -315,14 +315,14 @@ export default function EditUnitPage() {
       <div className="flex items-center justify-between gap-4">
         <div className="flex items-center gap-3 min-w-0">
           <Link
-            href="/teacher/units"
+            href="/teacher/chapters"
             className="text-sm text-muted-foreground hover:text-foreground shrink-0"
           >
-            Units
+            Chapters
           </Link>
           <span className="text-muted-foreground shrink-0">/</span>
-          <h1 className="text-lg font-semibold truncate">{unit.title}</h1>
-          <StatusBadge status={unit.status} />
+          <h1 className="text-lg font-semibold truncate">{chapter.title}</h1>
+          <StatusBadge status={chapter.status} />
         </div>
         <div className="flex items-center gap-3 shrink-0">
           {saveMessage && (
@@ -344,9 +344,9 @@ export default function EditUnitPage() {
           >
             {previewLoading ? "Loading..." : preview.active ? "Edit" : "Preview"}
           </Button>
-          <TransitionButton unit={unit} onTransitioned={handleTransitioned} />
+          <TransitionButton chapter={chapter} onTransitioned={handleTransitioned} />
           <Link
-            href={`/teacher/units/${id}`}
+            href={`/teacher/chapters/${id}`}
             className={buttonVariants({ variant: "outline", size: "sm" })}
           >
             View
@@ -354,7 +354,7 @@ export default function EditUnitPage() {
         </div>
       </div>
 
-      {/* Lineage breadcrumb — only shown when the unit has ancestors */}
+      {/* Lineage breadcrumb — only shown when the chapter has ancestors */}
       {lineage && lineage.length > 1 && (
         <div className="flex items-center gap-1 text-sm text-muted-foreground flex-wrap">
           {lineage.map((entry, idx) => {
@@ -366,7 +366,7 @@ export default function EditUnitPage() {
                   <span className="text-foreground font-medium">{entry.title}</span>
                 ) : (
                   <Link
-                    href={`/teacher/units/${entry.unitId}`}
+                    href={`/teacher/chapters/${entry.unitId}`}
                     className="hover:text-foreground underline underline-offset-2"
                   >
                     {entry.title}

@@ -1,10 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createUnit } from "@/lib/teaching-units";
+import { createUnit } from "@/lib/chapters";
 
-// Plan 054 drift fix — `createUnit` was dropping `materialType` from
-// the POST body. Without this assertion, the regression silently
-// returns; the picker becomes decorative and every unit defaults to
-// `notes`.
+// Plan 054 drift fix / plan 088 phase 2 rename — `createUnit` was dropping
+// `materialType` from the POST body. Without this assertion, the regression
+// silently returns; the picker becomes decorative and every chapter defaults to `notes`.
 
 describe("createUnit (Plan 054 drift fix)", () => {
   afterEach(() => {

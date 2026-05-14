@@ -7,7 +7,7 @@ vi.mock("@/lib/api-client", () => ({
   api: vi.fn(),
 }));
 
-import AdminUnitDetailPage from "@/app/(portal)/admin/units/[id]/page";
+import AdminChapterDetailPage from "@/app/(portal)/admin/chapters/[id]/page";
 import { api } from "@/lib/api-client";
 import { ApiError } from "@/lib/api-error";
 
@@ -15,29 +15,29 @@ const VALID_UUID = "f47ac10b-58cc-4372-a567-0e02b2c3d479";
 const mockedApi = vi.mocked(api);
 
 async function renderPage(id: string) {
-  const element = await AdminUnitDetailPage({ params: Promise.resolve({ id }) });
+  const element = await AdminChapterDetailPage({ params: Promise.resolve({ id }) });
   render(element as React.ReactElement);
 }
 
-describe("AdminUnitDetailPage", () => {
+describe("AdminChapterDetailPage", () => {
   beforeEach(() => {
     mockedApi.mockReset();
   });
 
-  it("renders 404 panel when /api/units/:id returns 404", async () => {
+  it("renders 404 panel when /api/chapters/:id returns 404", async () => {
     mockedApi.mockRejectedValueOnce(new ApiError(404, "Not Found"));
     await renderPage(VALID_UUID);
 
-    expect(screen.getByRole("heading", { name: "Unit not found" })).toBeInTheDocument();
-    expect(screen.getByText(/back to all units/i)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Chapter not found" })).toBeInTheDocument();
+    expect(screen.getByText(/back to all chapters/i)).toBeInTheDocument();
   });
 
-  it("renders error panel with HTTP status when /api/units/:id returns 500", async () => {
+  it("renders error panel with HTTP status when /api/chapters/:id returns 500", async () => {
     mockedApi.mockRejectedValueOnce(new ApiError(500, "Internal Server Error"));
     await renderPage(VALID_UUID);
 
     expect(
-      screen.getByRole("heading", { name: /couldn.t load unit/i }),
+      screen.getByRole("heading", { name: /couldn.t load chapter/i }),
     ).toBeInTheDocument();
     expect(screen.getByText(/HTTP 500/)).toBeInTheDocument();
     expect(screen.getByText(/Internal Server Error/)).toBeInTheDocument();
@@ -48,16 +48,16 @@ describe("AdminUnitDetailPage", () => {
     await renderPage(VALID_UUID);
 
     expect(
-      screen.getByRole("heading", { name: /couldn.t load unit/i }),
+      screen.getByRole("heading", { name: /couldn.t load chapter/i }),
     ).toBeInTheDocument();
     expect(screen.getByText(/Network down/)).toBeInTheDocument();
   });
 
-  it("renders 'Unit not found' for malformed UUID without calling api", async () => {
+  it("renders 'Chapter not found' for malformed UUID without calling api", async () => {
     await renderPage("not-a-uuid");
 
-    expect(screen.getByRole("heading", { name: "Unit not found" })).toBeInTheDocument();
-    expect(screen.getByText(/Invalid unit id format/)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Chapter not found" })).toBeInTheDocument();
+    expect(screen.getByText(/Invalid chapter id format/)).toBeInTheDocument();
     expect(mockedApi).not.toHaveBeenCalled();
   });
 
@@ -68,7 +68,7 @@ describe("AdminUnitDetailPage", () => {
       scopeId: null,
       title: "Print & Comments",
       slug: "print-comments",
-      summary: "First unit",
+      summary: "First chapter",
       gradeLevel: "K-5",
       status: "classroom_ready",
       materialType: "lesson",
@@ -78,16 +78,14 @@ describe("AdminUnitDetailPage", () => {
     await renderPage(VALID_UUID);
 
     expect(screen.getByRole("heading", { name: "Print & Comments" })).toBeInTheDocument();
-    expect(screen.getByText("First unit")).toBeInTheDocument();
+    expect(screen.getByText("First chapter")).toBeInTheDocument();
     expect(screen.getByText("Classroom Ready")).toBeInTheDocument();
     expect(screen.getByText("Platform")).toBeInTheDocument();
     expect(screen.getByText("K-5")).toBeInTheDocument();
     expect(screen.getByText("lesson")).toBeInTheDocument();
-    // Codex code-review NIT Q4: assert the back-link is present on the
-    // happy path (it's exercised in the 404 panel test but not here).
-    expect(screen.getByRole("link", { name: /back to all units/i })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: /back to all chapters/i })).toHaveAttribute(
       "href",
-      "/admin/units",
+      "/admin/chapters",
     );
   });
 });

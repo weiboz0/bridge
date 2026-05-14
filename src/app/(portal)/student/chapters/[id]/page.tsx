@@ -5,17 +5,17 @@ import { useParams } from "next/navigation"
 import Link from "next/link"
 import type { JSONContent } from "@tiptap/react"
 import { TeachingUnitViewer } from "@/components/editor/tiptap/teaching-unit-viewer"
-import { fetchUnit, fetchProjectedDocument, type TeachingUnit } from "@/lib/teaching-units"
+import { fetchChapter, fetchProjectedDocument, type Chapter } from "@/lib/chapters"
 
 type LoadState =
   | { status: "loading" }
-  | { status: "ready"; unit: TeachingUnit; doc: JSONContent }
+  | { status: "ready"; chapter: Chapter; doc: JSONContent }
   | { status: "unavailable" }
   | { status: "error"; message: string }
 
-type UnitStatus = "draft" | "reviewed" | "classroom_ready" | "coach_ready" | "archived"
+type ChapterStatus = "draft" | "reviewed" | "classroom_ready" | "coach_ready" | "archived"
 
-function isKnownStatus(s: string): s is UnitStatus {
+function isKnownStatus(s: string): s is ChapterStatus {
   return (
     s === "draft" ||
     s === "reviewed" ||
@@ -25,7 +25,7 @@ function isKnownStatus(s: string): s is UnitStatus {
   )
 }
 
-const STATUS_LABELS: Record<UnitStatus, string> = {
+const STATUS_LABELS: Record<ChapterStatus, string> = {
   draft: "Draft",
   reviewed: "Reviewed",
   classroom_ready: "Classroom Ready",
@@ -33,7 +33,7 @@ const STATUS_LABELS: Record<UnitStatus, string> = {
   archived: "Archived",
 }
 
-function statusBadgeClass(status: UnitStatus): string {
+function statusBadgeClass(status: ChapterStatus): string {
   switch (status) {
     case "draft":
       return "inline-flex items-center rounded-md px-2.5 py-0.5 text-xs font-semibold border border-zinc-200 bg-zinc-100 text-zinc-700"
@@ -57,19 +57,19 @@ function StatusBadge({ status }: { status: string }) {
   return <span className={cls}>{label}</span>
 }
 
-export default function StudentUnitPage() {
+export default function StudentChapterPage() {
   const { id } = useParams<{ id: string }>()
   const [state, setState] = useState<LoadState>({ status: "loading" })
 
   useEffect(() => {
     async function load() {
       try {
-        const [unit, projected] = await Promise.all([
-          fetchUnit(id),
+        const [chapter, projected] = await Promise.all([
+          fetchChapter(id),
           fetchProjectedDocument(id, "student"),
         ])
 
-        if (!unit) {
+        if (!chapter) {
           setState({ status: "unavailable" })
           return
         }
@@ -81,11 +81,11 @@ export default function StudentUnitPage() {
 
         setState({
           status: "ready",
-          unit,
+          chapter,
           doc: projected as JSONContent,
         })
       } catch {
-        setState({ status: "error", message: "Failed to load unit." })
+        setState({ status: "error", message: "Failed to load chapter." })
       }
     }
 
@@ -103,9 +103,9 @@ export default function StudentUnitPage() {
   if (state.status === "unavailable") {
     return (
       <div className="p-6 space-y-4">
-        <h1 className="text-lg font-semibold text-zinc-900">Unit not available</h1>
+        <h1 className="text-lg font-semibold text-zinc-900">Chapter not available</h1>
         <p className="text-sm text-zinc-500">
-          This unit is not currently accessible. Ask your teacher for access.
+          This chapter is not currently accessible. Ask your teacher for access.
         </p>
         <Link href="/student" className="text-sm text-blue-600 underline">
           Back to dashboard
@@ -125,7 +125,7 @@ export default function StudentUnitPage() {
     )
   }
 
-  const { unit, doc } = state
+  const { chapter, doc } = state
 
   return (
     <div className="p-6 space-y-4">
@@ -139,8 +139,8 @@ export default function StudentUnitPage() {
             Dashboard
           </Link>
           <span className="text-muted-foreground shrink-0">/</span>
-          <h1 className="text-lg font-semibold truncate">{unit.title}</h1>
-          <StatusBadge status={unit.status} />
+          <h1 className="text-lg font-semibold truncate">{chapter.title}</h1>
+          <StatusBadge status={chapter.status} />
         </div>
       </div>
 

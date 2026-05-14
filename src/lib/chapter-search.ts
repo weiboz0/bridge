@@ -1,11 +1,11 @@
 /**
- * Client-side helper for the unit search API (GET /api/units/search).
+ * Client-side helper for the chapter search API (GET /api/chapters/search).
  * All parameters are optional; omit to get defaults from the backend.
  *
  * Plan 045: linkableForCourse switches the endpoint into "picker mode"
- * — backend gates to course-edit, returns Units linkable to that course
+ * — backend gates to course-edit, returns Chapters linkable to that course
  * (platform OR same-org), and decorates each item with linkedTopicId,
- * linkedTopicTitle, and canLink. The UnitPickerDialog reads these to
+ * linkedTopicTitle, and canLink. The ChapterPickerDialog reads these to
  * disable already-linked rows and show "Already linked" labels.
  */
 
@@ -57,11 +57,11 @@ export interface SearchResult {
 }
 
 /**
- * Search teaching units. Returns { items, nextCursor, error }. On any
+ * Search chapters. Returns { items, nextCursor, error }. On any
  * network/server failure, items is [] and error is set so callers can
  * render an error banner distinct from the genuine empty-state.
  */
-export async function searchUnits(params: SearchParams): Promise<SearchResult> {
+export async function searchChapters(params: SearchParams): Promise<SearchResult> {
   const query = new URLSearchParams()
 
   if (params.q) query.set("q", params.q)
@@ -76,9 +76,9 @@ export async function searchUnits(params: SearchParams): Promise<SearchResult> {
   if (params.linkableForCourse) query.set("linkableForCourse", params.linkableForCourse)
 
   try {
-    const res = await fetch(`/api/units/search?${query}`)
+    const res = await fetch(`/api/chapters/search?${query}`)
     if (!res.ok) {
-      console.error("[unit-search] API error:", res.status, await res.text().catch(() => ""))
+      console.error("[chapter-search] API error:", res.status, await res.text().catch(() => ""))
       return { items: [], nextCursor: null, error: "server" }
     }
     const body = (await res.json()) as { items: SearchResultItem[]; nextCursor: string | null }
@@ -87,3 +87,6 @@ export async function searchUnits(params: SearchParams): Promise<SearchResult> {
     return { items: [], nextCursor: null, error: "network" }
   }
 }
+
+/** @deprecated Use searchChapters instead */
+export const searchUnits = searchChapters

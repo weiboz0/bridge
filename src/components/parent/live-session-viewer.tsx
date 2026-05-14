@@ -69,7 +69,7 @@ export function LiveSessionViewer({
               <h3 className="text-base font-semibold mb-2">{t.title}</h3>
               {t.unitId ? (
                 <Link
-                  href={`/student/units/${t.unitId}`}
+                  href={`/student/chapters/${t.unitId}`}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="inline-flex items-center gap-2 rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm hover:border-amber-400 hover:text-amber-800"

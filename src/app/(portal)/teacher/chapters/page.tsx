@@ -5,7 +5,7 @@ import Link from "next/link"
 import { useSession } from "next-auth/react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { searchUnits, type SearchResultItem } from "@/lib/unit-search"
+import { searchChapters, type SearchResultItem } from "@/lib/chapter-search"
 
 // ---------- Types ----------
 
@@ -29,9 +29,9 @@ const GRADE_LABELS: Record<string, string> = {
 
 // ---------- Status badge helpers ----------
 
-type UnitStatus = "draft" | "reviewed" | "classroom_ready" | "coach_ready" | "archived"
+type ChapterStatus = "draft" | "reviewed" | "classroom_ready" | "coach_ready" | "archived"
 
-const STATUS_LABELS: Record<UnitStatus, string> = {
+const STATUS_LABELS: Record<ChapterStatus, string> = {
   draft: "Draft",
   reviewed: "Reviewed",
   classroom_ready: "Classroom Ready",
@@ -39,11 +39,11 @@ const STATUS_LABELS: Record<UnitStatus, string> = {
   archived: "Archived",
 }
 
-function isKnownStatus(s: string): s is UnitStatus {
+function isKnownStatus(s: string): s is ChapterStatus {
   return ["draft", "reviewed", "classroom_ready", "coach_ready", "archived"].includes(s)
 }
 
-function statusBadgeClass(status: UnitStatus): string {
+function statusBadgeClass(status: ChapterStatus): string {
   switch (status) {
     case "draft":
       return "inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium border border-zinc-200 bg-zinc-100 text-zinc-700"
@@ -67,25 +67,25 @@ function StatusBadge({ status }: { status: string }) {
   return <span className={cls}>{label}</span>
 }
 
-// ---------- Unit card ----------
+// ---------- Chapter card ----------
 
-function UnitCard({ unit }: { unit: SearchResultItem }) {
-  const tags = unit.subjectTags ?? []
+function ChapterCard({ chapter }: { chapter: SearchResultItem }) {
+  const tags = chapter.subjectTags ?? []
   return (
-    <Link href={`/teacher/units/${unit.id}`} className="block">
+    <Link href={`/teacher/chapters/${chapter.id}`} className="block">
       <div className="border border-zinc-200 rounded-lg p-4 bg-white transition-colors hover:border-zinc-300 hover:bg-zinc-50 space-y-2">
         <div className="flex items-start justify-between gap-2">
-          <p className="font-medium text-zinc-900 leading-snug">{unit.title}</p>
-          <StatusBadge status={unit.status} />
+          <p className="font-medium text-zinc-900 leading-snug">{chapter.title}</p>
+          <StatusBadge status={chapter.status} />
         </div>
 
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-500">
-          {unit.gradeLevel && <span>Grade {unit.gradeLevel}</span>}
-          {unit.estimatedMinutes != null && <span>{unit.estimatedMinutes} min</span>}
+          {chapter.gradeLevel && <span>Grade {chapter.gradeLevel}</span>}
+          {chapter.estimatedMinutes != null && <span>{chapter.estimatedMinutes} min</span>}
         </div>
 
-        {unit.summary && (
-          <p className="text-sm text-zinc-600 line-clamp-2">{unit.summary}</p>
+        {chapter.summary && (
+          <p className="text-sm text-zinc-600 line-clamp-2">{chapter.summary}</p>
         )}
 
         {tags.length > 0 && (
@@ -107,7 +107,7 @@ function UnitCard({ unit }: { unit: SearchResultItem }) {
 
 // ---------- Main page ----------
 
-export default function UnitLibraryPage() {
+export default function ChapterLibraryPage() {
   const { data: session } = useSession()
 
   const [activeTab, setActiveTab] = useState<TabId>("all")
@@ -227,7 +227,7 @@ export default function UnitLibraryPage() {
     setItems([])
     setNextCursor(null)
 
-    searchUnits(buildParams()).then((result) => {
+    searchChapters(buildParams()).then((result) => {
       if (!cancelled) {
         setItems(result.items)
         setNextCursor(result.nextCursor)
@@ -243,7 +243,7 @@ export default function UnitLibraryPage() {
   async function handleLoadMore() {
     if (!nextCursor) return
     setLoadingMore(true)
-    const result = await searchUnits(buildParams(nextCursor))
+    const result = await searchChapters(buildParams(nextCursor))
     setItems((prev) => [...prev, ...result.items])
     setNextCursor(result.nextCursor)
     setLoadingMore(false)
@@ -251,7 +251,7 @@ export default function UnitLibraryPage() {
 
   const tabs: { id: TabId; label: string }[] = [
     { id: "all", label: "All" },
-    { id: "personal", label: "My Units" },
+    { id: "personal", label: "My Chapters" },
     { id: "org", label: "Org Library" },
     { id: "platform", label: "Platform" },
   ]
@@ -260,9 +260,9 @@ export default function UnitLibraryPage() {
     <div className="space-y-6 p-6">
       {/* Page header */}
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-zinc-900">Unit Library</h1>
-        <Link href="/teacher/units/new">
-          <Button className="bg-zinc-900 text-white hover:bg-zinc-800">Create Unit</Button>
+        <h1 className="text-2xl font-bold text-zinc-900">Chapter Library</h1>
+        <Link href="/teacher/chapters/new">
+          <Button className="bg-zinc-900 text-white hover:bg-zinc-800">Create Chapter</Button>
         </Link>
       </div>
 
@@ -315,7 +315,7 @@ export default function UnitLibraryPage() {
             </div>
           ) : (
             <p className="text-sm text-zinc-600">
-              Showing units for{" "}
+              Showing chapters for{" "}
               <span className="font-medium text-zinc-900">{orgs[0].orgName}</span>
             </p>
           )}
@@ -327,7 +327,7 @@ export default function UnitLibraryPage() {
         <Input
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          placeholder="Search units..."
+          placeholder="Search chapters..."
           className="w-64"
         />
         <select
@@ -357,20 +357,20 @@ export default function UnitLibraryPage() {
         </div>
       ) : items.length === 0 ? (
         <div className="rounded-lg border border-dashed border-zinc-200 bg-zinc-50 px-4 py-10 text-center">
-          <p className="text-sm text-zinc-600">No units found.</p>
+          <p className="text-sm text-zinc-600">No chapters found.</p>
           {activeTab === "personal" && (
             <p className="mt-1 text-sm text-zinc-500">
-              Create your first unit to get started.{" "}
-              <Link href="/teacher/units/new" className="underline text-zinc-700 hover:text-zinc-900">
-                Create Unit
+              Create your first chapter to get started.{" "}
+              <Link href="/teacher/chapters/new" className="underline text-zinc-700 hover:text-zinc-900">
+                Create Chapter
               </Link>
             </p>
           )}
         </div>
       ) : (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {items.map((unit) => (
-            <UnitCard key={unit.id} unit={unit} />
+          {items.map((chapter) => (
+            <ChapterCard key={chapter.id} chapter={chapter} />
           ))}
         </div>
       )}

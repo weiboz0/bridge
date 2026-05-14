@@ -4,35 +4,35 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { searchUnits, type SearchResultItem, type SearchError } from "@/lib/unit-search";
+import { searchChapters, type SearchResultItem, type SearchError } from "@/lib/chapter-search";
 
 /**
- * Plan 045 — UnitPickerDialog
+ * Plan 045 — ChapterPickerDialog
  *
- * A search-and-pick modal for attaching a teaching_unit to a topic.
+ * A search-and-pick modal for attaching a chapter to a topic.
  * Hand-rolled (no shadcn Dialog dependency) to match the project's
  * existing modal pattern (see editor/tiptap/help-overlay.tsx).
  *
- * The dialog calls /api/units/search?linkableForCourse=<courseId>
- * which returns Units the picker's caller can actually attach,
+ * The dialog calls /api/chapters/search?linkableForCourse=<courseId>
+ * which returns Chapters the picker's caller can actually attach,
  * decorated with linkedTopicId / linkedTopicTitle / canLink. Already-
  * linked rows render disabled with an "Already linked" badge.
  */
 
-interface UnitPickerDialogProps {
+interface ChapterPickerDialogProps {
   open: boolean;
   onClose: () => void;
   courseId: string;
   /**
-   * Called when the user picks a Unit. The dialog itself does NOT
-   * call the link-unit endpoint — the parent does, so it can refresh
+   * Called when the user picks a Chapter. The dialog itself does NOT
+   * call the link-chapter endpoint — the parent does, so it can refresh
    * its own state and handle errors in its own context.
    */
-  onPicked: (unitId: string) => Promise<void> | void;
+  onPicked: (chapterId: string) => Promise<void> | void;
   /**
    * The topic this picker is attaching to. Used to suppress the
    * "Already linked" disabled state when the row is the topic's own
-   * currently-linked Unit (you'd just be re-picking what's there —
+   * currently-linked Chapter (you'd just be re-picking what's there —
    * the parent can decide to no-op or show a "Currently linked here"
    * badge).
    */
@@ -44,13 +44,13 @@ const MATERIAL_TYPES = ["", "notes", "slides", "worksheet", "reference"] as cons
 const SEARCH_DEBOUNCE_MS = 250;
 const PAGE_SIZE = 20;
 
-export function UnitPickerDialog({
+export function ChapterPickerDialog({
   open,
   onClose,
   courseId,
   onPicked,
   currentTopicId,
-}: UnitPickerDialogProps) {
+}: ChapterPickerDialogProps) {
   const [query, setQuery] = useState("");
   const [grade, setGrade] = useState<string>("");
   const [materialType, setMaterialType] = useState<string>("");
@@ -67,7 +67,7 @@ export function UnitPickerDialog({
       const isLoadMore = cursor != null;
       if (isLoadMore) setLoadingMore(true);
       else setLoading(true);
-      const result = await searchUnits({
+      const result = await searchChapters({
         q: query || undefined,
         gradeLevel: grade || undefined,
         materialType: materialType || undefined,
@@ -123,10 +123,10 @@ export function UnitPickerDialog({
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose]);
 
-  async function handlePick(unitId: string) {
-    setPicking(unitId);
+  async function handlePick(chapterId: string) {
+    setPicking(chapterId);
     try {
-      await onPicked(unitId);
+      await onPicked(chapterId);
       onClose();
     } finally {
       setPicking(null);
@@ -139,7 +139,7 @@ export function UnitPickerDialog({
     <div
       role="dialog"
       aria-modal="true"
-      aria-labelledby="unit-picker-title"
+      aria-labelledby="chapter-picker-title"
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
       onClick={(e) => {
         // Close on backdrop click only — never on inner-card click.
@@ -148,8 +148,8 @@ export function UnitPickerDialog({
     >
       <div className="w-full max-w-2xl max-h-[80vh] flex flex-col rounded-lg border bg-background shadow-xl">
         <div className="flex items-center justify-between border-b px-4 py-3">
-          <h2 id="unit-picker-title" className="text-lg font-semibold">
-            Pick a Teaching Unit
+          <h2 id="chapter-picker-title" className="text-lg font-semibold">
+            Pick a Chapter
           </h2>
           <Button variant="ghost" size="sm" onClick={onClose} aria-label="Close picker">
             ×
@@ -223,15 +223,15 @@ export function UnitPickerDialog({
               role="alert"
               className="rounded border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive"
             >
-              Couldn&apos;t load units (
+              Couldn&apos;t load chapters (
               {error === "network" ? "network error" : "server error"}). Try again.
             </div>
           )}
           {!loading && !error && items.length === 0 && (
             <p className="py-6 text-center text-sm text-muted-foreground">
-              No matching units. Try a broader search or create one in the{" "}
-              <a href="/teacher/units" className="underline">
-                Units library
+              No matching chapters. Try a broader search or create one in the{" "}
+              <a href="/teacher/chapters" className="underline">
+                Chapters library
               </a>
               .
             </p>
@@ -295,7 +295,7 @@ export function UnitPickerDialog({
                       ) : item.canLink === false ? (
                         <span
                           className="inline-flex items-center rounded-md border bg-muted px-2 py-1 text-xs text-muted-foreground"
-                          title="You don't have permission to link this unit"
+                          title="You don't have permission to link this chapter"
                         >
                           Cannot link
                         </span>

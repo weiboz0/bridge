@@ -34,7 +34,8 @@ const GO_PROXY_ROUTES = [
   "/api/test-cases/:path*",
   "/api/attempts/:path*",
   "/api/s/:path*",
-  "/api/units/:path*",
+  "/api/chapters/:path*",
+  "/api/books/:path*",
   "/api/collections/:path*",
   "/api/uploads/:path*",
   // Plan 053 phase 1: client-side mint of Hocuspocus connection
@@ -79,6 +80,14 @@ const nextConfig: NextConfig = {
         headers: COOP_COEP_HEADERS,
       },
     ];
+  },
+  async redirects() {
+    return [
+      { source: "/teacher/units/:path*", destination: "/teacher/chapters/:path*", permanent: true },
+      { source: "/admin/units/:path*",   destination: "/admin/chapters/:path*",   permanent: true },
+      { source: "/org/units/:path*",     destination: "/org/chapters/:path*",     permanent: true },
+      { source: "/student/units/:path*", destination: "/student/chapters/:path*", permanent: true },
+    ]
   },
   async rewrites() {
     const rules = GO_PROXY_ROUTES.map((source) => ({

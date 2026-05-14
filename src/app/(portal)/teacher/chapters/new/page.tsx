@@ -6,7 +6,7 @@ import { useSession } from "next-auth/react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { createUnit } from "@/lib/teaching-units"
+import { createChapter } from "@/lib/chapters"
 
 interface OrgMembership {
   orgId: string
@@ -16,7 +16,7 @@ interface OrgMembership {
   orgStatus: string
 }
 
-export default function CreateUnitPage() {
+export default function CreateChapterPage() {
   const router = useRouter()
   const { data: session } = useSession()
 
@@ -84,7 +84,7 @@ export default function CreateUnitPage() {
 
     const userId = session?.user?.id
     if (!userId) {
-      setError("You must be signed in to create a unit.")
+      setError("You must be signed in to create a chapter.")
       return
     }
 
@@ -104,7 +104,7 @@ export default function CreateUnitPage() {
     setError(null)
 
     try {
-      const unit = await createUnit({
+      const chapter = await createChapter({
         title: title.trim(),
         scope,
         scopeId: scope === "org" ? orgId : userId,
@@ -114,16 +114,16 @@ export default function CreateUnitPage() {
         estimatedMinutes: mins && !isNaN(mins) ? mins : undefined,
         materialType: materialType || undefined,
       })
-      router.push(`/teacher/units/${unit.id}/edit`)
+      router.push(`/teacher/chapters/${chapter.id}/edit`)
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create unit.")
+      setError(err instanceof Error ? err.message : "Failed to create chapter.")
       setSubmitting(false)
     }
   }
 
   return (
     <div className="p-6 max-w-xl">
-      <h1 className="text-2xl font-bold mb-6">Create Unit</h1>
+      <h1 className="text-2xl font-bold mb-6">Create Chapter</h1>
 
       <form onSubmit={handleSubmit} className="space-y-5">
         {/* Title */}
@@ -133,7 +133,7 @@ export default function CreateUnitPage() {
             id="title"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
-            placeholder="Unit title"
+            placeholder="Chapter title"
             required
           />
         </div>
@@ -160,7 +160,7 @@ export default function CreateUnitPage() {
               <p className="text-sm text-muted-foreground">Loading organizations...</p>
             ) : orgs.length === 0 ? (
               <p className="text-sm text-destructive">
-                No organizations found. You must be a teacher or org admin in an active organization to create org-scoped units.
+                No organizations found. You must be a teacher or org admin in an active organization to create org-scoped chapters.
               </p>
             ) : (
               <select
@@ -186,7 +186,7 @@ export default function CreateUnitPage() {
             id="summary"
             value={summary}
             onChange={(e) => setSummary(e.target.value)}
-            placeholder="Brief description of the unit"
+            placeholder="Brief description of the chapter"
             rows={3}
             className="flex w-full rounded-lg border border-input bg-transparent px-2.5 py-1.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 resize-none"
           />
@@ -257,7 +257,7 @@ export default function CreateUnitPage() {
               click can't create a Personal unit before the form has a
               chance to flip to Org scope. */}
           <Button type="submit" disabled={submitting || orgsLoading}>
-            {submitting ? "Creating..." : orgsLoading ? "Loading..." : "Create Unit"}
+            {submitting ? "Creating..." : orgsLoading ? "Loading..." : "Create Chapter"}
           </Button>
           <Button
             type="button"

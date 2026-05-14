@@ -12,10 +12,10 @@ import {
   orgMemberships,
   problems,
   problemSolutions,
-  teachingUnits,
+  chapters as teachingUnits,
   topicProblems,
   topics,
-  unitDocuments,
+  chapterDocuments as unitDocuments,
   users,
 } from "@/lib/db/schema";
 import { runImporter } from "../../scripts/python-101/import";
@@ -285,7 +285,7 @@ describe("python-101 importer", () => {
 
     // unit_documents rebuilt as { type: doc, content: [problem-ref...] }
     const docRows = await testDb.select().from(unitDocuments);
-    const ourDocs = docRows.filter((d) => tree.unitIds.includes(d.unitId));
+    const ourDocs = docRows.filter((d) => tree.unitIds.includes(d.chapterId));
     expect(ourDocs).toHaveLength(2);
     const u1Doc = ourDocs.find(
       (d) => (d.blocks as { content?: unknown[] }).content?.length === 2,
@@ -654,7 +654,7 @@ describe("python-101 importer", () => {
       const [cloneDoc] = await testDb
         .select({ blocks: unitDocuments.blocks })
         .from(unitDocuments)
-        .where(eq(unitDocuments.unitId, ourCloneUnits[0].id));
+        .where(eq(unitDocuments.chapterId, ourCloneUnits[0].id));
       expect(cloneDoc).toBeTruthy();
       expect((cloneDoc.blocks as { type: string }).type).toBe("doc");
 

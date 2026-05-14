@@ -101,8 +101,8 @@ export function Sidebar({ userName, roles, currentRole: _currentRole }: SidebarP
       </aside>
 
       {/* Mobile bottom nav — uses primary role's nav items uniformly.
-          Active item highlighted via longest-match (so /teacher/units
-          highlights "Units", not "Dashboard"). */}
+          Active item highlighted via longest-match (so /teacher/chapters
+          highlights "Chapters", not "Dashboard"). */}
       <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-background border-t border-border z-40 flex justify-around py-2">
         {mobileItems.map((item, i) => {
           const isActive = i === mobileActiveIndex;

@@ -100,7 +100,7 @@ export function StudentSession({
   }, [sessionId, classId, returnPath, userId]);
 
   // Plan 044 phase 2: render the linked teaching_unit per topic.
-  // Click-through opens the Unit's projected view at /student/units/<id>
+  // Click-through opens the Chapter's projected view at /student/chapters/<id>
   // in a new tab so the editor pane isn't disturbed.
   const lessonPanel = topics.length > 0 ? (
     <div className="overflow-auto p-4 space-y-4">
@@ -109,7 +109,7 @@ export function StudentSession({
           <h3 className="text-base font-semibold mb-2">{t.title}</h3>
           {t.unitId ? (
             <Link
-              href={`/student/units/${t.unitId}`}
+              href={`/student/chapters/${t.unitId}`}
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex items-center gap-2 rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm hover:border-amber-400 hover:text-amber-800"

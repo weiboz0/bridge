@@ -3,8 +3,8 @@ import { api } from "@/lib/api-client";
 import { ApiError } from "@/lib/api-error";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
-// Plan 079 — read-only platform-admin unit detail. The list page at
-// /admin/units links here; the previous link to /teacher/units/{id}/edit
+// Plan 079 — read-only platform-admin chapter detail. The list page at
+// /admin/chapters links here; the previous link to /teacher/chapters/{id}/edit
 // bounced platform admins without the teacher role back to /admin
 // because <PortalShell portalRole="teacher"> redirects on missing role.
 //
@@ -12,7 +12,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 // state, not human-readable). No edit/publish/archive in v1 — defer to a
 // separate plan that handles realtime-collab semantics.
 
-interface UnitDetail {
+interface ChapterDetail {
   id: string;
   scope: string;
   scopeId: string | null;
@@ -50,7 +50,7 @@ function statusBadge(status: string): string {
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export default async function AdminUnitDetailPage({
+export default async function AdminChapterDetailPage({
   params,
 }: {
   params: Promise<{ id: string }>;
@@ -59,13 +59,13 @@ export default async function AdminUnitDetailPage({
 
   if (!UUID_RE.test(id)) {
     return (
-      <NotFoundState id={id} reason="Invalid unit id format" />
+      <NotFoundState id={id} reason="Invalid chapter id format" />
     );
   }
 
-  let unit: UnitDetail;
+  let chapter: ChapterDetail;
   try {
-    unit = await api<UnitDetail>(`/api/units/${id}`);
+    chapter = await api<ChapterDetail>(`/api/chapters/${id}`);
   } catch (e) {
     if (e instanceof ApiError) {
       // Per Kimi K2.6 plan-review BLOCKER 4(b): the Go handler returns
@@ -90,20 +90,20 @@ export default async function AdminUnitDetailPage({
       <BackLink />
       <div className="flex items-start justify-between gap-4">
         <div className="space-y-1">
-          <h1 className="text-2xl font-bold">{unit.title}</h1>
-          {unit.slug && (
-            <p className="text-xs text-muted-foreground font-mono">{unit.slug}</p>
+          <h1 className="text-2xl font-bold">{chapter.title}</h1>
+          {chapter.slug && (
+            <p className="text-xs text-muted-foreground font-mono">{chapter.slug}</p>
           )}
         </div>
         <span
-          className={`shrink-0 inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-medium ${statusBadge(unit.status)}`}
+          className={`shrink-0 inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-medium ${statusBadge(chapter.status)}`}
         >
-          {STATUS_LABELS[unit.status] ?? unit.status}
+          {STATUS_LABELS[chapter.status] ?? chapter.status}
         </span>
       </div>
 
-      {unit.summary && (
-        <p className="text-sm text-muted-foreground">{unit.summary}</p>
+      {chapter.summary && (
+        <p className="text-sm text-muted-foreground">{chapter.summary}</p>
       )}
 
       <Card>
@@ -111,24 +111,24 @@ export default async function AdminUnitDetailPage({
           <CardTitle className="text-base">Metadata</CardTitle>
         </CardHeader>
         <CardContent className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
-          <Field label="Scope" value={SCOPE_LABELS[unit.scope] ?? unit.scope} />
-          <Field label="Scope ID" value={unit.scopeId ?? "—"} mono />
+          <Field label="Scope" value={SCOPE_LABELS[chapter.scope] ?? chapter.scope} />
+          <Field label="Scope ID" value={chapter.scopeId ?? "—"} mono />
           <Field
             label="Material type"
-            value={unit.materialType || "—"}
+            value={chapter.materialType || "—"}
           />
           <Field
             label="Grade level"
-            value={unit.gradeLevel ?? "—"}
+            value={chapter.gradeLevel ?? "—"}
           />
           <Field
             label="Created by"
-            value={unit.createdBy}
+            value={chapter.createdBy}
             mono
           />
           <Field
             label="Created at"
-            value={new Date(unit.createdAt).toLocaleString()}
+            value={new Date(chapter.createdAt).toLocaleString()}
           />
         </CardContent>
       </Card>
@@ -139,10 +139,10 @@ export default async function AdminUnitDetailPage({
 function BackLink() {
   return (
     <Link
-      href="/admin/units"
+      href="/admin/chapters"
       className="text-sm text-primary hover:underline inline-flex items-center gap-1"
     >
-      ← Back to all units
+      ← Back to all chapters
     </Link>
   );
 }
@@ -172,9 +172,9 @@ function NotFoundState({ id, reason }: { id: string; reason?: string }) {
   return (
     <div className="p-6 max-w-2xl space-y-3">
       <BackLink />
-      <h1 className="text-2xl font-bold">Unit not found</h1>
+      <h1 className="text-2xl font-bold">Chapter not found</h1>
       <p className="text-sm text-muted-foreground">
-        No unit with id <span className="font-mono text-xs">{id}</span>{" "}
+        No chapter with id <span className="font-mono text-xs">{id}</span>{" "}
         {reason ? `(${reason})` : "exists, or it has been deleted."}
       </p>
     </div>
@@ -191,7 +191,7 @@ function ErrorState({
   return (
     <div className="p-6 max-w-2xl space-y-3">
       <BackLink />
-      <h1 className="text-2xl font-bold">Couldn&apos;t load unit</h1>
+      <h1 className="text-2xl font-bold">Couldn&apos;t load chapter</h1>
       <p className="text-sm text-muted-foreground">
         Something went wrong while loading this unit.
       </p>

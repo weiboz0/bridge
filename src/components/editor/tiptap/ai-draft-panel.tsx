@@ -2,7 +2,7 @@
 
 import { useCallback, useState } from "react"
 import { Button } from "@/components/ui/button"
-import { draftWithAI } from "@/lib/teaching-units"
+import { draftWithAI } from "@/lib/chapters"
 
 export interface AIDraftPanelProps {
   /** The unit ID for the API call. */

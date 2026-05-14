@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { UnitPickerDialog } from "@/components/teacher/unit-picker-dialog";
+import { ChapterPickerDialog } from "@/components/teacher/chapter-picker-dialog";
 import { isValidUUID } from "@/lib/utils";
 
 interface TopicData {
@@ -16,7 +16,7 @@ interface TopicData {
   description: string;
 }
 
-interface LinkedUnit {
+interface LinkedChapter {
   id: string;
   title: string;
   materialType: string;
@@ -40,8 +40,8 @@ type LoadState =
  * organizer; teaching material lives in the linked teaching_unit.
  *
  * Plan 045: paste-Unit-ID input replaced with a real picker dialog
- * (UnitPickerDialog), backed by the picker-mode SearchUnits endpoint.
- * Adds Replace and Unlink affordances when a Unit is currently linked.
+ * (ChapterPickerDialog), backed by the picker-mode SearchChapters endpoint.
+ * Adds Replace and Unlink affordances when a Chapter is currently linked.
  */
 export default function TopicEditorPage() {
   const params = useParams<{ id: string; topicId: string }>();
@@ -52,7 +52,7 @@ export default function TopicEditorPage() {
   const [saving, setSaving] = useState(false);
   const [loadState, setLoadState] = useState<LoadState>({ kind: "loading" });
 
-  const [linkedUnit, setLinkedUnit] = useState<LinkedUnit | null>(null);
+  const [linkedChapter, setLinkedChapter] = useState<LinkedChapter | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [linkError, setLinkError] = useState<string | null>(null);
   const [unlinking, setUnlinking] = useState(false);
@@ -87,29 +87,29 @@ export default function TopicEditorPage() {
     }
   }, [params.id, params.topicId, paramsValid]);
 
-  const loadLinkedUnit = useCallback(async () => {
+  const loadLinkedChapter = useCallback(async () => {
     if (!isValidUUID(params.topicId)) {
-      setLinkedUnit(null);
+      setLinkedChapter(null);
       return;
     }
-    const res = await fetch(`/api/units/by-topic/${params.topicId}`);
+    const res = await fetch(`/api/chapters/by-topic/${params.topicId}`);
     if (res.ok) {
       const data = await res.json();
-      setLinkedUnit({
+      setLinkedChapter({
         id: data.id,
         title: data.title,
         materialType: data.materialType,
         status: data.status,
       });
     } else {
-      setLinkedUnit(null);
+      setLinkedChapter(null);
     }
   }, [params.topicId]);
 
   useEffect(() => {
     loadTopic();
-    loadLinkedUnit();
-  }, [loadTopic, loadLinkedUnit]);
+    loadLinkedChapter();
+  }, [loadTopic, loadLinkedChapter]);
 
   async function handleSaveMetadata() {
     setSaving(true);
@@ -121,26 +121,26 @@ export default function TopicEditorPage() {
     setSaving(false);
   }
 
-  async function handlePicked(unitId: string) {
+  async function handlePicked(chapterId: string) {
     setLinkError(null);
     const res = await fetch(
-      `/api/courses/${params.id}/topics/${params.topicId}/link-unit`,
+      `/api/courses/${params.id}/topics/${params.topicId}/link-chapter`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ unitId }),
+        body: JSON.stringify({ chapterId }),
       }
     );
     if (res.ok) {
-      await loadLinkedUnit();
+      await loadLinkedChapter();
     } else {
       const body = await res.json().catch(() => null);
-      if (res.status === 404) setLinkError("Unit not found.");
+      if (res.status === 404) setLinkError("Chapter not found.");
       else if (res.status === 403)
-        setLinkError("You don't have permission to link that unit.");
+        setLinkError("You don't have permission to link that chapter.");
       else if (res.status === 409)
-        setLinkError(body?.error ?? "This focus area is already linked to a different unit.");
-      else setLinkError(body?.error ?? "Couldn't link the unit. Try again.");
+        setLinkError(body?.error ?? "This focus area is already linked to a different chapter.");
+      else setLinkError(body?.error ?? "Couldn't link the chapter. Try again.");
     }
   }
 
@@ -149,14 +149,14 @@ export default function TopicEditorPage() {
     setUnlinking(true);
     try {
       const res = await fetch(
-        `/api/courses/${params.id}/topics/${params.topicId}/link-unit`,
+        `/api/courses/${params.id}/topics/${params.topicId}/link-chapter`,
         { method: "DELETE" }
       );
       if (res.ok) {
-        await loadLinkedUnit();
+        await loadLinkedChapter();
       } else {
         const body = await res.json().catch(() => null);
-        setLinkError(body?.error ?? "Couldn't detach the unit. Try again.");
+        setLinkError(body?.error ?? "Couldn't detach the chapter. Try again.");
       }
     } finally {
       setUnlinking(false);
@@ -250,23 +250,23 @@ export default function TopicEditorPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg">Teaching Unit</CardTitle>
+          <CardTitle className="text-lg">Chapter</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3 text-sm">
-          {linkedUnit ? (
+          {linkedChapter ? (
             <div className="space-y-3">
               <div className="flex items-start justify-between rounded-md border p-3">
                 <div className="space-y-1">
-                  <p className="font-medium">{linkedUnit.title}</p>
+                  <p className="font-medium">{linkedChapter.title}</p>
                   <p className="text-xs text-muted-foreground">
-                    {linkedUnit.materialType} · {linkedUnit.status}
+                    {linkedChapter.materialType} · {linkedChapter.status}
                   </p>
                 </div>
                 <Link
-                  href={`/teacher/units/${linkedUnit.id}/edit`}
+                  href={`/teacher/chapters/${linkedChapter.id}/edit`}
                   className="text-primary text-xs underline self-center"
                 >
-                  Edit Unit →
+                  Edit Chapter →
                 </Link>
               </div>
               <div className="flex gap-2">
@@ -287,15 +287,15 @@ export default function TopicEditorPage() {
           ) : (
             <div className="space-y-3">
               <p className="text-muted-foreground">
-                No teaching unit linked. Search and pick one from the library, or
+                No chapter linked. Search and pick one from the library, or
                 create one in the{" "}
-                <Link href="/teacher/units" className="underline">
-                  Units library
+                <Link href="/teacher/chapters" className="underline">
+                  Chapters library
                 </Link>
                 .
               </p>
               <Button size="sm" onClick={() => setPickerOpen(true)}>
-                Pick a unit…
+                Pick a chapter…
               </Button>
             </div>
           )}
@@ -303,7 +303,7 @@ export default function TopicEditorPage() {
         </CardContent>
       </Card>
 
-      <UnitPickerDialog
+      <ChapterPickerDialog
         open={pickerOpen}
         onClose={() => setPickerOpen(false)}
         courseId={params.id}

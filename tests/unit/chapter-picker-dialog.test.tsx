@@ -3,30 +3,30 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import React from "react";
 
-// Mock the unit-search client BEFORE importing the dialog so that
-// the dialog picks up the mock when it pulls searchUnits in. Using
+// Mock the chapter-search client BEFORE importing the dialog so that
+// the dialog picks up the mock when it pulls searchChapters in. Using
 // vi.hoisted because vi.mock factories are hoisted to the top of the
 // file — a plain top-level const would not be initialized in time.
-const { searchUnitsMock } = vi.hoisted(() => ({ searchUnitsMock: vi.fn() }));
-vi.mock("@/lib/unit-search", () => ({
-  searchUnits: searchUnitsMock,
+const { searchChaptersMock } = vi.hoisted(() => ({ searchChaptersMock: vi.fn() }));
+vi.mock("@/lib/chapter-search", () => ({
+  searchChapters: searchChaptersMock,
 }));
 
-import { UnitPickerDialog } from "@/components/teacher/unit-picker-dialog";
+import { ChapterPickerDialog } from "@/components/teacher/chapter-picker-dialog";
 
 const COURSE_ID = "course-1";
 const TOPIC_ID = "topic-1";
 
 beforeEach(() => {
-  searchUnitsMock.mockReset();
+  searchChaptersMock.mockReset();
 });
 
 function makeItem(overrides: Partial<any> = {}) {
   return {
-    id: "unit-1",
+    id: "chapter-1",
     scope: "platform",
     scopeId: null,
-    title: "Sample Unit",
+    title: "Sample Chapter",
     slug: null,
     summary: "A short summary",
     gradeLevel: "K-5",
@@ -45,10 +45,10 @@ function makeItem(overrides: Partial<any> = {}) {
   };
 }
 
-describe("UnitPickerDialog", () => {
+describe("ChapterPickerDialog", () => {
   it("does not render when open=false", () => {
     render(
-      <UnitPickerDialog
+      <ChapterPickerDialog
         open={false}
         onClose={() => {}}
         courseId={COURSE_ID}
@@ -60,13 +60,13 @@ describe("UnitPickerDialog", () => {
   });
 
   it("opens, debounces a search call, and renders results", async () => {
-    searchUnitsMock.mockResolvedValueOnce({
+    searchChaptersMock.mockResolvedValueOnce({
       items: [makeItem({ id: "u1", title: "Loops Intro" })],
       nextCursor: null,
       error: null,
     });
     render(
-      <UnitPickerDialog
+      <ChapterPickerDialog
         open
         onClose={() => {}}
         courseId={COURSE_ID}
@@ -76,8 +76,8 @@ describe("UnitPickerDialog", () => {
     );
 
     expect(screen.getByRole("dialog")).toBeInTheDocument();
-    await waitFor(() => expect(searchUnitsMock).toHaveBeenCalledTimes(1));
-    expect(searchUnitsMock).toHaveBeenCalledWith(
+    await waitFor(() => expect(searchChaptersMock).toHaveBeenCalledTimes(1));
+    expect(searchChaptersMock).toHaveBeenCalledWith(
       expect.objectContaining({ linkableForCourse: COURSE_ID, limit: 20 })
     );
 
@@ -86,9 +86,9 @@ describe("UnitPickerDialog", () => {
   });
 
   it("typing in the search input fires a new debounced query", async () => {
-    searchUnitsMock.mockResolvedValue({ items: [], nextCursor: null, error: null });
+    searchChaptersMock.mockResolvedValue({ items: [], nextCursor: null, error: null });
     render(
-      <UnitPickerDialog
+      <ChapterPickerDialog
         open
         onClose={() => {}}
         courseId={COURSE_ID}
@@ -97,26 +97,26 @@ describe("UnitPickerDialog", () => {
       />
     );
 
-    await waitFor(() => expect(searchUnitsMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(searchChaptersMock).toHaveBeenCalledTimes(1));
 
     const input = screen.getByLabelText("Search") as HTMLInputElement;
     fireEvent.change(input, { target: { value: "python" } });
 
     await waitFor(() =>
-      expect(searchUnitsMock).toHaveBeenCalledWith(
+      expect(searchChaptersMock).toHaveBeenCalledWith(
         expect.objectContaining({ q: "python" })
       )
     );
   });
 
   it("renders an error banner on server failure (not the empty state)", async () => {
-    searchUnitsMock.mockResolvedValueOnce({
+    searchChaptersMock.mockResolvedValueOnce({
       items: [],
       nextCursor: null,
       error: "server",
     });
     render(
-      <UnitPickerDialog
+      <ChapterPickerDialog
         open
         onClose={() => {}}
         courseId={COURSE_ID}
@@ -128,13 +128,13 @@ describe("UnitPickerDialog", () => {
     await waitFor(() =>
       expect(screen.getByRole("alert")).toHaveTextContent(/server error/i)
     );
-    expect(screen.queryByText(/no matching units/i)).toBeNull();
+    expect(screen.queryByText(/no matching chapters/i)).toBeNull();
   });
 
   it("renders the empty state when results are genuinely empty", async () => {
-    searchUnitsMock.mockResolvedValueOnce({ items: [], nextCursor: null, error: null });
+    searchChaptersMock.mockResolvedValueOnce({ items: [], nextCursor: null, error: null });
     render(
-      <UnitPickerDialog
+      <ChapterPickerDialog
         open
         onClose={() => {}}
         courseId={COURSE_ID}
@@ -144,13 +144,13 @@ describe("UnitPickerDialog", () => {
     );
 
     await waitFor(() =>
-      expect(screen.getByText(/no matching units/i)).toBeInTheDocument()
+      expect(screen.getByText(/no matching chapters/i)).toBeInTheDocument()
     );
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("disables Pick for already-linked-elsewhere rows and shows the topic title when present", async () => {
-    searchUnitsMock.mockResolvedValueOnce({
+    searchChaptersMock.mockResolvedValueOnce({
       items: [
         makeItem({
           id: "u-linked",
@@ -164,7 +164,7 @@ describe("UnitPickerDialog", () => {
       error: null,
     });
     render(
-      <UnitPickerDialog
+      <ChapterPickerDialog
         open
         onClose={() => {}}
         courseId={COURSE_ID}
@@ -180,7 +180,7 @@ describe("UnitPickerDialog", () => {
   });
 
   it("cross-org linked row shows 'Already linked' with no topic title leak", async () => {
-    searchUnitsMock.mockResolvedValueOnce({
+    searchChaptersMock.mockResolvedValueOnce({
       items: [
         makeItem({
           id: "u-cross",
@@ -194,7 +194,7 @@ describe("UnitPickerDialog", () => {
       error: null,
     });
     render(
-      <UnitPickerDialog
+      <ChapterPickerDialog
         open
         onClose={() => {}}
         courseId={COURSE_ID}
@@ -210,8 +210,8 @@ describe("UnitPickerDialog", () => {
     expect(screen.queryByText(/other-topic/i)).toBeNull();
   });
 
-  it("shows a 'Linked here' badge for the topic's own currently-linked Unit", async () => {
-    searchUnitsMock.mockResolvedValueOnce({
+  it("shows a 'Linked here' badge for the topic's own currently-linked Chapter", async () => {
+    searchChaptersMock.mockResolvedValueOnce({
       items: [
         makeItem({
           id: "u-here",
@@ -225,7 +225,7 @@ describe("UnitPickerDialog", () => {
       error: null,
     });
     render(
-      <UnitPickerDialog
+      <ChapterPickerDialog
         open
         onClose={() => {}}
         courseId={COURSE_ID}
@@ -240,7 +240,7 @@ describe("UnitPickerDialog", () => {
   });
 
   it("clicking Pick calls onPicked and closes the dialog", async () => {
-    searchUnitsMock.mockResolvedValueOnce({
+    searchChaptersMock.mockResolvedValueOnce({
       items: [makeItem({ id: "u-pick", title: "To Pick" })],
       nextCursor: null,
       error: null,
@@ -248,7 +248,7 @@ describe("UnitPickerDialog", () => {
     const onPicked = vi.fn().mockResolvedValue(undefined);
     const onClose = vi.fn();
     render(
-      <UnitPickerDialog
+      <ChapterPickerDialog
         open
         onClose={onClose}
         courseId={COURSE_ID}
@@ -266,7 +266,7 @@ describe("UnitPickerDialog", () => {
   });
 
   it("Load more uses the cursor from page 1", async () => {
-    searchUnitsMock
+    searchChaptersMock
       .mockResolvedValueOnce({
         items: [makeItem({ id: "p1-a", title: "Page 1 A" })],
         nextCursor: "cursor-1",
@@ -278,7 +278,7 @@ describe("UnitPickerDialog", () => {
         error: null,
       });
     render(
-      <UnitPickerDialog
+      <ChapterPickerDialog
         open
         onClose={() => {}}
         courseId={COURSE_ID}
@@ -292,7 +292,7 @@ describe("UnitPickerDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: /load more/i }));
 
     await waitFor(() =>
-      expect(searchUnitsMock).toHaveBeenLastCalledWith(
+      expect(searchChaptersMock).toHaveBeenLastCalledWith(
         expect.objectContaining({ cursor: "cursor-1" })
       )
     );
@@ -302,10 +302,10 @@ describe("UnitPickerDialog", () => {
   });
 
   it("Escape key closes the dialog", async () => {
-    searchUnitsMock.mockResolvedValueOnce({ items: [], nextCursor: null, error: null });
+    searchChaptersMock.mockResolvedValueOnce({ items: [], nextCursor: null, error: null });
     const onClose = vi.fn();
     render(
-      <UnitPickerDialog
+      <ChapterPickerDialog
         open
         onClose={onClose}
         courseId={COURSE_ID}

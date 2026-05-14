@@ -716,7 +716,7 @@ function TeachingUnitEditor({ initialDoc, onSave, onDirty, unitId, collaborative
         editor.chain().focus().deleteRange({ from: blockStart, to: blockEnd }).run()
 
         // Call AI
-        import("@/lib/teaching-units").then(({ draftWithAI }) => {
+        import("@/lib/chapters").then(({ draftWithAI }) => {
           draftWithAI(resolvedUnitId, promptText)
             .then((result) => {
               if (result?.blocks) handleInsertAIBlocks(result.blocks)
@@ -742,7 +742,7 @@ function TeachingUnitEditor({ initialDoc, onSave, onDirty, unitId, collaborative
       if (!detail?.intent || !resolvedUnitId) return
       setAiGenerating(true)
       try {
-        const { draftWithAI } = await import("@/lib/teaching-units")
+        const { draftWithAI } = await import("@/lib/chapters")
         const result = await draftWithAI(resolvedUnitId, detail.intent)
         if (result?.blocks) {
           handleInsertAIBlocks(result.blocks)

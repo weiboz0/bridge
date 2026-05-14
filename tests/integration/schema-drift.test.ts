@@ -44,7 +44,7 @@ describe("schema drift (plan 054)", () => {
     });
   });
 
-  describe("teaching_units indexes (load-bearing partial-WHERE + expression)", () => {
+  describe("chapters indexes (load-bearing partial-WHERE + expression)", () => {
     async function indexDef(name: string): Promise<string | null> {
       const rows = (await testDb.execute(sql`
         SELECT pg_get_indexdef(c.oid) AS def
@@ -55,9 +55,9 @@ describe("schema drift (plan 054)", () => {
       return rows[0]?.def ?? null;
     }
 
-    it("teaching_units_scope_slug_uniq exists with COALESCE expression and partial WHERE", async () => {
-      const def = await indexDef("teaching_units_scope_slug_uniq");
-      expect(def, "teaching_units_scope_slug_uniq must exist in the live DB").not.toBeNull();
+    it("chapters_scope_slug_uniq exists with COALESCE expression and partial WHERE", async () => {
+      const def = await indexDef("chapters_scope_slug_uniq");
+      expect(def, "chapters_scope_slug_uniq must exist in the live DB").not.toBeNull();
       // The expression index uses COALESCE(scope_id::text, '') so
       // platform-scope rows (scope_id NULL) don't all collide.
       expect(def).toMatch(/COALESCE/i);
@@ -66,41 +66,41 @@ describe("schema drift (plan 054)", () => {
       expect(def).toMatch(/UNIQUE/i);
     });
 
-    it("teaching_units_topic_id_uniq exists with partial WHERE — load-bearing for plan 044", async () => {
-      const def = await indexDef("teaching_units_topic_id_uniq");
+    it("chapters_topic_id_uniq exists with partial WHERE — load-bearing for plan 044", async () => {
+      const def = await indexDef("chapters_topic_id_uniq");
       expect(def).not.toBeNull();
       expect(def).toMatch(/UNIQUE/i);
       expect(def).toMatch(/topic_id/i);
       expect(def).toMatch(/WHERE \(?topic_id IS NOT NULL\)?/i);
     });
 
-    it("teaching_units_search_idx is a GIN index on search_vector", async () => {
-      const def = await indexDef("teaching_units_search_idx");
+    it("chapters_search_idx is a GIN index on search_vector", async () => {
+      const def = await indexDef("chapters_search_idx");
       expect(def).not.toBeNull();
       expect(def).toMatch(/USING gin/i);
       expect(def).toMatch(/search_vector/);
     });
 
-    it("teaching_units_subject_tags_gin_idx is a GIN index on subject_tags", async () => {
-      const def = await indexDef("teaching_units_subject_tags_gin_idx");
+    it("chapters_subject_tags_gin_idx is a GIN index on subject_tags", async () => {
+      const def = await indexDef("chapters_subject_tags_gin_idx");
       expect(def).not.toBeNull();
       expect(def).toMatch(/USING gin/i);
       expect(def).toMatch(/subject_tags/);
     });
 
-    it("teaching_units_standards_tags_gin_idx is a GIN index on standards_tags", async () => {
-      const def = await indexDef("teaching_units_standards_tags_gin_idx");
+    it("chapters_standards_tags_gin_idx is a GIN index on standards_tags", async () => {
+      const def = await indexDef("chapters_standards_tags_gin_idx");
       expect(def).not.toBeNull();
       expect(def).toMatch(/USING gin/i);
       expect(def).toMatch(/standards_tags/);
     });
   });
 
-  describe("teaching_units columns", () => {
+  describe("chapters columns", () => {
     async function columnExists(name: string): Promise<boolean> {
       const rows = (await testDb.execute(sql`
         SELECT column_name FROM information_schema.columns
-        WHERE table_name = 'teaching_units' AND column_name = ${name}
+        WHERE table_name = 'chapters' AND column_name = ${name}
       `)) as unknown as Array<{ column_name: string }>;
       return rows.length > 0;
     }
@@ -125,7 +125,7 @@ describe("schema drift (plan 054)", () => {
         JOIN pg_class c ON c.oid = a.attrelid
         JOIN pg_namespace n ON n.oid = c.relnamespace
         WHERE n.nspname = 'public'
-          AND c.relname = 'teaching_units'
+          AND c.relname = 'chapters'
           AND a.attname = 'search_vector'
           AND a.attnum > 0
       `)) as unknown as Array<{ type_name: string; generated_kind: string }>;
