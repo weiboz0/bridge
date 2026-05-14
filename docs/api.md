@@ -360,3 +360,72 @@ Promote / demote a user as platform admin. Invalidates the cache entry for the t
 - `RequireAuth` returns `401` on `status='suspended'` regardless of admin status.
 - `OptionalAuth` treats suspended as unauthenticated (claims dropped, request proceeds without identity).
 - NextAuth `authorize()` does NOT currently check `users.status` — a suspended user can still complete sign-in but will 401 on the first subsequent Go-proxied request. Acceptable v1; a future plan will add the check for graceful "Account suspended" sign-in failure.
+
+---
+
+## Platform Admin — Organizations
+
+All endpoints require `is_platform_admin = true`. Same suspended-user semantics as the Platform Admin Users section.
+
+### `GET /api/admin/orgs/{orgID}`
+
+Return a single org enriched with active-membership counts per role.
+
+**Response (`200`):** `AdminOrg`:
+```json
+{
+  "id": "uuid",
+  "name": "Riverdale School",
+  "slug": "riverdale",
+  "type": "k12",
+  "status": "active",
+  "contactEmail": "principal@riverdale.edu",
+  "contactName": "Diana Riverdale",
+  "domain": null,
+  "settings": "{}",
+  "verifiedAt": null,
+  "createdAt": "2026-01-01T00:00:00Z",
+  "updatedAt": "2026-05-12T00:00:00Z",
+  "teacherCount": 5,
+  "studentCount": 32,
+  "parentCount": 3,
+  "adminCount": 2,
+  "totalActive": 42
+}
+```
+
+Counts come from a `LATERAL` subquery over `org_memberships WHERE org_id = $1 AND status = 'active'`, FILTER-aggregated by role. Suspended memberships are excluded.
+
+**Errors:**
+- `400` — Malformed UUID
+- `401` — Not authenticated (incl. suspended)
+- `403` — Not a platform admin
+- `404` — Organization not found
+
+### `PATCH /api/admin/orgs/{orgID}/details`
+
+Update an org's display fields. All three fields are required (no partial updates v1).
+
+**Request body:**
+```json
+{
+  "name": "Riverdale School District",
+  "contactName": "Diana Riverdale",
+  "contactEmail": "principal@riverdale.edu"
+}
+```
+
+Validation: each field is `strings.TrimSpace`'d before the non-empty check (leading/trailing whitespace is acceptable and stripped). `contactEmail` is validated via `net/mail.ParseAddress`.
+
+**Response (`200`):** the updated `AdminOrg` row (with current counts).
+
+**Errors:**
+- `400` — Empty field (post-trim), malformed email, or malformed UUID
+- `401` — Not authenticated (incl. suspended)
+- `403` — Not a platform admin
+- `404` — Organization not found (including the POST-UPDATE race where the org was deleted between request and write)
+
+### Existing org endpoints (unchanged)
+
+- `GET /api/admin/orgs?status=...` — list orgs (optional status filter).
+- `PATCH /api/admin/orgs/{orgID}` — status changes only (`{status: "active" | "suspended"}`). Distinct from `/details` to keep status-change semantics narrow.

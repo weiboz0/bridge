@@ -377,4 +377,38 @@ Open concerns flagged for external reviewers:
 
 ## Post-Execution Report
 
-(Placeholder — to be filled before opening the PR.)
+### Commits on the branch (in order)
+
+- Plan-review iterations: `58e0f8d` (initial) → `5d30deb` (self-review) → `24ff1c5` (Codex round-1 BLOCKER + 4 NITs + GLM impl nits) → `5d28593` (Codex round-2 precision).
+- Phase 1 backend (`bbf3685`): Codex implementation — `AdminOrg` struct + `GetAdminOrgByID` + `UpdateOrgDetails` + 2 new handlers + route wiring + 21 tests.
+- Phase 2 frontend (`655fee8`): Sonnet — `ConfirmDialog`, org detail page, `OrgEditDialog`, `OrgActions` rewrite, clickable name, replaced `window.confirm` in UserActions + OrgActions. 4 new test files + 1 extended (41 cases).
+- Phase 2 lint cleanup + Phase 3 docs (this commit): converted pre-existing `<a>` → `<Link>` in `/admin/orgs/page.tsx` that the new `[id]` route exposed to Next.js's lint rule; added Platform Admin Organizations section to `docs/api.md`.
+
+### Deviations from the plan
+
+- **`org-edit-trigger.tsx` is a separate file** — plan §2b implied an inline `"use client"` wrapper; Sonnet broke it out into `src/app/(portal)/admin/orgs/[id]/org-edit-trigger.tsx` as the client island so the server-component page stays server-side. Sensible split.
+- **Unanticipated lint cleanup**: adding the `[id]` route as a sibling triggered Next.js's `no-html-link-for-pages` rule to start flagging pre-existing `<a>` tags in `/admin/orgs/page.tsx`. Converted 5 anchors to `<Link>`. Strictly an improvement; lint count went from 105 (post-Phase 2) → 100 (better than plan-085 baseline of 101).
+- **Codex sandbox stalls did NOT recur** for plan 086 (smaller scope, single Phase 1 dispatch succeeded cleanly + committed + pushed).
+
+### Verification (final)
+
+- Vitest: 742 passed + 3 pre-existing failures in `auth-jwt-refresh.test.ts` (unchanged from main).
+- Go: ALL pass via `cd platform && TEST_DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test go test ./... -count=1 -timeout 180s`.
+- Lint: 100 errors / 45 warnings (1 BETTER than plan-085 baseline).
+- TSC: 7 errors (baseline unchanged).
+
+### Known limitations / follow-up work
+
+- **Slug / type / domain edit deferred** per Decision #4. Slug change has URL/SEO implications worth their own design pass; type and domain are deeper schema-level changes.
+- **No audit log** for admin org operations (suspend/reactivate/approve/edit). Same gap as plan 085's user ops. A future plan should add an `admin_actions` table and retrofit both.
+- **`window.confirm` remains** in `src/components/org/invite-member-modal.tsx` (domain mismatch warning) and `src/components/org/archive-class-button.tsx` (archive class). Out of scope per plan §2e — neither is auth-changing. Follow-up plan can migrate them once the generic `ConfirmDialog` is proven in admin paths.
+
+### File census (branch vs main)
+
+- 1 plan file: `docs/plans/086-admin-orgs-detail-and-confirm-dialogs.md`
+- Backend Go (4): `store/orgs.go`, `store/orgs_test.go`, `handlers/admin.go`, `handlers/admin_test.go`
+- Frontend source (6): `confirm-dialog.tsx` (new ui/), `org-edit-dialog.tsx` (new admin/), `orgs/[id]/page.tsx` (new route), `orgs/[id]/org-edit-trigger.tsx` (new client island), `org-actions.tsx` (rewrite), `user-actions.tsx` (rewrite), `admin/orgs/page.tsx` (modified)
+- Frontend tests (4 new + 1 extended): `confirm-dialog.test.tsx`, `admin-org-detail-page.test.tsx`, `org-edit-dialog.test.tsx`, `org-actions.test.tsx`, `user-actions.test.tsx` (extended)
+- Docs: `docs/api.md` Platform Admin Organizations section
+
+Ready for 4-way code review against the consolidated branch diff.

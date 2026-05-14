@@ -51,7 +51,7 @@ export default async function AdminOrgsPage({
               </p>
               <p>
                 If you don&apos;t expect to be a platform admin, return to{" "}
-                <a href="/" className="underline text-primary">your dashboard</a>.
+                <Link href="/" className="underline text-primary">your dashboard</Link>.
               </p>
             </CardContent>
           </Card>
@@ -66,10 +66,10 @@ export default async function AdminOrgsPage({
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Organizations</h1>
         <div className="flex gap-2 text-sm">
-          <a href="/admin/orgs" className={`px-2 py-1 rounded ${!status ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}>All</a>
-          <a href="/admin/orgs?status=pending" className={`px-2 py-1 rounded ${status === "pending" ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}>Pending</a>
-          <a href="/admin/orgs?status=active" className={`px-2 py-1 rounded ${status === "active" ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}>Active</a>
-          <a href="/admin/orgs?status=suspended" className={`px-2 py-1 rounded ${status === "suspended" ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}>Suspended</a>
+          <Link href="/admin/orgs" className={`px-2 py-1 rounded ${!status ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}>All</Link>
+          <Link href="/admin/orgs?status=pending" className={`px-2 py-1 rounded ${status === "pending" ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}>Pending</Link>
+          <Link href="/admin/orgs?status=active" className={`px-2 py-1 rounded ${status === "active" ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}>Active</Link>
+          <Link href="/admin/orgs?status=suspended" className={`px-2 py-1 rounded ${status === "suspended" ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}>Suspended</Link>
         </div>
       </div>
 
