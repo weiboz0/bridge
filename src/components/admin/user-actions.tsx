@@ -164,7 +164,6 @@ export function UserActions({
           confirmLabel={toggleAdminConfirmLabel}
           destructive={toggleAdminDestructive}
           typeToConfirm={userName}
-          typeToConfirmLabel={`Type ${userName} to confirm`}
         />
       )}
     </>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -47,6 +47,13 @@ export function ConfirmDialog({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [typed, setTyped] = useState("");
+
+  // Use useId so multiple ConfirmDialogs mounted simultaneously don't collide
+  // on the aria-labelledby target or the input id (e.g. nested confirm flows).
+  // Hook must run unconditionally — declared before the early return.
+  const reactId = useId();
+  const titleId = `${reactId}-title`;
+  const inputId = `${reactId}-type-input`;
 
   // Stable read of onClose from the keydown listener so the listener isn't
   // re-bound every parent render (callers commonly pass an inline arrow).
@@ -99,8 +106,6 @@ export function ConfirmDialog({
     }
   }
 
-  const titleId = "confirm-dialog-title";
-  const inputId = "confirm-dialog-type-input";
   const resolvedTypeLabel =
     typeToConfirmLabel ?? `Type ${typeToConfirm ?? ""} to confirm`;
 
