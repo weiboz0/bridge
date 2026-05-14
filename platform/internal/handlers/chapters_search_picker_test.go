@@ -16,21 +16,21 @@ import (
 	"github.com/weiboz0/bridge/platform/internal/store"
 )
 
-// Plan 045 picker mode: GET /api/units/search?linkableForCourse=<id>
+// Plan 045 picker mode: GET /api/chapters/search?linkableForCourse=<id>
 // returns Units linkable to that course (platform OR same-org),
 // decorated with linkedTopicId / linkedTopicTitle / canLink.
 
-// pickerSearchFixture extends unitFixture with a course owned by
+// pickerSearchFixture extends chapterFixture with a course owned by
 // teacher1 in org1, used as the picker target.
 type pickerSearchFixture struct {
-	*unitFixture
+	*chapterFixture
 	courseID  string
 	courseOrg *store.Org
 }
 
 func newPickerSearchFixture(t *testing.T, suffix string) *pickerSearchFixture {
 	t.Helper()
-	ufx := newUnitFixture(t, suffix)
+	ufx := newChapterFixture(t, suffix)
 	ctx := context.Background()
 	courses := store.NewCourseStore(ufx.sqlDB)
 	course, err := courses.CreateCourse(ctx, store.CreateCourseInput{
@@ -45,7 +45,7 @@ func newPickerSearchFixture(t *testing.T, suffix string) *pickerSearchFixture {
 		ufx.sqlDB.ExecContext(ctx, "DELETE FROM topics WHERE course_id = $1", course.ID)
 		ufx.sqlDB.ExecContext(ctx, "DELETE FROM courses WHERE id = $1", course.ID)
 	})
-	return &pickerSearchFixture{unitFixture: ufx, courseID: course.ID, courseOrg: ufx.org1}
+	return &pickerSearchFixture{chapterFixture: ufx, courseID: course.ID, courseOrg: ufx.org1}
 }
 
 func (fx *pickerSearchFixture) callPickerSearch(
@@ -56,12 +56,12 @@ func (fx *pickerSearchFixture) callPickerSearch(
 		params = url.Values{}
 	}
 	params.Set("linkableForCourse", fx.courseID)
-	req := httptest.NewRequest(http.MethodGet, "/api/units/search?"+params.Encode(), nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/chapters/search?"+params.Encode(), nil)
 	if claims != nil {
 		req = withClaims(req, claims)
 	}
 	w := httptest.NewRecorder()
-	fx.h.SearchUnits(w, req)
+	fx.h.SearchChapters(w, req)
 	return w.Code, w.Body.Bytes()
 }
 
@@ -97,7 +97,7 @@ func TestPickerSearch_NonCourseEditor_Forbidden(t *testing.T) {
 // Personal-scope Units are excluded from picker results.
 func TestPickerSearch_PersonalScopeExcluded(t *testing.T) {
 	fx := newPickerSearchFixture(t, "personal")
-	personalUnit := fx.mkUnit(t, "personal", &fx.teacher1.ID, "draft", "Mine", fx.teacher1.ID)
+	personalUnit := fx.mkChapter(t, "personal", &fx.teacher1.ID, "draft", "Mine", fx.teacher1.ID)
 	code, body := fx.callPickerSearch(t, fx.claims(fx.teacher1, false), nil)
 	require.Equal(t, http.StatusOK, code)
 	resp := decodePickerResp(t, body)
@@ -109,7 +109,7 @@ func TestPickerSearch_PersonalScopeExcluded(t *testing.T) {
 // Wrong-org (org2) Units are excluded.
 func TestPickerSearch_WrongOrgScopeExcluded(t *testing.T) {
 	fx := newPickerSearchFixture(t, "wrongorg")
-	wrongOrgUnit := fx.mkUnit(t, "org", &fx.org2.ID, "classroom_ready", "Other Org", fx.teacher2.ID)
+	wrongOrgUnit := fx.mkChapter(t, "org", &fx.org2.ID, "classroom_ready", "Other Org", fx.teacher2.ID)
 	code, body := fx.callPickerSearch(t, fx.claims(fx.teacher1, false), nil)
 	require.Equal(t, http.StatusOK, code)
 	resp := decodePickerResp(t, body)
@@ -124,7 +124,7 @@ func TestPickerSearch_WrongOrgScopeExcluded(t *testing.T) {
 // still see all statuses.
 func TestPickerSearch_DraftPlatformUnit_HiddenFromTeacher(t *testing.T) {
 	fx := newPickerSearchFixture(t, "platdraft")
-	platDraft := fx.mkUnit(t, "platform", nil, "draft", "Platform Draft", fx.admin.ID)
+	platDraft := fx.mkChapter(t, "platform", nil, "draft", "Platform Draft", fx.admin.ID)
 	code, body := fx.callPickerSearch(t, fx.claims(fx.teacher1, false), nil)
 	require.Equal(t, http.StatusOK, code)
 	resp := decodePickerResp(t, body)
@@ -139,7 +139,7 @@ func TestPickerSearch_DraftPlatformUnit_HiddenFromTeacher(t *testing.T) {
 // admin bypass still works).
 func TestPickerSearch_DraftPlatformUnit_VisibleToAdmin(t *testing.T) {
 	fx := newPickerSearchFixture(t, "platdraftadm")
-	platDraft := fx.mkUnit(t, "platform", nil, "draft", "Platform Draft Adm", fx.admin.ID)
+	platDraft := fx.mkChapter(t, "platform", nil, "draft", "Platform Draft Adm", fx.admin.ID)
 	code, body := fx.callPickerSearch(t, fx.claims(fx.admin, true), nil)
 	require.Equal(t, http.StatusOK, code)
 	resp := decodePickerResp(t, body)
@@ -157,7 +157,7 @@ func TestPickerSearch_DraftPlatformUnit_VisibleToAdmin(t *testing.T) {
 // Published platform-scope Units have canLink=true for course teachers.
 func TestPickerSearch_PublishedPlatformUnit_LinkableForTeacher(t *testing.T) {
 	fx := newPickerSearchFixture(t, "platpub")
-	platPub := fx.mkUnit(t, "platform", nil, "classroom_ready", "Platform Pub", fx.admin.ID)
+	platPub := fx.mkChapter(t, "platform", nil, "classroom_ready", "Platform Pub", fx.admin.ID)
 	code, body := fx.callPickerSearch(t, fx.claims(fx.teacher1, false), nil)
 	require.Equal(t, http.StatusOK, code)
 	resp := decodePickerResp(t, body)
@@ -180,7 +180,7 @@ func TestPickerSearch_AlreadyLinked_SameOrg_TitlePopulated(t *testing.T) {
 	ctx := context.Background()
 
 	// Make a unit in org1, link it to a topic in fx.courseID (also org1).
-	unit := fx.mkUnit(t, "org", &fx.org1.ID, "classroom_ready", "Linked Unit", fx.teacher1.ID)
+	unit := fx.mkChapter(t, "org", &fx.org1.ID, "classroom_ready", "Linked Unit", fx.teacher1.ID)
 
 	// Create a topic in fx.courseID.
 	var topicID, topicTitle string
@@ -194,7 +194,7 @@ func TestPickerSearch_AlreadyLinked_SameOrg_TitlePopulated(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { fx.sqlDB.ExecContext(ctx, "DELETE FROM topics WHERE id = $1", topicID) })
 
-	_, err = fx.h.Units.LinkUnitToTopic(ctx, unit.ID, topicID)
+	_, err = fx.h.Units.LinkChapterToTopic(ctx, unit.ID, topicID)
 	require.NoError(t, err)
 
 	code, body := fx.callPickerSearch(t, fx.claims(fx.teacher1, false), nil)
@@ -233,7 +233,7 @@ func TestPickerSearch_AlreadyLinked_CrossOrg_TitleRedacted(t *testing.T) {
 	ctx := context.Background()
 
 	// Make a platform-scope Unit, link it to a topic in org2's course.
-	unit := fx.mkUnit(t, "platform", nil, "classroom_ready", "Shared", fx.admin.ID)
+	unit := fx.mkChapter(t, "platform", nil, "classroom_ready", "Shared", fx.admin.ID)
 
 	courses := store.NewCourseStore(fx.sqlDB)
 	otherCourse, err := courses.CreateCourse(ctx, store.CreateCourseInput{
@@ -255,7 +255,7 @@ func TestPickerSearch_AlreadyLinked_CrossOrg_TitleRedacted(t *testing.T) {
 	).Scan(&otherTopicID)
 	require.NoError(t, err)
 
-	_, err = fx.h.Units.LinkUnitToTopic(ctx, unit.ID, otherTopicID)
+	_, err = fx.h.Units.LinkChapterToTopic(ctx, unit.ID, otherTopicID)
 	require.NoError(t, err)
 
 	// Search as teacher1 (org1, NOT platform admin). Cross-org title
@@ -280,7 +280,7 @@ func TestPickerSearch_AlreadyLinked_CrossOrg_AdminSeesTitle(t *testing.T) {
 	fx := newPickerSearchFixture(t, "linkedadmin")
 	ctx := context.Background()
 
-	unit := fx.mkUnit(t, "platform", nil, "classroom_ready", "Shared Adm", fx.admin.ID)
+	unit := fx.mkChapter(t, "platform", nil, "classroom_ready", "Shared Adm", fx.admin.ID)
 
 	courses := store.NewCourseStore(fx.sqlDB)
 	otherCourse, err := courses.CreateCourse(ctx, store.CreateCourseInput{
@@ -303,7 +303,7 @@ func TestPickerSearch_AlreadyLinked_CrossOrg_AdminSeesTitle(t *testing.T) {
 	).Scan(&otherTopicID)
 	require.NoError(t, err)
 
-	_, err = fx.h.Units.LinkUnitToTopic(ctx, unit.ID, otherTopicID)
+	_, err = fx.h.Units.LinkChapterToTopic(ctx, unit.ID, otherTopicID)
 	require.NoError(t, err)
 
 	code, body := fx.callPickerSearch(t, fx.claims(fx.admin, true), nil)
@@ -321,15 +321,15 @@ func TestPickerSearch_AlreadyLinked_CrossOrg_AdminSeesTitle(t *testing.T) {
 // materialType filter narrows results.
 func TestPickerSearch_MaterialTypeFilter(t *testing.T) {
 	fx := newPickerSearchFixture(t, "mattype")
-	notes := fx.mkUnit(t, "platform", nil, "classroom_ready", "Notes Doc", fx.admin.ID)
-	// Override the material type via direct SQL since mkUnit defaults to notes.
+	notes := fx.mkChapter(t, "platform", nil, "classroom_ready", "Notes Doc", fx.admin.ID)
+	// Override the material type via direct SQL since mkChapter defaults to notes.
 	_, err := fx.sqlDB.ExecContext(context.Background(),
-		"UPDATE teaching_units SET material_type = 'slides' WHERE id = $1", notes.ID)
+		"UPDATE chapters SET material_type = 'slides' WHERE id = $1", notes.ID)
 	require.NoError(t, err)
 
-	worksheet := fx.mkUnit(t, "platform", nil, "classroom_ready", "Worksheet Doc", fx.admin.ID)
+	worksheet := fx.mkChapter(t, "platform", nil, "classroom_ready", "Worksheet Doc", fx.admin.ID)
 	_, err = fx.sqlDB.ExecContext(context.Background(),
-		"UPDATE teaching_units SET material_type = 'worksheet' WHERE id = $1", worksheet.ID)
+		"UPDATE chapters SET material_type = 'worksheet' WHERE id = $1", worksheet.ID)
 	require.NoError(t, err)
 
 	code, body := fx.callPickerSearch(t,
@@ -361,11 +361,11 @@ func TestPickerSearch_CursorPagination(t *testing.T) {
 	// the order is deterministic. Updated_at descending = u4, u3, u2, u1, u0.
 	ids := make([]string, 5)
 	for i := 0; i < 5; i++ {
-		u := fx.mkUnit(t, "platform", nil, "classroom_ready",
+		u := fx.mkChapter(t, "platform", nil, "classroom_ready",
 			"Cursor Unit "+string(rune('A'+i)), fx.admin.ID)
 		ids[i] = u.ID
 		_, err := fx.sqlDB.ExecContext(ctx,
-			"UPDATE teaching_units SET updated_at = $1 WHERE id = $2",
+			"UPDATE chapters SET updated_at = $1 WHERE id = $2",
 			time.Date(2026, 4, 27, 12, i, 0, 0, time.UTC), u.ID)
 		require.NoError(t, err)
 	}

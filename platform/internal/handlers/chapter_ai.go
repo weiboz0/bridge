@@ -17,19 +17,19 @@ import (
 	"github.com/weiboz0/bridge/platform/internal/store"
 )
 
-// UnitAIHandler serves AI-assisted unit drafting endpoints.
-type UnitAIHandler struct {
-	Units   *store.TeachingUnitStore
+// ChapterAIHandler serves AI-assisted chapter drafting endpoints.
+type ChapterAIHandler struct {
+	Units   *store.ChapterStore
 	Orgs    *store.OrgStore
 	Backend llm.Backend // may be nil if LLM not configured
 }
 
-func (h *UnitAIHandler) Routes(r chi.Router) {
-	r.Route("/api/units/{id}/draft-with-ai", func(r chi.Router) {
+func (h *ChapterAIHandler) Routes(r chi.Router) {
+	r.Route("/api/chapters/{id}/draft-with-ai", func(r chi.Router) {
 		r.Use(ValidateUUIDParam("id"))
 		r.Post("/", h.DraftWithAI)
 	})
-	r.Route("/api/units/{id}/ai-transform", func(r chi.Router) {
+	r.Route("/api/chapters/{id}/ai-transform", func(r chi.Router) {
 		r.Use(ValidateUUIDParam("id"))
 		r.Post("/", h.AITransform)
 	})
@@ -37,9 +37,9 @@ func (h *UnitAIHandler) Routes(r chi.Router) {
 
 const maxIntentLen = 2000
 
-// draftSystemPrompt is the system prompt sent to the LLM for unit drafting.
+// draftSystemPrompt is the system prompt sent to the LLM for chapter drafting.
 // It describes the available block types and their JSON shapes so the LLM
-// can use the provided tools to generate a structured teaching unit.
+// can use the provided tools to generate a structured chapter.
 // materialTypeGuidelines maps material_type to AI writing style guidance.
 var materialTypeGuidelines = map[string]string{
 	"notes": `Writing style: DETAILED NOTES
@@ -71,7 +71,7 @@ var materialTypeGuidelines = map[string]string{
 - Minimize prose — every word should earn its place.`,
 }
 
-const draftSystemPrompt = `You are a curriculum designer. Given a teacher's intent, generate a teaching unit composed of structured blocks.
+const draftSystemPrompt = `You are a curriculum designer. Given a teacher's intent, generate a chapter composed of structured blocks.
 
 Use the provided tools to build the unit. Call them in sequence to compose the lesson.
 
@@ -95,7 +95,7 @@ func draftToolDefs() []llm.ToolSpec {
 	return []llm.ToolSpec{
 		{
 			Name:        "add_prose",
-			Description: "Add a prose paragraph to the teaching unit.",
+			Description: "Add a prose paragraph to the chapter.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -269,10 +269,10 @@ func ToolCallsToBlocks(calls []llm.ToolCall) []map[string]any {
 	return blocks
 }
 
-// DraftWithAI handles POST /api/units/{id}/draft-with-ai.
+// DraftWithAI handles POST /api/chapters/{id}/draft-with-ai.
 // Accepts an intent string, calls the LLM with tool definitions, and returns
 // the generated blocks for the frontend to insert into the editor.
-func (h *UnitAIHandler) DraftWithAI(w http.ResponseWriter, r *http.Request) {
+func (h *ChapterAIHandler) DraftWithAI(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
 		writeError(w, http.StatusUnauthorized, "Unauthorized")
@@ -284,10 +284,10 @@ func (h *UnitAIHandler) DraftWithAI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	unitID := chi.URLParam(r, "id")
+	chapterID := chi.URLParam(r, "id")
 
 	// Load unit and check edit access.
-	unit, err := h.Units.GetUnit(r.Context(), unitID)
+	unit, err := h.Units.GetChapter(r.Context(), chapterID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
@@ -296,7 +296,7 @@ func (h *UnitAIHandler) DraftWithAI(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "Not found")
 		return
 	}
-	if !h.canEditUnit(r.Context(), claims, unit.Scope, unit.ScopeID) {
+	if !h.canEditChapter(r.Context(), claims, unit.Scope, unit.ScopeID) {
 		writeError(w, http.StatusForbidden, "Not authorized to edit this unit")
 		return
 	}
@@ -322,7 +322,7 @@ func (h *UnitAIHandler) DraftWithAI(w http.ResponseWriter, r *http.Request) {
 	if guide, ok := materialTypeGuidelines[unit.MaterialType]; ok {
 		enrichedSystemPrompt += "\n\n" + guide
 	}
-	enrichedSystemPrompt += h.buildDraftContext(r.Context(), unitID, unit)
+	enrichedSystemPrompt += h.buildDraftContext(r.Context(), chapterID, unit)
 
 	// Build messages.
 	messages := []llm.Message{
@@ -338,7 +338,7 @@ func (h *UnitAIHandler) DraftWithAI(w http.ResponseWriter, r *http.Request) {
 	if h.Backend.SupportsTools() {
 		resp, err := h.Backend.ChatWithTools(r.Context(), messages, tools, llm.WithMaxTokens(4000))
 		if err != nil {
-			slog.Error("AI draft LLM call failed", "error", err, "unitId", unitID)
+			slog.Error("AI draft LLM call failed", "error", err, "chapterId", chapterID)
 			writeError(w, http.StatusBadGateway, "AI backend error")
 			return
 		}
@@ -374,7 +374,7 @@ Return ONLY the JSON array, no other text.`
 
 		resp, err := h.Backend.Chat(r.Context(), fallbackMessages, llm.WithMaxTokens(4000))
 		if err != nil {
-			slog.Error("AI draft LLM call failed (fallback)", "error", err, "unitId", unitID)
+			slog.Error("AI draft LLM call failed (fallback)", "error", err, "chapterId", chapterID)
 			writeError(w, http.StatusBadGateway, "AI backend error")
 			return
 		}
@@ -383,7 +383,7 @@ Return ONLY the JSON array, no other text.`
 	}
 
 	if len(blocks) == 0 {
-		slog.Warn("AI draft produced no blocks", "unitId", unitID)
+		slog.Warn("AI draft produced no blocks", "chapterId", chapterID)
 		writeError(w, http.StatusBadGateway, "AI produced no usable blocks — try rephrasing your intent")
 		return
 	}
@@ -407,44 +407,44 @@ const (
 // aiTransformPrompts maps action names to system prompts that instruct the LLM
 // how to transform the selected text.
 var aiTransformPrompts = map[string]string{
-	"rewrite": `You are a writing assistant for a K-12 teaching unit editor.
+	"rewrite": `You are a writing assistant for a K-12 chapter editor.
 The user has selected text in their document and wants it rewritten — same meaning, different words.
 Rephrase the selected text while maintaining the original meaning, tone, and level of detail.
 Do NOT add new information or change the intent.
 Return ONLY the rewritten text, no explanations or preamble.`,
 
-	"polish": `You are a writing assistant for a K-12 teaching unit editor.
+	"polish": `You are a writing assistant for a K-12 chapter editor.
 The user has selected text in their document and wants it polished — fix grammar, improve clarity, maintain tone.
 Correct any grammatical errors, improve sentence flow, and enhance clarity without changing the meaning.
 Keep the same level of formality and writing style.
 Return ONLY the polished text, no explanations or preamble.`,
 
-	"simplify": `You are a writing assistant for a K-12 teaching unit editor.
+	"simplify": `You are a writing assistant for a K-12 chapter editor.
 The user has selected text in their document and wants it simplified — reduce reading level for younger students.
 Rewrite the text using simpler vocabulary, shorter sentences, and clearer structure.
 Target a reading level appropriate for grades K-5.
 Maintain the core meaning and key information.
 Return ONLY the simplified text, no explanations or preamble.`,
 
-	"expand": `You are a writing assistant for a K-12 teaching unit editor.
+	"expand": `You are a writing assistant for a K-12 chapter editor.
 The user has selected text in their document and wants it expanded — elaborate with more detail.
 Add supporting details, examples, or explanations to make the text more comprehensive.
 Maintain the same writing style and level of formality.
 Do not introduce information that contradicts the original text.
 Return ONLY the expanded text, no explanations or preamble.`,
 
-	"summarize": `You are a writing assistant for a K-12 teaching unit editor.
+	"summarize": `You are a writing assistant for a K-12 chapter editor.
 The user has selected text in their document and wants it summarized — condense to key points.
 Distill the text down to its most essential points.
 Maintain accuracy and preserve the most important information.
 Return ONLY the summarized text, no explanations or preamble.`,
 }
 
-// AITransform handles POST /api/units/{id}/ai-transform.
+// AITransform handles POST /api/chapters/{id}/ai-transform.
 // Accepts a selected text passage, surrounding context, and an action to
 // perform (rewrite, polish, simplify, expand, summarize). Returns the
 // transformed text.
-func (h *UnitAIHandler) AITransform(w http.ResponseWriter, r *http.Request) {
+func (h *ChapterAIHandler) AITransform(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
 		writeError(w, http.StatusUnauthorized, "Unauthorized")
@@ -456,20 +456,20 @@ func (h *UnitAIHandler) AITransform(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	unitID := chi.URLParam(r, "id")
+	chapterID := chi.URLParam(r, "id")
 
 	// Load unit and check edit access.
-	unit, err := h.Units.GetUnit(r.Context(), unitID)
+	unit, err := h.Units.GetChapter(r.Context(), chapterID)
 	if err != nil {
-		slog.Error("AI transform: failed to fetch unit", "error", err, "unitId", unitID)
+		slog.Error("AI transform: failed to fetch unit", "error", err, "chapterId", chapterID)
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
 	}
 	if unit == nil {
-		writeError(w, http.StatusNotFound, "Unit not found")
+		writeError(w, http.StatusNotFound, "Chapter not found")
 		return
 	}
-	if !h.canEditUnit(r.Context(), claims, unit.Scope, unit.ScopeID) {
+	if !h.canEditChapter(r.Context(), claims, unit.Scope, unit.ScopeID) {
 		writeError(w, http.StatusForbidden, "Not authorized to edit this unit")
 		return
 	}
@@ -522,14 +522,14 @@ func (h *UnitAIHandler) AITransform(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := h.Backend.Chat(r.Context(), messages, llm.WithMaxTokens(4000))
 	if err != nil {
-		slog.Error("AI transform LLM call failed", "error", err, "unitId", unitID, "action", body.Action)
+		slog.Error("AI transform LLM call failed", "error", err, "chapterId", chapterID, "action", body.Action)
 		writeError(w, http.StatusBadGateway, "AI backend error")
 		return
 	}
 
 	result := resp.Content
 	if result == "" {
-		slog.Warn("AI transform returned empty content", "unitId", unitID, "action", body.Action)
+		slog.Warn("AI transform returned empty content", "chapterId", chapterID, "action", body.Action)
 		writeError(w, http.StatusBadGateway, "AI returned empty result — try again")
 		return
 	}
@@ -541,7 +541,7 @@ func (h *UnitAIHandler) AITransform(w http.ResponseWriter, r *http.Request) {
 
 // buildDraftContext fetches the unit's current document and metadata to enrich
 // the AI drafting system prompt with document-aware context.
-func (h *UnitAIHandler) buildDraftContext(ctx context.Context, unitID string, unit *store.TeachingUnit) string {
+func (h *ChapterAIHandler) buildDraftContext(ctx context.Context, chapterID string, unit *store.Chapter) string {
 	var parts []string
 
 	// Unit metadata
@@ -558,9 +558,9 @@ func (h *UnitAIHandler) buildDraftContext(ctx context.Context, unitID string, un
 	parts = append(parts, meta)
 
 	// Current document content (first 3000 chars)
-	doc, err := h.Units.GetDocument(ctx, unitID)
+	doc, err := h.Units.GetDocument(ctx, chapterID)
 	if err != nil {
-		slog.Warn("buildDraftContext: failed to fetch document", "error", err, "unitId", unitID)
+		slog.Warn("buildDraftContext: failed to fetch document", "error", err, "chapterId", chapterID)
 	} else if doc != nil && len(doc.Blocks) > 0 {
 		// Extract text content from the block JSON for context.
 		// Use the raw JSON truncated to 3000 chars as a rough summary.
@@ -577,13 +577,13 @@ func (h *UnitAIHandler) buildDraftContext(ctx context.Context, unitID string, un
 	return strings.Join(parts, "")
 }
 
-// TODO(plan-075-followup): canEditUnit (line ~592) has an inline
+// TODO(plan-075-followup): canEditChapter (line ~592) has an inline
 // GetUserRolesInOrg in the org-scope branch of a switch over scope. Migrating
 // to RequireOrgAuthority touches helper signature (returns bool, not
 // (bool, error)). See plan-075 §Out of scope, Bucket 2.
 
-// canEditUnit delegates to the same access logic as TeachingUnitHandler.
-func (h *UnitAIHandler) canEditUnit(ctx context.Context, c *auth.Claims, scope string, scopeID *string) bool {
+// canEditChapter delegates to the same access logic as ChapterHandler.
+func (h *ChapterAIHandler) canEditChapter(ctx context.Context, c *auth.Claims, scope string, scopeID *string) bool {
 	if c.IsPlatformAdmin {
 		return true
 	}

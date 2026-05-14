@@ -12,10 +12,10 @@ import (
 )
 
 type TopicHandler struct {
-	Topics        *store.TopicStore
-	Courses       *store.CourseStore
-	Orgs          *store.OrgStore
-	TeachingUnits *store.TeachingUnitStore // Plan 044: backs LinkUnit.
+	Topics   *store.TopicStore
+	Courses  *store.CourseStore
+	Orgs     *store.OrgStore
+	Chapters *store.ChapterStore // Plan 044: backs LinkChapter.
 }
 
 // Routes registers topic routes nested under /api/courses/{courseId}/topics
@@ -31,9 +31,9 @@ func (h *TopicHandler) Routes(r chi.Router) {
 			r.Patch("/", h.UpdateTopic)
 			r.Delete("/", h.DeleteTopic)
 			// Plan 044 phase 2: link a teaching_unit to this topic.
-			r.Post("/link-unit", h.LinkUnit)
+			r.Post("/link-chapter", h.LinkChapter)
 			// Plan 045: detach the currently-linked teaching_unit.
-			r.Delete("/link-unit", h.UnlinkUnit)
+			r.Delete("/link-chapter", h.UnlinkChapter)
 		})
 	})
 }
@@ -64,7 +64,7 @@ func (h *TopicHandler) CreateTopic(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Strict decode: unknown fields are rejected with 400. Teaching
-	// material is attached via POST /api/courses/{cid}/topics/{tid}/link-unit,
+	// material is attached via POST /api/courses/{cid}/topics/{tid}/link-chapter,
 	// not the topic create body.
 	var body struct {
 		Title       string `json:"title"`
@@ -317,19 +317,19 @@ func (h *TopicHandler) ReorderTopics(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, topics)
 }
 
-// publishedPlatformUnitStatuses lists the statuses at which a
+// publishedPlatformChapterStatuses lists the statuses at which a
 // platform-scope Unit is considered "live" library content. Plan 045
 // widens the link/unlink gate so any teacher who can edit a course can
 // attach a published platform Unit (previously only platform admins
 // could). Drafts (`draft`, `in_review`) remain admin-only because they
 // haven't passed editorial review.
-var publishedPlatformUnitStatuses = map[string]bool{
+var publishedPlatformChapterStatuses = map[string]bool{
 	"classroom_ready": true,
 	"coach_ready":     true,
 	"archived":        true,
 }
 
-// canLinkUnitToCourse decides whether `claims` may attach `unit` to a
+// canLinkChapterToCourse decides whether `claims` may attach `unit` to a
 // topic in `course`. Replaces plan 044's Unit-edit-only gate with the
 // plan 045 widened model:
 //
@@ -348,11 +348,11 @@ var publishedPlatformUnitStatuses = map[string]bool{
 // is part of a free-helper family that mirrors the broader scope-discriminating
 // pattern; consolidating these as a group is cleaner than one-off migration.
 // See plan-075 §Out of scope, Bucket 2.
-func canLinkUnitToCourse(
+func canLinkChapterToCourse(
 	ctx context.Context,
 	orgs *store.OrgStore,
 	claims *auth.Claims,
-	unit *store.TeachingUnit,
+	unit *store.Chapter,
 	course *store.Course,
 ) (bool, error) {
 	if claims.IsPlatformAdmin || claims.ImpersonatedBy != "" {
@@ -362,7 +362,7 @@ func canLinkUnitToCourse(
 	case "personal":
 		return false, nil
 	case "platform":
-		return publishedPlatformUnitStatuses[unit.Status], nil
+		return publishedPlatformChapterStatuses[unit.Status], nil
 	case "org":
 		if unit.ScopeID == nil || *unit.ScopeID != course.OrgID {
 			return false, nil
@@ -385,16 +385,16 @@ func canLinkUnitToCourse(
 	}
 }
 
-// LinkUnit handles POST /api/courses/{courseId}/topics/{topicId}/link-unit.
+// LinkChapter handles POST /api/courses/{courseId}/topics/{topicId}/link-chapter.
 //
 // Plan 044 phase 2 introduced the endpoint with a Unit-edit-only gate;
-// plan 045 widened it (see canLinkUnitToCourse) so course teachers can
+// plan 045 widened it (see canLinkChapterToCourse) so course teachers can
 // attach published platform-scope library Units without admin help.
 //
-// 1:1 invariant: if a different unit already claims this topic, returns
+// 1:1 invariant: if a different chapter already claims this topic, returns
 // 409 with a clear message rather than letting the unique-index
 // violation surface as an opaque 500.
-func (h *TopicHandler) LinkUnit(w http.ResponseWriter, r *http.Request) {
+func (h *TopicHandler) LinkChapter(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
 		writeError(w, http.StatusUnauthorized, "Unauthorized")
@@ -420,7 +420,7 @@ func (h *TopicHandler) LinkUnit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Verify the topic actually belongs to this course (reject mismatched
-	// path traversal: /courses/A/topics/B-from-course-C/link-unit).
+	// path traversal: /courses/A/topics/B-from-course-C/link-chapter).
 	topic, err := h.Topics.GetTopic(r.Context(), topicID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
@@ -432,31 +432,31 @@ func (h *TopicHandler) LinkUnit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var body struct {
-		UnitID string `json:"unitId"`
+		ChapterID string `json:"chapterId"`
 	}
 	if !decodeJSON(w, r, &body) {
 		return
 	}
-	if body.UnitID == "" {
-		writeError(w, http.StatusBadRequest, "unitId is required")
+	if body.ChapterID == "" {
+		writeError(w, http.StatusBadRequest, "chapterId is required")
 		return
 	}
 
-	if h.TeachingUnits == nil {
+	if h.Chapters == nil {
 		writeError(w, http.StatusInternalServerError, "Teaching units store unavailable")
 		return
 	}
-	unit, err := h.TeachingUnits.GetUnit(r.Context(), body.UnitID)
+	unit, err := h.Chapters.GetChapter(r.Context(), body.ChapterID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
 	}
 	if unit == nil {
-		writeError(w, http.StatusNotFound, "Unit not found")
+		writeError(w, http.StatusNotFound, "Chapter not found")
 		return
 	}
 
-	allowed, err := canLinkUnitToCourse(r.Context(), h.Orgs, claims, unit, course)
+	allowed, err := canLinkChapterToCourse(r.Context(), h.Orgs, claims, unit, course)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
@@ -466,14 +466,14 @@ func (h *TopicHandler) LinkUnit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	updated, err := h.TeachingUnits.LinkUnitToTopic(r.Context(), body.UnitID, topicID)
+	updated, err := h.Chapters.LinkChapterToTopic(r.Context(), body.ChapterID, topicID)
 	if err != nil {
 		if errors.Is(err, store.ErrTopicAlreadyLinked) {
-			writeError(w, http.StatusConflict, "This topic is already linked to a different unit")
+			writeError(w, http.StatusConflict, "This topic is already linked to a different chapter")
 			return
 		}
-		if errors.Is(err, store.ErrUnitNotFound) {
-			writeError(w, http.StatusNotFound, "Unit not found")
+		if errors.Is(err, store.ErrChapterNotFound) {
+			writeError(w, http.StatusNotFound, "Chapter not found")
 			return
 		}
 		writeError(w, http.StatusInternalServerError, "Database error")
@@ -483,22 +483,22 @@ func (h *TopicHandler) LinkUnit(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, updated)
 }
 
-// UnlinkUnit handles DELETE /api/courses/{courseId}/topics/{topicId}/link-unit.
+// UnlinkChapter handles DELETE /api/courses/{courseId}/topics/{topicId}/link-chapter.
 //
 // Plan 045: detaches the teaching_unit currently linked to this topic
-// (sets teaching_units.topic_id = NULL). Idempotent: returns 200 with
+// (sets chapters.topic_id = NULL). Idempotent: returns 200 with
 // an empty body when nothing is linked.
 //
-// Auth chain mirrors LinkUnit:
+// Auth chain mirrors LinkChapter:
 //  1. Claims must be present (401 otherwise).
 //  2. Course must exist; caller must be creator or platform admin (403).
 //  3. Topic must belong to that course (404 on mismatch — path
 //     traversal guard).
 //  4. Look up the currently-linked Unit; if none, 200 (idempotent).
-//  5. Caller must satisfy canLinkUnitToCourse for the linked Unit
+//  5. Caller must satisfy canLinkChapterToCourse for the linked Unit
 //     (same gate that authorized the link). 403 otherwise.
 //  6. Clear topic_id; return 200.
-func (h *TopicHandler) UnlinkUnit(w http.ResponseWriter, r *http.Request) {
+func (h *TopicHandler) UnlinkChapter(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
 		writeError(w, http.StatusUnauthorized, "Unauthorized")
@@ -532,11 +532,11 @@ func (h *TopicHandler) UnlinkUnit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if h.TeachingUnits == nil {
+	if h.Chapters == nil {
 		writeError(w, http.StatusInternalServerError, "Teaching units store unavailable")
 		return
 	}
-	current, err := h.TeachingUnits.GetUnitByTopicID(r.Context(), topicID)
+	current, err := h.Chapters.GetChapterByTopicID(r.Context(), topicID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
@@ -547,7 +547,7 @@ func (h *TopicHandler) UnlinkUnit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	allowed, err := canLinkUnitToCourse(r.Context(), h.Orgs, claims, current, course)
+	allowed, err := canLinkChapterToCourse(r.Context(), h.Orgs, claims, current, course)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
@@ -557,9 +557,9 @@ func (h *TopicHandler) UnlinkUnit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.TeachingUnits.UnlinkUnitFromTopic(r.Context(), current.ID); err != nil {
+	if err := h.Chapters.UnlinkChapterFromTopic(r.Context(), current.ID); err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"unlinked": true, "unitId": current.ID})
+	writeJSON(w, http.StatusOK, map[string]any{"unlinked": true, "chapterId": current.ID})
 }

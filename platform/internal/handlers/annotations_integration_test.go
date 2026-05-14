@@ -190,7 +190,7 @@ func TestAnnotationAuth_RejectsNonSessionPrefix(t *testing.T) {
 
 	cases := []string{
 		"attempt:abc-123",
-		"unit:abc-123",
+		"chapter:abc-123",
 		"broadcast:abc-123",
 		"d1",
 		"session:abc",             // wrong shape (only 2 parts)

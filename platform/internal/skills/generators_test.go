@@ -27,7 +27,7 @@ func (m *mockBackend) StreamChat(ctx context.Context, messages []llm.Message, op
 func (m *mockBackend) ChatWithTools(ctx context.Context, messages []llm.Message, toolSpecs []llm.ToolSpec, opts ...llm.ChatOption) (*llm.LLMResponse, error) {
 	return m.response, m.err
 }
-func (m *mockBackend) SupportsTools() bool                            { return false }
+func (m *mockBackend) SupportsTools() bool                              { return false }
 func (m *mockBackend) ListModels(ctx context.Context) ([]string, error) { return nil, nil }
 
 // --- ReportGenerator tests ---

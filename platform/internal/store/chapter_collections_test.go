@@ -8,23 +8,23 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// setupCollectionEnv creates a user + org and wires a UnitCollectionStore.
-func setupCollectionEnv(t *testing.T, suffix string) (*UnitCollectionStore, *TeachingUnitStore, string /* orgID */, string /* userID */) {
+// setupCollectionEnv creates a user + org and wires a ChapterCollectionStore.
+func setupCollectionEnv(t *testing.T, suffix string) (*ChapterCollectionStore, *ChapterStore, string /* orgID */, string /* userID */) {
 	t.Helper()
 	db := testDB(t)
 	orgs := NewOrgStore(db)
 	users := NewUserStore(db)
-	collections := NewUnitCollectionStore(db)
-	units := NewTeachingUnitStore(db)
+	collections := NewChapterCollectionStore(db)
+	units := NewChapterStore(db)
 
 	org := createTestOrg(t, db, orgs, suffix)
 	user := createTestUser(t, db, users, suffix)
 
 	ctx := context.Background()
 	t.Cleanup(func() {
-		db.ExecContext(ctx, `DELETE FROM unit_collection_items WHERE collection_id IN (SELECT id FROM unit_collections WHERE created_by = $1)`, user.ID)
-		db.ExecContext(ctx, `DELETE FROM unit_collections WHERE created_by = $1`, user.ID)
-		db.ExecContext(ctx, `DELETE FROM teaching_units WHERE created_by = $1`, user.ID)
+		db.ExecContext(ctx, `DELETE FROM chapter_collection_items WHERE collection_id IN (SELECT id FROM chapter_collections WHERE created_by = $1)`, user.ID)
+		db.ExecContext(ctx, `DELETE FROM chapter_collections WHERE created_by = $1`, user.ID)
+		db.ExecContext(ctx, `DELETE FROM chapters WHERE created_by = $1`, user.ID)
 	})
 
 	return collections, units, org.ID, user.ID
@@ -32,7 +32,7 @@ func setupCollectionEnv(t *testing.T, suffix string) (*UnitCollectionStore, *Tea
 
 // ── CreateCollection ────────────────────────────────────────────────────────
 
-func TestUnitCollectionStore_Create_Org(t *testing.T) {
+func TestChapterCollectionStore_Create_Org(t *testing.T) {
 	collections, _, orgID, userID := setupCollectionEnv(t, t.Name())
 	ctx := context.Background()
 
@@ -54,7 +54,7 @@ func TestUnitCollectionStore_Create_Org(t *testing.T) {
 	assert.NotEmpty(t, c.ID)
 }
 
-func TestUnitCollectionStore_Create_Platform(t *testing.T) {
+func TestChapterCollectionStore_Create_Platform(t *testing.T) {
 	collections, _, _, userID := setupCollectionEnv(t, t.Name())
 	ctx := context.Background()
 
@@ -69,7 +69,7 @@ func TestUnitCollectionStore_Create_Platform(t *testing.T) {
 	assert.Nil(t, c.ScopeID)
 }
 
-func TestUnitCollectionStore_Create_Personal(t *testing.T) {
+func TestChapterCollectionStore_Create_Personal(t *testing.T) {
 	collections, _, _, userID := setupCollectionEnv(t, t.Name())
 	ctx := context.Background()
 
@@ -86,7 +86,7 @@ func TestUnitCollectionStore_Create_Personal(t *testing.T) {
 	assert.Equal(t, userID, *c.ScopeID)
 }
 
-func TestUnitCollectionStore_Create_CheckConstraint(t *testing.T) {
+func TestChapterCollectionStore_Create_CheckConstraint(t *testing.T) {
 	collections, _, orgID, userID := setupCollectionEnv(t, t.Name())
 	ctx := context.Background()
 
@@ -103,7 +103,7 @@ func TestUnitCollectionStore_Create_CheckConstraint(t *testing.T) {
 
 // ── GetCollection ───────────────────────────────────────────────────────────
 
-func TestUnitCollectionStore_GetCollection(t *testing.T) {
+func TestChapterCollectionStore_GetCollection(t *testing.T) {
 	collections, _, orgID, userID := setupCollectionEnv(t, t.Name())
 	ctx := context.Background()
 
@@ -122,7 +122,7 @@ func TestUnitCollectionStore_GetCollection(t *testing.T) {
 	assert.Equal(t, "Get Test", got.Title)
 }
 
-func TestUnitCollectionStore_GetCollection_NotFound(t *testing.T) {
+func TestChapterCollectionStore_GetCollection_NotFound(t *testing.T) {
 	collections, _, _, _ := setupCollectionEnv(t, t.Name())
 	ctx := context.Background()
 
@@ -133,7 +133,7 @@ func TestUnitCollectionStore_GetCollection_NotFound(t *testing.T) {
 
 // ── UpdateCollection ────────────────────────────────────────────────────────
 
-func TestUnitCollectionStore_UpdateCollection_Partial(t *testing.T) {
+func TestChapterCollectionStore_UpdateCollection_Partial(t *testing.T) {
 	collections, _, orgID, userID := setupCollectionEnv(t, t.Name())
 	ctx := context.Background()
 
@@ -156,7 +156,7 @@ func TestUnitCollectionStore_UpdateCollection_Partial(t *testing.T) {
 	assert.Equal(t, "Original desc", updated.Description, "description should remain unchanged")
 }
 
-func TestUnitCollectionStore_UpdateCollection_NoFields(t *testing.T) {
+func TestChapterCollectionStore_UpdateCollection_NoFields(t *testing.T) {
 	collections, _, orgID, userID := setupCollectionEnv(t, t.Name())
 	ctx := context.Background()
 
@@ -174,7 +174,7 @@ func TestUnitCollectionStore_UpdateCollection_NoFields(t *testing.T) {
 	assert.Equal(t, "No Change", updated.Title)
 }
 
-func TestUnitCollectionStore_UpdateCollection_NonExistent(t *testing.T) {
+func TestChapterCollectionStore_UpdateCollection_NonExistent(t *testing.T) {
 	collections, _, _, _ := setupCollectionEnv(t, t.Name())
 	ctx := context.Background()
 
@@ -188,7 +188,7 @@ func TestUnitCollectionStore_UpdateCollection_NonExistent(t *testing.T) {
 
 // ── DeleteCollection ────────────────────────────────────────────────────────
 
-func TestUnitCollectionStore_DeleteCollection(t *testing.T) {
+func TestChapterCollectionStore_DeleteCollection(t *testing.T) {
 	collections, _, orgID, userID := setupCollectionEnv(t, t.Name())
 	ctx := context.Background()
 
@@ -210,7 +210,7 @@ func TestUnitCollectionStore_DeleteCollection(t *testing.T) {
 	assert.Nil(t, gone)
 }
 
-func TestUnitCollectionStore_DeleteCollection_NotFound(t *testing.T) {
+func TestChapterCollectionStore_DeleteCollection_NotFound(t *testing.T) {
 	collections, _, _, _ := setupCollectionEnv(t, t.Name())
 	ctx := context.Background()
 
@@ -221,7 +221,7 @@ func TestUnitCollectionStore_DeleteCollection_NotFound(t *testing.T) {
 
 // ── ListCollections ─────────────────────────────────────────────────────────
 
-func TestUnitCollectionStore_ListCollections(t *testing.T) {
+func TestChapterCollectionStore_ListCollections(t *testing.T) {
 	collections, _, orgID, userID := setupCollectionEnv(t, t.Name())
 	ctx := context.Background()
 
@@ -240,7 +240,7 @@ func TestUnitCollectionStore_ListCollections(t *testing.T) {
 	assert.GreaterOrEqual(t, len(list), 2)
 }
 
-func TestUnitCollectionStore_ListCollections_Empty(t *testing.T) {
+func TestChapterCollectionStore_ListCollections_Empty(t *testing.T) {
 	collections, _, _, _ := setupCollectionEnv(t, t.Name())
 	ctx := context.Background()
 
@@ -252,7 +252,7 @@ func TestUnitCollectionStore_ListCollections_Empty(t *testing.T) {
 
 // ── Collection items ────────────────────────────────────────────────────────
 
-func TestUnitCollectionStore_AddItem(t *testing.T) {
+func TestChapterCollectionStore_AddItem(t *testing.T) {
 	collections, units, orgID, userID := setupCollectionEnv(t, t.Name())
 	ctx := context.Background()
 
@@ -261,7 +261,7 @@ func TestUnitCollectionStore_AddItem(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	unit, err := units.CreateUnit(ctx, CreateTeachingUnitInput{
+	unit, err := units.CreateChapter(ctx, CreateChapterInput{
 		Scope: "org", ScopeID: &orgID, Title: "Unit for Item", CreatedBy: userID,
 	})
 	require.NoError(t, err)
@@ -270,11 +270,11 @@ func TestUnitCollectionStore_AddItem(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, item)
 	assert.Equal(t, col.ID, item.CollectionID)
-	assert.Equal(t, unit.ID, item.UnitID)
+	assert.Equal(t, unit.ID, item.ChapterID)
 	assert.Equal(t, 0, item.SortOrder)
 }
 
-func TestUnitCollectionStore_AddItem_Upsert(t *testing.T) {
+func TestChapterCollectionStore_AddItem_Upsert(t *testing.T) {
 	collections, units, orgID, userID := setupCollectionEnv(t, t.Name())
 	ctx := context.Background()
 
@@ -283,7 +283,7 @@ func TestUnitCollectionStore_AddItem_Upsert(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	unit, err := units.CreateUnit(ctx, CreateTeachingUnitInput{
+	unit, err := units.CreateChapter(ctx, CreateChapterInput{
 		Scope: "org", ScopeID: &orgID, Title: "Upsert Unit", CreatedBy: userID,
 	})
 	require.NoError(t, err)
@@ -298,7 +298,7 @@ func TestUnitCollectionStore_AddItem_Upsert(t *testing.T) {
 	assert.Equal(t, 5, item.SortOrder, "upsert should update sort_order")
 }
 
-func TestUnitCollectionStore_RemoveItem(t *testing.T) {
+func TestChapterCollectionStore_RemoveItem(t *testing.T) {
 	collections, units, orgID, userID := setupCollectionEnv(t, t.Name())
 	ctx := context.Background()
 
@@ -307,7 +307,7 @@ func TestUnitCollectionStore_RemoveItem(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	unit, err := units.CreateUnit(ctx, CreateTeachingUnitInput{
+	unit, err := units.CreateChapter(ctx, CreateChapterInput{
 		Scope: "org", ScopeID: &orgID, Title: "Remove Unit", CreatedBy: userID,
 	})
 	require.NoError(t, err)
@@ -325,7 +325,7 @@ func TestUnitCollectionStore_RemoveItem(t *testing.T) {
 	assert.False(t, removed2)
 }
 
-func TestUnitCollectionStore_ReorderItem(t *testing.T) {
+func TestChapterCollectionStore_ReorderItem(t *testing.T) {
 	collections, units, orgID, userID := setupCollectionEnv(t, t.Name())
 	ctx := context.Background()
 
@@ -334,7 +334,7 @@ func TestUnitCollectionStore_ReorderItem(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	unit, err := units.CreateUnit(ctx, CreateTeachingUnitInput{
+	unit, err := units.CreateChapter(ctx, CreateChapterInput{
 		Scope: "org", ScopeID: &orgID, Title: "Reorder Unit", CreatedBy: userID,
 	})
 	require.NoError(t, err)
@@ -348,7 +348,7 @@ func TestUnitCollectionStore_ReorderItem(t *testing.T) {
 	assert.Equal(t, 10, reordered.SortOrder)
 }
 
-func TestUnitCollectionStore_ReorderItem_NotFound(t *testing.T) {
+func TestChapterCollectionStore_ReorderItem_NotFound(t *testing.T) {
 	collections, _, _, _ := setupCollectionEnv(t, t.Name())
 	ctx := context.Background()
 
@@ -357,7 +357,7 @@ func TestUnitCollectionStore_ReorderItem_NotFound(t *testing.T) {
 	assert.Nil(t, result)
 }
 
-func TestUnitCollectionStore_ListItems_Ordered(t *testing.T) {
+func TestChapterCollectionStore_ListItems_Ordered(t *testing.T) {
 	collections, units, orgID, userID := setupCollectionEnv(t, t.Name())
 	ctx := context.Background()
 
@@ -366,12 +366,12 @@ func TestUnitCollectionStore_ListItems_Ordered(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	u1, err := units.CreateUnit(ctx, CreateTeachingUnitInput{
+	u1, err := units.CreateChapter(ctx, CreateChapterInput{
 		Scope: "org", ScopeID: &orgID, Title: "Item Unit A", CreatedBy: userID,
 	})
 	require.NoError(t, err)
 
-	u2, err := units.CreateUnit(ctx, CreateTeachingUnitInput{
+	u2, err := units.CreateChapter(ctx, CreateChapterInput{
 		Scope: "org", ScopeID: &orgID, Title: "Item Unit B", CreatedBy: userID,
 	})
 	require.NoError(t, err)
@@ -387,11 +387,11 @@ func TestUnitCollectionStore_ListItems_Ordered(t *testing.T) {
 	require.Len(t, items, 2)
 
 	// Ordered by sort_order ASC.
-	assert.Equal(t, u1.ID, items[0].UnitID, "sort_order=1 should come first")
-	assert.Equal(t, u2.ID, items[1].UnitID, "sort_order=2 should come second")
+	assert.Equal(t, u1.ID, items[0].ChapterID, "sort_order=1 should come first")
+	assert.Equal(t, u2.ID, items[1].ChapterID, "sort_order=2 should come second")
 }
 
-func TestUnitCollectionStore_ListItems_Empty(t *testing.T) {
+func TestChapterCollectionStore_ListItems_Empty(t *testing.T) {
 	collections, _, orgID, userID := setupCollectionEnv(t, t.Name())
 	ctx := context.Background()
 
@@ -406,7 +406,7 @@ func TestUnitCollectionStore_ListItems_Empty(t *testing.T) {
 	assert.Empty(t, items)
 }
 
-func TestUnitCollectionStore_DeleteCollection_CascadesItems(t *testing.T) {
+func TestChapterCollectionStore_DeleteCollection_CascadesItems(t *testing.T) {
 	collections, units, orgID, userID := setupCollectionEnv(t, t.Name())
 	ctx := context.Background()
 
@@ -415,7 +415,7 @@ func TestUnitCollectionStore_DeleteCollection_CascadesItems(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	unit, err := units.CreateUnit(ctx, CreateTeachingUnitInput{
+	unit, err := units.CreateChapter(ctx, CreateChapterInput{
 		Scope: "org", ScopeID: &orgID, Title: "Cascade Unit", CreatedBy: userID,
 	})
 	require.NoError(t, err)

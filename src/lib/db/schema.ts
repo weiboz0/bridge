@@ -128,6 +128,8 @@ export const programmingLanguageEnum = pgEnum("programming_language", [
   "blockly",
 ]);
 
+export const bookScopeEnum = pgEnum("book_scope", ["platform", "org"]);
+
 // --- Tables ---
 
 export const organizations = pgTable(
@@ -667,8 +669,30 @@ export const problemSolutions = pgTable(
   })
 );
 
-export const teachingUnits = pgTable(
-  "teaching_units",
+export const books = pgTable(
+  "books",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    title: varchar("title", { length: 255 }).notNull(),
+    description: text("description").notNull().default(""),
+    scope: bookScopeEnum("scope").notNull(),
+    scopeId: uuid("scope_id"),
+    createdBy: uuid("created_by").notNull().references(() => users.id),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => ({
+    scopeIdx: index("books_scope_idx").on(t.scope, t.scopeId),
+    createdByIdx: index("books_created_by_idx").on(t.createdBy),
+  })
+);
+
+export const chapters = pgTable(
+  "chapters",
   {
     id: uuid("id").primaryKey().defaultRandom(),
     scope: varchar("scope", { length: 16 })
@@ -693,6 +717,7 @@ export const teachingUnits = pgTable(
       .notNull()
       .default("draft"),
     topicId: uuid("topic_id").references(() => topics.id, { onDelete: "set null" }),
+    bookId: uuid("book_id").references(() => books.id, { onDelete: "set null" }),
     // Plan 054 drift fix — these columns exist in the live DB
     // (migrations 0019_discovery.sql) but were missing from this
     // Drizzle declaration. Without them, `bun run db:generate`
@@ -702,7 +727,7 @@ export const teachingUnits = pgTable(
     // search_vector is a STORED generated column populated from
     // `to_tsvector('english', title || ' ' || summary)`. Application
     // code never reads/writes it directly — it powers the
-    // teaching_units_search_idx GIN index for full-text search.
+    // chapters_search_idx GIN index for full-text search.
     // Uses the local `tsvector` customType so the Drizzle column
     // type matches the live `tsvector` exactly (text would still be
     // drifted).
@@ -718,42 +743,43 @@ export const teachingUnits = pgTable(
       .defaultNow(),
   },
   (t) => ({
-    scopeStatusIdx: index("teaching_units_scope_scope_id_status_idx").on(
+    scopeStatusIdx: index("chapters_scope_scope_id_status_idx").on(
       t.scope,
       t.scopeId,
       t.status
     ),
-    createdByIdx: index("teaching_units_created_by_idx").on(t.createdBy),
+    createdByIdx: index("chapters_created_by_idx").on(t.createdBy),
+    bookIdx: index("chapters_book_idx").on(t.bookId),
     // Plan 054 drift fix — these indexes exist in the live DB but
     // were missing from Drizzle. Order matches the migrations
     // (0016 first, then 0017, then 0019).
     //
-    // teaching_units_scope_slug_uniq is an EXPRESSION index over
+    // chapters_scope_slug_uniq is an EXPRESSION index over
     // COALESCE(scope_id::text, '') so platform-scope rows (with
     // scope_id IS NULL) don't all collide on the same key. Drizzle's
     // .on() takes raw SQL via `sql\`\`` for the expression column.
-    scopeSlugUniqIdx: uniqueIndex("teaching_units_scope_slug_uniq")
+    scopeSlugUniqIdx: uniqueIndex("chapters_scope_slug_uniq")
       .on(t.scope, sql`COALESCE(${t.scopeId}::text, '')`, t.slug)
       .where(sql`${t.slug} IS NOT NULL`),
-    topicIdUniqIdx: uniqueIndex("teaching_units_topic_id_uniq")
+    topicIdUniqIdx: uniqueIndex("chapters_topic_id_uniq")
       .on(t.topicId)
       .where(sql`${t.topicId} IS NOT NULL`),
-    subjectTagsGinIdx: index("teaching_units_subject_tags_gin_idx").using(
+    subjectTagsGinIdx: index("chapters_subject_tags_gin_idx").using(
       "gin",
       t.subjectTags,
     ),
-    standardsTagsGinIdx: index("teaching_units_standards_tags_gin_idx").using(
+    standardsTagsGinIdx: index("chapters_standards_tags_gin_idx").using(
       "gin",
       t.standardsTags,
     ),
-    searchIdx: index("teaching_units_search_idx").using("gin", t.searchVector),
+    searchIdx: index("chapters_search_idx").using("gin", t.searchVector),
   })
 );
 
-export const unitDocuments = pgTable("unit_documents", {
-  unitId: uuid("unit_id")
+export const chapterDocuments = pgTable("chapter_documents", {
+  chapterId: uuid("chapter_id")
     .primaryKey()
-    .references(() => teachingUnits.id, { onDelete: "cascade" }),
+    .references(() => chapters.id, { onDelete: "cascade" }),
   blocks: jsonb("blocks")
     .$type<Record<string, unknown>>()
     .notNull()
@@ -763,13 +789,13 @@ export const unitDocuments = pgTable("unit_documents", {
     .defaultNow(),
 });
 
-export const unitRevisions = pgTable(
-  "unit_revisions",
+export const chapterRevisions = pgTable(
+  "chapter_revisions",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    unitId: uuid("unit_id")
+    chapterId: uuid("chapter_id")
       .notNull()
-      .references(() => teachingUnits.id, { onDelete: "cascade" }),
+      .references(() => chapters.id, { onDelete: "cascade" }),
     blocks: jsonb("blocks").$type<Record<string, unknown>>().notNull(),
     reason: varchar("reason", { length: 255 }),
     createdBy: uuid("created_by").notNull().references(() => users.id),
@@ -778,28 +804,28 @@ export const unitRevisions = pgTable(
       .defaultNow(),
   },
   (t) => ({
-    unitCreatedIdx: index("unit_revisions_unit_created_idx").on(
-      t.unitId,
+    chapterCreatedIdx: index("chapter_revisions_chapter_created_idx").on(
+      t.chapterId,
       t.createdAt
     ),
   })
 );
 
-export const unitOverlays = pgTable("unit_overlays", {
-  childUnitId: uuid("child_unit_id").primaryKey().references(() => teachingUnits.id, { onDelete: "cascade" }),
-  parentUnitId: uuid("parent_unit_id").notNull().references(() => teachingUnits.id, { onDelete: "cascade" }),
-  parentRevisionId: uuid("parent_revision_id").references(() => unitRevisions.id, { onDelete: "set null" }),
+export const chapterOverlays = pgTable("chapter_overlays", {
+  childChapterId: uuid("child_chapter_id").primaryKey().references(() => chapters.id, { onDelete: "cascade" }),
+  parentChapterId: uuid("parent_chapter_id").notNull().references(() => chapters.id, { onDelete: "cascade" }),
+  parentRevisionId: uuid("parent_revision_id").references(() => chapterRevisions.id, { onDelete: "set null" }),
   blockOverrides: jsonb("block_overrides").$type<Record<string, { action: string; block?: unknown }>>().notNull().default({}),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
-  parentIdx: index("unit_overlays_parent_idx").on(t.parentUnitId),
+  parentIdx: index("chapter_overlays_parent_idx").on(t.parentChapterId),
 }));
 
-// --- Unit Collections ---
+// --- Chapter Collections ---
 
-export const unitCollections = pgTable(
-  "unit_collections",
+export const chapterCollections = pgTable(
+  "chapter_collections",
   {
     id: uuid("id").primaryKey().defaultRandom(),
     scope: varchar("scope", { length: 16 })
@@ -819,23 +845,23 @@ export const unitCollections = pgTable(
       .defaultNow(),
   },
   (t) => ({
-    scopeIdx: index("unit_collections_scope_idx").on(t.scope, t.scopeId),
+    scopeIdx: index("chapter_collections_scope_idx").on(t.scope, t.scopeId),
   })
 );
 
-export const unitCollectionItems = pgTable(
-  "unit_collection_items",
+export const chapterCollectionItems = pgTable(
+  "chapter_collection_items",
   {
     collectionId: uuid("collection_id")
       .notNull()
-      .references(() => unitCollections.id, { onDelete: "cascade" }),
-    unitId: uuid("unit_id")
+      .references(() => chapterCollections.id, { onDelete: "cascade" }),
+    chapterId: uuid("chapter_id")
       .notNull()
-      .references(() => teachingUnits.id, { onDelete: "cascade" }),
+      .references(() => chapters.id, { onDelete: "cascade" }),
     sortOrder: integer("sort_order").notNull().default(0),
   },
   (t) => ({
-    pk: primaryKey({ columns: [t.collectionId, t.unitId] }),
+    pk: primaryKey({ columns: [t.collectionId, t.chapterId] }),
   })
 );
 

@@ -45,17 +45,17 @@ func newSessionPageFixture(t *testing.T, suffix string) *sessionPageFixture {
 	topics := store.NewTopicStore(db)
 	classes := store.NewClassStore(db)
 	sessions := store.NewSessionStore(db)
-	units := store.NewTeachingUnitStore(db)
+	units := store.NewChapterStore(db)
 
 	h := &SessionHandler{
-		Sessions:      sessions,
-		Classes:       classes,
-		Courses:       courses,
-		Topics:        topics,
-		TeachingUnits: units,
-		Orgs:          orgs,
-		ParentLinks:   store.NewParentLinkStore(db), // Plan 064.
-		Broadcaster:   events.NewBroadcaster(),
+		Sessions:    sessions,
+		Classes:     classes,
+		Courses:     courses,
+		Topics:      topics,
+		Chapters:    units,
+		Orgs:        orgs,
+		ParentLinks: store.NewParentLinkStore(db), // Plan 064.
+		Broadcaster: events.NewBroadcaster(),
 	}
 
 	mkUser := func(label string) *store.RegisteredUser {

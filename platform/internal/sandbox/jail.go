@@ -151,7 +151,7 @@ func (d DockerBackend) BuildCommand(cfg JailConfig) (string, []string, error) {
 type UnsandboxedBackend struct{}
 
 func (u UnsandboxedBackend) Name() string    { return "unsandboxed" }
-func (u UnsandboxedBackend) Available() bool  { return true }
+func (u UnsandboxedBackend) Available() bool { return true }
 
 func (u UnsandboxedBackend) BuildCommand(cfg JailConfig) (string, []string, error) {
 	cmd := cfg.Command

@@ -17,24 +17,24 @@ import (
 // ---------------------------------------------------------------------------
 
 func TestAITransform_NoClaims(t *testing.T) {
-	h := &UnitAIHandler{}
+	h := &ChapterAIHandler{}
 	body, _ := json.Marshal(map[string]string{
 		"action":       "rewrite",
 		"selectedText": "hello world",
 	})
-	req := httptest.NewRequest(http.MethodPost, "/api/units/00000000-0000-0000-0000-000000000001/ai-transform", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/api/chapters/00000000-0000-0000-0000-000000000001/ai-transform", bytes.NewReader(body))
 	w := httptest.NewRecorder()
 	h.AITransform(w, req)
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
 }
 
 func TestAITransform_NoBackend(t *testing.T) {
-	h := &UnitAIHandler{Backend: nil}
+	h := &ChapterAIHandler{Backend: nil}
 	body, _ := json.Marshal(map[string]string{
 		"action":       "rewrite",
 		"selectedText": "hello world",
 	})
-	req := httptest.NewRequest(http.MethodPost, "/api/units/00000000-0000-0000-0000-000000000001/ai-transform", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/api/chapters/00000000-0000-0000-0000-000000000001/ai-transform", bytes.NewReader(body))
 	req = withClaims(req, &auth.Claims{UserID: "user-1"})
 	w := httptest.NewRecorder()
 	h.AITransform(w, req)

@@ -13,7 +13,7 @@ import (
 // setupTopicProblemEnv reuses setupProblemEnv to get a full org/user/topic
 // fixture and returns the raw *sql.DB alongside the three stores under test.
 func setupTopicProblemEnv(t *testing.T, suffix string) (
-	*sql.DB, *ProblemStore, *TopicProblemStore, string /*topicID*/, string /*orgID*/, string /*userID*/,
+	*sql.DB, *ProblemStore, *TopicProblemStore, string /*topicID*/, string /*orgID*/, string, /*userID*/
 ) {
 	t.Helper()
 	db, ps, topic, user := setupProblemEnv(t, suffix)

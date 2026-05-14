@@ -18,18 +18,18 @@ import (
 // --- Auth guard tests (no LLM or DB needed) ---
 
 func TestDraftWithAI_NoClaims(t *testing.T) {
-	h := &UnitAIHandler{}
+	h := &ChapterAIHandler{}
 	body, _ := json.Marshal(map[string]string{"intent": "hello"})
-	req := httptest.NewRequest(http.MethodPost, "/api/units/00000000-0000-0000-0000-000000000001/draft-with-ai", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/api/chapters/00000000-0000-0000-0000-000000000001/draft-with-ai", bytes.NewReader(body))
 	w := httptest.NewRecorder()
 	h.DraftWithAI(w, req)
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
 }
 
 func TestDraftWithAI_NoBackend(t *testing.T) {
-	h := &UnitAIHandler{Backend: nil}
+	h := &ChapterAIHandler{Backend: nil}
 	body, _ := json.Marshal(map[string]string{"intent": "hello"})
-	req := httptest.NewRequest(http.MethodPost, "/api/units/00000000-0000-0000-0000-000000000001/draft-with-ai", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/api/chapters/00000000-0000-0000-0000-000000000001/draft-with-ai", bytes.NewReader(body))
 	req = withClaims(req, &auth.Claims{UserID: "user-1"})
 	w := httptest.NewRecorder()
 	h.DraftWithAI(w, req)
@@ -40,7 +40,7 @@ func TestDraftWithAI_NoBackend(t *testing.T) {
 }
 
 // Note: TestDraftWithAI_EmptyIntent and TestDraftWithAI_IntentTooLong require
-// a unit store (GetUnit is called before body validation). These are covered
+// a unit store (GetChapter is called before body validation). These are covered
 // at integration test level. The tool-call conversion tests below cover the
 // core business logic without DB dependencies.
 
@@ -195,9 +195,9 @@ func TestToolCallToBlock_UnknownTool(t *testing.T) {
 func TestToolCallsToBlocks_Mixed(t *testing.T) {
 	calls := []llm.ToolCall{
 		{Name: "add_prose", Arguments: map[string]any{"text": "Intro"}},
-		{Name: "unknown", Arguments: map[string]any{}},                                                 // should be skipped
+		{Name: "unknown", Arguments: map[string]any{}},                                                // should be skipped
 		{Name: "add_code_snippet", Arguments: map[string]any{"language": "js", "code": "let x = 1;"}}, // valid
-		{Name: "add_prose", Arguments: map[string]any{"text": ""}},                                     // should be skipped (empty)
+		{Name: "add_prose", Arguments: map[string]any{"text": ""}},                                    // should be skipped (empty)
 		{Name: "add_teacher_note", Arguments: map[string]any{"text": "Check understanding"}},
 	}
 	blocks := ToolCallsToBlocks(calls)
@@ -293,5 +293,5 @@ func (s *stubBackend) ChatWithTools(_ context.Context, _ []llm.Message, _ []llm.
 	}}, nil
 }
 
-func (s *stubBackend) SupportsTools() bool                             { return true }
+func (s *stubBackend) SupportsTools() bool                            { return true }
 func (s *stubBackend) ListModels(_ context.Context) ([]string, error) { return nil, nil }

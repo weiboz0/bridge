@@ -17,28 +17,28 @@ import (
 
 // collectionFixture is the world a collection integration test runs against.
 type collectionFixture struct {
-	unitFx *unitFixture
-	ch     *UnitCollectionHandler
+	unitFx *chapterFixture
+	ch     *ChapterCollectionHandler
 }
 
 func newCollectionFixture(t *testing.T, suffix string) *collectionFixture {
 	t.Helper()
-	ufx := newUnitFixture(t, suffix)
-	ch := &UnitCollectionHandler{
-		Collections: store.NewUnitCollectionStore(ufx.sqlDB),
+	ufx := newChapterFixture(t, suffix)
+	ch := &ChapterCollectionHandler{
+		Collections: store.NewChapterCollectionStore(ufx.sqlDB),
 		Orgs:        store.NewOrgStore(ufx.sqlDB),
 		// Plan 052 PR-C: AddItem now verifies the candidate unit is
-		// visible to the caller (CanViewUnit). The store is needed
-		// for the GetUnit lookup.
-		TeachingUnits: store.NewTeachingUnitStore(ufx.sqlDB),
+		// visible to the caller (CanViewChapter). The store is needed
+		// for the GetChapter lookup.
+		Chapters: store.NewChapterStore(ufx.sqlDB),
 	}
 
 	ctx := context.Background()
 	t.Cleanup(func() {
 		// Clean up collections created by any test user.
 		for _, u := range []*store.RegisteredUser{ufx.admin, ufx.teacher1, ufx.student1, ufx.teacher2, ufx.outsider} {
-			ufx.sqlDB.ExecContext(ctx, "DELETE FROM unit_collection_items WHERE collection_id IN (SELECT id FROM unit_collections WHERE created_by = $1)", u.ID)
-			ufx.sqlDB.ExecContext(ctx, "DELETE FROM unit_collections WHERE created_by = $1", u.ID)
+			ufx.sqlDB.ExecContext(ctx, "DELETE FROM chapter_collection_items WHERE collection_id IN (SELECT id FROM chapter_collections WHERE created_by = $1)", u.ID)
+			ufx.sqlDB.ExecContext(ctx, "DELETE FROM chapter_collections WHERE created_by = $1", u.ID)
 		}
 	})
 
@@ -51,25 +51,25 @@ func (fx *collectionFixture) claims(u *store.RegisteredUser, isPlatformAdmin boo
 
 // ── Search endpoint tests ──────────────────────────────────────────────────
 
-func TestSearchUnits_FTS_Match(t *testing.T) {
-	fx := newUnitFixture(t, t.Name())
+func TestSearchChapters_FTS_Match(t *testing.T) {
+	fx := newChapterFixture(t, t.Name())
 	ctx := context.Background()
 
 	// Create an org-scoped unit with "Python Loops" in the title.
-	u := fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Python Loops Basics", fx.teacher1.ID)
+	u := fx.mkChapter(t, "org", &fx.org1.ID, "draft", "Python Loops Basics", fx.teacher1.ID)
 	_ = u
 
 	// Search as teacher1 (org1 member).
-	req := httptest.NewRequest(http.MethodGet, "/api/units/search?q=loops", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/chapters/search?q=loops", nil)
 	req = withClaims(req, fx.claims(fx.teacher1, false))
 	w := httptest.NewRecorder()
-	fx.h.SearchUnits(w, req)
+	fx.h.SearchChapters(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
 
 	var resp struct {
-		Items      []store.TeachingUnit `json:"items"`
-		NextCursor *string              `json:"nextCursor"`
+		Items      []store.Chapter `json:"items"`
+		NextCursor *string         `json:"nextCursor"`
 	}
 	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
 	require.NotEmpty(t, resp.Items, "FTS search for 'loops' should return results")
@@ -85,24 +85,24 @@ func TestSearchUnits_FTS_Match(t *testing.T) {
 	_ = ctx
 }
 
-func TestSearchUnits_ScopeFilter(t *testing.T) {
-	fx := newUnitFixture(t, t.Name())
+func TestSearchChapters_ScopeFilter(t *testing.T) {
+	fx := newChapterFixture(t, t.Name())
 
 	// Create units in different scopes.
-	fx.mkUnit(t, "org", &fx.org1.ID, "draft", "Org Scope Unit", fx.teacher1.ID)
+	fx.mkChapter(t, "org", &fx.org1.ID, "draft", "Org Scope Unit", fx.teacher1.ID)
 	uid := fx.teacher1.ID
-	fx.mkUnit(t, "personal", &uid, "draft", "Personal Scope Unit", fx.teacher1.ID)
+	fx.mkChapter(t, "personal", &uid, "draft", "Personal Scope Unit", fx.teacher1.ID)
 
 	// Search only org scope.
-	req := httptest.NewRequest(http.MethodGet, "/api/units/search?scope=org", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/chapters/search?scope=org", nil)
 	req = withClaims(req, fx.claims(fx.teacher1, false))
 	w := httptest.NewRecorder()
-	fx.h.SearchUnits(w, req)
+	fx.h.SearchChapters(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
 
 	var resp struct {
-		Items []store.TeachingUnit `json:"items"`
+		Items []store.Chapter `json:"items"`
 	}
 	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
 	for _, item := range resp.Items {
@@ -110,41 +110,41 @@ func TestSearchUnits_ScopeFilter(t *testing.T) {
 	}
 }
 
-func TestSearchUnits_EmptyResults(t *testing.T) {
-	fx := newUnitFixture(t, t.Name())
+func TestSearchChapters_EmptyResults(t *testing.T) {
+	fx := newChapterFixture(t, t.Name())
 
-	req := httptest.NewRequest(http.MethodGet, "/api/units/search?q=nonexistentquerythatmatchesnothing", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/chapters/search?q=nonexistentquerythatmatchesnothing", nil)
 	req = withClaims(req, fx.claims(fx.teacher1, false))
 	w := httptest.NewRecorder()
-	fx.h.SearchUnits(w, req)
+	fx.h.SearchChapters(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
 
 	var resp struct {
-		Items []store.TeachingUnit `json:"items"`
+		Items []store.Chapter `json:"items"`
 	}
 	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
 	assert.Empty(t, resp.Items)
 }
 
-func TestSearchUnits_Unauthorized(t *testing.T) {
-	fx := newUnitFixture(t, t.Name())
+func TestSearchChapters_Unauthorized(t *testing.T) {
+	fx := newChapterFixture(t, t.Name())
 
-	req := httptest.NewRequest(http.MethodGet, "/api/units/search?q=test", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/chapters/search?q=test", nil)
 	// No claims.
 	w := httptest.NewRecorder()
-	fx.h.SearchUnits(w, req)
+	fx.h.SearchChapters(w, req)
 
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
 }
 
-func TestSearchUnits_InvalidScope(t *testing.T) {
-	fx := newUnitFixture(t, t.Name())
+func TestSearchChapters_InvalidScope(t *testing.T) {
+	fx := newChapterFixture(t, t.Name())
 
-	req := httptest.NewRequest(http.MethodGet, "/api/units/search?scope=invalid", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/chapters/search?scope=invalid", nil)
 	req = withClaims(req, fx.claims(fx.teacher1, false))
 	w := httptest.NewRecorder()
-	fx.h.SearchUnits(w, req)
+	fx.h.SearchChapters(w, req)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
@@ -169,7 +169,7 @@ func TestCollectionHandler_CreateAndGet(t *testing.T) {
 
 	assert.Equal(t, http.StatusCreated, w.Code)
 
-	var created store.UnitCollection
+	var created store.ChapterCollection
 	require.NoError(t, json.NewDecoder(w.Body).Decode(&created))
 	assert.Equal(t, "My Collection", created.Title)
 	assert.Equal(t, "org", created.Scope)
@@ -185,8 +185,8 @@ func TestCollectionHandler_CreateAndGet(t *testing.T) {
 	assert.Equal(t, http.StatusOK, gw.Code)
 
 	var getResp struct {
-		Collection store.UnitCollection       `json:"collection"`
-		Items      []store.UnitCollectionItem `json:"items"`
+		Collection store.ChapterCollection       `json:"collection"`
+		Items      []store.ChapterCollectionItem `json:"items"`
 	}
 	require.NoError(t, json.NewDecoder(gw.Body).Decode(&getResp))
 	assert.Equal(t, created.ID, getResp.Collection.ID)
@@ -262,7 +262,7 @@ func TestCollectionHandler_Update(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, w.Code)
 
-	var updated store.UnitCollection
+	var updated store.ChapterCollection
 	require.NoError(t, json.NewDecoder(w.Body).Decode(&updated))
 	assert.Equal(t, "Updated Title", updated.Title)
 }
@@ -344,7 +344,7 @@ func TestCollectionHandler_ListCollections(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 
 	var resp struct {
-		Items []store.UnitCollection `json:"items"`
+		Items []store.ChapterCollection `json:"items"`
 	}
 	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
 	assert.GreaterOrEqual(t, len(resp.Items), 2)
@@ -361,10 +361,10 @@ func TestCollectionHandler_AddAndRemoveItem(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	unit := fx.unitFx.mkUnit(t, "org", &fx.unitFx.org1.ID, "draft", "Item Unit", fx.unitFx.teacher1.ID)
+	unit := fx.unitFx.mkChapter(t, "org", &fx.unitFx.org1.ID, "draft", "Item Unit", fx.unitFx.teacher1.ID)
 
 	// Add item.
-	addBody := map[string]any{"unitId": unit.ID, "sortOrder": 1}
+	addBody := map[string]any{"chapterId": unit.ID, "sortOrder": 1}
 	ab, _ := json.Marshal(addBody)
 	addReq := httptest.NewRequest(http.MethodPost, "/api/collections/"+col.ID+"/items", bytes.NewReader(ab))
 	addReq = withClaims(addReq, fx.claims(fx.unitFx.teacher1, false))
@@ -374,10 +374,10 @@ func TestCollectionHandler_AddAndRemoveItem(t *testing.T) {
 
 	assert.Equal(t, http.StatusCreated, aw.Code)
 
-	var item store.UnitCollectionItem
+	var item store.ChapterCollectionItem
 	require.NoError(t, json.NewDecoder(aw.Body).Decode(&item))
 	assert.Equal(t, col.ID, item.CollectionID)
-	assert.Equal(t, unit.ID, item.UnitID)
+	assert.Equal(t, unit.ID, item.ChapterID)
 	assert.Equal(t, 1, item.SortOrder)
 
 	// List items.
@@ -390,7 +390,7 @@ func TestCollectionHandler_AddAndRemoveItem(t *testing.T) {
 	assert.Equal(t, http.StatusOK, lw.Code)
 
 	var listResp struct {
-		Items []store.UnitCollectionItem `json:"items"`
+		Items []store.ChapterCollectionItem `json:"items"`
 	}
 	require.NoError(t, json.NewDecoder(lw.Body).Decode(&listResp))
 	assert.Len(t, listResp.Items, 1)
@@ -398,7 +398,7 @@ func TestCollectionHandler_AddAndRemoveItem(t *testing.T) {
 	// Remove item.
 	delReq := httptest.NewRequest(http.MethodDelete, "/api/collections/"+col.ID+"/items/"+unit.ID, nil)
 	delReq = withClaims(delReq, fx.claims(fx.unitFx.teacher1, false))
-	delReq = withChiParams(delReq, map[string]string{"id": col.ID, "unitId": unit.ID})
+	delReq = withChiParams(delReq, map[string]string{"id": col.ID, "chapterId": unit.ID})
 	dw := httptest.NewRecorder()
 	fx.ch.RemoveItem(dw, delReq)
 
@@ -410,7 +410,7 @@ func TestCollectionHandler_AddAndRemoveItem(t *testing.T) {
 	assert.Empty(t, items)
 }
 
-func TestCollectionHandler_AddItem_InvalidUnitId(t *testing.T) {
+func TestCollectionHandler_AddItem_InvalidChapterId(t *testing.T) {
 	fx := newCollectionFixture(t, t.Name())
 	ctx := context.Background()
 
@@ -419,7 +419,7 @@ func TestCollectionHandler_AddItem_InvalidUnitId(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	body := map[string]any{"unitId": "not-a-uuid"}
+	body := map[string]any{"chapterId": "not-a-uuid"}
 	b, _ := json.Marshal(body)
 	req := httptest.NewRequest(http.MethodPost, "/api/collections/"+col.ID+"/items", bytes.NewReader(b))
 	req = withClaims(req, fx.claims(fx.unitFx.teacher1, false))
@@ -439,7 +439,7 @@ func TestCollectionHandler_AddItem_NonExistentUnit(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	body := map[string]any{"unitId": "00000000-0000-0000-0000-000000000099"}
+	body := map[string]any{"chapterId": "00000000-0000-0000-0000-000000000099"}
 	b, _ := json.Marshal(body)
 	req := httptest.NewRequest(http.MethodPost, "/api/collections/"+col.ID+"/items", bytes.NewReader(b))
 	req = withClaims(req, fx.claims(fx.unitFx.teacher1, false))
@@ -450,7 +450,7 @@ func TestCollectionHandler_AddItem_NonExistentUnit(t *testing.T) {
 	// Plan 052 PR-C: was 400 (FK constraint surfaced from the store)
 	// in the pre-PR-C behavior. Now AddItem looks up the unit FIRST
 	// and returns 404 on missing/invisible unit — matches the
-	// don't-leak-existence convention used by canViewUnit elsewhere.
+	// don't-leak-existence convention used by canViewChapter elsewhere.
 	assert.Equal(t, http.StatusNotFound, w.Code)
 }
 
@@ -465,7 +465,7 @@ func TestCollectionHandler_RemoveItem_NotFound(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodDelete, "/api/collections/"+col.ID+"/items/00000000-0000-0000-0000-000000000099", nil)
 	req = withClaims(req, fx.claims(fx.unitFx.teacher1, false))
-	req = withChiParams(req, map[string]string{"id": col.ID, "unitId": "00000000-0000-0000-0000-000000000099"})
+	req = withChiParams(req, map[string]string{"id": col.ID, "chapterId": "00000000-0000-0000-0000-000000000099"})
 	w := httptest.NewRecorder()
 	fx.ch.RemoveItem(w, req)
 
@@ -492,7 +492,7 @@ func TestCollectionHandler_PlatformAdmin_SeesAll(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 
 	var resp struct {
-		Items []store.UnitCollection `json:"items"`
+		Items []store.ChapterCollection `json:"items"`
 	}
 	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
 	assert.NotEmpty(t, resp.Items, "platform admin should see collections across scopes")
@@ -550,7 +550,7 @@ func TestCollectionHandler_Create_EmptyTitle(t *testing.T) {
 }
 
 // Plan 052 PR-C: AddItem now verifies the candidate unit is visible
-// to the caller via CanViewUnit. Without this check, anyone with
+// to the caller via CanViewChapter. Without this check, anyone with
 // canEditCollection could attach cross-org / draft / personal units
 // they have no right to see, leaking content via the collection's
 // ListItems / projection paths.
@@ -560,67 +560,67 @@ func TestCollectionHandler_Create_EmptyTitle(t *testing.T) {
 // owner.
 func TestCollectionHandler_AddItem_VisibilityMatrix(t *testing.T) {
 	cases := []struct {
-		name     string
-		mkUnit   func(fx *collectionFixture) *store.TeachingUnit
-		expected int
+		name      string
+		mkChapter func(fx *collectionFixture) *store.Chapter
+		expected  int
 	}{
 		{
 			name: "org1_draft_visible_to_teacher1",
-			mkUnit: func(fx *collectionFixture) *store.TeachingUnit {
-				return fx.unitFx.mkUnit(t, "org", &fx.unitFx.org1.ID, "draft", "Org1 Draft", fx.unitFx.teacher1.ID)
+			mkChapter: func(fx *collectionFixture) *store.Chapter {
+				return fx.unitFx.mkChapter(t, "org", &fx.unitFx.org1.ID, "draft", "Org1 Draft", fx.unitFx.teacher1.ID)
 			},
 			expected: http.StatusCreated,
 		},
 		{
 			name: "org2_draft_invisible_to_teacher1",
-			mkUnit: func(fx *collectionFixture) *store.TeachingUnit {
-				return fx.unitFx.mkUnit(t, "org", &fx.unitFx.org2.ID, "draft", "Org2 Draft", fx.unitFx.teacher2.ID)
+			mkChapter: func(fx *collectionFixture) *store.Chapter {
+				return fx.unitFx.mkChapter(t, "org", &fx.unitFx.org2.ID, "draft", "Org2 Draft", fx.unitFx.teacher2.ID)
 			},
 			expected: http.StatusNotFound,
 		},
 		{
 			name: "personal_owned_by_teacher2_invisible",
-			mkUnit: func(fx *collectionFixture) *store.TeachingUnit {
-				return fx.unitFx.mkUnit(t, "personal", &fx.unitFx.teacher2.ID, "draft", "T2 Personal", fx.unitFx.teacher2.ID)
+			mkChapter: func(fx *collectionFixture) *store.Chapter {
+				return fx.unitFx.mkChapter(t, "personal", &fx.unitFx.teacher2.ID, "draft", "T2 Personal", fx.unitFx.teacher2.ID)
 			},
 			expected: http.StatusNotFound,
 		},
 		{
 			name: "personal_owned_by_teacher1_visible",
-			mkUnit: func(fx *collectionFixture) *store.TeachingUnit {
-				return fx.unitFx.mkUnit(t, "personal", &fx.unitFx.teacher1.ID, "draft", "T1 Personal", fx.unitFx.teacher1.ID)
+			mkChapter: func(fx *collectionFixture) *store.Chapter {
+				return fx.unitFx.mkChapter(t, "personal", &fx.unitFx.teacher1.ID, "draft", "T1 Personal", fx.unitFx.teacher1.ID)
 			},
 			expected: http.StatusCreated,
 		},
 		{
 			name: "platform_classroom_ready_visible",
-			mkUnit: func(fx *collectionFixture) *store.TeachingUnit {
-				return fx.unitFx.mkUnit(t, "platform", nil, "classroom_ready", "Platform CR", fx.unitFx.admin.ID)
+			mkChapter: func(fx *collectionFixture) *store.Chapter {
+				return fx.unitFx.mkChapter(t, "platform", nil, "classroom_ready", "Platform CR", fx.unitFx.admin.ID)
 			},
 			expected: http.StatusCreated,
 		},
 		{
 			name: "platform_draft_invisible_to_non_admin",
-			mkUnit: func(fx *collectionFixture) *store.TeachingUnit {
-				return fx.unitFx.mkUnit(t, "platform", nil, "draft", "Platform Draft", fx.unitFx.admin.ID)
+			mkChapter: func(fx *collectionFixture) *store.Chapter {
+				return fx.unitFx.mkChapter(t, "platform", nil, "draft", "Platform Draft", fx.unitFx.admin.ID)
 			},
 			expected: http.StatusNotFound,
 		},
 		{
 			name: "platform_reviewed_invisible_to_non_admin",
-			mkUnit: func(fx *collectionFixture) *store.TeachingUnit {
-				return fx.unitFx.mkUnit(t, "platform", nil, "reviewed", "Platform Reviewed", fx.unitFx.admin.ID)
+			mkChapter: func(fx *collectionFixture) *store.Chapter {
+				return fx.unitFx.mkChapter(t, "platform", nil, "reviewed", "Platform Reviewed", fx.unitFx.admin.ID)
 			},
 			expected: http.StatusNotFound,
 		},
 		{
 			name: "org1_archived_visible_to_org_teacher",
-			mkUnit: func(fx *collectionFixture) *store.TeachingUnit {
+			mkChapter: func(fx *collectionFixture) *store.Chapter {
 				// Org-scope "archived" is visible to org teachers — the
 				// status filter only excludes for platform scope. Adding
 				// archived org units to a collection is a librarian
 				// workflow, so allow it.
-				return fx.unitFx.mkUnit(t, "org", &fx.unitFx.org1.ID, "archived", "Org1 Archived", fx.unitFx.teacher1.ID)
+				return fx.unitFx.mkChapter(t, "org", &fx.unitFx.org1.ID, "archived", "Org1 Archived", fx.unitFx.teacher1.ID)
 			},
 			expected: http.StatusCreated,
 		},
@@ -636,8 +636,8 @@ func TestCollectionHandler_AddItem_VisibilityMatrix(t *testing.T) {
 			})
 			require.NoError(t, err)
 
-			candidate := tc.mkUnit(fx)
-			body, _ := json.Marshal(map[string]any{"unitId": candidate.ID, "sortOrder": 0})
+			candidate := tc.mkChapter(fx)
+			body, _ := json.Marshal(map[string]any{"chapterId": candidate.ID, "sortOrder": 0})
 			req := httptest.NewRequest(http.MethodPost, "/api/collections/"+col.ID+"/items", bytes.NewReader(body))
 			req = withClaims(req, fx.claims(fx.unitFx.teacher1, false))
 			req = withChiParams(req, map[string]string{"id": col.ID})
@@ -651,7 +651,7 @@ func TestCollectionHandler_AddItem_VisibilityMatrix(t *testing.T) {
 // Student in org1 owns a personal collection. They can edit their own
 // personal collection (canEditCollection passes for personal-owner).
 // They CANNOT attach an org1 draft because students are denied by
-// CanViewUnit's org-scope rule (`m.Role == "org_admin" || "teacher"`
+// CanViewChapter's org-scope rule (`m.Role == "org_admin" || "teacher"`
 // only). 404 — don't leak unit existence.
 func TestCollectionHandler_AddItem_StudentCannotAttachOrgUnit(t *testing.T) {
 	fx := newCollectionFixture(t, t.Name())
@@ -664,10 +664,10 @@ func TestCollectionHandler_AddItem_StudentCannotAttachOrgUnit(t *testing.T) {
 	require.NoError(t, err)
 
 	// org1 draft — created by teacher1 in student1's own org. Teachers
-	// can see it; students can't (per CanViewUnit org rule).
-	candidate := fx.unitFx.mkUnit(t, "org", &fx.unitFx.org1.ID, "draft", "Org1 Draft", fx.unitFx.teacher1.ID)
+	// can see it; students can't (per CanViewChapter org rule).
+	candidate := fx.unitFx.mkChapter(t, "org", &fx.unitFx.org1.ID, "draft", "Org1 Draft", fx.unitFx.teacher1.ID)
 
-	body, _ := json.Marshal(map[string]any{"unitId": candidate.ID, "sortOrder": 0})
+	body, _ := json.Marshal(map[string]any{"chapterId": candidate.ID, "sortOrder": 0})
 	req := httptest.NewRequest(http.MethodPost, "/api/collections/"+col.ID+"/items", bytes.NewReader(body))
 	req = withClaims(req, fx.claims(fx.unitFx.student1, false))
 	req = withChiParams(req, map[string]string{"id": col.ID})
@@ -676,7 +676,7 @@ func TestCollectionHandler_AddItem_StudentCannotAttachOrgUnit(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, w.Code, "student should not see org-scope unit even in their own org")
 }
 
-// Platform admin bypasses CanViewUnit, so they CAN attach an org2
+// Platform admin bypasses CanViewChapter, so they CAN attach an org2
 // draft they have no scope-membership for. Uses a personal-scope
 // collection owned by the admin so canEditCollection passes
 // independently of the visibility check we're testing.
@@ -690,14 +690,14 @@ func TestCollectionHandler_AddItem_PlatformAdminBypassesVisibility(t *testing.T)
 	require.NoError(t, err)
 
 	// org2 draft — invisible to teacher1, visible to platform admin
-	// via CanViewUnit's IsPlatformAdmin bypass.
-	candidate := fx.unitFx.mkUnit(t, "org", &fx.unitFx.org2.ID, "draft", "Org2 Draft", fx.unitFx.teacher2.ID)
+	// via CanViewChapter's IsPlatformAdmin bypass.
+	candidate := fx.unitFx.mkChapter(t, "org", &fx.unitFx.org2.ID, "draft", "Org2 Draft", fx.unitFx.teacher2.ID)
 
-	body, _ := json.Marshal(map[string]any{"unitId": candidate.ID, "sortOrder": 0})
+	body, _ := json.Marshal(map[string]any{"chapterId": candidate.ID, "sortOrder": 0})
 	req := httptest.NewRequest(http.MethodPost, "/api/collections/"+col.ID+"/items", bytes.NewReader(body))
 	req = withClaims(req, fx.claims(fx.unitFx.admin, true))
 	req = withChiParams(req, map[string]string{"id": col.ID})
 	w := httptest.NewRecorder()
 	fx.ch.AddItem(w, req)
-	assert.Equal(t, http.StatusCreated, w.Code, "platform admin should bypass CanViewUnit")
+	assert.Equal(t, http.StatusCreated, w.Code, "platform admin should bypass CanViewChapter")
 }

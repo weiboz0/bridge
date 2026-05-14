@@ -58,15 +58,15 @@ func TestValidateDevAuthEnv(t *testing.T) {
 		{
 			name: "DEV_SKIP_AUTH set + BRIDGE_HOST_EXPOSURE=localhost → no error (explicit localhost)",
 			env: map[string]string{
-				"DEV_SKIP_AUTH":         "admin",
-				"BRIDGE_HOST_EXPOSURE":  "localhost",
+				"DEV_SKIP_AUTH":        "admin",
+				"BRIDGE_HOST_EXPOSURE": "localhost",
 			},
 		},
 		{
 			name: "DEV_SKIP_AUTH set + BRIDGE_HOST_EXPOSURE=exposed → ERROR",
 			env: map[string]string{
-				"DEV_SKIP_AUTH":         "admin",
-				"BRIDGE_HOST_EXPOSURE":  "exposed",
+				"DEV_SKIP_AUTH":        "admin",
+				"BRIDGE_HOST_EXPOSURE": "exposed",
 			},
 			expectError: true,
 			errSubstr:   "BRIDGE_HOST_EXPOSURE=exposed",

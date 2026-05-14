@@ -8,52 +8,54 @@ import (
 
 // Stores holds all store instances for dependency injection.
 type Stores struct {
-	Orgs          *store.OrgStore
-	Users         *store.UserStore
-	Courses       *store.CourseStore
-	Topics        *store.TopicStore
-	Classes       *store.ClassStore
-	Sessions      *store.SessionStore
-	Documents     *store.DocumentStore
-	Assignments   *store.AssignmentStore
-	Annotations   *store.AnnotationStore
-	Interactions  *store.InteractionStore
-	Reports       *store.ReportStore
-	Stats         *store.StatsStore
-	Schedules     *store.ScheduleStore
-	Problems      *store.ProblemStore
-	TestCases     *store.TestCaseStore
-	Attempts      *store.AttemptStore
-	Solutions     *store.ProblemSolutionStore
-	TopicProblems *store.TopicProblemStore
-	TeachingUnits   *store.TeachingUnitStore
-	UnitCollections *store.UnitCollectionStore
-	ParentLinks     *store.ParentLinkStore
+	Orgs               *store.OrgStore
+	Users              *store.UserStore
+	Courses            *store.CourseStore
+	Topics             *store.TopicStore
+	Classes            *store.ClassStore
+	Sessions           *store.SessionStore
+	Documents          *store.DocumentStore
+	Assignments        *store.AssignmentStore
+	Annotations        *store.AnnotationStore
+	Interactions       *store.InteractionStore
+	Reports            *store.ReportStore
+	Stats              *store.StatsStore
+	Schedules          *store.ScheduleStore
+	Problems           *store.ProblemStore
+	TestCases          *store.TestCaseStore
+	Attempts           *store.AttemptStore
+	Solutions          *store.ProblemSolutionStore
+	TopicProblems      *store.TopicProblemStore
+	Books              *store.BookStore
+	Chapters           *store.ChapterStore
+	ChapterCollections *store.ChapterCollectionStore
+	ParentLinks        *store.ParentLinkStore
 }
 
 // NewStores creates all stores from a database connection.
 func NewStores(db *sql.DB) *Stores {
 	return &Stores{
-		Orgs:          store.NewOrgStore(db),
-		Users:         store.NewUserStore(db),
-		Courses:       store.NewCourseStore(db),
-		Topics:        store.NewTopicStore(db),
-		Classes:       store.NewClassStore(db),
-		Sessions:      store.NewSessionStore(db),
-		Documents:     store.NewDocumentStore(db),
-		Assignments:   store.NewAssignmentStore(db),
-		Annotations:   store.NewAnnotationStore(db),
-		Interactions:  store.NewInteractionStore(db),
-		Reports:       store.NewReportStore(db),
-		Stats:         store.NewStatsStore(db),
-		Schedules:     store.NewScheduleStore(db),
-		Problems:      store.NewProblemStore(db),
-		TestCases:     store.NewTestCaseStore(db),
-		Attempts:      store.NewAttemptStore(db),
-		Solutions:     store.NewProblemSolutionStore(db),
-		TopicProblems: store.NewTopicProblemStore(db),
-		TeachingUnits:   store.NewTeachingUnitStore(db),
-		UnitCollections: store.NewUnitCollectionStore(db),
-		ParentLinks:     store.NewParentLinkStore(db),
+		Orgs:               store.NewOrgStore(db),
+		Users:              store.NewUserStore(db),
+		Courses:            store.NewCourseStore(db),
+		Topics:             store.NewTopicStore(db),
+		Classes:            store.NewClassStore(db),
+		Sessions:           store.NewSessionStore(db),
+		Documents:          store.NewDocumentStore(db),
+		Assignments:        store.NewAssignmentStore(db),
+		Annotations:        store.NewAnnotationStore(db),
+		Interactions:       store.NewInteractionStore(db),
+		Reports:            store.NewReportStore(db),
+		Stats:              store.NewStatsStore(db),
+		Schedules:          store.NewScheduleStore(db),
+		Problems:           store.NewProblemStore(db),
+		TestCases:          store.NewTestCaseStore(db),
+		Attempts:           store.NewAttemptStore(db),
+		Solutions:          store.NewProblemSolutionStore(db),
+		TopicProblems:      store.NewTopicProblemStore(db),
+		Books:              store.NewBookStore(db),
+		Chapters:           store.NewChapterStore(db),
+		ChapterCollections: store.NewChapterCollectionStore(db),
+		ParentLinks:        store.NewParentLinkStore(db),
 	}
 }

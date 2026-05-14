@@ -82,9 +82,9 @@ func (h *ClassHandler) CreateClass(w http.ResponseWriter, r *http.Request) {
 
 	class, err := h.Classes.CreateClass(r.Context(), store.CreateClassInput{
 		CourseID:  body.CourseID,
-		OrgID:    body.OrgID,
-		Title:    body.Title,
-		Term:     body.Term,
+		OrgID:     body.OrgID,
+		Title:     body.Title,
+		Term:      body.Term,
 		CreatedBy: claims.UserID,
 	})
 	if err != nil {

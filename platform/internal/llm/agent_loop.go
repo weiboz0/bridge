@@ -16,7 +16,7 @@ type ToolExecutor func(ctx context.Context, tc ToolCall) (map[string]any, error)
 
 // AgenticLoopConfig configures the agentic loop.
 type AgenticLoopConfig struct {
-	MaxIterations int          // default 15
+	MaxIterations int // default 15
 	Backend       Backend
 	Tools         []ToolSpec
 	ToolExecutor  ToolExecutor

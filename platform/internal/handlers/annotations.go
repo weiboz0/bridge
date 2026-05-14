@@ -59,7 +59,7 @@ type annotationAccess struct {
 // missing session → 404, no read access → 404).
 func (h *AnnotationHandler) resolveAnnotationAccess(ctx context.Context, claims *auth.Claims, documentID string) (annotationAccess, *authDecision) {
 	// Plan 056 — explicitly reject any documentId that is not a
-	// student session doc. attempt:*, unit:*, and broadcast:* are
+	// student session doc. attempt:*, chapter:*, and broadcast:* are
 	// realtime doc shapes that don't carry annotations.
 	parts := strings.Split(documentID, ":")
 	if len(parts) != 4 || parts[0] != "session" || parts[2] != "user" {

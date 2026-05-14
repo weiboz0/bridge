@@ -1506,7 +1506,7 @@ func TestProblemStore_CreateProblem_SlugConflict(t *testing.T) {
 }
 
 // Plan 071 phase 1 — same slug is allowed across different scopeIds because
-// the unique index is partitioned by (scope, COALESCE(scope_id::text, '')).
+// the unique index is partitioned by (scope, COALESCE(scope_id::text, ”)).
 // Two personal users may each have a "two-sum" without colliding.
 func TestProblemStore_CreateProblem_SlugAllowedInDifferentScope(t *testing.T) {
 	db, problems, _, userA := setupProblemEnv(t, t.Name())

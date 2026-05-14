@@ -13,6 +13,7 @@ import (
 //	{baseDir}/{userID}/skills/
 //	{baseDir}/{userID}/workspace/
 //	{baseDir}/{userID}/venv/
+//
 // validateUserID prevents path traversal attacks.
 func validateUserID(userID string) error {
 	if userID == "" {

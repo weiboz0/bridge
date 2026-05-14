@@ -31,8 +31,8 @@ type CreateTestCaseInput struct {
 }
 
 type UpdateTestCaseInput struct {
-	Name           *string
-	Stdin          *string
+	Name  *string
+	Stdin *string
 	// ExpectedStdout: nil = unchanged; non-nil + empty = clear (NULL);
 	// non-nil + non-empty = set.
 	ExpectedStdout *string

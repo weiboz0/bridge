@@ -8,9 +8,9 @@ import (
 	"time"
 )
 
-// UnitCollection represents a curated sequence of teaching units, scoped
-// the same way as teaching_units (platform / org / personal).
-type UnitCollection struct {
+// ChapterCollection represents a curated sequence of teaching units, scoped
+// the same way as chapters (platform / org / personal).
+type ChapterCollection struct {
 	ID          string    `json:"id"`
 	Scope       string    `json:"scope"`
 	ScopeID     *string   `json:"scopeId"`
@@ -21,11 +21,11 @@ type UnitCollection struct {
 	UpdatedAt   time.Time `json:"updatedAt"`
 }
 
-// UnitCollectionItem links a teaching unit to a collection at a specific
+// ChapterCollectionItem links a teaching unit to a collection at a specific
 // sort position.
-type UnitCollectionItem struct {
+type ChapterCollectionItem struct {
 	CollectionID string `json:"collectionId"`
-	UnitID       string `json:"unitId"`
+	ChapterID    string `json:"chapterId"`
 	SortOrder    int    `json:"sortOrder"`
 }
 
@@ -44,20 +44,20 @@ type UpdateCollectionInput struct {
 	Description *string
 }
 
-// UnitCollectionStore manages unit_collections and unit_collection_items rows.
-type UnitCollectionStore struct{ db *sql.DB }
+// ChapterCollectionStore manages chapter_collections and chapter_collection_items rows.
+type ChapterCollectionStore struct{ db *sql.DB }
 
-// NewUnitCollectionStore constructs a store backed by db.
-func NewUnitCollectionStore(db *sql.DB) *UnitCollectionStore {
-	return &UnitCollectionStore{db: db}
+// NewChapterCollectionStore constructs a store backed by db.
+func NewChapterCollectionStore(db *sql.DB) *ChapterCollectionStore {
+	return &ChapterCollectionStore{db: db}
 }
 
 const collectionColumns = `id, scope, scope_id, title, description, created_by, created_at, updated_at`
 
-// scanCollection reads a unit_collections row. Returns (nil, nil) on
+// scanCollection reads a chapter_collections row. Returns (nil, nil) on
 // sql.ErrNoRows so callers can use a uniform "not found" check.
-func scanCollection(row interface{ Scan(...any) error }) (*UnitCollection, error) {
-	var c UnitCollection
+func scanCollection(row interface{ Scan(...any) error }) (*ChapterCollection, error) {
+	var c ChapterCollection
 	var scopeID sql.NullString
 
 	err := row.Scan(&c.ID, &c.Scope, &scopeID, &c.Title, &c.Description,
@@ -76,9 +76,9 @@ func scanCollection(row interface{ Scan(...any) error }) (*UnitCollection, error
 }
 
 // CreateCollection inserts a new collection row.
-func (s *UnitCollectionStore) CreateCollection(ctx context.Context, in CreateCollectionInput) (*UnitCollection, error) {
+func (s *ChapterCollectionStore) CreateCollection(ctx context.Context, in CreateCollectionInput) (*ChapterCollection, error) {
 	return scanCollection(s.db.QueryRowContext(ctx, `
-		INSERT INTO unit_collections (scope, scope_id, title, description, created_by)
+		INSERT INTO chapter_collections (scope, scope_id, title, description, created_by)
 		VALUES ($1, $2, $3, $4, $5)
 		RETURNING `+collectionColumns,
 		in.Scope, in.ScopeID, in.Title, in.Description, in.CreatedBy,
@@ -87,14 +87,14 @@ func (s *UnitCollectionStore) CreateCollection(ctx context.Context, in CreateCol
 
 // GetCollection returns the collection with the given id, or (nil, nil)
 // if not found.
-func (s *UnitCollectionStore) GetCollection(ctx context.Context, id string) (*UnitCollection, error) {
+func (s *ChapterCollectionStore) GetCollection(ctx context.Context, id string) (*ChapterCollection, error) {
 	return scanCollection(s.db.QueryRowContext(ctx,
-		`SELECT `+collectionColumns+` FROM unit_collections WHERE id = $1`, id))
+		`SELECT `+collectionColumns+` FROM chapter_collections WHERE id = $1`, id))
 }
 
 // UpdateCollection applies partial updates to the collection. Nil fields
 // are left untouched.
-func (s *UnitCollectionStore) UpdateCollection(ctx context.Context, id string, in UpdateCollectionInput) (*UnitCollection, error) {
+func (s *ChapterCollectionStore) UpdateCollection(ctx context.Context, id string, in UpdateCollectionInput) (*ChapterCollection, error) {
 	setClauses := []string{}
 	args := []any{}
 	argIdx := 1
@@ -120,22 +120,22 @@ func (s *UnitCollectionStore) UpdateCollection(ctx context.Context, id string, i
 
 	args = append(args, id)
 	q := fmt.Sprintf(
-		`UPDATE unit_collections SET %s WHERE id = $%d RETURNING `+collectionColumns,
+		`UPDATE chapter_collections SET %s WHERE id = $%d RETURNING `+collectionColumns,
 		strings.Join(setClauses, ", "), argIdx,
 	)
 	return scanCollection(s.db.QueryRowContext(ctx, q, args...))
 }
 
 // DeleteCollection hard-deletes the collection and returns the deleted row
-// (or nil if not found). Cascades remove unit_collection_items.
-func (s *UnitCollectionStore) DeleteCollection(ctx context.Context, id string) (*UnitCollection, error) {
+// (or nil if not found). Cascades remove chapter_collection_items.
+func (s *ChapterCollectionStore) DeleteCollection(ctx context.Context, id string) (*ChapterCollection, error) {
 	return scanCollection(s.db.QueryRowContext(ctx,
-		`DELETE FROM unit_collections WHERE id = $1 RETURNING `+collectionColumns, id))
+		`DELETE FROM chapter_collections WHERE id = $1 RETURNING `+collectionColumns, id))
 }
 
 // ListCollections returns all collections for the given scope + scopeID,
 // ordered by updated_at DESC. Pass an empty scopeID for scope="platform".
-func (s *UnitCollectionStore) ListCollections(ctx context.Context, scope, scopeID string) ([]UnitCollection, error) {
+func (s *ChapterCollectionStore) ListCollections(ctx context.Context, scope, scopeID string) ([]ChapterCollection, error) {
 	var (
 		rows *sql.Rows
 		err  error
@@ -143,13 +143,13 @@ func (s *UnitCollectionStore) ListCollections(ctx context.Context, scope, scopeI
 	if scopeID == "" {
 		rows, err = s.db.QueryContext(ctx, `
 			SELECT `+collectionColumns+`
-			FROM unit_collections
+			FROM chapter_collections
 			WHERE scope = $1 AND scope_id IS NULL
 			ORDER BY updated_at DESC`, scope)
 	} else {
 		rows, err = s.db.QueryContext(ctx, `
 			SELECT `+collectionColumns+`
-			FROM unit_collections
+			FROM chapter_collections
 			WHERE scope = $1 AND scope_id = $2
 			ORDER BY updated_at DESC`, scope, scopeID)
 	}
@@ -158,7 +158,7 @@ func (s *UnitCollectionStore) ListCollections(ctx context.Context, scope, scopeI
 	}
 	defer rows.Close()
 
-	out := []UnitCollection{}
+	out := []ChapterCollection{}
 	for rows.Next() {
 		c, err := scanCollection(rows)
 		if err != nil {
@@ -171,7 +171,7 @@ func (s *UnitCollectionStore) ListCollections(ctx context.Context, scope, scopeI
 
 // ListCollectionsForViewer returns all collections visible to the viewer,
 // filtered by optional scope. Used by the collection list endpoint.
-func (s *UnitCollectionStore) ListCollectionsForViewer(ctx context.Context, viewerID string, viewerOrgs []string, isPlatformAdmin bool, scope string) ([]UnitCollection, error) {
+func (s *ChapterCollectionStore) ListCollectionsForViewer(ctx context.Context, viewerID string, viewerOrgs []string, isPlatformAdmin bool, scope string) ([]ChapterCollection, error) {
 	where := []string{}
 	args := []any{}
 	idx := 1
@@ -207,7 +207,7 @@ func (s *UnitCollectionStore) ListCollectionsForViewer(ctx context.Context, view
 		idx++
 	}
 
-	q := `SELECT ` + collectionColumns + ` FROM unit_collections`
+	q := `SELECT ` + collectionColumns + ` FROM chapter_collections`
 	if len(where) > 0 {
 		q += ` WHERE ` + strings.Join(where, " AND ")
 	}
@@ -219,7 +219,7 @@ func (s *UnitCollectionStore) ListCollectionsForViewer(ctx context.Context, view
 	}
 	defer rows.Close()
 
-	out := []UnitCollection{}
+	out := []ChapterCollection{}
 	for rows.Next() {
 		c, err := scanCollection(rows)
 		if err != nil {
@@ -235,15 +235,15 @@ func (s *UnitCollectionStore) ListCollectionsForViewer(ctx context.Context, view
 // AddItem inserts a unit into a collection at the given sort position.
 // Returns the inserted item. If the item already exists, it is a no-op
 // that returns the existing row.
-func (s *UnitCollectionStore) AddItem(ctx context.Context, collectionID, unitID string, sortOrder int) (*UnitCollectionItem, error) {
-	var item UnitCollectionItem
+func (s *ChapterCollectionStore) AddItem(ctx context.Context, collectionID, chapterID string, sortOrder int) (*ChapterCollectionItem, error) {
+	var item ChapterCollectionItem
 	err := s.db.QueryRowContext(ctx, `
-		INSERT INTO unit_collection_items (collection_id, unit_id, sort_order)
+		INSERT INTO chapter_collection_items (collection_id, chapter_id, sort_order)
 		VALUES ($1, $2, $3)
-		ON CONFLICT (collection_id, unit_id) DO UPDATE SET sort_order = EXCLUDED.sort_order
-		RETURNING collection_id, unit_id, sort_order`,
-		collectionID, unitID, sortOrder,
-	).Scan(&item.CollectionID, &item.UnitID, &item.SortOrder)
+		ON CONFLICT (collection_id, chapter_id) DO UPDATE SET sort_order = EXCLUDED.sort_order
+		RETURNING collection_id, chapter_id, sort_order`,
+		collectionID, chapterID, sortOrder,
+	).Scan(&item.CollectionID, &item.ChapterID, &item.SortOrder)
 	if err != nil {
 		return nil, err
 	}
@@ -252,11 +252,11 @@ func (s *UnitCollectionStore) AddItem(ctx context.Context, collectionID, unitID 
 
 // RemoveItem deletes a unit from a collection. Returns true if the row
 // existed and was deleted.
-func (s *UnitCollectionStore) RemoveItem(ctx context.Context, collectionID, unitID string) (bool, error) {
+func (s *ChapterCollectionStore) RemoveItem(ctx context.Context, collectionID, chapterID string) (bool, error) {
 	res, err := s.db.ExecContext(ctx, `
-		DELETE FROM unit_collection_items
-		WHERE collection_id = $1 AND unit_id = $2`,
-		collectionID, unitID)
+		DELETE FROM chapter_collection_items
+		WHERE collection_id = $1 AND chapter_id = $2`,
+		collectionID, chapterID)
 	if err != nil {
 		return false, err
 	}
@@ -266,14 +266,14 @@ func (s *UnitCollectionStore) RemoveItem(ctx context.Context, collectionID, unit
 
 // ReorderItem updates the sort_order of an existing item. Returns (nil, nil)
 // if the item does not exist.
-func (s *UnitCollectionStore) ReorderItem(ctx context.Context, collectionID, unitID string, sortOrder int) (*UnitCollectionItem, error) {
-	var item UnitCollectionItem
+func (s *ChapterCollectionStore) ReorderItem(ctx context.Context, collectionID, chapterID string, sortOrder int) (*ChapterCollectionItem, error) {
+	var item ChapterCollectionItem
 	err := s.db.QueryRowContext(ctx, `
-		UPDATE unit_collection_items SET sort_order = $3
-		WHERE collection_id = $1 AND unit_id = $2
-		RETURNING collection_id, unit_id, sort_order`,
-		collectionID, unitID, sortOrder,
-	).Scan(&item.CollectionID, &item.UnitID, &item.SortOrder)
+		UPDATE chapter_collection_items SET sort_order = $3
+		WHERE collection_id = $1 AND chapter_id = $2
+		RETURNING collection_id, chapter_id, sort_order`,
+		collectionID, chapterID, sortOrder,
+	).Scan(&item.CollectionID, &item.ChapterID, &item.SortOrder)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -284,22 +284,22 @@ func (s *UnitCollectionStore) ReorderItem(ctx context.Context, collectionID, uni
 }
 
 // ListItems returns all items in a collection, ordered by sort_order ASC.
-func (s *UnitCollectionStore) ListItems(ctx context.Context, collectionID string) ([]UnitCollectionItem, error) {
+func (s *ChapterCollectionStore) ListItems(ctx context.Context, collectionID string) ([]ChapterCollectionItem, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT collection_id, unit_id, sort_order
-		FROM unit_collection_items
+		SELECT collection_id, chapter_id, sort_order
+		FROM chapter_collection_items
 		WHERE collection_id = $1
-		ORDER BY sort_order ASC, unit_id ASC`,
+		ORDER BY sort_order ASC, chapter_id ASC`,
 		collectionID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	out := []UnitCollectionItem{}
+	out := []ChapterCollectionItem{}
 	for rows.Next() {
-		var item UnitCollectionItem
-		if err := rows.Scan(&item.CollectionID, &item.UnitID, &item.SortOrder); err != nil {
+		var item ChapterCollectionItem
+		if err := rows.Scan(&item.CollectionID, &item.ChapterID, &item.SortOrder); err != nil {
 			return nil, err
 		}
 		out = append(out, item)

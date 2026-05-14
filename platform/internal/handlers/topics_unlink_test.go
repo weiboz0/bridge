@@ -14,63 +14,63 @@ import (
 	"github.com/weiboz0/bridge/platform/internal/store"
 )
 
-// Plan 045: TopicHandler.UnlinkUnit detaches the teaching_unit
+// Plan 045: TopicHandler.UnlinkChapter detaches the teaching_unit
 // currently linked to a topic. Idempotent (200 when nothing linked).
 
-func (fx *linkUnitFixture) callUnlinkUnit(t *testing.T, claims *auth.Claims) (int, []byte) {
+func (fx *linkChapterFixture) callUnlinkChapter(t *testing.T, claims *auth.Claims) (int, []byte) {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodDelete,
-		"/api/courses/"+fx.courseID+"/topics/"+fx.topicID+"/link-unit", nil)
+		"/api/courses/"+fx.courseID+"/topics/"+fx.topicID+"/link-chapter", nil)
 	req = withChiParams(withClaims(req, claims), map[string]string{
 		"courseId": fx.courseID, "topicId": fx.topicID,
 	})
 	w := httptest.NewRecorder()
-	fx.h.UnlinkUnit(w, req)
+	fx.h.UnlinkChapter(w, req)
 	return w.Code, w.Body.Bytes()
 }
 
-func TestUnlinkUnit_NoClaims(t *testing.T) {
+func TestUnlinkChapter_NoClaims(t *testing.T) {
 	h := &TopicHandler{}
 	req := httptest.NewRequest(http.MethodDelete,
-		"/api/courses/c/topics/t/link-unit", nil)
+		"/api/courses/c/topics/t/link-chapter", nil)
 	req = withChiParams(req, map[string]string{"courseId": "c", "topicId": "t"})
 	w := httptest.NewRecorder()
-	h.UnlinkUnit(w, req)
+	h.UnlinkChapter(w, req)
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
 }
 
 // Happy path: teacher links a Unit, then unlinks it.
-func TestUnlinkUnit_TeacherDetachesOwnUnit(t *testing.T) {
-	fx := newLinkUnitFixture(t, "unlinkok")
+func TestUnlinkChapter_TeacherDetachesOwnUnit(t *testing.T) {
+	fx := newLinkChapterFixture(t, "unlinkok")
 	claims := &auth.Claims{UserID: fx.teacher.ID}
 
 	// Link first.
-	linkCode, _ := fx.callLinkUnit(t, claims, fx.unitID)
+	linkCode, _ := fx.callLinkChapter(t, claims, fx.chapterID)
 	require.Equal(t, http.StatusOK, linkCode)
 
 	// Now unlink.
-	unlinkCode, body := fx.callUnlinkUnit(t, claims)
+	unlinkCode, body := fx.callUnlinkChapter(t, claims)
 	require.Equal(t, http.StatusOK, unlinkCode)
 
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(body, &resp))
 	assert.Equal(t, true, resp["unlinked"])
-	assert.Equal(t, fx.unitID, resp["unitId"])
+	assert.Equal(t, fx.chapterID, resp["chapterId"])
 
 	// Verify the unit's topic_id is NULL afterwards.
 	ctx := context.Background()
 	db := integrationDB(t)
 	var topicIDAfter *string
 	err := db.QueryRowContext(ctx,
-		"SELECT topic_id FROM teaching_units WHERE id = $1", fx.unitID).Scan(&topicIDAfter)
+		"SELECT topic_id FROM chapters WHERE id = $1", fx.chapterID).Scan(&topicIDAfter)
 	require.NoError(t, err)
 	assert.Nil(t, topicIDAfter)
 }
 
 // Idempotent: unlinking when nothing is linked returns 200, not 404.
-func TestUnlinkUnit_WhenNothingLinked_IsIdempotent(t *testing.T) {
-	fx := newLinkUnitFixture(t, "unlinkidem")
-	code, body := fx.callUnlinkUnit(t,
+func TestUnlinkChapter_WhenNothingLinked_IsIdempotent(t *testing.T) {
+	fx := newLinkChapterFixture(t, "unlinkidem")
+	code, body := fx.callUnlinkChapter(t,
 		&auth.Claims{UserID: fx.teacher.ID})
 	require.Equal(t, http.StatusOK, code)
 
@@ -81,35 +81,35 @@ func TestUnlinkUnit_WhenNothingLinked_IsIdempotent(t *testing.T) {
 
 // Outsider (not the course creator) is rejected at the course-edit gate
 // even when a Unit is currently linked to the topic.
-func TestUnlinkUnit_Outsider_Forbidden(t *testing.T) {
-	fx := newLinkUnitFixture(t, "unlinkoutsider")
+func TestUnlinkChapter_Outsider_Forbidden(t *testing.T) {
+	fx := newLinkChapterFixture(t, "unlinkoutsider")
 
 	// Pre-link as the teacher.
-	linkCode, _ := fx.callLinkUnit(t,
-		&auth.Claims{UserID: fx.teacher.ID}, fx.unitID)
+	linkCode, _ := fx.callLinkChapter(t,
+		&auth.Claims{UserID: fx.teacher.ID}, fx.chapterID)
 	require.Equal(t, http.StatusOK, linkCode)
 
-	code, _ := fx.callUnlinkUnit(t,
+	code, _ := fx.callUnlinkChapter(t,
 		&auth.Claims{UserID: fx.outsider.ID})
 	assert.Equal(t, http.StatusForbidden, code)
 }
 
 // Platform admin can unlink any linked Unit.
-func TestUnlinkUnit_PlatformAdmin(t *testing.T) {
-	fx := newLinkUnitFixture(t, "unlinkadmin")
+func TestUnlinkChapter_PlatformAdmin(t *testing.T) {
+	fx := newLinkChapterFixture(t, "unlinkadmin")
 
-	linkCode, _ := fx.callLinkUnit(t,
-		&auth.Claims{UserID: fx.teacher.ID}, fx.unitID)
+	linkCode, _ := fx.callLinkChapter(t,
+		&auth.Claims{UserID: fx.teacher.ID}, fx.chapterID)
 	require.Equal(t, http.StatusOK, linkCode)
 
-	code, _ := fx.callUnlinkUnit(t,
+	code, _ := fx.callUnlinkChapter(t,
 		&auth.Claims{UserID: fx.admin.ID, IsPlatformAdmin: true})
 	assert.Equal(t, http.StatusOK, code)
 }
 
 // Mismatched topic-course path returns 404 (path traversal guard).
-func TestUnlinkUnit_MismatchedTopicCoursePath_NotFound(t *testing.T) {
-	fx := newLinkUnitFixture(t, "unlinkpath")
+func TestUnlinkChapter_MismatchedTopicCoursePath_NotFound(t *testing.T) {
+	fx := newLinkChapterFixture(t, "unlinkpath")
 
 	// Build a SECOND course owned by the same teacher.
 	ctx := context.Background()
@@ -122,42 +122,42 @@ func TestUnlinkUnit_MismatchedTopicCoursePath_NotFound(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { db.ExecContext(ctx, "DELETE FROM courses WHERE id = $1", otherCourse.ID) })
 
-	// Hit /courses/{otherCourse}/topics/{fx.topicID}/link-unit — topic
+	// Hit /courses/{otherCourse}/topics/{fx.topicID}/link-chapter — topic
 	// doesn't belong to that course.
 	req := httptest.NewRequest(http.MethodDelete,
-		"/api/courses/"+otherCourse.ID+"/topics/"+fx.topicID+"/link-unit", nil)
+		"/api/courses/"+otherCourse.ID+"/topics/"+fx.topicID+"/link-chapter", nil)
 	req = withChiParams(withClaims(req, &auth.Claims{UserID: fx.teacher.ID}),
 		map[string]string{"courseId": otherCourse.ID, "topicId": fx.topicID})
 	w := httptest.NewRecorder()
-	fx.h.UnlinkUnit(w, req)
+	fx.h.UnlinkChapter(w, req)
 	assert.Equal(t, http.StatusNotFound, w.Code)
 }
 
 // A teacher can detach a published platform Unit they previously
 // linked — symmetric with the widened link permission.
-func TestUnlinkUnit_TeacherDetachesPlatformPublishedUnit(t *testing.T) {
-	fx := newLinkUnitFixture(t, "unlinkplat")
+func TestUnlinkChapter_TeacherDetachesPlatformPublishedUnit(t *testing.T) {
+	fx := newLinkChapterFixture(t, "unlinkplat")
 	ctx := context.Background()
 	db := integrationDB(t)
 
-	var platUnitID string
+	var platChapterID string
 	err := db.QueryRowContext(ctx,
-		`INSERT INTO teaching_units
+		`INSERT INTO chapters
 		 (id, scope, scope_id, title, summary, material_type, status, created_by, created_at, updated_at)
 		 VALUES (gen_random_uuid(), 'platform', NULL, 'Lib', '', 'notes', 'classroom_ready', $1, now(), now())
 		 RETURNING id`,
 		fx.admin.ID,
-	).Scan(&platUnitID)
+	).Scan(&platChapterID)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		db.ExecContext(ctx, "DELETE FROM teaching_units WHERE id = $1", platUnitID)
+		db.ExecContext(ctx, "DELETE FROM chapters WHERE id = $1", platChapterID)
 	})
 
 	teacherClaims := &auth.Claims{UserID: fx.teacher.ID}
 
-	linkCode, _ := fx.callLinkUnit(t, teacherClaims, platUnitID)
+	linkCode, _ := fx.callLinkChapter(t, teacherClaims, platChapterID)
 	require.Equal(t, http.StatusOK, linkCode)
 
-	unlinkCode, _ := fx.callUnlinkUnit(t, teacherClaims)
+	unlinkCode, _ := fx.callUnlinkChapter(t, teacherClaims)
 	assert.Equal(t, http.StatusOK, unlinkCode)
 }

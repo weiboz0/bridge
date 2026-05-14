@@ -29,14 +29,14 @@ import (
 //     gated by HOCUSPOCUS_TOKEN_SECRET; called by the Hocuspocus
 //     Node process during onLoadDocument as defense-in-depth.
 type RealtimeHandler struct {
-	Sessions      *store.SessionStore
-	Classes       *store.ClassStore
-	Orgs          *store.OrgStore
-	TeachingUnits *store.TeachingUnitStore
-	Problems      *store.ProblemStore
-	Attempts      *store.AttemptStore
-	Users         *store.UserStore
-	ParentLinks   *store.ParentLinkStore // Plan 053b Phase 4 — parent-of-doc-owner gate.
+	Sessions    *store.SessionStore
+	Classes     *store.ClassStore
+	Orgs        *store.OrgStore
+	Chapters    *store.ChapterStore
+	Problems    *store.ProblemStore
+	Attempts    *store.AttemptStore
+	Users       *store.UserStore
+	ParentLinks *store.ParentLinkStore // Plan 053b Phase 4 — parent-of-doc-owner gate.
 	// HocuspocusTokenSecret is the HMAC key shared between the Go API
 	// and the Hocuspocus Node process. Empty = realtime endpoints
 	// return 503 (server misconfigured).
@@ -305,7 +305,7 @@ type authDecision struct {
 //	session:{sessionId}:user:{studentId}
 //	broadcast:{sessionId}
 //	attempt:{attemptId}
-//	unit:{unitId}
+//	chapter:{chapterId}
 //
 // Anything else → 400.
 func (h *RealtimeHandler) authorizeDocument(ctx context.Context, claims *auth.Claims, docName string) (string, *authDecision) {
@@ -332,12 +332,12 @@ func (h *RealtimeHandler) authorizeDocument(ctx context.Context, claims *auth.Cl
 			return "", &authDecision{Status: http.StatusBadRequest, Message: "attempt doc-name must be attempt:{aid}"}
 		}
 		return h.authorizeAttemptDoc(ctx, claims, parts[1])
-	case "unit":
-		// unit:{unitId}
+	case "chapter":
+		// chapter:{chapterId}
 		if len(parts) != 2 {
-			return "", &authDecision{Status: http.StatusBadRequest, Message: "unit doc-name must be unit:{uid}"}
+			return "", &authDecision{Status: http.StatusBadRequest, Message: "chapter doc-name must be chapter:{uid}"}
 		}
-		return h.authorizeUnitDoc(ctx, claims, parts[1])
+		return h.authorizeChapterDoc(ctx, claims, parts[1])
 	default:
 		return "", &authDecision{Status: http.StatusBadRequest, Message: "unknown doc-name scope"}
 	}
@@ -536,31 +536,31 @@ func (h *RealtimeHandler) authorizeAttemptDoc(ctx context.Context, claims *auth.
 	return "", &authDecision{Status: http.StatusForbidden, Message: "Not authorized to watch this attempt"}
 }
 
-// unit:{unitId} — caller may EDIT the unit (CanEditUnit semantics).
+// chapter:{chapterId} — caller may EDIT the unit (CanEditUnit semantics).
 // Read-only viewers don't need a Hocuspocus token; the unit editor
 // is teacher-only.
 //
 // Plan 053 phase 1: applies the same rule as
-// `TeachingUnitHandler.canEditUnit`:
+// `ChapterHandler.canEditChapter`:
 //
 //	platform → platform admin only.
 //	org      → active teacher or org_admin in the unit's org.
 //	personal → owner.
 //
-// TODO(plan-075-followup): authorizeUnitDoc (line ~491) has an inline
+// TODO(plan-075-followup): authorizeChapterDoc (line ~491) has an inline
 // GetUserRolesInOrg in the org-scope branch of a switch over unit.Scope.
 // Migrating to RequireOrgAuthority touches the (string, *authDecision)
 // return shape. See plan-075 §Out of scope, Bucket 2.
-func (h *RealtimeHandler) authorizeUnitDoc(ctx context.Context, claims *auth.Claims, unitID string) (string, *authDecision) {
-	if h.TeachingUnits == nil {
+func (h *RealtimeHandler) authorizeChapterDoc(ctx context.Context, claims *auth.Claims, chapterID string) (string, *authDecision) {
+	if h.Chapters == nil {
 		return "", &authDecision{Status: http.StatusInternalServerError, Message: "Units store unavailable"}
 	}
-	unit, err := h.TeachingUnits.GetUnit(ctx, unitID)
+	unit, err := h.Chapters.GetChapter(ctx, chapterID)
 	if err != nil {
 		return "", &authDecision{Status: http.StatusInternalServerError, Message: "Database error"}
 	}
 	if unit == nil {
-		return "", &authDecision{Status: http.StatusNotFound, Message: "Unit not found"}
+		return "", &authDecision{Status: http.StatusNotFound, Message: "Chapter not found"}
 	}
 	if claims.IsPlatformAdmin {
 		return "teacher", nil

@@ -11,35 +11,35 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// setupUnitEnv creates a user + org and wires a TeachingUnitStore.
+// setupUnitEnv creates a user + org and wires a ChapterStore.
 // It registers cleanup so all units created by the user are swept before the
-// user row is dropped (teaching_units FK to users(id) via created_by has no ON
+// user row is dropped (chapters FK to users(id) via created_by has no ON
 // DELETE, so un-swept rows would block the user delete and leak).
-func setupUnitEnv(t *testing.T, suffix string) (*TeachingUnitStore, *OrgStore, string /* orgID */, string /* userID */) {
+func setupUnitEnv(t *testing.T, suffix string) (*ChapterStore, *OrgStore, string /* orgID */, string /* userID */) {
 	t.Helper()
 	db := testDB(t)
 	orgs := NewOrgStore(db)
 	users := NewUserStore(db)
-	units := NewTeachingUnitStore(db)
+	units := NewChapterStore(db)
 
 	org := createTestOrg(t, db, orgs, suffix)
 	user := createTestUser(t, db, users, suffix)
 
 	ctx := context.Background()
 	t.Cleanup(func() {
-		db.ExecContext(ctx, `DELETE FROM unit_overlays WHERE child_unit_id IN (SELECT id FROM teaching_units WHERE created_by = $1)`, user.ID)
-		db.ExecContext(ctx, `DELETE FROM unit_overlays WHERE parent_unit_id IN (SELECT id FROM teaching_units WHERE created_by = $1)`, user.ID)
-		db.ExecContext(ctx, `DELETE FROM teaching_units WHERE created_by = $1`, user.ID)
+		db.ExecContext(ctx, `DELETE FROM chapter_overlays WHERE child_chapter_id IN (SELECT id FROM chapters WHERE created_by = $1)`, user.ID)
+		db.ExecContext(ctx, `DELETE FROM chapter_overlays WHERE parent_chapter_id IN (SELECT id FROM chapters WHERE created_by = $1)`, user.ID)
+		db.ExecContext(ctx, `DELETE FROM chapters WHERE created_by = $1`, user.ID)
 	})
 
 	return units, orgs, org.ID, user.ID
 }
 
-// mustCreateUnit is a focused helper used by multiple tests.
-func mustCreateUnit(t *testing.T, units *TeachingUnitStore, in CreateTeachingUnitInput) *TeachingUnit {
+// mustCreateChapter is a focused helper used by multiple tests.
+func mustCreateChapter(t *testing.T, units *ChapterStore, in CreateChapterInput) *Chapter {
 	t.Helper()
 	ctx := context.Background()
-	u, err := units.CreateUnit(ctx, in)
+	u, err := units.CreateChapter(ctx, in)
 	require.NoError(t, err)
 	require.NotNil(t, u)
 	return u
@@ -47,11 +47,11 @@ func mustCreateUnit(t *testing.T, units *TeachingUnitStore, in CreateTeachingUni
 
 // ── Create / scope tests ──────────────────────────────────────────────────────
 
-func TestTeachingUnitStore_Create_Platform(t *testing.T) {
+func TestChapterStore_Create_Platform(t *testing.T) {
 	units, _, _, userID := setupUnitEnv(t, t.Name())
 	ctx := context.Background()
 
-	u := mustCreateUnit(t, units, CreateTeachingUnitInput{
+	u := mustCreateChapter(t, units, CreateChapterInput{
 		Scope:     "platform",
 		ScopeID:   nil,
 		Title:     "Platform Unit",
@@ -68,16 +68,16 @@ func TestTeachingUnitStore_Create_Platform(t *testing.T) {
 	assert.NotEmpty(t, u.ID)
 
 	// Confirm it survives a round-trip.
-	got, err := units.GetUnit(ctx, u.ID)
+	got, err := units.GetChapter(ctx, u.ID)
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.Equal(t, u.ID, got.ID)
 }
 
-func TestTeachingUnitStore_Create_Org(t *testing.T) {
+func TestChapterStore_Create_Org(t *testing.T) {
 	units, _, orgID, userID := setupUnitEnv(t, t.Name())
 
-	u := mustCreateUnit(t, units, CreateTeachingUnitInput{
+	u := mustCreateChapter(t, units, CreateChapterInput{
 		Scope:     "org",
 		ScopeID:   &orgID,
 		Title:     "Org Unit",
@@ -89,10 +89,10 @@ func TestTeachingUnitStore_Create_Org(t *testing.T) {
 	assert.Equal(t, orgID, *u.ScopeID)
 }
 
-func TestTeachingUnitStore_Create_Personal(t *testing.T) {
+func TestChapterStore_Create_Personal(t *testing.T) {
 	units, _, _, userID := setupUnitEnv(t, t.Name())
 
-	u := mustCreateUnit(t, units, CreateTeachingUnitInput{
+	u := mustCreateChapter(t, units, CreateChapterInput{
 		Scope:     "personal",
 		ScopeID:   &userID,
 		Title:     "Personal Unit",
@@ -104,12 +104,12 @@ func TestTeachingUnitStore_Create_Personal(t *testing.T) {
 	assert.Equal(t, userID, *u.ScopeID)
 }
 
-func TestTeachingUnitStore_Create_CheckConstraint(t *testing.T) {
+func TestChapterStore_Create_CheckConstraint(t *testing.T) {
 	// scope=platform + scope_id non-nil must be rejected by the DB CHECK constraint.
 	units, _, orgID, userID := setupUnitEnv(t, t.Name())
 	ctx := context.Background()
 
-	_, err := units.CreateUnit(ctx, CreateTeachingUnitInput{
+	_, err := units.CreateChapter(ctx, CreateChapterInput{
 		Scope:     "platform",
 		ScopeID:   &orgID, // violates constraint
 		Title:     "Bad Unit",
@@ -122,10 +122,10 @@ func TestTeachingUnitStore_Create_CheckConstraint(t *testing.T) {
 
 // ── Document seeding ──────────────────────────────────────────────────────────
 
-func TestTeachingUnitStore_Create_Seeds_Document(t *testing.T) {
+func TestChapterStore_Create_Seeds_Document(t *testing.T) {
 	units, _, _, userID := setupUnitEnv(t, t.Name())
 
-	u := mustCreateUnit(t, units, CreateTeachingUnitInput{
+	u := mustCreateChapter(t, units, CreateChapterInput{
 		Scope:     "personal",
 		ScopeID:   &userID,
 		Title:     "Seeded Doc Unit",
@@ -135,18 +135,18 @@ func TestTeachingUnitStore_Create_Seeds_Document(t *testing.T) {
 	ctx := context.Background()
 	doc, err := units.GetDocument(ctx, u.ID)
 	require.NoError(t, err)
-	require.NotNil(t, doc, "unit_documents row must exist after CreateUnit")
-	assert.Equal(t, u.ID, doc.UnitID)
+	require.NotNil(t, doc, "chapter_documents row must exist after CreateChapter")
+	assert.Equal(t, u.ID, doc.ChapterID)
 	// The default document must be valid JSON with type="doc".
 	var parsed map[string]interface{}
 	require.NoError(t, json.Unmarshal(doc.Blocks, &parsed))
 	assert.Equal(t, "doc", parsed["type"])
 }
 
-func TestTeachingUnitStore_GetDocument(t *testing.T) {
+func TestChapterStore_GetDocument(t *testing.T) {
 	units, _, _, userID := setupUnitEnv(t, t.Name())
 
-	u := mustCreateUnit(t, units, CreateTeachingUnitInput{
+	u := mustCreateChapter(t, units, CreateChapterInput{
 		Scope:     "personal",
 		ScopeID:   &userID,
 		Title:     "GetDoc Unit",
@@ -157,16 +157,16 @@ func TestTeachingUnitStore_GetDocument(t *testing.T) {
 	doc, err := units.GetDocument(ctx, u.ID)
 	require.NoError(t, err)
 	require.NotNil(t, doc)
-	assert.Equal(t, u.ID, doc.UnitID)
+	assert.Equal(t, u.ID, doc.ChapterID)
 	assert.NotEmpty(t, doc.Blocks)
 }
 
 // ── SaveDocument ──────────────────────────────────────────────────────────────
 
-func TestTeachingUnitStore_SaveDocument_Upsert(t *testing.T) {
+func TestChapterStore_SaveDocument_Upsert(t *testing.T) {
 	units, _, _, userID := setupUnitEnv(t, t.Name())
 
-	u := mustCreateUnit(t, units, CreateTeachingUnitInput{
+	u := mustCreateChapter(t, units, CreateChapterInput{
 		Scope:     "personal",
 		ScopeID:   &userID,
 		Title:     "Save Doc Unit",
@@ -180,7 +180,7 @@ func TestTeachingUnitStore_SaveDocument_Upsert(t *testing.T) {
 	doc1, err := units.SaveDocument(ctx, u.ID, blocks1)
 	require.NoError(t, err)
 	require.NotNil(t, doc1)
-	assert.Equal(t, u.ID, doc1.UnitID)
+	assert.Equal(t, u.ID, doc1.ChapterID)
 	var parsed1 map[string]interface{}
 	require.NoError(t, json.Unmarshal(doc1.Blocks, &parsed1))
 	assert.Equal(t, "doc", parsed1["type"])
@@ -214,10 +214,10 @@ func TestTeachingUnitStore_SaveDocument_Upsert(t *testing.T) {
 	assert.Equal(t, "world", text["text"])
 }
 
-func TestTeachingUnitStore_SaveDocument_BumpsUnitUpdatedAt(t *testing.T) {
+func TestChapterStore_SaveDocument_BumpsUnitUpdatedAt(t *testing.T) {
 	units, _, _, userID := setupUnitEnv(t, t.Name())
 
-	u := mustCreateUnit(t, units, CreateTeachingUnitInput{
+	u := mustCreateChapter(t, units, CreateChapterInput{
 		Scope:     "personal",
 		ScopeID:   &userID,
 		Title:     "Bump Unit",
@@ -233,19 +233,19 @@ func TestTeachingUnitStore_SaveDocument_BumpsUnitUpdatedAt(t *testing.T) {
 	_, err := units.SaveDocument(ctx, u.ID, blocks)
 	require.NoError(t, err)
 
-	refreshed, err := units.GetUnit(ctx, u.ID)
+	refreshed, err := units.GetChapter(ctx, u.ID)
 	require.NoError(t, err)
 	require.NotNil(t, refreshed)
 	assert.True(t, refreshed.UpdatedAt.After(originalUpdatedAt),
-		"teaching_units.updated_at must be bumped by SaveDocument")
+		"chapters.updated_at must be bumped by SaveDocument")
 }
 
-// ── UpdateUnit ────────────────────────────────────────────────────────────────
+// ── UpdateChapter ────────────────────────────────────────────────────────────────
 
-func TestTeachingUnitStore_UpdateUnit_Partial(t *testing.T) {
+func TestChapterStore_UpdateChapter_Partial(t *testing.T) {
 	units, _, _, userID := setupUnitEnv(t, t.Name())
 
-	u := mustCreateUnit(t, units, CreateTeachingUnitInput{
+	u := mustCreateChapter(t, units, CreateChapterInput{
 		Scope:     "personal",
 		ScopeID:   &userID,
 		Title:     "Original Title",
@@ -255,7 +255,7 @@ func TestTeachingUnitStore_UpdateUnit_Partial(t *testing.T) {
 
 	ctx := context.Background()
 	newTitle := "Updated Title"
-	updated, err := units.UpdateUnit(ctx, u.ID, UpdateTeachingUnitInput{
+	updated, err := units.UpdateChapter(ctx, u.ID, UpdateChapterInput{
 		Title: &newTitle,
 		// Summary intentionally omitted — must remain unchanged.
 	})
@@ -265,10 +265,10 @@ func TestTeachingUnitStore_UpdateUnit_Partial(t *testing.T) {
 	assert.Equal(t, "Original summary", updated.Summary, "untouched field must not change")
 }
 
-func TestTeachingUnitStore_UpdateUnit_SubjectTags(t *testing.T) {
+func TestChapterStore_UpdateChapter_SubjectTags(t *testing.T) {
 	units, _, _, userID := setupUnitEnv(t, t.Name())
 
-	u := mustCreateUnit(t, units, CreateTeachingUnitInput{
+	u := mustCreateChapter(t, units, CreateChapterInput{
 		Scope:       "personal",
 		ScopeID:     &userID,
 		Title:       "Tags Unit",
@@ -280,7 +280,7 @@ func TestTeachingUnitStore_UpdateUnit_SubjectTags(t *testing.T) {
 	ctx := context.Background()
 
 	// nil SubjectTags → leave unchanged.
-	unchanged, err := units.UpdateUnit(ctx, u.ID, UpdateTeachingUnitInput{
+	unchanged, err := units.UpdateChapter(ctx, u.ID, UpdateChapterInput{
 		SubjectTags: nil,
 	})
 	require.NoError(t, err)
@@ -288,7 +288,7 @@ func TestTeachingUnitStore_UpdateUnit_SubjectTags(t *testing.T) {
 	assert.Equal(t, []string{"math", "cs"}, unchanged.SubjectTags, "nil SubjectTags must leave tags unchanged")
 
 	// Empty slice → clear to '{}'.
-	cleared, err := units.UpdateUnit(ctx, u.ID, UpdateTeachingUnitInput{
+	cleared, err := units.UpdateChapter(ctx, u.ID, UpdateChapterInput{
 		SubjectTags: []string{},
 	})
 	require.NoError(t, err)
@@ -296,13 +296,13 @@ func TestTeachingUnitStore_UpdateUnit_SubjectTags(t *testing.T) {
 	assert.Equal(t, []string{}, cleared.SubjectTags, "empty SubjectTags must clear the array")
 }
 
-// ── UpdateUnit extended coverage ─────────────────────────────────────────────
+// ── UpdateChapter extended coverage ─────────────────────────────────────────────
 
-func TestTeachingUnitStore_UpdateUnit_SlugSetAndClear(t *testing.T) {
+func TestChapterStore_UpdateChapter_SlugSetAndClear(t *testing.T) {
 	units, _, _, userID := setupUnitEnv(t, t.Name())
 	ctx := context.Background()
 
-	u := mustCreateUnit(t, units, CreateTeachingUnitInput{
+	u := mustCreateChapter(t, units, CreateChapterInput{
 		Scope:     "personal",
 		ScopeID:   &userID,
 		Title:     "Slug Unit",
@@ -312,7 +312,7 @@ func TestTeachingUnitStore_UpdateUnit_SlugSetAndClear(t *testing.T) {
 
 	// Set slug
 	slug := "my-slug"
-	updated, err := units.UpdateUnit(ctx, u.ID, UpdateTeachingUnitInput{Slug: &slug})
+	updated, err := units.UpdateChapter(ctx, u.ID, UpdateChapterInput{Slug: &slug})
 	require.NoError(t, err)
 	require.NotNil(t, updated)
 	require.NotNil(t, updated.Slug)
@@ -320,17 +320,17 @@ func TestTeachingUnitStore_UpdateUnit_SlugSetAndClear(t *testing.T) {
 
 	// Clear slug (empty string → NULL)
 	emptySlug := ""
-	cleared, err := units.UpdateUnit(ctx, u.ID, UpdateTeachingUnitInput{Slug: &emptySlug})
+	cleared, err := units.UpdateChapter(ctx, u.ID, UpdateChapterInput{Slug: &emptySlug})
 	require.NoError(t, err)
 	require.NotNil(t, cleared)
 	assert.Nil(t, cleared.Slug, "slug should be cleared to nil when set to empty string")
 }
 
-func TestTeachingUnitStore_UpdateUnit_GradeLevelSetAndClear(t *testing.T) {
+func TestChapterStore_UpdateChapter_GradeLevelSetAndClear(t *testing.T) {
 	units, _, _, userID := setupUnitEnv(t, t.Name())
 	ctx := context.Background()
 
-	u := mustCreateUnit(t, units, CreateTeachingUnitInput{
+	u := mustCreateChapter(t, units, CreateChapterInput{
 		Scope:     "personal",
 		ScopeID:   &userID,
 		Title:     "Grade Unit",
@@ -340,7 +340,7 @@ func TestTeachingUnitStore_UpdateUnit_GradeLevelSetAndClear(t *testing.T) {
 
 	// Set grade level
 	grade := "K-5"
-	updated, err := units.UpdateUnit(ctx, u.ID, UpdateTeachingUnitInput{GradeLevel: &grade})
+	updated, err := units.UpdateChapter(ctx, u.ID, UpdateChapterInput{GradeLevel: &grade})
 	require.NoError(t, err)
 	require.NotNil(t, updated)
 	require.NotNil(t, updated.GradeLevel)
@@ -348,17 +348,17 @@ func TestTeachingUnitStore_UpdateUnit_GradeLevelSetAndClear(t *testing.T) {
 
 	// Clear grade level (empty string → NULL)
 	emptyGrade := ""
-	cleared, err := units.UpdateUnit(ctx, u.ID, UpdateTeachingUnitInput{GradeLevel: &emptyGrade})
+	cleared, err := units.UpdateChapter(ctx, u.ID, UpdateChapterInput{GradeLevel: &emptyGrade})
 	require.NoError(t, err)
 	require.NotNil(t, cleared)
 	assert.Nil(t, cleared.GradeLevel, "grade level should be cleared to nil when set to empty string")
 }
 
-func TestTeachingUnitStore_UpdateUnit_StandardsTags(t *testing.T) {
+func TestChapterStore_UpdateChapter_StandardsTags(t *testing.T) {
 	units, _, _, userID := setupUnitEnv(t, t.Name())
 	ctx := context.Background()
 
-	u := mustCreateUnit(t, units, CreateTeachingUnitInput{
+	u := mustCreateChapter(t, units, CreateChapterInput{
 		Scope:         "personal",
 		ScopeID:       &userID,
 		Title:         "Standards Unit",
@@ -368,7 +368,7 @@ func TestTeachingUnitStore_UpdateUnit_StandardsTags(t *testing.T) {
 	assert.Equal(t, []string{"CCSS.1", "CCSS.2"}, u.StandardsTags)
 
 	// nil StandardsTags → leave unchanged
-	unchanged, err := units.UpdateUnit(ctx, u.ID, UpdateTeachingUnitInput{
+	unchanged, err := units.UpdateChapter(ctx, u.ID, UpdateChapterInput{
 		StandardsTags: nil,
 	})
 	require.NoError(t, err)
@@ -376,7 +376,7 @@ func TestTeachingUnitStore_UpdateUnit_StandardsTags(t *testing.T) {
 	assert.Equal(t, []string{"CCSS.1", "CCSS.2"}, unchanged.StandardsTags, "nil StandardsTags must leave tags unchanged")
 
 	// Empty slice → clear
-	cleared, err := units.UpdateUnit(ctx, u.ID, UpdateTeachingUnitInput{
+	cleared, err := units.UpdateChapter(ctx, u.ID, UpdateChapterInput{
 		StandardsTags: []string{},
 	})
 	require.NoError(t, err)
@@ -384,7 +384,7 @@ func TestTeachingUnitStore_UpdateUnit_StandardsTags(t *testing.T) {
 	assert.Equal(t, []string{}, cleared.StandardsTags, "empty StandardsTags must clear the array")
 
 	// Set new tags
-	set, err := units.UpdateUnit(ctx, u.ID, UpdateTeachingUnitInput{
+	set, err := units.UpdateChapter(ctx, u.ID, UpdateChapterInput{
 		StandardsTags: []string{"NGSS.1"},
 	})
 	require.NoError(t, err)
@@ -392,11 +392,11 @@ func TestTeachingUnitStore_UpdateUnit_StandardsTags(t *testing.T) {
 	assert.Equal(t, []string{"NGSS.1"}, set.StandardsTags)
 }
 
-func TestTeachingUnitStore_UpdateUnit_EstimatedMinutes(t *testing.T) {
+func TestChapterStore_UpdateChapter_EstimatedMinutes(t *testing.T) {
 	units, _, _, userID := setupUnitEnv(t, t.Name())
 	ctx := context.Background()
 
-	u := mustCreateUnit(t, units, CreateTeachingUnitInput{
+	u := mustCreateChapter(t, units, CreateChapterInput{
 		Scope:     "personal",
 		ScopeID:   &userID,
 		Title:     "Minutes Unit",
@@ -406,7 +406,7 @@ func TestTeachingUnitStore_UpdateUnit_EstimatedMinutes(t *testing.T) {
 
 	// Set estimated minutes
 	mins := 45
-	updated, err := units.UpdateUnit(ctx, u.ID, UpdateTeachingUnitInput{EstimatedMinutes: &mins})
+	updated, err := units.UpdateChapter(ctx, u.ID, UpdateChapterInput{EstimatedMinutes: &mins})
 	require.NoError(t, err)
 	require.NotNil(t, updated)
 	require.NotNil(t, updated.EstimatedMinutes)
@@ -414,18 +414,18 @@ func TestTeachingUnitStore_UpdateUnit_EstimatedMinutes(t *testing.T) {
 
 	// Clear estimated minutes (0 maps to SQL zero, which IS stored — but we can verify it round-trips)
 	zero := 0
-	zeroed, err := units.UpdateUnit(ctx, u.ID, UpdateTeachingUnitInput{EstimatedMinutes: &zero})
+	zeroed, err := units.UpdateChapter(ctx, u.ID, UpdateChapterInput{EstimatedMinutes: &zero})
 	require.NoError(t, err)
 	require.NotNil(t, zeroed)
 	require.NotNil(t, zeroed.EstimatedMinutes)
 	assert.Equal(t, 0, *zeroed.EstimatedMinutes)
 }
 
-func TestTeachingUnitStore_UpdateUnit_Status(t *testing.T) {
+func TestChapterStore_UpdateChapter_Status(t *testing.T) {
 	units, _, _, userID := setupUnitEnv(t, t.Name())
 	ctx := context.Background()
 
-	u := mustCreateUnit(t, units, CreateTeachingUnitInput{
+	u := mustCreateChapter(t, units, CreateChapterInput{
 		Scope:     "personal",
 		ScopeID:   &userID,
 		Title:     "Status Unit",
@@ -434,17 +434,17 @@ func TestTeachingUnitStore_UpdateUnit_Status(t *testing.T) {
 	assert.Equal(t, "draft", u.Status)
 
 	status := "reviewed"
-	updated, err := units.UpdateUnit(ctx, u.ID, UpdateTeachingUnitInput{Status: &status})
+	updated, err := units.UpdateChapter(ctx, u.ID, UpdateChapterInput{Status: &status})
 	require.NoError(t, err)
 	require.NotNil(t, updated)
 	assert.Equal(t, "reviewed", updated.Status)
 }
 
-func TestTeachingUnitStore_UpdateUnit_MultipleFields(t *testing.T) {
+func TestChapterStore_UpdateChapter_MultipleFields(t *testing.T) {
 	units, _, _, userID := setupUnitEnv(t, t.Name())
 	ctx := context.Background()
 
-	u := mustCreateUnit(t, units, CreateTeachingUnitInput{
+	u := mustCreateChapter(t, units, CreateChapterInput{
 		Scope:     "personal",
 		ScopeID:   &userID,
 		Title:     "Multi Unit",
@@ -458,7 +458,7 @@ func TestTeachingUnitStore_UpdateUnit_MultipleFields(t *testing.T) {
 	grade := "6-8"
 	mins := 60
 	status := "classroom_ready"
-	updated, err := units.UpdateUnit(ctx, u.ID, UpdateTeachingUnitInput{
+	updated, err := units.UpdateChapter(ctx, u.ID, UpdateChapterInput{
 		Title:            &newTitle,
 		Summary:          &newSummary,
 		Slug:             &newSlug,
@@ -483,23 +483,23 @@ func TestTeachingUnitStore_UpdateUnit_MultipleFields(t *testing.T) {
 	assert.Equal(t, "classroom_ready", updated.Status)
 }
 
-func TestTeachingUnitStore_UpdateUnit_NonExistent(t *testing.T) {
+func TestChapterStore_UpdateChapter_NonExistent(t *testing.T) {
 	units, _, _, _ := setupUnitEnv(t, t.Name())
 	ctx := context.Background()
 
 	newTitle := "Ghost"
-	result, err := units.UpdateUnit(ctx, "00000000-0000-0000-0000-000000000000", UpdateTeachingUnitInput{
+	result, err := units.UpdateChapter(ctx, "00000000-0000-0000-0000-000000000000", UpdateChapterInput{
 		Title: &newTitle,
 	})
 	assert.NoError(t, err)
 	assert.Nil(t, result, "updating non-existent unit should return nil")
 }
 
-func TestTeachingUnitStore_UpdateUnit_NoFields(t *testing.T) {
+func TestChapterStore_UpdateChapter_NoFields(t *testing.T) {
 	units, _, _, userID := setupUnitEnv(t, t.Name())
 	ctx := context.Background()
 
-	u := mustCreateUnit(t, units, CreateTeachingUnitInput{
+	u := mustCreateChapter(t, units, CreateChapterInput{
 		Scope:     "personal",
 		ScopeID:   &userID,
 		Title:     "Unchanged Unit",
@@ -507,16 +507,16 @@ func TestTeachingUnitStore_UpdateUnit_NoFields(t *testing.T) {
 	})
 
 	// No fields provided — should return existing unchanged
-	result, err := units.UpdateUnit(ctx, u.ID, UpdateTeachingUnitInput{})
+	result, err := units.UpdateChapter(ctx, u.ID, UpdateChapterInput{})
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	assert.Equal(t, "Unchanged Unit", result.Title)
 	assert.Equal(t, u.ID, result.ID)
 }
 
-// ── ListUnitsForScope ────────────────────────────────────────────────────────
+// ── ListChaptersForScope ────────────────────────────────────────────────────────
 
-func TestTeachingUnitStore_ListUnitsForScope_OrgUnits(t *testing.T) {
+func TestChapterStore_ListChaptersForScope_OrgUnits(t *testing.T) {
 	units, _, orgID, userID := setupUnitEnv(t, t.Name())
 	ctx := context.Background()
 
@@ -526,23 +526,23 @@ func TestTeachingUnitStore_ListUnitsForScope_OrgUnits(t *testing.T) {
 	otherOrg := createTestOrg(t, db, orgs, t.Name()+"-other")
 
 	// Create units in our org
-	u1 := mustCreateUnit(t, units, CreateTeachingUnitInput{
+	u1 := mustCreateChapter(t, units, CreateChapterInput{
 		Scope: "org", ScopeID: &orgID, Title: "Org Unit 1", CreatedBy: userID,
 	})
-	u2 := mustCreateUnit(t, units, CreateTeachingUnitInput{
+	u2 := mustCreateChapter(t, units, CreateChapterInput{
 		Scope: "org", ScopeID: &orgID, Title: "Org Unit 2", CreatedBy: userID,
 	})
 
 	// Create unit in other org (should be excluded)
-	otherUnits := NewTeachingUnitStore(db)
-	otherUnit := mustCreateUnit(t, otherUnits, CreateTeachingUnitInput{
+	otherUnits := NewChapterStore(db)
+	otherUnit := mustCreateChapter(t, otherUnits, CreateChapterInput{
 		Scope: "org", ScopeID: &otherOrg.ID, Title: "Other Org Unit", CreatedBy: userID,
 	})
 	t.Cleanup(func() {
-		db.ExecContext(ctx, `DELETE FROM teaching_units WHERE id = $1`, otherUnit.ID)
+		db.ExecContext(ctx, `DELETE FROM chapters WHERE id = $1`, otherUnit.ID)
 	})
 
-	list, err := units.ListUnitsForScope(ctx, "org", orgID)
+	list, err := units.ListChaptersForScope(ctx, "org", orgID)
 	require.NoError(t, err)
 	require.Len(t, list, 2)
 
@@ -557,15 +557,15 @@ func TestTeachingUnitStore_ListUnitsForScope_OrgUnits(t *testing.T) {
 	}
 }
 
-func TestTeachingUnitStore_ListUnitsForScope_PlatformUnits(t *testing.T) {
+func TestChapterStore_ListChaptersForScope_PlatformUnits(t *testing.T) {
 	units, _, _, userID := setupUnitEnv(t, t.Name())
 	ctx := context.Background()
 
-	u := mustCreateUnit(t, units, CreateTeachingUnitInput{
+	u := mustCreateChapter(t, units, CreateChapterInput{
 		Scope: "platform", ScopeID: nil, Title: "Platform List Unit", CreatedBy: userID,
 	})
 
-	list, err := units.ListUnitsForScope(ctx, "platform", "")
+	list, err := units.ListChaptersForScope(ctx, "platform", "")
 	require.NoError(t, err)
 	require.NotEmpty(t, list)
 
@@ -579,16 +579,16 @@ func TestTeachingUnitStore_ListUnitsForScope_PlatformUnits(t *testing.T) {
 	assert.True(t, found, "platform unit should appear in platform scope listing")
 }
 
-func TestTeachingUnitStore_ListUnitsForScope_PersonalUnits(t *testing.T) {
+func TestChapterStore_ListChaptersForScope_PersonalUnits(t *testing.T) {
 	units, _, _, userID := setupUnitEnv(t, t.Name())
 	ctx := context.Background()
 
 	// Create a personal unit for this user
-	u := mustCreateUnit(t, units, CreateTeachingUnitInput{
+	u := mustCreateChapter(t, units, CreateChapterInput{
 		Scope: "personal", ScopeID: &userID, Title: "Personal Unit", CreatedBy: userID,
 	})
 
-	list, err := units.ListUnitsForScope(ctx, "personal", userID)
+	list, err := units.ListChaptersForScope(ctx, "personal", userID)
 	require.NoError(t, err)
 	require.NotEmpty(t, list)
 
@@ -602,49 +602,49 @@ func TestTeachingUnitStore_ListUnitsForScope_PersonalUnits(t *testing.T) {
 	assert.True(t, found, "personal unit should appear in user scope listing")
 }
 
-func TestTeachingUnitStore_ListUnitsForScope_EmptyScope(t *testing.T) {
+func TestChapterStore_ListChaptersForScope_EmptyScope(t *testing.T) {
 	units, _, _, _ := setupUnitEnv(t, t.Name())
 	ctx := context.Background()
 
 	// Use a non-existent scope_id for an org scope — should be empty
-	list, err := units.ListUnitsForScope(ctx, "org", "00000000-0000-0000-0000-000000000000")
+	list, err := units.ListChaptersForScope(ctx, "org", "00000000-0000-0000-0000-000000000000")
 	require.NoError(t, err)
 	require.NotNil(t, list)
 	assert.Len(t, list, 0)
 }
 
-func TestTeachingUnitStore_ListUnitsForScope_OrderByUpdatedAtDesc(t *testing.T) {
+func TestChapterStore_ListChaptersForScope_OrderByUpdatedAtDesc(t *testing.T) {
 	units, _, _, userID := setupUnitEnv(t, t.Name())
 	ctx := context.Background()
 	db := testDB(t)
 
-	u1 := mustCreateUnit(t, units, CreateTeachingUnitInput{
+	u1 := mustCreateChapter(t, units, CreateChapterInput{
 		Scope: "personal", ScopeID: &userID, Title: "First", CreatedBy: userID,
 	})
-	u2 := mustCreateUnit(t, units, CreateTeachingUnitInput{
+	u2 := mustCreateChapter(t, units, CreateChapterInput{
 		Scope: "personal", ScopeID: &userID, Title: "Second", CreatedBy: userID,
 	})
 
 	// Force u1 to have a newer updated_at than u2
 	future := time.Now().Add(1 * time.Hour)
-	_, err := db.ExecContext(ctx, "UPDATE teaching_units SET updated_at = $1 WHERE id = $2", future, u1.ID)
+	_, err := db.ExecContext(ctx, "UPDATE chapters SET updated_at = $1 WHERE id = $2", future, u1.ID)
 	require.NoError(t, err)
 
-	list, err := units.ListUnitsForScope(ctx, "personal", userID)
+	list, err := units.ListChaptersForScope(ctx, "personal", userID)
 	require.NoError(t, err)
 	require.Len(t, list, 2)
 	assert.Equal(t, u1.ID, list[0].ID, "unit with newer updated_at should come first")
 	assert.Equal(t, u2.ID, list[1].ID)
 }
 
-// ── scanTeachingUnit nullable fields coverage ────────────────────────────────
+// ── scanChapter nullable fields coverage ────────────────────────────────
 
-func TestTeachingUnitStore_NullableFields_RoundTrip(t *testing.T) {
+func TestChapterStore_NullableFields_RoundTrip(t *testing.T) {
 	units, _, _, userID := setupUnitEnv(t, t.Name())
 	ctx := context.Background()
 
 	// Create with all nullable fields as nil
-	u := mustCreateUnit(t, units, CreateTeachingUnitInput{
+	u := mustCreateChapter(t, units, CreateChapterInput{
 		Scope:     "personal",
 		ScopeID:   &userID,
 		Title:     "Nullable Unit",
@@ -658,7 +658,7 @@ func TestTeachingUnitStore_NullableFields_RoundTrip(t *testing.T) {
 	assert.Equal(t, []string{}, u.StandardsTags)
 
 	// Fetch and verify round-trip of nil fields
-	fetched, err := units.GetUnit(ctx, u.ID)
+	fetched, err := units.GetChapter(ctx, u.ID)
 	require.NoError(t, err)
 	require.NotNil(t, fetched)
 	assert.Nil(t, fetched.Slug)
@@ -669,7 +669,7 @@ func TestTeachingUnitStore_NullableFields_RoundTrip(t *testing.T) {
 	slug := "test-slug"
 	grade := "9-12"
 	mins := 90
-	updated, err := units.UpdateUnit(ctx, u.ID, UpdateTeachingUnitInput{
+	updated, err := units.UpdateChapter(ctx, u.ID, UpdateChapterInput{
 		Slug:             &slug,
 		GradeLevel:       &grade,
 		EstimatedMinutes: &mins,
@@ -684,9 +684,9 @@ func TestTeachingUnitStore_NullableFields_RoundTrip(t *testing.T) {
 	assert.Equal(t, 90, *updated.EstimatedMinutes)
 }
 
-// ── GetUnitByTopicID ─────────────────────────────────────────────────────────
+// ── GetChapterByTopicID ─────────────────────────────────────────────────────────
 
-func TestTeachingUnitStore_GetUnitByTopicID(t *testing.T) {
+func TestChapterStore_GetChapterByTopicID(t *testing.T) {
 	units, _, orgID, userID := setupUnitEnv(t, t.Name())
 	ctx := context.Background()
 	db := testDB(t)
@@ -715,38 +715,38 @@ func TestTeachingUnitStore_GetUnitByTopicID(t *testing.T) {
 	})
 
 	// Create a unit that references this topic.
-	u := mustCreateUnit(t, units, CreateTeachingUnitInput{
+	u := mustCreateChapter(t, units, CreateChapterInput{
 		Scope:     "personal",
 		ScopeID:   &userID,
 		Title:     "Topic-linked Unit",
 		CreatedBy: userID,
 	})
 
-	// Set topic_id directly (CreateUnit doesn't expose it yet).
+	// Set topic_id directly (CreateChapter doesn't expose it yet).
 	_, err = db.ExecContext(ctx,
-		`UPDATE teaching_units SET topic_id = $1 WHERE id = $2`, topicID, u.ID)
+		`UPDATE chapters SET topic_id = $1 WHERE id = $2`, topicID, u.ID)
 	require.NoError(t, err)
 
 	// Happy path: should find the unit by topic_id.
-	found, err := units.GetUnitByTopicID(ctx, topicID)
+	found, err := units.GetChapterByTopicID(ctx, topicID)
 	require.NoError(t, err)
-	require.NotNil(t, found, "GetUnitByTopicID must return unit when topic_id matches")
+	require.NotNil(t, found, "GetChapterByTopicID must return unit when topic_id matches")
 	assert.Equal(t, u.ID, found.ID)
 	require.NotNil(t, found.TopicID, "TopicID field must be populated")
 	assert.Equal(t, topicID, *found.TopicID)
 
 	// Non-existent topic_id → nil, nil.
-	missing, err := units.GetUnitByTopicID(ctx, "00000000-0000-0000-0000-000000000000")
+	missing, err := units.GetChapterByTopicID(ctx, "00000000-0000-0000-0000-000000000000")
 	require.NoError(t, err)
-	assert.Nil(t, missing, "GetUnitByTopicID must return nil for unknown topic_id")
+	assert.Nil(t, missing, "GetChapterByTopicID must return nil for unknown topic_id")
 }
 
-// ── DeleteUnit ────────────────────────────────────────────────────────────────
+// ── DeleteChapter ────────────────────────────────────────────────────────────────
 
-func TestTeachingUnitStore_DeleteUnit_Cascades(t *testing.T) {
+func TestChapterStore_DeleteChapter_Cascades(t *testing.T) {
 	units, _, _, userID := setupUnitEnv(t, t.Name())
 
-	u := mustCreateUnit(t, units, CreateTeachingUnitInput{
+	u := mustCreateChapter(t, units, CreateChapterInput{
 		Scope:     "personal",
 		ScopeID:   &userID,
 		Title:     "Cascade Unit",
@@ -761,29 +761,29 @@ func TestTeachingUnitStore_DeleteUnit_Cascades(t *testing.T) {
 	require.NotNil(t, doc, "document must exist before delete")
 
 	// Delete the unit.
-	deleted, err := units.DeleteUnit(ctx, u.ID)
+	deleted, err := units.DeleteChapter(ctx, u.ID)
 	require.NoError(t, err)
 	require.NotNil(t, deleted)
 	assert.Equal(t, u.ID, deleted.ID)
 
 	// Unit must be gone.
-	gone, err := units.GetUnit(ctx, u.ID)
+	gone, err := units.GetChapter(ctx, u.ID)
 	require.NoError(t, err)
-	assert.Nil(t, gone, "GetUnit must return nil after delete")
+	assert.Nil(t, gone, "GetChapter must return nil after delete")
 
 	// Document must be cascaded away.
 	docGone, err := units.GetDocument(ctx, u.ID)
 	require.NoError(t, err)
-	assert.Nil(t, docGone, "unit_documents row must be cascaded on unit delete")
+	assert.Nil(t, docGone, "chapter_documents row must be cascaded on unit delete")
 }
 
 // ── SetUnitStatus ────────────────────────────────────────────────────────────
 
-func TestTeachingUnitStore_SetUnitStatus_DraftToReviewed(t *testing.T) {
+func TestChapterStore_SetUnitStatus_DraftToReviewed(t *testing.T) {
 	units, _, _, userID := setupUnitEnv(t, t.Name())
 	ctx := context.Background()
 
-	u := mustCreateUnit(t, units, CreateTeachingUnitInput{
+	u := mustCreateChapter(t, units, CreateChapterInput{
 		Scope: "personal", ScopeID: &userID, Title: "Draft→Reviewed", CreatedBy: userID,
 	})
 	assert.Equal(t, "draft", u.Status)
@@ -799,11 +799,11 @@ func TestTeachingUnitStore_SetUnitStatus_DraftToReviewed(t *testing.T) {
 	assert.Empty(t, revs, "no revision on draft→reviewed")
 }
 
-func TestTeachingUnitStore_SetUnitStatus_ReviewedToClassroomReady_CreatesRevision(t *testing.T) {
+func TestChapterStore_SetUnitStatus_ReviewedToClassroomReady_CreatesRevision(t *testing.T) {
 	units, _, _, userID := setupUnitEnv(t, t.Name())
 	ctx := context.Background()
 
-	u := mustCreateUnit(t, units, CreateTeachingUnitInput{
+	u := mustCreateChapter(t, units, CreateChapterInput{
 		Scope: "personal", ScopeID: &userID, Title: "Reviewed→CR", CreatedBy: userID,
 	})
 
@@ -826,7 +826,7 @@ func TestTeachingUnitStore_SetUnitStatus_ReviewedToClassroomReady_CreatesRevisio
 	revs, err := units.ListRevisions(ctx, u.ID)
 	require.NoError(t, err)
 	require.Len(t, revs, 1)
-	assert.Equal(t, u.ID, revs[0].UnitID)
+	assert.Equal(t, u.ID, revs[0].ChapterID)
 	require.NotNil(t, revs[0].Reason)
 	assert.Equal(t, "classroom_ready", *revs[0].Reason)
 	assert.Equal(t, userID, revs[0].CreatedBy)
@@ -837,11 +837,11 @@ func TestTeachingUnitStore_SetUnitStatus_ReviewedToClassroomReady_CreatesRevisio
 	assert.Equal(t, "doc", revBlocks["type"])
 }
 
-func TestTeachingUnitStore_SetUnitStatus_ReviewedToCoachReady_CreatesRevision(t *testing.T) {
+func TestChapterStore_SetUnitStatus_ReviewedToCoachReady_CreatesRevision(t *testing.T) {
 	units, _, _, userID := setupUnitEnv(t, t.Name())
 	ctx := context.Background()
 
-	u := mustCreateUnit(t, units, CreateTeachingUnitInput{
+	u := mustCreateChapter(t, units, CreateChapterInput{
 		Scope: "personal", ScopeID: &userID, Title: "Reviewed→Coach", CreatedBy: userID,
 	})
 
@@ -860,7 +860,7 @@ func TestTeachingUnitStore_SetUnitStatus_ReviewedToCoachReady_CreatesRevision(t 
 	assert.Equal(t, "coach_ready", *revs[0].Reason)
 }
 
-func TestTeachingUnitStore_SetUnitStatus_InvalidTransitions(t *testing.T) {
+func TestChapterStore_SetUnitStatus_InvalidTransitions(t *testing.T) {
 	units, _, _, userID := setupUnitEnv(t, t.Name())
 	ctx := context.Background()
 
@@ -881,7 +881,7 @@ func TestTeachingUnitStore_SetUnitStatus_InvalidTransitions(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			u := mustCreateUnit(t, units, CreateTeachingUnitInput{
+			u := mustCreateChapter(t, units, CreateChapterInput{
 				Scope: "personal", ScopeID: &userID, Title: "Invalid-" + tt.name,
 				Status: tt.initialStatus, CreatedBy: userID,
 			})
@@ -892,11 +892,11 @@ func TestTeachingUnitStore_SetUnitStatus_InvalidTransitions(t *testing.T) {
 	}
 }
 
-func TestTeachingUnitStore_SetUnitStatus_ArchiveFromReviewed(t *testing.T) {
+func TestChapterStore_SetUnitStatus_ArchiveFromReviewed(t *testing.T) {
 	units, _, _, userID := setupUnitEnv(t, t.Name())
 	ctx := context.Background()
 
-	u := mustCreateUnit(t, units, CreateTeachingUnitInput{
+	u := mustCreateChapter(t, units, CreateChapterInput{
 		Scope: "personal", ScopeID: &userID, Title: "Archive-Reviewed", CreatedBy: userID,
 	})
 	_, err := units.SetUnitStatus(ctx, u.ID, "reviewed", userID)
@@ -908,11 +908,11 @@ func TestTeachingUnitStore_SetUnitStatus_ArchiveFromReviewed(t *testing.T) {
 	assert.Equal(t, "archived", archived.Status)
 }
 
-func TestTeachingUnitStore_SetUnitStatus_ArchiveFromClassroomReady(t *testing.T) {
+func TestChapterStore_SetUnitStatus_ArchiveFromClassroomReady(t *testing.T) {
 	units, _, _, userID := setupUnitEnv(t, t.Name())
 	ctx := context.Background()
 
-	u := mustCreateUnit(t, units, CreateTeachingUnitInput{
+	u := mustCreateChapter(t, units, CreateChapterInput{
 		Scope: "personal", ScopeID: &userID, Title: "Archive-CR",
 		Status: "classroom_ready", CreatedBy: userID,
 	})
@@ -923,11 +923,11 @@ func TestTeachingUnitStore_SetUnitStatus_ArchiveFromClassroomReady(t *testing.T)
 	assert.Equal(t, "archived", archived.Status)
 }
 
-func TestTeachingUnitStore_SetUnitStatus_UnarchiveToClassroomReady_CreatesRevision(t *testing.T) {
+func TestChapterStore_SetUnitStatus_UnarchiveToClassroomReady_CreatesRevision(t *testing.T) {
 	units, _, _, userID := setupUnitEnv(t, t.Name())
 	ctx := context.Background()
 
-	u := mustCreateUnit(t, units, CreateTeachingUnitInput{
+	u := mustCreateChapter(t, units, CreateChapterInput{
 		Scope: "personal", ScopeID: &userID, Title: "Unarchive",
 		Status: "archived", CreatedBy: userID,
 	})
@@ -950,7 +950,7 @@ func TestTeachingUnitStore_SetUnitStatus_UnarchiveToClassroomReady_CreatesRevisi
 	assert.Equal(t, "classroom_ready", *revs[0].Reason)
 }
 
-func TestTeachingUnitStore_SetUnitStatus_NonExistentUnit(t *testing.T) {
+func TestChapterStore_SetUnitStatus_NonExistentUnit(t *testing.T) {
 	units, _, _, userID := setupUnitEnv(t, t.Name())
 	ctx := context.Background()
 
@@ -960,11 +960,11 @@ func TestTeachingUnitStore_SetUnitStatus_NonExistentUnit(t *testing.T) {
 
 // ── ListRevisions / GetRevision ─────────────────────────────────────────────
 
-func TestTeachingUnitStore_ListRevisions_Ordered(t *testing.T) {
+func TestChapterStore_ListRevisions_Ordered(t *testing.T) {
 	units, _, _, userID := setupUnitEnv(t, t.Name())
 	ctx := context.Background()
 
-	u := mustCreateUnit(t, units, CreateTeachingUnitInput{
+	u := mustCreateChapter(t, units, CreateChapterInput{
 		Scope: "personal", ScopeID: &userID, Title: "Rev-Order", CreatedBy: userID,
 	})
 
@@ -989,11 +989,11 @@ func TestTeachingUnitStore_ListRevisions_Ordered(t *testing.T) {
 		"revisions should be ordered DESC by created_at")
 }
 
-func TestTeachingUnitStore_ListRevisions_EmptyForUnpublished(t *testing.T) {
+func TestChapterStore_ListRevisions_EmptyForUnpublished(t *testing.T) {
 	units, _, _, userID := setupUnitEnv(t, t.Name())
 	ctx := context.Background()
 
-	u := mustCreateUnit(t, units, CreateTeachingUnitInput{
+	u := mustCreateChapter(t, units, CreateChapterInput{
 		Scope: "personal", ScopeID: &userID, Title: "Never Published", CreatedBy: userID,
 	})
 
@@ -1002,11 +1002,11 @@ func TestTeachingUnitStore_ListRevisions_EmptyForUnpublished(t *testing.T) {
 	assert.Empty(t, revs)
 }
 
-func TestTeachingUnitStore_GetRevision(t *testing.T) {
+func TestChapterStore_GetRevision(t *testing.T) {
 	units, _, _, userID := setupUnitEnv(t, t.Name())
 	ctx := context.Background()
 
-	u := mustCreateUnit(t, units, CreateTeachingUnitInput{
+	u := mustCreateChapter(t, units, CreateChapterInput{
 		Scope: "personal", ScopeID: &userID, Title: "Get-Rev", CreatedBy: userID,
 	})
 
@@ -1023,10 +1023,10 @@ func TestTeachingUnitStore_GetRevision(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.Equal(t, revs[0].ID, got.ID)
-	assert.Equal(t, u.ID, got.UnitID)
+	assert.Equal(t, u.ID, got.ChapterID)
 }
 
-func TestTeachingUnitStore_GetRevision_NotFound(t *testing.T) {
+func TestChapterStore_GetRevision_NotFound(t *testing.T) {
 	units, _, _, _ := setupUnitEnv(t, t.Name())
 	ctx := context.Background()
 
@@ -1035,17 +1035,17 @@ func TestTeachingUnitStore_GetRevision_NotFound(t *testing.T) {
 	assert.Nil(t, got)
 }
 
-// ── ForkUnit ────────────────────────────────────────────────────────────────
+// ── ForkChapter ────────────────────────────────────────────────────────────────
 
-func TestTeachingUnitStore_ForkUnit_CreatesChildOverlayDoc(t *testing.T) {
+func TestChapterStore_ForkChapter_CreatesChildOverlayDoc(t *testing.T) {
 	units, _, orgID, userID := setupUnitEnv(t, t.Name())
 	ctx := context.Background()
 
-	source := mustCreateUnit(t, units, CreateTeachingUnitInput{
+	source := mustCreateChapter(t, units, CreateChapterInput{
 		Scope: "platform", Title: "Source Unit", Summary: "Source summary", CreatedBy: userID,
 	})
 
-	child, err := units.ForkUnit(ctx, source.ID, ForkTarget{
+	child, err := units.ForkChapter(ctx, source.ID, ForkTarget{
 		Scope: "org", ScopeID: &orgID, CallerID: userID,
 	})
 	require.NoError(t, err)
@@ -1061,8 +1061,8 @@ func TestTeachingUnitStore_ForkUnit_CreatesChildOverlayDoc(t *testing.T) {
 	ov, err := units.GetOverlay(ctx, child.ID)
 	require.NoError(t, err)
 	require.NotNil(t, ov)
-	assert.Equal(t, child.ID, ov.ChildUnitID)
-	assert.Equal(t, source.ID, ov.ParentUnitID)
+	assert.Equal(t, child.ID, ov.ChildChapterID)
+	assert.Equal(t, source.ID, ov.ParentChapterID)
 	assert.Nil(t, ov.ParentRevisionID, "fork should be floating (nil revision)")
 	assert.Equal(t, json.RawMessage(`{}`), ov.BlockOverrides)
 
@@ -1072,16 +1072,16 @@ func TestTeachingUnitStore_ForkUnit_CreatesChildOverlayDoc(t *testing.T) {
 	require.NotNil(t, doc)
 }
 
-func TestTeachingUnitStore_ForkUnit_CustomTitle(t *testing.T) {
+func TestChapterStore_ForkChapter_CustomTitle(t *testing.T) {
 	units, _, orgID, userID := setupUnitEnv(t, t.Name())
 	ctx := context.Background()
 
-	source := mustCreateUnit(t, units, CreateTeachingUnitInput{
+	source := mustCreateChapter(t, units, CreateChapterInput{
 		Scope: "platform", Title: "Source", CreatedBy: userID,
 	})
 
 	title := "My Adaptation"
-	child, err := units.ForkUnit(ctx, source.ID, ForkTarget{
+	child, err := units.ForkChapter(ctx, source.ID, ForkTarget{
 		Scope: "org", ScopeID: &orgID, Title: &title, CallerID: userID,
 	})
 	require.NoError(t, err)
@@ -1089,11 +1089,11 @@ func TestTeachingUnitStore_ForkUnit_CustomTitle(t *testing.T) {
 	assert.Equal(t, "My Adaptation", child.Title)
 }
 
-func TestTeachingUnitStore_ForkUnit_SourceNotFound(t *testing.T) {
+func TestChapterStore_ForkChapter_SourceNotFound(t *testing.T) {
 	units, _, orgID, userID := setupUnitEnv(t, t.Name())
 	ctx := context.Background()
 
-	child, err := units.ForkUnit(ctx, "00000000-0000-0000-0000-000000000000", ForkTarget{
+	child, err := units.ForkChapter(ctx, "00000000-0000-0000-0000-000000000000", ForkTarget{
 		Scope: "org", ScopeID: &orgID, CallerID: userID,
 	})
 	require.NoError(t, err)
@@ -1102,11 +1102,11 @@ func TestTeachingUnitStore_ForkUnit_SourceNotFound(t *testing.T) {
 
 // ── GetOverlay / UpdateOverlay ──────────────────────────────────────────────
 
-func TestTeachingUnitStore_GetOverlay_NoOverlay(t *testing.T) {
+func TestChapterStore_GetOverlay_NoOverlay(t *testing.T) {
 	units, _, _, userID := setupUnitEnv(t, t.Name())
 	ctx := context.Background()
 
-	u := mustCreateUnit(t, units, CreateTeachingUnitInput{
+	u := mustCreateChapter(t, units, CreateChapterInput{
 		Scope: "personal", ScopeID: &userID, Title: "No Overlay", CreatedBy: userID,
 	})
 
@@ -1115,11 +1115,11 @@ func TestTeachingUnitStore_GetOverlay_NoOverlay(t *testing.T) {
 	assert.Nil(t, ov, "non-forked unit should have no overlay")
 }
 
-func TestTeachingUnitStore_UpdateOverlay_PinRevision(t *testing.T) {
+func TestChapterStore_UpdateOverlay_PinRevision(t *testing.T) {
 	units, _, orgID, userID := setupUnitEnv(t, t.Name())
 	ctx := context.Background()
 
-	source := mustCreateUnit(t, units, CreateTeachingUnitInput{
+	source := mustCreateChapter(t, units, CreateChapterInput{
 		Scope: "platform", Title: "Pin Source", CreatedBy: userID,
 	})
 
@@ -1137,7 +1137,7 @@ func TestTeachingUnitStore_UpdateOverlay_PinRevision(t *testing.T) {
 	require.Len(t, revs, 1)
 	revID := revs[0].ID
 
-	child, err := units.ForkUnit(ctx, source.ID, ForkTarget{
+	child, err := units.ForkChapter(ctx, source.ID, ForkTarget{
 		Scope: "org", ScopeID: &orgID, CallerID: userID,
 	})
 	require.NoError(t, err)
@@ -1153,11 +1153,11 @@ func TestTeachingUnitStore_UpdateOverlay_PinRevision(t *testing.T) {
 	assert.Equal(t, revID, *updated.ParentRevisionID)
 }
 
-func TestTeachingUnitStore_UpdateOverlay_Float(t *testing.T) {
+func TestChapterStore_UpdateOverlay_Float(t *testing.T) {
 	units, _, orgID, userID := setupUnitEnv(t, t.Name())
 	ctx := context.Background()
 
-	source := mustCreateUnit(t, units, CreateTeachingUnitInput{
+	source := mustCreateChapter(t, units, CreateChapterInput{
 		Scope: "platform", Title: "Float Source", CreatedBy: userID,
 	})
 
@@ -1175,7 +1175,7 @@ func TestTeachingUnitStore_UpdateOverlay_Float(t *testing.T) {
 	require.Len(t, revs, 1)
 	revID := revs[0].ID
 
-	child, err := units.ForkUnit(ctx, source.ID, ForkTarget{
+	child, err := units.ForkChapter(ctx, source.ID, ForkTarget{
 		Scope: "org", ScopeID: &orgID, CallerID: userID,
 	})
 	require.NoError(t, err)
@@ -1197,15 +1197,15 @@ func TestTeachingUnitStore_UpdateOverlay_Float(t *testing.T) {
 	assert.Nil(t, updated.ParentRevisionID, "empty string should set to NULL (floating)")
 }
 
-func TestTeachingUnitStore_UpdateOverlay_BlockOverrides(t *testing.T) {
+func TestChapterStore_UpdateOverlay_BlockOverrides(t *testing.T) {
 	units, _, orgID, userID := setupUnitEnv(t, t.Name())
 	ctx := context.Background()
 
-	source := mustCreateUnit(t, units, CreateTeachingUnitInput{
+	source := mustCreateChapter(t, units, CreateChapterInput{
 		Scope: "platform", Title: "Override Source", CreatedBy: userID,
 	})
 
-	child, err := units.ForkUnit(ctx, source.ID, ForkTarget{
+	child, err := units.ForkChapter(ctx, source.ID, ForkTarget{
 		Scope: "org", ScopeID: &orgID, CallerID: userID,
 	})
 	require.NoError(t, err)
@@ -1224,15 +1224,15 @@ func TestTeachingUnitStore_UpdateOverlay_BlockOverrides(t *testing.T) {
 	assert.Contains(t, parsed, "b1")
 }
 
-func TestTeachingUnitStore_UpdateOverlay_NoFields(t *testing.T) {
+func TestChapterStore_UpdateOverlay_NoFields(t *testing.T) {
 	units, _, orgID, userID := setupUnitEnv(t, t.Name())
 	ctx := context.Background()
 
-	source := mustCreateUnit(t, units, CreateTeachingUnitInput{
+	source := mustCreateChapter(t, units, CreateChapterInput{
 		Scope: "platform", Title: "NoField Source", CreatedBy: userID,
 	})
 
-	child, err := units.ForkUnit(ctx, source.ID, ForkTarget{
+	child, err := units.ForkChapter(ctx, source.ID, ForkTarget{
 		Scope: "org", ScopeID: &orgID, CallerID: userID,
 	})
 	require.NoError(t, err)
@@ -1242,16 +1242,16 @@ func TestTeachingUnitStore_UpdateOverlay_NoFields(t *testing.T) {
 	updated, err := units.UpdateOverlay(ctx, child.ID, UpdateOverlayInput{})
 	require.NoError(t, err)
 	require.NotNil(t, updated)
-	assert.Equal(t, child.ID, updated.ChildUnitID)
+	assert.Equal(t, child.ID, updated.ChildChapterID)
 }
 
 // ── GetComposedDocument ─────────────────────────────────────────────────────
 
-func TestTeachingUnitStore_GetComposedDocument_NoOverlay(t *testing.T) {
+func TestChapterStore_GetComposedDocument_NoOverlay(t *testing.T) {
 	units, _, _, userID := setupUnitEnv(t, t.Name())
 	ctx := context.Background()
 
-	u := mustCreateUnit(t, units, CreateTeachingUnitInput{
+	u := mustCreateChapter(t, units, CreateChapterInput{
 		Scope: "personal", ScopeID: &userID, Title: "Plain Unit", CreatedBy: userID,
 	})
 
@@ -1269,11 +1269,11 @@ func TestTeachingUnitStore_GetComposedDocument_NoOverlay(t *testing.T) {
 	assert.Equal(t, "doc", doc["type"])
 }
 
-func TestTeachingUnitStore_GetComposedDocument_ForkedFloating(t *testing.T) {
+func TestChapterStore_GetComposedDocument_ForkedFloating(t *testing.T) {
 	units, _, orgID, userID := setupUnitEnv(t, t.Name())
 	ctx := context.Background()
 
-	source := mustCreateUnit(t, units, CreateTeachingUnitInput{
+	source := mustCreateChapter(t, units, CreateChapterInput{
 		Scope: "platform", Title: "Compose Source", CreatedBy: userID,
 	})
 
@@ -1287,7 +1287,7 @@ func TestTeachingUnitStore_GetComposedDocument_ForkedFloating(t *testing.T) {
 	require.NoError(t, err)
 
 	// Fork.
-	child, err := units.ForkUnit(ctx, source.ID, ForkTarget{
+	child, err := units.ForkChapter(ctx, source.ID, ForkTarget{
 		Scope: "org", ScopeID: &orgID, CallerID: userID,
 	})
 	require.NoError(t, err)
@@ -1306,11 +1306,11 @@ func TestTeachingUnitStore_GetComposedDocument_ForkedFloating(t *testing.T) {
 	require.Len(t, content, 1, "composed should have 1 parent block")
 }
 
-func TestTeachingUnitStore_GetComposedDocument_HideOverride(t *testing.T) {
+func TestChapterStore_GetComposedDocument_HideOverride(t *testing.T) {
 	units, _, orgID, userID := setupUnitEnv(t, t.Name())
 	ctx := context.Background()
 
-	source := mustCreateUnit(t, units, CreateTeachingUnitInput{
+	source := mustCreateChapter(t, units, CreateChapterInput{
 		Scope: "platform", Title: "Hide Source", CreatedBy: userID,
 	})
 
@@ -1322,7 +1322,7 @@ func TestTeachingUnitStore_GetComposedDocument_HideOverride(t *testing.T) {
 	_, err = units.SetUnitStatus(ctx, source.ID, "classroom_ready", userID)
 	require.NoError(t, err)
 
-	child, err := units.ForkUnit(ctx, source.ID, ForkTarget{
+	child, err := units.ForkChapter(ctx, source.ID, ForkTarget{
 		Scope: "org", ScopeID: &orgID, CallerID: userID,
 	})
 	require.NoError(t, err)
@@ -1348,11 +1348,11 @@ func TestTeachingUnitStore_GetComposedDocument_HideOverride(t *testing.T) {
 	assert.Equal(t, "b2", attrs["id"])
 }
 
-func TestTeachingUnitStore_GetComposedDocument_ReplaceOverride(t *testing.T) {
+func TestChapterStore_GetComposedDocument_ReplaceOverride(t *testing.T) {
 	units, _, orgID, userID := setupUnitEnv(t, t.Name())
 	ctx := context.Background()
 
-	source := mustCreateUnit(t, units, CreateTeachingUnitInput{
+	source := mustCreateChapter(t, units, CreateChapterInput{
 		Scope: "platform", Title: "Replace Source", CreatedBy: userID,
 	})
 
@@ -1364,7 +1364,7 @@ func TestTeachingUnitStore_GetComposedDocument_ReplaceOverride(t *testing.T) {
 	_, err = units.SetUnitStatus(ctx, source.ID, "classroom_ready", userID)
 	require.NoError(t, err)
 
-	child, err := units.ForkUnit(ctx, source.ID, ForkTarget{
+	child, err := units.ForkChapter(ctx, source.ID, ForkTarget{
 		Scope: "org", ScopeID: &orgID, CallerID: userID,
 	})
 	require.NoError(t, err)
@@ -1390,11 +1390,11 @@ func TestTeachingUnitStore_GetComposedDocument_ReplaceOverride(t *testing.T) {
 	assert.Equal(t, "b1-replaced", attrs["id"])
 }
 
-func TestTeachingUnitStore_GetComposedDocument_PinnedRevision(t *testing.T) {
+func TestChapterStore_GetComposedDocument_PinnedRevision(t *testing.T) {
 	units, _, orgID, userID := setupUnitEnv(t, t.Name())
 	ctx := context.Background()
 
-	source := mustCreateUnit(t, units, CreateTeachingUnitInput{
+	source := mustCreateChapter(t, units, CreateChapterInput{
 		Scope: "platform", Title: "Pinned Source", CreatedBy: userID,
 	})
 
@@ -1422,7 +1422,7 @@ func TestTeachingUnitStore_GetComposedDocument_PinnedRevision(t *testing.T) {
 	require.NoError(t, err)
 
 	// Fork and pin to v1.
-	child, err := units.ForkUnit(ctx, source.ID, ForkTarget{
+	child, err := units.ForkChapter(ctx, source.ID, ForkTarget{
 		Scope: "org", ScopeID: &orgID, CallerID: userID,
 	})
 	require.NoError(t, err)
@@ -1447,11 +1447,11 @@ func TestTeachingUnitStore_GetComposedDocument_PinnedRevision(t *testing.T) {
 	assert.Equal(t, "v1", text["text"], "pinned revision should use v1 blocks")
 }
 
-func TestTeachingUnitStore_GetComposedDocument_FloatingUsesLatest(t *testing.T) {
+func TestChapterStore_GetComposedDocument_FloatingUsesLatest(t *testing.T) {
 	units, _, orgID, userID := setupUnitEnv(t, t.Name())
 	ctx := context.Background()
 
-	source := mustCreateUnit(t, units, CreateTeachingUnitInput{
+	source := mustCreateChapter(t, units, CreateChapterInput{
 		Scope: "platform", Title: "Float Latest Source", CreatedBy: userID,
 	})
 
@@ -1465,7 +1465,7 @@ func TestTeachingUnitStore_GetComposedDocument_FloatingUsesLatest(t *testing.T) 
 	require.NoError(t, err)
 
 	// Fork (floating by default).
-	child, err := units.ForkUnit(ctx, source.ID, ForkTarget{
+	child, err := units.ForkChapter(ctx, source.ID, ForkTarget{
 		Scope: "org", ScopeID: &orgID, CallerID: userID,
 	})
 	require.NoError(t, err)
@@ -1496,30 +1496,30 @@ func TestTeachingUnitStore_GetComposedDocument_FloatingUsesLatest(t *testing.T) 
 
 // ── GetLineage ──────────────────────────────────────────────────────────────
 
-func TestTeachingUnitStore_GetLineage_NoOverlay(t *testing.T) {
+func TestChapterStore_GetLineage_NoOverlay(t *testing.T) {
 	units, _, _, userID := setupUnitEnv(t, t.Name())
 	ctx := context.Background()
 
-	u := mustCreateUnit(t, units, CreateTeachingUnitInput{
-		Scope: "personal", ScopeID: &userID, Title: "Lone Unit", CreatedBy: userID,
+	u := mustCreateChapter(t, units, CreateChapterInput{
+		Scope: "personal", ScopeID: &userID, Title: "Lone Chapter", CreatedBy: userID,
 	})
 
 	lineage, err := units.GetLineage(ctx, u.ID)
 	require.NoError(t, err)
 	require.Len(t, lineage, 1, "non-forked unit should have lineage of just itself")
-	assert.Equal(t, u.ID, lineage[0].UnitID)
-	assert.Equal(t, "Lone Unit", lineage[0].Title)
+	assert.Equal(t, u.ID, lineage[0].ChapterID)
+	assert.Equal(t, "Lone Chapter", lineage[0].Title)
 }
 
-func TestTeachingUnitStore_GetLineage_ChildParent(t *testing.T) {
+func TestChapterStore_GetLineage_ChildParent(t *testing.T) {
 	units, _, orgID, userID := setupUnitEnv(t, t.Name())
 	ctx := context.Background()
 
-	parent := mustCreateUnit(t, units, CreateTeachingUnitInput{
+	parent := mustCreateChapter(t, units, CreateChapterInput{
 		Scope: "platform", Title: "Parent", CreatedBy: userID,
 	})
 
-	child, err := units.ForkUnit(ctx, parent.ID, ForkTarget{
+	child, err := units.ForkChapter(ctx, parent.ID, ForkTarget{
 		Scope: "org", ScopeID: &orgID, CallerID: userID,
 	})
 	require.NoError(t, err)
@@ -1529,25 +1529,25 @@ func TestTeachingUnitStore_GetLineage_ChildParent(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, lineage, 2, "child → parent = 2 entries")
 	// Root-first.
-	assert.Equal(t, parent.ID, lineage[0].UnitID)
-	assert.Equal(t, child.ID, lineage[1].UnitID)
+	assert.Equal(t, parent.ID, lineage[0].ChapterID)
+	assert.Equal(t, child.ID, lineage[1].ChapterID)
 }
 
-func TestTeachingUnitStore_GetLineage_ThreeGenerations(t *testing.T) {
+func TestChapterStore_GetLineage_ThreeGenerations(t *testing.T) {
 	units, _, orgID, userID := setupUnitEnv(t, t.Name())
 	ctx := context.Background()
 
-	grandparent := mustCreateUnit(t, units, CreateTeachingUnitInput{
+	grandparent := mustCreateChapter(t, units, CreateChapterInput{
 		Scope: "platform", Title: "Grandparent", CreatedBy: userID,
 	})
 
-	parentUnit, err := units.ForkUnit(ctx, grandparent.ID, ForkTarget{
+	parentUnit, err := units.ForkChapter(ctx, grandparent.ID, ForkTarget{
 		Scope: "org", ScopeID: &orgID, CallerID: userID,
 	})
 	require.NoError(t, err)
 	require.NotNil(t, parentUnit)
 
-	child, err := units.ForkUnit(ctx, parentUnit.ID, ForkTarget{
+	child, err := units.ForkChapter(ctx, parentUnit.ID, ForkTarget{
 		Scope: "personal", ScopeID: &userID, CallerID: userID,
 	})
 	require.NoError(t, err)
@@ -1557,14 +1557,14 @@ func TestTeachingUnitStore_GetLineage_ThreeGenerations(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, lineage, 3, "child → parent → grandparent = 3 entries")
 	// Root-first.
-	assert.Equal(t, grandparent.ID, lineage[0].UnitID)
-	assert.Equal(t, parentUnit.ID, lineage[1].UnitID)
-	assert.Equal(t, child.ID, lineage[2].UnitID)
+	assert.Equal(t, grandparent.ID, lineage[0].ChapterID)
+	assert.Equal(t, parentUnit.ID, lineage[1].ChapterID)
+	assert.Equal(t, child.ID, lineage[2].ChapterID)
 }
 
-// ── SearchUnits ────────────────────────────────────────────────────────────
+// ── SearchChapters ────────────────────────────────────────────────────────────
 
-func TestTeachingUnitStore_SearchUnits_FTS(t *testing.T) {
+func TestChapterStore_SearchChapters_FTS(t *testing.T) {
 	units, orgs, orgID, userID := setupUnitEnv(t, t.Name())
 	ctx := context.Background()
 	db := testDB(t)
@@ -1579,17 +1579,17 @@ func TestTeachingUnitStore_SearchUnits_FTS(t *testing.T) {
 	})
 
 	// Create units with distinct titles and summaries for FTS matching.
-	mustCreateUnit(t, units, CreateTeachingUnitInput{
+	mustCreateChapter(t, units, CreateChapterInput{
 		Scope: "org", ScopeID: &orgID, Title: "Introduction to Python Loops",
 		Summary: "Learn about for and while loops", CreatedBy: userID,
 	})
-	mustCreateUnit(t, units, CreateTeachingUnitInput{
+	mustCreateChapter(t, units, CreateChapterInput{
 		Scope: "org", ScopeID: &orgID, Title: "Data Structures Arrays",
 		Summary: "Working with arrays and lists", CreatedBy: userID,
 	})
 
 	// Search for "loops" — should match the first unit.
-	results, err := units.SearchUnits(ctx, SearchUnitsFilter{
+	results, err := units.SearchChapters(ctx, SearchChaptersFilter{
 		Query:      "loops",
 		ViewerID:   userID,
 		ViewerOrgs: []string{orgID},
@@ -1607,7 +1607,7 @@ func TestTeachingUnitStore_SearchUnits_FTS(t *testing.T) {
 	assert.True(t, found, "should find the loops unit via FTS")
 }
 
-func TestTeachingUnitStore_SearchUnits_BrowseMode(t *testing.T) {
+func TestChapterStore_SearchChapters_BrowseMode(t *testing.T) {
 	units, orgs, orgID, userID := setupUnitEnv(t, t.Name())
 	ctx := context.Background()
 	db := testDB(t)
@@ -1620,19 +1620,19 @@ func TestTeachingUnitStore_SearchUnits_BrowseMode(t *testing.T) {
 		db.ExecContext(ctx, "DELETE FROM org_memberships WHERE user_id = $1 AND org_id = $2", userID, orgID)
 	})
 
-	u1 := mustCreateUnit(t, units, CreateTeachingUnitInput{
+	u1 := mustCreateChapter(t, units, CreateChapterInput{
 		Scope: "org", ScopeID: &orgID, Title: "Browse Unit A", CreatedBy: userID,
 	})
-	u2 := mustCreateUnit(t, units, CreateTeachingUnitInput{
+	u2 := mustCreateChapter(t, units, CreateChapterInput{
 		Scope: "org", ScopeID: &orgID, Title: "Browse Unit B", CreatedBy: userID,
 	})
 
 	// Force u1 to have a newer updated_at so it comes first.
 	future := time.Now().Add(1 * time.Hour)
-	_, err = db.ExecContext(ctx, "UPDATE teaching_units SET updated_at = $1 WHERE id = $2", future, u1.ID)
+	_, err = db.ExecContext(ctx, "UPDATE chapters SET updated_at = $1 WHERE id = $2", future, u1.ID)
 	require.NoError(t, err)
 
-	results, err := units.SearchUnits(ctx, SearchUnitsFilter{
+	results, err := units.SearchChapters(ctx, SearchChaptersFilter{
 		Scope:      "org",
 		ScopeID:    &orgID,
 		ViewerID:   userID,
@@ -1654,17 +1654,17 @@ func TestTeachingUnitStore_SearchUnits_BrowseMode(t *testing.T) {
 	assert.Less(t, u1Idx, u2Idx, "u1 (newer updated_at) should come before u2")
 }
 
-func TestTeachingUnitStore_SearchUnits_ScopeVisibility(t *testing.T) {
+func TestChapterStore_SearchChapters_ScopeVisibility(t *testing.T) {
 	units, _, _, userID := setupUnitEnv(t, t.Name())
 	ctx := context.Background()
 
 	// Create a personal unit.
-	mustCreateUnit(t, units, CreateTeachingUnitInput{
+	mustCreateChapter(t, units, CreateChapterInput{
 		Scope: "personal", ScopeID: &userID, Title: "My Personal Unit", CreatedBy: userID,
 	})
 
 	// Search as the owner — should see personal unit.
-	results, err := units.SearchUnits(ctx, SearchUnitsFilter{
+	results, err := units.SearchChapters(ctx, SearchChaptersFilter{
 		Scope:    "personal",
 		ScopeID:  &userID,
 		ViewerID: userID,
@@ -1674,7 +1674,7 @@ func TestTeachingUnitStore_SearchUnits_ScopeVisibility(t *testing.T) {
 
 	// Search as a different user — should NOT see the personal unit.
 	otherUser := "00000000-0000-0000-0000-000000000099"
-	results2, err := units.SearchUnits(ctx, SearchUnitsFilter{
+	results2, err := units.SearchChapters(ctx, SearchChaptersFilter{
 		Scope:    "personal",
 		ScopeID:  &userID,
 		ViewerID: otherUser,
@@ -1683,11 +1683,11 @@ func TestTeachingUnitStore_SearchUnits_ScopeVisibility(t *testing.T) {
 	assert.Empty(t, results2, "other user should not see personal unit")
 }
 
-func TestTeachingUnitStore_SearchUnits_EmptyResults(t *testing.T) {
+func TestChapterStore_SearchChapters_EmptyResults(t *testing.T) {
 	units, _, _, userID := setupUnitEnv(t, t.Name())
 	ctx := context.Background()
 
-	results, err := units.SearchUnits(ctx, SearchUnitsFilter{
+	results, err := units.SearchChapters(ctx, SearchChaptersFilter{
 		Query:    "xyznonexistentquerythatmatchesnothing",
 		ViewerID: userID,
 	})
@@ -1696,7 +1696,7 @@ func TestTeachingUnitStore_SearchUnits_EmptyResults(t *testing.T) {
 	assert.NotNil(t, results, "empty results should be non-nil slice")
 }
 
-func TestTeachingUnitStore_SearchUnits_SubjectTagFilter(t *testing.T) {
+func TestChapterStore_SearchChapters_SubjectTagFilter(t *testing.T) {
 	units, orgs, orgID, userID := setupUnitEnv(t, t.Name())
 	ctx := context.Background()
 	db := testDB(t)
@@ -1709,16 +1709,16 @@ func TestTeachingUnitStore_SearchUnits_SubjectTagFilter(t *testing.T) {
 		db.ExecContext(ctx, "DELETE FROM org_memberships WHERE user_id = $1 AND org_id = $2", userID, orgID)
 	})
 
-	mustCreateUnit(t, units, CreateTeachingUnitInput{
+	mustCreateChapter(t, units, CreateChapterInput{
 		Scope: "org", ScopeID: &orgID, Title: "Tagged Unit",
 		SubjectTags: []string{"math", "cs"}, CreatedBy: userID,
 	})
-	mustCreateUnit(t, units, CreateTeachingUnitInput{
+	mustCreateChapter(t, units, CreateChapterInput{
 		Scope: "org", ScopeID: &orgID, Title: "Other Tagged Unit",
 		SubjectTags: []string{"science"}, CreatedBy: userID,
 	})
 
-	results, err := units.SearchUnits(ctx, SearchUnitsFilter{
+	results, err := units.SearchChapters(ctx, SearchChaptersFilter{
 		SubjectTags: []string{"math"},
 		ViewerID:    userID,
 		ViewerOrgs:  []string{orgID},
@@ -1737,16 +1737,16 @@ func TestTeachingUnitStore_SearchUnits_SubjectTagFilter(t *testing.T) {
 	}
 }
 
-func TestTeachingUnitStore_SearchUnits_PlatformAdminSeesAll(t *testing.T) {
+func TestChapterStore_SearchChapters_PlatformAdminSeesAll(t *testing.T) {
 	units, _, _, userID := setupUnitEnv(t, t.Name())
 	ctx := context.Background()
 
-	mustCreateUnit(t, units, CreateTeachingUnitInput{
+	mustCreateChapter(t, units, CreateChapterInput{
 		Scope: "personal", ScopeID: &userID, Title: "Admin Visible Unit",
 		CreatedBy: userID,
 	})
 
-	results, err := units.SearchUnits(ctx, SearchUnitsFilter{
+	results, err := units.SearchChapters(ctx, SearchChaptersFilter{
 		IsPlatformAdmin: true,
 		ViewerID:        "00000000-0000-0000-0000-000000000001",
 	})
@@ -1754,17 +1754,17 @@ func TestTeachingUnitStore_SearchUnits_PlatformAdminSeesAll(t *testing.T) {
 	require.NotEmpty(t, results, "platform admin should see units across scopes")
 }
 
-func TestTeachingUnitStore_SearchUnits_GradeLevelFilter(t *testing.T) {
+func TestChapterStore_SearchChapters_GradeLevelFilter(t *testing.T) {
 	units, _, _, userID := setupUnitEnv(t, t.Name())
 	ctx := context.Background()
 
 	grade := "K-5"
-	mustCreateUnit(t, units, CreateTeachingUnitInput{
+	mustCreateChapter(t, units, CreateChapterInput{
 		Scope: "personal", ScopeID: &userID, Title: "K5 Unit",
 		GradeLevel: &grade, CreatedBy: userID,
 	})
 
-	results, err := units.SearchUnits(ctx, SearchUnitsFilter{
+	results, err := units.SearchChapters(ctx, SearchChaptersFilter{
 		GradeLevel: "K-5",
 		ViewerID:   userID,
 	})

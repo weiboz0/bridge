@@ -56,19 +56,19 @@ func (fx *sessionFixture) seedTopic(t *testing.T, title string, withUnit bool) (
 	require.NoError(t, err)
 	t.Cleanup(func() { fx.db.ExecContext(ctx, "DELETE FROM topics WHERE id = $1", topicID) })
 
-	var unitID string
+	var chapterID string
 	if withUnit {
 		err = fx.db.QueryRowContext(ctx,
-			`INSERT INTO teaching_units
+			`INSERT INTO chapters
 			 (id, scope, scope_id, title, summary, material_type, status, created_by, topic_id, created_at, updated_at)
 			 VALUES (gen_random_uuid(), 'org', $1, $2, '', 'notes', 'classroom_ready', $3, $4, now(), now())
 			 RETURNING id`,
 			fx.orgID, "Unit for "+title, fx.teacher.ID, topicID,
-		).Scan(&unitID)
+		).Scan(&chapterID)
 		require.NoError(t, err)
-		t.Cleanup(func() { fx.db.ExecContext(ctx, "DELETE FROM teaching_units WHERE id = $1", unitID) })
+		t.Cleanup(func() { fx.db.ExecContext(ctx, "DELETE FROM chapters WHERE id = $1", chapterID) })
 	}
-	return topicID, unitID
+	return topicID, chapterID
 }
 
 // All topics linked → session created normally (201, no 422).
@@ -196,7 +196,7 @@ func TestCreateSession_NoClassID_NoGuard(t *testing.T) {
 	})
 }
 
-// Misconfiguration: if Topics or TeachingUnits is nil on the handler,
+// Misconfiguration: if Topics or Chapters is nil on the handler,
 // CreateSession returns 500 instead of silently bypassing the guard.
 // Codex post-impl review caught this — silent skip would let an
 // unguarded session creation through if someone forgot to wire the

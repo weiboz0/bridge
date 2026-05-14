@@ -18,27 +18,27 @@ import (
 	"github.com/weiboz0/bridge/platform/internal/store"
 )
 
-// TeachingUnitHandler serves teaching unit CRUD and document endpoints.
+// ChapterHandler serves teaching unit CRUD and document endpoints.
 // Access is scope-based (platform / org / personal) per spec 012.
 // Lifecycle transitions (publish/archive) and overlay/fork routes are
 // excluded from this handler — they land in plans 033 and 034.
-type TeachingUnitHandler struct {
-	Units   *store.TeachingUnitStore
+type ChapterHandler struct {
+	Units   *store.ChapterStore
 	Orgs    *store.OrgStore
-	Courses *store.CourseStore // Plan 045: backs the SearchUnits ?linkableForCourse= gate.
+	Courses *store.CourseStore // Plan 045: backs the SearchChapters ?linkableForCourse= gate.
 }
 
-// validUnitScopes is the allowed set of scope values.
-var validUnitScopes = map[string]bool{
+// validChapterScopes is the allowed set of scope values.
+var validChapterScopes = map[string]bool{
 	"platform": true,
 	"org":      true,
 	"personal": true,
 }
 
-// validUnitStatuses is the allowed set of status values for initial creation /
+// validChapterStatuses is the allowed set of status values for initial creation /
 // manual updates in plan 031. Lifecycle transitions (draft → reviewed → ready)
 // land in plan 033.
-var validUnitStatuses = map[string]bool{
+var validChapterStatuses = map[string]bool{
 	"draft":           true,
 	"reviewed":        true,
 	"classroom_ready": true,
@@ -89,36 +89,36 @@ var knownBlockTypes = map[string]bool{
 	"math-inline": true,
 }
 
-const maxUnitTitleLen = 255
+const maxChapterTitleLen = 255
 
-func (h *TeachingUnitHandler) Routes(r chi.Router) {
-	r.Route("/api/units", func(r chi.Router) {
-		r.Get("/", h.ListUnits)
-		r.Post("/", h.CreateUnit)
+func (h *ChapterHandler) Routes(r chi.Router) {
+	r.Route("/api/chapters", func(r chi.Router) {
+		r.Get("/", h.ListChapters)
+		r.Post("/", h.CreateChapter)
 
 		// Static sub-paths MUST be registered before the {id} wildcard
-		r.Get("/search", h.SearchUnits)
+		r.Get("/search", h.SearchChapters)
 
 		r.Route("/by-topic/{topicId}", func(r chi.Router) {
 			r.Use(ValidateUUIDParam("topicId"))
-			r.Get("/", h.GetUnitByTopic)
+			r.Get("/", h.GetChapterByTopic)
 		})
 
 		r.Route("/{id}", func(r chi.Router) {
 			r.Use(ValidateUUIDParam("id"))
-			r.Get("/", h.GetUnit)
-			r.Patch("/", h.UpdateUnit)
-			r.Delete("/", h.DeleteUnit)
+			r.Get("/", h.GetChapter)
+			r.Patch("/", h.UpdateChapter)
+			r.Delete("/", h.DeleteChapter)
 			r.Get("/document", h.GetDocument)
 			r.Put("/document", h.SaveDocument)
 			r.Get("/projected", h.GetProjectedDocument)
-			r.Post("/transition", h.TransitionUnit)
+			r.Post("/transition", h.TransitionChapter)
 			r.Get("/revisions", h.ListRevisions)
 			r.Route("/revisions/{revisionId}", func(r chi.Router) {
 				r.Use(ValidateUUIDParam("revisionId"))
 				r.Get("/", h.GetRevision)
 			})
-			r.Post("/fork", h.ForkUnit)
+			r.Post("/fork", h.ForkChapter)
 			r.Get("/overlay", h.GetOverlay)
 			r.Patch("/overlay", h.PatchOverlay)
 			r.Get("/composed", h.GetComposedDocument)
@@ -129,7 +129,7 @@ func (h *TeachingUnitHandler) Routes(r chi.Router) {
 
 // ---------- Access helpers ----------
 
-// canViewUnit applies the Access table from spec 012 §Access, with the
+// canViewChapter applies the Access table from spec 012 §Access, with the
 // plan-031-specific narrowing: org students are denied access entirely
 // until class-binding lands in plan 032.
 //
@@ -138,25 +138,25 @@ func (h *TeachingUnitHandler) Routes(r chi.Router) {
 // Org scope: teachers/org_admins see all statuses; students denied.
 // Personal scope: owner only.
 // Platform admin bypass applies everywhere.
-func (h *TeachingUnitHandler) canViewUnit(ctx context.Context, c *auth.Claims, u *store.TeachingUnit) bool {
-	// Plan 052 PR-C: thin wrapper around the free `CanViewUnit`
-	// helper so non-handler-method callers (e.g., UnitCollectionHandler)
+func (h *ChapterHandler) canViewChapter(ctx context.Context, c *auth.Claims, u *store.Chapter) bool {
+	// Plan 052 PR-C: thin wrapper around the free `CanViewChapter`
+	// helper so non-handler-method callers (e.g., ChapterCollectionHandler)
 	// can apply the same rule.
 	// Plan 061: passes h.Units so the helper can run the
 	// student-binding check.
-	return CanViewUnit(ctx, h.Orgs, h.Units, c, u)
+	return CanViewChapter(ctx, h.Orgs, h.Units, c, u)
 }
 
-// TODO(plan-075-followup): canEditUnit (line ~164) and resolveViewerRole
+// TODO(plan-075-followup): canEditChapter (line ~164) and resolveViewerRole
 // (line ~871) each have an inline GetUserRolesInOrg in the org-scope branch
 // of a switch over scope. Migrating to RequireOrgAuthority touches helper
 // signatures (returns bool / projection.ViewerRole). See plan-075 §Out of
 // scope, Bucket 2.
 
-// canEditUnit checks whether the caller may create, update, or delete a unit
+// canEditChapter checks whether the caller may create, update, or delete a unit
 // in the given scope. Platform requires platform admin; org requires an active
 // org_admin or teacher; personal requires the caller to be the scope owner.
-func (h *TeachingUnitHandler) canEditUnit(ctx context.Context, c *auth.Claims, scope string, scopeID *string) bool {
+func (h *ChapterHandler) canEditChapter(ctx context.Context, c *auth.Claims, scope string, scopeID *string) bool {
 	if c.IsPlatformAdmin && scope == "platform" {
 		return true
 	}
@@ -255,11 +255,11 @@ func joinBlockTypes() string {
 
 // ---------- Handlers ----------
 
-// ListUnits — GET /api/units?scope=&scopeId=
+// ListChapters — GET /api/chapters?scope=&scopeId=
 // Returns units the caller can view. Scope + scopeId filter to a specific
 // bucket; omitting both returns all units visible to the caller (this plan
 // returns units from the requested bucket only for simplicity).
-func (h *TeachingUnitHandler) ListUnits(w http.ResponseWriter, r *http.Request) {
+func (h *ChapterHandler) ListChapters(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
 		writeError(w, http.StatusUnauthorized, "Unauthorized")
@@ -269,7 +269,7 @@ func (h *TeachingUnitHandler) ListUnits(w http.ResponseWriter, r *http.Request) 
 	scope := r.URL.Query().Get("scope")
 	scopeIDRaw := r.URL.Query().Get("scopeId")
 
-	if scope != "" && !validUnitScopes[scope] {
+	if scope != "" && !validChapterScopes[scope] {
 		writeError(w, http.StatusBadRequest, "scope must be platform, org, or personal")
 		return
 	}
@@ -279,28 +279,28 @@ func (h *TeachingUnitHandler) ListUnits(w http.ResponseWriter, r *http.Request) 
 	if scope == "" {
 		// Return an empty list with a hint rather than a 400 so clients can
 		// call without a scope and learn they need to specify one.
-		writeJSON(w, http.StatusOK, map[string]any{"items": []store.TeachingUnit{}})
+		writeJSON(w, http.StatusOK, map[string]any{"items": []store.Chapter{}})
 		return
 	}
 
-	units, err := h.Units.ListUnitsForScope(r.Context(), scope, scopeIDRaw)
+	units, err := h.Units.ListChaptersForScope(r.Context(), scope, scopeIDRaw)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
 	}
 
 	// Filter by view access.
-	visible := make([]store.TeachingUnit, 0, len(units))
+	visible := make([]store.Chapter, 0, len(units))
 	for _, u := range units {
 		u := u // capture
-		if h.canViewUnit(r.Context(), claims, &u) {
+		if h.canViewChapter(r.Context(), claims, &u) {
 			visible = append(visible, u)
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": visible})
 }
 
-// SearchUnits — GET /api/units/search?q=&scope=&gradeLevel=&materialType=&tags=&limit=&cursor=&linkableForCourse=
+// SearchChapters — GET /api/chapters/search?q=&scope=&gradeLevel=&materialType=&tags=&limit=&cursor=&linkableForCourse=
 // Returns units matching FTS query and/or structured filters, with visibility
 // filtering. When q is non-empty, results are ranked by FTS relevance;
 // otherwise they are ordered by updated_at DESC.
@@ -313,7 +313,7 @@ func (h *TeachingUnitHandler) ListUnits(w http.ResponseWriter, r *http.Request) 
 //     the course, gates the caller to creator-or-platform-admin, and
 //     returns Units linkable to that course (platform-scope OR same
 //     org) decorated with linkedTopicId/linkedTopicTitle/canLink.
-func (h *TeachingUnitHandler) SearchUnits(w http.ResponseWriter, r *http.Request) {
+func (h *ChapterHandler) SearchChapters(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
 		writeError(w, http.StatusUnauthorized, "Unauthorized")
@@ -321,7 +321,7 @@ func (h *TeachingUnitHandler) SearchUnits(w http.ResponseWriter, r *http.Request
 	}
 
 	q := r.URL.Query()
-	filter := store.SearchUnitsFilter{
+	filter := store.SearchChaptersFilter{
 		Query:           q.Get("q"),
 		Scope:           q.Get("scope"),
 		Status:          q.Get("status"),
@@ -335,7 +335,7 @@ func (h *TeachingUnitHandler) SearchUnits(w http.ResponseWriter, r *http.Request
 		filter.ScopeID = &scopeID
 	}
 
-	if filter.Scope != "" && !validUnitScopes[filter.Scope] {
+	if filter.Scope != "" && !validChapterScopes[filter.Scope] {
 		writeError(w, http.StatusBadRequest, "scope must be platform, org, or personal")
 		return
 	}
@@ -357,7 +357,7 @@ func (h *TeachingUnitHandler) SearchUnits(w http.ResponseWriter, r *http.Request
 		ts, id, ok := parseSearchCursor(cursor)
 		if !ok {
 			writeError(w, http.StatusBadRequest,
-				"cursor must be of form <RFC3339-timestamp>|<unitId>")
+				"cursor must be of form <RFC3339-timestamp>|<chapterId>")
 			return
 		}
 		filter.CursorCreatedAt = &ts
@@ -381,14 +381,14 @@ func (h *TeachingUnitHandler) SearchUnits(w http.ResponseWriter, r *http.Request
 	}
 
 	// Plan 045 picker mode: linkableForCourse=<courseId> dispatches to
-	// the dedicated SearchUnitsForPicker SQL (LEFT JOIN topics + courses
+	// the dedicated SearchChaptersForPicker SQL (LEFT JOIN topics + courses
 	// for the linked-topic decoration with cross-org title redaction).
 	if linkableCourseID := q.Get("linkableForCourse"); linkableCourseID != "" {
 		h.searchUnitsForPicker(w, r, claims, filter, linkableCourseID)
 		return
 	}
 
-	units, err := h.Units.SearchUnits(r.Context(), filter)
+	units, err := h.Units.SearchChapters(r.Context(), filter)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
@@ -408,8 +408,8 @@ func (h *TeachingUnitHandler) SearchUnits(w http.ResponseWriter, r *http.Request
 	})
 }
 
-// parseSearchCursor splits the SearchUnits cursor format
-// `<RFC3339-timestamp>|<unitId>` and returns the parsed timestamp + ID.
+// parseSearchCursor splits the SearchChapters cursor format
+// `<RFC3339-timestamp>|<chapterId>` and returns the parsed timestamp + ID.
 // Returns ok=false on any malformed input — the caller should map to 400.
 func parseSearchCursor(c string) (time.Time, string, bool) {
 	parts := strings.SplitN(c, "|", 2)
@@ -425,7 +425,7 @@ func parseSearchCursor(c string) (time.Time, string, bool) {
 	return ts, parts[1], true
 }
 
-// pickerItem is the per-row payload SearchUnits returns in picker mode.
+// pickerItem is the per-row payload SearchChapters returns in picker mode.
 // Adds the linked-topic decoration plus a server-computed canLink that
 // the UI uses to disable rows the caller cannot actually attach.
 type pickerItem struct {
@@ -433,14 +433,14 @@ type pickerItem struct {
 	CanLink bool `json:"canLink"`
 }
 
-// searchUnitsForPicker runs the SearchUnitsForPicker store method,
+// searchUnitsForPicker runs the SearchChaptersForPicker store method,
 // gates on course-edit access, computes canLink per row, and writes
-// the response. Split out from SearchUnits for clarity.
-func (h *TeachingUnitHandler) searchUnitsForPicker(
+// the response. Split out from SearchChapters for clarity.
+func (h *ChapterHandler) searchUnitsForPicker(
 	w http.ResponseWriter,
 	r *http.Request,
 	claims *auth.Claims,
-	filter store.SearchUnitsFilter,
+	filter store.SearchChaptersFilter,
 	courseID string,
 ) {
 	if h.Courses == nil {
@@ -470,12 +470,12 @@ func (h *TeachingUnitHandler) searchUnitsForPicker(
 	}
 
 	// Filter draft platform Units out of picker results for non-admin
-	// callers, mirroring the regular SearchUnits visibility gate
+	// callers, mirroring the regular SearchChapters visibility gate
 	// (only published platform-scope is visible to teachers). Without
 	// this, the picker leaks draft titles/summaries that the regular
 	// search endpoint would not surface — and they'd be canLink=false
 	// noise anyway.
-	rows, err := h.Units.SearchUnitsForPicker(
+	rows, err := h.Units.SearchChaptersForPicker(
 		r.Context(), filter, course.OrgID, effectivePlatformAdmin,
 		!effectivePlatformAdmin, // restrictPlatformToPublished
 	)
@@ -493,8 +493,8 @@ func (h *TeachingUnitHandler) searchUnitsForPicker(
 	//     (or platform admin / impersonating-admin).
 	canLinkOrg := effectivePlatformAdmin
 	if !canLinkOrg && h.Orgs != nil {
-		// Reuse the ViewerOrgs already computed by SearchUnits caller.
-		// SearchUnits populates filter.ViewerOrgs before dispatching.
+		// Reuse the ViewerOrgs already computed by SearchChapters caller.
+		// SearchChapters populates filter.ViewerOrgs before dispatching.
 		for _, oid := range filter.ViewerOrgs {
 			if oid == course.OrgID {
 				canLinkOrg = true
@@ -509,7 +509,7 @@ func (h *TeachingUnitHandler) searchUnitsForPicker(
 		can := false
 		switch row.Scope {
 		case "platform":
-			can = effectivePlatformAdmin || publishedPlatformUnitStatuses[row.Status]
+			can = effectivePlatformAdmin || publishedPlatformChapterStatuses[row.Status]
 		case "org":
 			can = canLinkOrg
 		}
@@ -532,8 +532,8 @@ func (h *TeachingUnitHandler) searchUnitsForPicker(
 	})
 }
 
-// CreateUnit — POST /api/units
-func (h *TeachingUnitHandler) CreateUnit(w http.ResponseWriter, r *http.Request) {
+// CreateChapter — POST /api/chapters
+func (h *ChapterHandler) CreateChapter(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
 		writeError(w, http.StatusUnauthorized, "Unauthorized")
@@ -557,15 +557,15 @@ func (h *TeachingUnitHandler) CreateUnit(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if !validUnitScopes[body.Scope] {
+	if !validChapterScopes[body.Scope] {
 		writeError(w, http.StatusBadRequest, "scope must be platform, org, or personal")
 		return
 	}
-	if body.Title == "" || len(body.Title) > maxUnitTitleLen {
+	if body.Title == "" || len(body.Title) > maxChapterTitleLen {
 		writeError(w, http.StatusBadRequest, "title is required (max 255 chars)")
 		return
 	}
-	if body.Status != "" && !validUnitStatuses[body.Status] {
+	if body.Status != "" && !validChapterStatuses[body.Status] {
 		writeError(w, http.StatusBadRequest, "invalid status value")
 		return
 	}
@@ -580,12 +580,12 @@ func (h *TeachingUnitHandler) CreateUnit(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if !h.canEditUnit(r.Context(), claims, body.Scope, body.ScopeID) {
+	if !h.canEditChapter(r.Context(), claims, body.Scope, body.ScopeID) {
 		writeError(w, http.StatusForbidden, "not authorized for scope")
 		return
 	}
 
-	unit, err := h.Units.CreateUnit(r.Context(), store.CreateTeachingUnitInput{
+	unit, err := h.Units.CreateChapter(r.Context(), store.CreateChapterInput{
 		Scope:            body.Scope,
 		ScopeID:          body.ScopeID,
 		Title:            body.Title,
@@ -604,20 +604,20 @@ func (h *TeachingUnitHandler) CreateUnit(w http.ResponseWriter, r *http.Request)
 			writeError(w, http.StatusConflict, "constraint violation: check scope/scopeId combination")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "Failed to create unit")
+		writeError(w, http.StatusInternalServerError, "Failed to create chapter")
 		return
 	}
 	writeJSON(w, http.StatusCreated, unit)
 }
 
-// GetUnit — GET /api/units/{id}
-func (h *TeachingUnitHandler) GetUnit(w http.ResponseWriter, r *http.Request) {
+// GetChapter — GET /api/chapters/{id}
+func (h *ChapterHandler) GetChapter(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
 		writeError(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
-	unit, err := h.Units.GetUnit(r.Context(), chi.URLParam(r, "id"))
+	unit, err := h.Units.GetChapter(r.Context(), chi.URLParam(r, "id"))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
@@ -626,52 +626,52 @@ func (h *TeachingUnitHandler) GetUnit(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "Not found")
 		return
 	}
-	if !h.canViewUnit(r.Context(), claims, unit) {
+	if !h.canViewChapter(r.Context(), claims, unit) {
 		writeError(w, http.StatusNotFound, "Not found") // don't leak existence
 		return
 	}
 	writeJSON(w, http.StatusOK, unit)
 }
 
-// UpdateUnit — PATCH /api/units/{id}
-func (h *TeachingUnitHandler) UpdateUnit(w http.ResponseWriter, r *http.Request) {
+// UpdateChapter — PATCH /api/chapters/{id}
+func (h *ChapterHandler) UpdateChapter(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
 		writeError(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
-	unitID := chi.URLParam(r, "id")
+	chapterID := chi.URLParam(r, "id")
 
 	// Load the row first to determine scope for authz and to return 404 vs 403.
-	unit, err := h.Units.GetUnit(r.Context(), unitID)
+	unit, err := h.Units.GetChapter(r.Context(), chapterID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
 	}
 	// If not found OR caller can't even view it → 404 (don't leak existence).
-	if unit == nil || !h.canViewUnit(r.Context(), claims, unit) {
+	if unit == nil || !h.canViewChapter(r.Context(), claims, unit) {
 		writeError(w, http.StatusNotFound, "Not found")
 		return
 	}
-	if !h.canEditUnit(r.Context(), claims, unit.Scope, unit.ScopeID) {
+	if !h.canEditChapter(r.Context(), claims, unit.Scope, unit.ScopeID) {
 		writeError(w, http.StatusForbidden, "Not authorized to edit")
 		return
 	}
 
-	var body store.UpdateTeachingUnitInput
+	var body store.UpdateChapterInput
 	if !decodeJSON(w, r, &body) {
 		return
 	}
-	if body.Title != nil && (*body.Title == "" || len(*body.Title) > maxUnitTitleLen) {
+	if body.Title != nil && (*body.Title == "" || len(*body.Title) > maxChapterTitleLen) {
 		writeError(w, http.StatusBadRequest, "title must be 1-255 chars")
 		return
 	}
-	if body.Status != nil && *body.Status != "" && !validUnitStatuses[*body.Status] {
+	if body.Status != nil && *body.Status != "" && !validChapterStatuses[*body.Status] {
 		writeError(w, http.StatusBadRequest, "invalid status value")
 		return
 	}
 
-	updated, err := h.Units.UpdateUnit(r.Context(), unitID, body)
+	updated, err := h.Units.UpdateChapter(r.Context(), chapterID, body)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
@@ -683,30 +683,30 @@ func (h *TeachingUnitHandler) UpdateUnit(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, updated)
 }
 
-// DeleteUnit — DELETE /api/units/{id}
-func (h *TeachingUnitHandler) DeleteUnit(w http.ResponseWriter, r *http.Request) {
+// DeleteChapter — DELETE /api/chapters/{id}
+func (h *ChapterHandler) DeleteChapter(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
 		writeError(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
-	unitID := chi.URLParam(r, "id")
+	chapterID := chi.URLParam(r, "id")
 
-	unit, err := h.Units.GetUnit(r.Context(), unitID)
+	unit, err := h.Units.GetChapter(r.Context(), chapterID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
 	}
-	if unit == nil || !h.canViewUnit(r.Context(), claims, unit) {
+	if unit == nil || !h.canViewChapter(r.Context(), claims, unit) {
 		writeError(w, http.StatusNotFound, "Not found")
 		return
 	}
-	if !h.canEditUnit(r.Context(), claims, unit.Scope, unit.ScopeID) {
+	if !h.canEditChapter(r.Context(), claims, unit.Scope, unit.ScopeID) {
 		writeError(w, http.StatusForbidden, "Not authorized to delete")
 		return
 	}
 
-	deleted, err := h.Units.DeleteUnit(r.Context(), unitID)
+	deleted, err := h.Units.DeleteChapter(r.Context(), chapterID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
@@ -718,26 +718,26 @@ func (h *TeachingUnitHandler) DeleteUnit(w http.ResponseWriter, r *http.Request)
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// GetDocument — GET /api/units/{id}/document
-func (h *TeachingUnitHandler) GetDocument(w http.ResponseWriter, r *http.Request) {
+// GetDocument — GET /api/chapters/{id}/document
+func (h *ChapterHandler) GetDocument(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
 		writeError(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
-	unitID := chi.URLParam(r, "id")
+	chapterID := chi.URLParam(r, "id")
 
-	unit, err := h.Units.GetUnit(r.Context(), unitID)
+	unit, err := h.Units.GetChapter(r.Context(), chapterID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
 	}
-	if unit == nil || !h.canViewUnit(r.Context(), claims, unit) {
+	if unit == nil || !h.canViewChapter(r.Context(), claims, unit) {
 		writeError(w, http.StatusNotFound, "Not found")
 		return
 	}
 
-	doc, err := h.Units.GetDocument(r.Context(), unitID)
+	doc, err := h.Units.GetDocument(r.Context(), chapterID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
@@ -749,24 +749,24 @@ func (h *TeachingUnitHandler) GetDocument(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, doc)
 }
 
-// GetProjectedDocument — GET /api/units/{id}/projected?role=student&attemptStates=b03:submitted,b05:not_started
+// GetProjectedDocument — GET /api/chapters/{id}/projected?role=student&attemptStates=b03:submitted,b05:not_started
 // Returns the unit document filtered through the projection pipeline.
 // Teachers/admins can pass ?role=student to preview the student view.
 // Students always receive the student projection regardless of query param.
-func (h *TeachingUnitHandler) GetProjectedDocument(w http.ResponseWriter, r *http.Request) {
+func (h *ChapterHandler) GetProjectedDocument(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
 		writeError(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
-	unitID := chi.URLParam(r, "id")
+	chapterID := chi.URLParam(r, "id")
 
-	unit, err := h.Units.GetUnit(r.Context(), unitID)
+	unit, err := h.Units.GetChapter(r.Context(), chapterID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
 	}
-	if unit == nil || !h.canViewUnit(r.Context(), claims, unit) {
+	if unit == nil || !h.canViewChapter(r.Context(), claims, unit) {
 		writeError(w, http.StatusNotFound, "Not found")
 		return
 	}
@@ -822,7 +822,7 @@ func (h *TeachingUnitHandler) GetProjectedDocument(w http.ResponseWriter, r *htt
 	// a strict superset of the prior behavior. The original code
 	// called GetDocument here, which for forked units returned only
 	// the raw child blocks — students saw empty / stale content.
-	composedBlocks, err := h.Units.GetComposedDocument(r.Context(), unitID)
+	composedBlocks, err := h.Units.GetComposedDocument(r.Context(), chapterID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
@@ -857,7 +857,7 @@ func (h *TeachingUnitHandler) GetProjectedDocument(w http.ResponseWriter, r *htt
 
 // resolveViewerRole determines the caller's effective projection role based on
 // their platform status, org membership, or personal ownership.
-func (h *TeachingUnitHandler) resolveViewerRole(ctx context.Context, c *auth.Claims, u *store.TeachingUnit) projection.ViewerRole {
+func (h *ChapterHandler) resolveViewerRole(ctx context.Context, c *auth.Claims, u *store.Chapter) projection.ViewerRole {
 	if c.IsPlatformAdmin {
 		return projection.RoleAdmin
 	}
@@ -893,10 +893,10 @@ func (h *TeachingUnitHandler) resolveViewerRole(ctx context.Context, c *auth.Cla
 	return projection.RoleStudent
 }
 
-// GetUnitByTopic — GET /api/units/by-topic/{topicId}
+// GetChapterByTopic — GET /api/chapters/by-topic/{topicId}
 // Looks up the teaching unit linked to the given topic. Returns 404 if no unit
 // is linked to that topic or if the caller cannot view the found unit.
-func (h *TeachingUnitHandler) GetUnitByTopic(w http.ResponseWriter, r *http.Request) {
+func (h *ChapterHandler) GetChapterByTopic(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
 		writeError(w, http.StatusUnauthorized, "Unauthorized")
@@ -904,7 +904,7 @@ func (h *TeachingUnitHandler) GetUnitByTopic(w http.ResponseWriter, r *http.Requ
 	}
 	topicID := chi.URLParam(r, "topicId")
 
-	unit, err := h.Units.GetUnitByTopicID(r.Context(), topicID)
+	unit, err := h.Units.GetChapterByTopicID(r.Context(), topicID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
@@ -913,33 +913,33 @@ func (h *TeachingUnitHandler) GetUnitByTopic(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusNotFound, "Not found")
 		return
 	}
-	if !h.canViewUnit(r.Context(), claims, unit) {
+	if !h.canViewChapter(r.Context(), claims, unit) {
 		writeError(w, http.StatusNotFound, "Not found") // don't leak existence
 		return
 	}
 	writeJSON(w, http.StatusOK, unit)
 }
 
-// SaveDocument — PUT /api/units/{id}/document
+// SaveDocument — PUT /api/chapters/{id}/document
 // Accepts a raw JSON body that must satisfy the spec-012 block-document shape.
-func (h *TeachingUnitHandler) SaveDocument(w http.ResponseWriter, r *http.Request) {
+func (h *ChapterHandler) SaveDocument(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
 		writeError(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
-	unitID := chi.URLParam(r, "id")
+	chapterID := chi.URLParam(r, "id")
 
-	unit, err := h.Units.GetUnit(r.Context(), unitID)
+	unit, err := h.Units.GetChapter(r.Context(), chapterID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
 	}
-	if unit == nil || !h.canViewUnit(r.Context(), claims, unit) {
+	if unit == nil || !h.canViewChapter(r.Context(), claims, unit) {
 		writeError(w, http.StatusNotFound, "Not found")
 		return
 	}
-	if !h.canEditUnit(r.Context(), claims, unit.Scope, unit.ScopeID) {
+	if !h.canEditChapter(r.Context(), claims, unit.Scope, unit.ScopeID) {
 		writeError(w, http.StatusForbidden, "Not authorized to edit document")
 		return
 	}
@@ -954,7 +954,7 @@ func (h *TeachingUnitHandler) SaveDocument(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	doc, err := h.Units.SaveDocument(r.Context(), unitID, raw)
+	doc, err := h.Units.SaveDocument(r.Context(), chapterID, raw)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
@@ -962,28 +962,28 @@ func (h *TeachingUnitHandler) SaveDocument(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, doc)
 }
 
-// TransitionUnit — POST /api/units/{id}/transition
+// TransitionChapter — POST /api/chapters/{id}/transition
 // Transitions the unit to a new status per the spec-012 state machine.
 // Body: { "status": "<target>" }
 // Maps ErrInvalidTransition → 409 Conflict.
-func (h *TeachingUnitHandler) TransitionUnit(w http.ResponseWriter, r *http.Request) {
+func (h *ChapterHandler) TransitionChapter(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
 		writeError(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
-	unitID := chi.URLParam(r, "id")
+	chapterID := chi.URLParam(r, "id")
 
-	unit, err := h.Units.GetUnit(r.Context(), unitID)
+	unit, err := h.Units.GetChapter(r.Context(), chapterID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
 	}
-	if unit == nil || !h.canViewUnit(r.Context(), claims, unit) {
+	if unit == nil || !h.canViewChapter(r.Context(), claims, unit) {
 		writeError(w, http.StatusNotFound, "Not found")
 		return
 	}
-	if !h.canEditUnit(r.Context(), claims, unit.Scope, unit.ScopeID) {
+	if !h.canEditChapter(r.Context(), claims, unit.Scope, unit.ScopeID) {
 		writeError(w, http.StatusForbidden, "Not authorized to transition")
 		return
 	}
@@ -994,12 +994,12 @@ func (h *TeachingUnitHandler) TransitionUnit(w http.ResponseWriter, r *http.Requ
 	if !decodeJSON(w, r, &body) {
 		return
 	}
-	if !validUnitStatuses[body.Status] {
+	if !validChapterStatuses[body.Status] {
 		writeError(w, http.StatusBadRequest, "invalid target status")
 		return
 	}
 
-	updated, err := h.Units.SetUnitStatus(r.Context(), unitID, body.Status, claims.UserID)
+	updated, err := h.Units.SetUnitStatus(r.Context(), chapterID, body.Status, claims.UserID)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		writeError(w, http.StatusNotFound, "Not found")
@@ -1014,26 +1014,26 @@ func (h *TeachingUnitHandler) TransitionUnit(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, http.StatusOK, updated)
 }
 
-// ListRevisions — GET /api/units/{id}/revisions
-func (h *TeachingUnitHandler) ListRevisions(w http.ResponseWriter, r *http.Request) {
+// ListRevisions — GET /api/chapters/{id}/revisions
+func (h *ChapterHandler) ListRevisions(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
 		writeError(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
-	unitID := chi.URLParam(r, "id")
+	chapterID := chi.URLParam(r, "id")
 
-	unit, err := h.Units.GetUnit(r.Context(), unitID)
+	unit, err := h.Units.GetChapter(r.Context(), chapterID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
 	}
-	if unit == nil || !h.canViewUnit(r.Context(), claims, unit) {
+	if unit == nil || !h.canViewChapter(r.Context(), claims, unit) {
 		writeError(w, http.StatusNotFound, "Not found")
 		return
 	}
 
-	revisions, err := h.Units.ListRevisions(r.Context(), unitID)
+	revisions, err := h.Units.ListRevisions(r.Context(), chapterID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
@@ -1041,22 +1041,22 @@ func (h *TeachingUnitHandler) ListRevisions(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, map[string]any{"items": revisions})
 }
 
-// GetRevision — GET /api/units/{id}/revisions/{revisionId}
-func (h *TeachingUnitHandler) GetRevision(w http.ResponseWriter, r *http.Request) {
+// GetRevision — GET /api/chapters/{id}/revisions/{revisionId}
+func (h *ChapterHandler) GetRevision(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
 		writeError(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
-	unitID := chi.URLParam(r, "id")
+	chapterID := chi.URLParam(r, "id")
 
 	// Verify access to the parent unit first.
-	unit, err := h.Units.GetUnit(r.Context(), unitID)
+	unit, err := h.Units.GetChapter(r.Context(), chapterID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
 	}
-	if unit == nil || !h.canViewUnit(r.Context(), claims, unit) {
+	if unit == nil || !h.canViewChapter(r.Context(), claims, unit) {
 		writeError(w, http.StatusNotFound, "Not found")
 		return
 	}
@@ -1067,7 +1067,7 @@ func (h *TeachingUnitHandler) GetRevision(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
 	}
-	if rev == nil || rev.UnitID != unitID {
+	if rev == nil || rev.ChapterID != chapterID {
 		writeError(w, http.StatusNotFound, "Revision not found")
 		return
 	}
@@ -1076,11 +1076,11 @@ func (h *TeachingUnitHandler) GetRevision(w http.ResponseWriter, r *http.Request
 
 // ---------- Overlay / Fork handlers (plan 034) ----------
 
-// ForkUnit — POST /api/units/{id}/fork
+// ForkChapter — POST /api/chapters/{id}/fork
 // Body: { scope?, scopeId?, title? }
-// Requires: canViewUnit on source + authorized-for-scope on target.
+// Requires: canViewChapter on source + authorized-for-scope on target.
 // If scope is omitted, infer from caller's memberships (like problem fork).
-func (h *TeachingUnitHandler) ForkUnit(w http.ResponseWriter, r *http.Request) {
+func (h *ChapterHandler) ForkChapter(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
 		writeError(w, http.StatusUnauthorized, "Unauthorized")
@@ -1116,29 +1116,29 @@ func (h *TeachingUnitHandler) ForkUnit(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if !validUnitScopes[body.Scope] {
+	if !validChapterScopes[body.Scope] {
 		writeError(w, http.StatusBadRequest, "scope must be platform, org, or personal")
 		return
 	}
 
 	// Source must be visible to the caller.
-	source, err := h.Units.GetUnit(r.Context(), sourceID)
+	source, err := h.Units.GetChapter(r.Context(), sourceID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
 	}
-	if source == nil || !h.canViewUnit(r.Context(), claims, source) {
+	if source == nil || !h.canViewChapter(r.Context(), claims, source) {
 		writeError(w, http.StatusNotFound, "Not found")
 		return
 	}
 
 	// Caller must be authorized for the target scope.
-	if !h.canEditUnit(r.Context(), claims, body.Scope, body.ScopeID) {
+	if !h.canEditChapter(r.Context(), claims, body.Scope, body.ScopeID) {
 		writeError(w, http.StatusForbidden, "not authorized for target scope")
 		return
 	}
 
-	child, err := h.Units.ForkUnit(r.Context(), sourceID, store.ForkTarget{
+	child, err := h.Units.ForkChapter(r.Context(), sourceID, store.ForkTarget{
 		Scope:    body.Scope,
 		ScopeID:  body.ScopeID,
 		Title:    body.Title,
@@ -1166,28 +1166,28 @@ func unitOrgIDs(ms []store.UserMembershipWithOrg) []string {
 	return out
 }
 
-// GetOverlay — GET /api/units/{id}/overlay
+// GetOverlay — GET /api/chapters/{id}/overlay
 // Returns the overlay row or 404 if the unit has no overlay.
-// Auth: canViewUnit on the child unit.
-func (h *TeachingUnitHandler) GetOverlay(w http.ResponseWriter, r *http.Request) {
+// Auth: canViewChapter on the child unit.
+func (h *ChapterHandler) GetOverlay(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
 		writeError(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
-	unitID := chi.URLParam(r, "id")
+	chapterID := chi.URLParam(r, "id")
 
-	unit, err := h.Units.GetUnit(r.Context(), unitID)
+	unit, err := h.Units.GetChapter(r.Context(), chapterID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
 	}
-	if unit == nil || !h.canViewUnit(r.Context(), claims, unit) {
+	if unit == nil || !h.canViewChapter(r.Context(), claims, unit) {
 		writeError(w, http.StatusNotFound, "Not found")
 		return
 	}
 
-	ov, err := h.Units.GetOverlay(r.Context(), unitID)
+	ov, err := h.Units.GetOverlay(r.Context(), chapterID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
@@ -1199,33 +1199,33 @@ func (h *TeachingUnitHandler) GetOverlay(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, ov)
 }
 
-// PatchOverlay — PATCH /api/units/{id}/overlay
+// PatchOverlay — PATCH /api/chapters/{id}/overlay
 // Body: { parentRevisionId?, blockOverrides? }
-// Auth: canEditUnit on the child.
-func (h *TeachingUnitHandler) PatchOverlay(w http.ResponseWriter, r *http.Request) {
+// Auth: canEditChapter on the child.
+func (h *ChapterHandler) PatchOverlay(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
 		writeError(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
-	unitID := chi.URLParam(r, "id")
+	chapterID := chi.URLParam(r, "id")
 
-	unit, err := h.Units.GetUnit(r.Context(), unitID)
+	unit, err := h.Units.GetChapter(r.Context(), chapterID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
 	}
-	if unit == nil || !h.canViewUnit(r.Context(), claims, unit) {
+	if unit == nil || !h.canViewChapter(r.Context(), claims, unit) {
 		writeError(w, http.StatusNotFound, "Not found")
 		return
 	}
-	if !h.canEditUnit(r.Context(), claims, unit.Scope, unit.ScopeID) {
+	if !h.canEditChapter(r.Context(), claims, unit.Scope, unit.ScopeID) {
 		writeError(w, http.StatusForbidden, "Not authorized to edit overlay")
 		return
 	}
 
 	// Verify the overlay exists before attempting to update.
-	existing, err := h.Units.GetOverlay(r.Context(), unitID)
+	existing, err := h.Units.GetOverlay(r.Context(), chapterID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
@@ -1243,7 +1243,7 @@ func (h *TeachingUnitHandler) PatchOverlay(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	updated, err := h.Units.UpdateOverlay(r.Context(), unitID, store.UpdateOverlayInput{
+	updated, err := h.Units.UpdateOverlay(r.Context(), chapterID, store.UpdateOverlayInput{
 		ParentRevisionID: body.ParentRevisionID,
 		BlockOverrides:   body.BlockOverrides,
 	})
@@ -1262,28 +1262,28 @@ func (h *TeachingUnitHandler) PatchOverlay(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, updated)
 }
 
-// GetComposedDocument — GET /api/units/{id}/composed
+// GetComposedDocument — GET /api/chapters/{id}/composed
 // Returns the composed document (overlay-merged), ready for projection.
-// Auth: canViewUnit.
-func (h *TeachingUnitHandler) GetComposedDocument(w http.ResponseWriter, r *http.Request) {
+// Auth: canViewChapter.
+func (h *ChapterHandler) GetComposedDocument(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
 		writeError(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
-	unitID := chi.URLParam(r, "id")
+	chapterID := chi.URLParam(r, "id")
 
-	unit, err := h.Units.GetUnit(r.Context(), unitID)
+	unit, err := h.Units.GetChapter(r.Context(), chapterID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
 	}
-	if unit == nil || !h.canViewUnit(r.Context(), claims, unit) {
+	if unit == nil || !h.canViewChapter(r.Context(), claims, unit) {
 		writeError(w, http.StatusNotFound, "Not found")
 		return
 	}
 
-	composed, err := h.Units.GetComposedDocument(r.Context(), unitID)
+	composed, err := h.Units.GetComposedDocument(r.Context(), chapterID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
@@ -1299,28 +1299,28 @@ func (h *TeachingUnitHandler) GetComposedDocument(w http.ResponseWriter, r *http
 	w.Write(composed)
 }
 
-// GetLineage — GET /api/units/{id}/lineage
+// GetLineage — GET /api/chapters/{id}/lineage
 // Returns the overlay chain as a breadcrumb list (root-first).
-// Auth: canViewUnit.
-func (h *TeachingUnitHandler) GetLineage(w http.ResponseWriter, r *http.Request) {
+// Auth: canViewChapter.
+func (h *ChapterHandler) GetLineage(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
 		writeError(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
-	unitID := chi.URLParam(r, "id")
+	chapterID := chi.URLParam(r, "id")
 
-	unit, err := h.Units.GetUnit(r.Context(), unitID)
+	unit, err := h.Units.GetChapter(r.Context(), chapterID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
 	}
-	if unit == nil || !h.canViewUnit(r.Context(), claims, unit) {
+	if unit == nil || !h.canViewChapter(r.Context(), claims, unit) {
 		writeError(w, http.StatusNotFound, "Not found")
 		return
 	}
 
-	lineage, err := h.Units.GetLineage(r.Context(), unitID)
+	lineage, err := h.Units.GetLineage(r.Context(), chapterID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return

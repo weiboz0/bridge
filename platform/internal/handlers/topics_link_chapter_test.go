@@ -15,21 +15,21 @@ import (
 	"github.com/weiboz0/bridge/platform/internal/store"
 )
 
-// Plan 044 phase 2: TopicHandler.LinkUnit attaches a teaching_unit to a
-// topic via teaching_units.topic_id (1:1 enforced by unique index).
+// Plan 044 phase 2: TopicHandler.LinkChapter attaches a teaching_unit to a
+// topic via chapters.topic_id (1:1 enforced by unique index).
 
-type linkUnitFixture struct {
-	h        *TopicHandler
-	teacher  *store.RegisteredUser
-	outsider *store.RegisteredUser
-	admin    *store.RegisteredUser
-	orgID    string
-	courseID string
-	topicID  string
-	unitID   string
+type linkChapterFixture struct {
+	h         *TopicHandler
+	teacher   *store.RegisteredUser
+	outsider  *store.RegisteredUser
+	admin     *store.RegisteredUser
+	orgID     string
+	courseID  string
+	topicID   string
+	chapterID string
 }
 
-func newLinkUnitFixture(t *testing.T, suffix string) *linkUnitFixture {
+func newLinkChapterFixture(t *testing.T, suffix string) *linkChapterFixture {
 	t.Helper()
 	db := integrationDB(t)
 	ctx := context.Background()
@@ -38,13 +38,13 @@ func newLinkUnitFixture(t *testing.T, suffix string) *linkUnitFixture {
 	users := store.NewUserStore(db)
 	courses := store.NewCourseStore(db)
 	topics := store.NewTopicStore(db)
-	units := store.NewTeachingUnitStore(db)
+	units := store.NewChapterStore(db)
 
 	h := &TopicHandler{
-		Topics:        topics,
-		Courses:       courses,
-		Orgs:          orgs,
-		TeachingUnits: units,
+		Topics:   topics,
+		Courses:  courses,
+		Orgs:     orgs,
+		Chapters: units,
 	}
 
 	mkUser := func(label string) *store.RegisteredUser {
@@ -61,7 +61,7 @@ func newLinkUnitFixture(t *testing.T, suffix string) *linkUnitFixture {
 		return u
 	}
 
-	fx := &linkUnitFixture{h: h}
+	fx := &linkChapterFixture{h: h}
 	fx.teacher = mkUser("teacher" + suffix)
 	fx.outsider = mkUser("outsider" + suffix)
 	fx.admin = mkUser("admin" + suffix)
@@ -102,125 +102,125 @@ func newLinkUnitFixture(t *testing.T, suffix string) *linkUnitFixture {
 	// Create a unit owned by the teacher in the same org.
 	scopeID := org.ID
 	err = db.QueryRowContext(ctx,
-		`INSERT INTO teaching_units
+		`INSERT INTO chapters
 		 (id, scope, scope_id, title, summary, material_type, status, created_by, created_at, updated_at)
 		 VALUES (gen_random_uuid(), 'org', $1, 'U', '', 'notes', 'draft', $2, now(), now())
 		 RETURNING id`,
 		scopeID, fx.teacher.ID,
-	).Scan(&fx.unitID)
+	).Scan(&fx.chapterID)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		db.ExecContext(ctx, "DELETE FROM teaching_units WHERE id = $1", fx.unitID)
+		db.ExecContext(ctx, "DELETE FROM chapters WHERE id = $1", fx.chapterID)
 	})
 
 	return fx
 }
 
-func (fx *linkUnitFixture) callLinkUnit(t *testing.T, claims *auth.Claims, unitID string) (int, []byte) {
+func (fx *linkChapterFixture) callLinkChapter(t *testing.T, claims *auth.Claims, chapterID string) (int, []byte) {
 	t.Helper()
-	body := map[string]string{"unitId": unitID}
+	body := map[string]string{"chapterId": chapterID}
 	buf, _ := json.Marshal(body)
 	req := httptest.NewRequest(http.MethodPost,
-		"/api/courses/"+fx.courseID+"/topics/"+fx.topicID+"/link-unit",
+		"/api/courses/"+fx.courseID+"/topics/"+fx.topicID+"/link-chapter",
 		bytes.NewReader(buf))
 	req = withChiParams(withClaims(req, claims), map[string]string{
 		"courseId": fx.courseID, "topicId": fx.topicID,
 	})
 	w := httptest.NewRecorder()
-	fx.h.LinkUnit(w, req)
+	fx.h.LinkChapter(w, req)
 	return w.Code, w.Body.Bytes()
 }
 
-func TestLinkUnit_NoClaims(t *testing.T) {
+func TestLinkChapter_NoClaims(t *testing.T) {
 	h := &TopicHandler{}
 	req := httptest.NewRequest(http.MethodPost,
-		"/api/courses/c/topics/t/link-unit",
-		bytes.NewReader([]byte(`{"unitId":"u"}`)))
+		"/api/courses/c/topics/t/link-chapter",
+		bytes.NewReader([]byte(`{"chapterId":"u"}`)))
 	req = withChiParams(req, map[string]string{"courseId": "c", "topicId": "t"})
 	w := httptest.NewRecorder()
-	h.LinkUnit(w, req)
+	h.LinkChapter(w, req)
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
 }
 
-func TestLinkUnit_TeacherCanLinkOwnUnit(t *testing.T) {
-	fx := newLinkUnitFixture(t, "ok")
-	code, body := fx.callLinkUnit(t,
-		&auth.Claims{UserID: fx.teacher.ID}, fx.unitID)
+func TestLinkChapter_TeacherCanLinkOwnUnit(t *testing.T) {
+	fx := newLinkChapterFixture(t, "ok")
+	code, body := fx.callLinkChapter(t,
+		&auth.Claims{UserID: fx.teacher.ID}, fx.chapterID)
 	require.Equal(t, http.StatusOK, code)
 
 	var unit map[string]any
 	require.NoError(t, json.Unmarshal(body, &unit))
-	assert.Equal(t, fx.unitID, unit["id"])
+	assert.Equal(t, fx.chapterID, unit["id"])
 	assert.Equal(t, fx.topicID, unit["topicId"])
 }
 
-func TestLinkUnit_PlatformAdmin(t *testing.T) {
-	fx := newLinkUnitFixture(t, "admin")
-	code, _ := fx.callLinkUnit(t,
-		&auth.Claims{UserID: fx.admin.ID, IsPlatformAdmin: true}, fx.unitID)
+func TestLinkChapter_PlatformAdmin(t *testing.T) {
+	fx := newLinkChapterFixture(t, "admin")
+	code, _ := fx.callLinkChapter(t,
+		&auth.Claims{UserID: fx.admin.ID, IsPlatformAdmin: true}, fx.chapterID)
 	require.Equal(t, http.StatusOK, code)
 }
 
 // Outsider (not the course creator) should be rejected at the
 // course-edit gate before unit auth runs.
-func TestLinkUnit_Outsider_Forbidden(t *testing.T) {
-	fx := newLinkUnitFixture(t, "outsider")
-	code, _ := fx.callLinkUnit(t,
-		&auth.Claims{UserID: fx.outsider.ID}, fx.unitID)
+func TestLinkChapter_Outsider_Forbidden(t *testing.T) {
+	fx := newLinkChapterFixture(t, "outsider")
+	code, _ := fx.callLinkChapter(t,
+		&auth.Claims{UserID: fx.outsider.ID}, fx.chapterID)
 	assert.Equal(t, http.StatusForbidden, code)
 }
 
 // Re-linking the same unit to the same topic is idempotent (200, not
 // 409). The unique index doesn't fire because the row already has the
 // correct topic_id.
-func TestLinkUnit_Idempotent(t *testing.T) {
-	fx := newLinkUnitFixture(t, "idem")
-	code1, _ := fx.callLinkUnit(t,
-		&auth.Claims{UserID: fx.teacher.ID}, fx.unitID)
+func TestLinkChapter_Idempotent(t *testing.T) {
+	fx := newLinkChapterFixture(t, "idem")
+	code1, _ := fx.callLinkChapter(t,
+		&auth.Claims{UserID: fx.teacher.ID}, fx.chapterID)
 	require.Equal(t, http.StatusOK, code1)
-	code2, _ := fx.callLinkUnit(t,
-		&auth.Claims{UserID: fx.teacher.ID}, fx.unitID)
+	code2, _ := fx.callLinkChapter(t,
+		&auth.Claims{UserID: fx.teacher.ID}, fx.chapterID)
 	require.Equal(t, http.StatusOK, code2)
 }
 
-// Trying to link a topic that already owns a different unit returns
-// 409, not 500. Tests the LinkUnitToTopic store-level check.
-func TestLinkUnit_TopicAlreadyLinked_Conflict(t *testing.T) {
-	fx := newLinkUnitFixture(t, "conf")
+// Trying to link a topic that already owns a different chapter returns
+// 409, not 500. Tests the LinkChapterToTopic store-level check.
+func TestLinkChapter_TopicAlreadyLinked_Conflict(t *testing.T) {
+	fx := newLinkChapterFixture(t, "conf")
 	ctx := context.Background()
 	db := integrationDB(t)
 
-	// Link the topic to fx.unitID first.
-	code1, _ := fx.callLinkUnit(t,
-		&auth.Claims{UserID: fx.teacher.ID}, fx.unitID)
+	// Link the topic to fx.chapterID first.
+	code1, _ := fx.callLinkChapter(t,
+		&auth.Claims{UserID: fx.teacher.ID}, fx.chapterID)
 	require.Equal(t, http.StatusOK, code1)
 
 	// Create a SECOND unit (also owned by the teacher in the same org).
-	var otherUnitID string
+	var otherChapterID string
 	err := db.QueryRowContext(ctx,
-		`INSERT INTO teaching_units
+		`INSERT INTO chapters
 		 (id, scope, scope_id, title, summary, material_type, status, created_by, created_at, updated_at)
 		 VALUES (gen_random_uuid(), 'org', $1, 'Other', '', 'notes', 'draft', $2, now(), now())
 		 RETURNING id`,
 		fx.orgID, fx.teacher.ID,
-	).Scan(&otherUnitID)
+	).Scan(&otherChapterID)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		db.ExecContext(ctx, "DELETE FROM teaching_units WHERE id = $1", otherUnitID)
+		db.ExecContext(ctx, "DELETE FROM chapters WHERE id = $1", otherChapterID)
 	})
 
 	// Try to link the SAME topic to the SECOND unit → 409.
-	code2, _ := fx.callLinkUnit(t,
-		&auth.Claims{UserID: fx.teacher.ID}, otherUnitID)
+	code2, _ := fx.callLinkChapter(t,
+		&auth.Claims{UserID: fx.teacher.ID}, otherChapterID)
 	assert.Equal(t, http.StatusConflict, code2)
 }
 
-// Codex post-impl review: a direct POST to /link-unit must NOT silently
+// Codex post-impl review: a direct POST to /link-chapter must NOT silently
 // move a Unit that's already attached to a different topic. The picker
 // disables those rows in the UI, but the API can still receive the
 // request — return 409 to make the conflict explicit.
-func TestLinkUnit_UnitAlreadyLinkedToDifferentTopic_Conflict(t *testing.T) {
-	fx := newLinkUnitFixture(t, "movegate")
+func TestLinkChapter_UnitAlreadyLinkedToDifferentTopic_Conflict(t *testing.T) {
+	fx := newLinkChapterFixture(t, "movegate")
 	ctx := context.Background()
 	db := integrationDB(t)
 
@@ -235,45 +235,45 @@ func TestLinkUnit_UnitAlreadyLinkedToDifferentTopic_Conflict(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { db.ExecContext(ctx, "DELETE FROM topics WHERE id = $1", otherTopicID) })
 
-	// Link fx.unitID to fx.topicID first.
-	code1, _ := fx.callLinkUnit(t,
-		&auth.Claims{UserID: fx.teacher.ID}, fx.unitID)
+	// Link fx.chapterID to fx.topicID first.
+	code1, _ := fx.callLinkChapter(t,
+		&auth.Claims{UserID: fx.teacher.ID}, fx.chapterID)
 	require.Equal(t, http.StatusOK, code1)
 
 	// Now try to link the SAME unit to the OTHER topic via a direct
 	// POST — should return 409, not silently move it.
-	body := map[string]string{"unitId": fx.unitID}
+	body := map[string]string{"chapterId": fx.chapterID}
 	buf, _ := json.Marshal(body)
 	req := httptest.NewRequest(http.MethodPost,
-		"/api/courses/"+fx.courseID+"/topics/"+otherTopicID+"/link-unit",
+		"/api/courses/"+fx.courseID+"/topics/"+otherTopicID+"/link-chapter",
 		bytes.NewReader(buf))
 	req = withChiParams(
 		withClaims(req, &auth.Claims{UserID: fx.teacher.ID}),
 		map[string]string{"courseId": fx.courseID, "topicId": otherTopicID})
 	w := httptest.NewRecorder()
-	fx.h.LinkUnit(w, req)
+	fx.h.LinkChapter(w, req)
 	assert.Equal(t, http.StatusConflict, w.Code)
 
 	// Verify the unit's topic_id was NOT changed.
 	var topicIDAfter string
 	err = db.QueryRowContext(ctx,
-		"SELECT topic_id FROM teaching_units WHERE id = $1", fx.unitID,
+		"SELECT topic_id FROM chapters WHERE id = $1", fx.chapterID,
 	).Scan(&topicIDAfter)
 	require.NoError(t, err)
 	assert.Equal(t, fx.topicID, topicIDAfter, "unit's topic_id must not have moved silently")
 }
 
-func TestLinkUnit_UnitNotFound(t *testing.T) {
-	fx := newLinkUnitFixture(t, "miss")
+func TestLinkChapter_UnitNotFound(t *testing.T) {
+	fx := newLinkChapterFixture(t, "miss")
 	bogus := "00000000-0000-0000-0000-000000000abc"
-	code, _ := fx.callLinkUnit(t,
+	code, _ := fx.callLinkChapter(t,
 		&auth.Claims{UserID: fx.teacher.ID}, bogus)
 	assert.Equal(t, http.StatusNotFound, code)
 }
 
-func TestLinkUnit_MissingUnitId(t *testing.T) {
-	fx := newLinkUnitFixture(t, "missing")
-	code, _ := fx.callLinkUnit(t,
+func TestLinkChapter_MissingUnitId(t *testing.T) {
+	fx := newLinkChapterFixture(t, "missing")
+	code, _ := fx.callLinkChapter(t,
 		&auth.Claims{UserID: fx.teacher.ID}, "")
 	assert.Equal(t, http.StatusBadRequest, code)
 }
@@ -282,8 +282,8 @@ func TestLinkUnit_MissingUnitId(t *testing.T) {
 // caller is the course creator AND owns the unit. The cross-org
 // reachability gate matches the read-side join guard
 // (scope='platform' OR scope_id = course.org_id).
-func TestLinkUnit_WrongOrgUnit_Forbidden(t *testing.T) {
-	fx := newLinkUnitFixture(t, "wrongorg")
+func TestLinkChapter_WrongOrgUnit_Forbidden(t *testing.T) {
+	fx := newLinkChapterFixture(t, "wrongorg")
 	ctx := context.Background()
 	db := integrationDB(t)
 
@@ -307,21 +307,21 @@ func TestLinkUnit_WrongOrgUnit_Forbidden(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	var foreignUnitID string
+	var foreignChapterID string
 	err = db.QueryRowContext(ctx,
-		`INSERT INTO teaching_units
+		`INSERT INTO chapters
 		 (id, scope, scope_id, title, summary, material_type, status, created_by, created_at, updated_at)
 		 VALUES (gen_random_uuid(), 'org', $1, 'Foreign', '', 'notes', 'draft', $2, now(), now())
 		 RETURNING id`,
 		otherOrg.ID, fx.teacher.ID,
-	).Scan(&foreignUnitID)
+	).Scan(&foreignChapterID)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		db.ExecContext(ctx, "DELETE FROM teaching_units WHERE id = $1", foreignUnitID)
+		db.ExecContext(ctx, "DELETE FROM chapters WHERE id = $1", foreignChapterID)
 	})
 
-	code, _ := fx.callLinkUnit(t,
-		&auth.Claims{UserID: fx.teacher.ID}, foreignUnitID)
+	code, _ := fx.callLinkChapter(t,
+		&auth.Claims{UserID: fx.teacher.ID}, foreignChapterID)
 	assert.Equal(t, http.StatusForbidden, code)
 }
 
@@ -329,76 +329,76 @@ func TestLinkUnit_WrongOrgUnit_Forbidden(t *testing.T) {
 // platform-scope Unit to their topic. Plan 044 forbade this — only
 // platform admins could. Plan 045 widens the gate so library Units
 // are usable.
-func TestLinkUnit_TeacherLinksPlatformPublishedUnit_Allowed(t *testing.T) {
-	fx := newLinkUnitFixture(t, "platpub")
+func TestLinkChapter_TeacherLinksPlatformPublishedUnit_Allowed(t *testing.T) {
+	fx := newLinkChapterFixture(t, "platpub")
 	ctx := context.Background()
 	db := integrationDB(t)
 
-	var platUnitID string
+	var platChapterID string
 	err := db.QueryRowContext(ctx,
-		`INSERT INTO teaching_units
+		`INSERT INTO chapters
 		 (id, scope, scope_id, title, summary, material_type, status, created_by, created_at, updated_at)
 		 VALUES (gen_random_uuid(), 'platform', NULL, 'Platform Lib', '', 'notes', 'classroom_ready', $1, now(), now())
 		 RETURNING id`,
 		fx.admin.ID, // created by the platform admin
-	).Scan(&platUnitID)
+	).Scan(&platChapterID)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		db.ExecContext(ctx, "DELETE FROM teaching_units WHERE id = $1", platUnitID)
+		db.ExecContext(ctx, "DELETE FROM chapters WHERE id = $1", platChapterID)
 	})
 
-	code, _ := fx.callLinkUnit(t,
-		&auth.Claims{UserID: fx.teacher.ID}, platUnitID)
+	code, _ := fx.callLinkChapter(t,
+		&auth.Claims{UserID: fx.teacher.ID}, platChapterID)
 	assert.Equal(t, http.StatusOK, code)
 }
 
 // A draft platform-scope Unit (status not in published-statuses) is
 // still admin-only.
-func TestLinkUnit_TeacherLinksPlatformDraftUnit_Forbidden(t *testing.T) {
-	fx := newLinkUnitFixture(t, "platdraft")
+func TestLinkChapter_TeacherLinksPlatformDraftUnit_Forbidden(t *testing.T) {
+	fx := newLinkChapterFixture(t, "platdraft")
 	ctx := context.Background()
 	db := integrationDB(t)
 
-	var platUnitID string
+	var platChapterID string
 	err := db.QueryRowContext(ctx,
-		`INSERT INTO teaching_units
+		`INSERT INTO chapters
 		 (id, scope, scope_id, title, summary, material_type, status, created_by, created_at, updated_at)
 		 VALUES (gen_random_uuid(), 'platform', NULL, 'Platform Draft', '', 'notes', 'draft', $1, now(), now())
 		 RETURNING id`,
 		fx.admin.ID,
-	).Scan(&platUnitID)
+	).Scan(&platChapterID)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		db.ExecContext(ctx, "DELETE FROM teaching_units WHERE id = $1", platUnitID)
+		db.ExecContext(ctx, "DELETE FROM chapters WHERE id = $1", platChapterID)
 	})
 
-	code, _ := fx.callLinkUnit(t,
-		&auth.Claims{UserID: fx.teacher.ID}, platUnitID)
+	code, _ := fx.callLinkChapter(t,
+		&auth.Claims{UserID: fx.teacher.ID}, platChapterID)
 	assert.Equal(t, http.StatusForbidden, code)
 }
 
 // Platform admin can still attach a draft platform Unit (sanity check
 // the IsPlatformAdmin bypass survives the gate refactor).
-func TestLinkUnit_AdminLinksPlatformDraftUnit_Allowed(t *testing.T) {
-	fx := newLinkUnitFixture(t, "platdraftadm")
+func TestLinkChapter_AdminLinksPlatformDraftUnit_Allowed(t *testing.T) {
+	fx := newLinkChapterFixture(t, "platdraftadm")
 	ctx := context.Background()
 	db := integrationDB(t)
 
-	var platUnitID string
+	var platChapterID string
 	err := db.QueryRowContext(ctx,
-		`INSERT INTO teaching_units
+		`INSERT INTO chapters
 		 (id, scope, scope_id, title, summary, material_type, status, created_by, created_at, updated_at)
 		 VALUES (gen_random_uuid(), 'platform', NULL, 'Draft', '', 'notes', 'draft', $1, now(), now())
 		 RETURNING id`,
 		fx.admin.ID,
-	).Scan(&platUnitID)
+	).Scan(&platChapterID)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		db.ExecContext(ctx, "DELETE FROM teaching_units WHERE id = $1", platUnitID)
+		db.ExecContext(ctx, "DELETE FROM chapters WHERE id = $1", platChapterID)
 	})
 
-	code, _ := fx.callLinkUnit(t,
-		&auth.Claims{UserID: fx.admin.ID, IsPlatformAdmin: true}, platUnitID)
+	code, _ := fx.callLinkChapter(t,
+		&auth.Claims{UserID: fx.admin.ID, IsPlatformAdmin: true}, platChapterID)
 	assert.Equal(t, http.StatusOK, code)
 }
 
@@ -406,25 +406,25 @@ func TestLinkUnit_AdminLinksPlatformDraftUnit_Allowed(t *testing.T) {
 // the cross-org reachability guard before the unit-edit check runs.
 // Personal-scope units never satisfy `scope='platform' OR scope_id =
 // course.org_id`, so they cannot be linked to any course's topic.
-func TestLinkUnit_WrongOwnerPersonalUnit_Forbidden(t *testing.T) {
-	fx := newLinkUnitFixture(t, "wrongowner")
+func TestLinkChapter_WrongOwnerPersonalUnit_Forbidden(t *testing.T) {
+	fx := newLinkChapterFixture(t, "wrongowner")
 	ctx := context.Background()
 	db := integrationDB(t)
 
-	var personalUnitID string
+	var personalChapterID string
 	err := db.QueryRowContext(ctx,
-		`INSERT INTO teaching_units
+		`INSERT INTO chapters
 		 (id, scope, scope_id, title, summary, material_type, status, created_by, created_at, updated_at)
 		 VALUES (gen_random_uuid(), 'personal', $1, 'Mine', '', 'notes', 'draft', $1, now(), now())
 		 RETURNING id`,
 		fx.outsider.ID,
-	).Scan(&personalUnitID)
+	).Scan(&personalChapterID)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		db.ExecContext(ctx, "DELETE FROM teaching_units WHERE id = $1", personalUnitID)
+		db.ExecContext(ctx, "DELETE FROM chapters WHERE id = $1", personalChapterID)
 	})
 
-	code, _ := fx.callLinkUnit(t,
-		&auth.Claims{UserID: fx.teacher.ID}, personalUnitID)
+	code, _ := fx.callLinkChapter(t,
+		&auth.Claims{UserID: fx.teacher.ID}, personalChapterID)
 	assert.Equal(t, http.StatusForbidden, code)
 }

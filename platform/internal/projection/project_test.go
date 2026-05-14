@@ -279,14 +279,14 @@ func TestProjectBlocks_MixedDoc_Teacher_SeesAll(t *testing.T) {
 
 func TestProjectBlocks_MixedDoc_Student_Filtered(t *testing.T) {
 	blocks := []json.RawMessage{
-		block("prose", map[string]any{"id": "b1"}),            // included
-		block("teacher-note", map[string]any{"id": "b2"}),     // omitted
-		block("live-cue", map[string]any{"id": "b3"}),         // omitted
+		block("prose", map[string]any{"id": "b1"}),                               // included
+		block("teacher-note", map[string]any{"id": "b2"}),                        // omitted
+		block("live-cue", map[string]any{"id": "b3"}),                            // omitted
 		block("problem-ref", map[string]any{"id": "b4", "visibility": "always"}), // included
 		block("solution-ref", map[string]any{"id": "b5", "reveal": "always"}),    // included
 		block("assignment-variant", map[string]any{"id": "b6"}),                  // omitted
 		block("test-case-ref", map[string]any{"id": "b7"}),                       // included
-		block("paragraph", nil),                                                   // included
+		block("paragraph", nil),                                                  // included
 	}
 	result := ProjectBlocks(blocks, RoleStudent, nil)
 	assert.Len(t, result, 5, "student should see 5 of 8 blocks")

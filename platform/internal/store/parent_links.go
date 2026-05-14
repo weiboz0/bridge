@@ -287,10 +287,10 @@ func (s *ParentLinkStore) list(ctx context.Context, where string, args ...any) (
 // active class). Pure read shape; the caller doesn't write back.
 type ParentLinkRow struct {
 	ParentLink
-	ParentEmail string  `json:"parentEmail"`
-	ParentName  string  `json:"parentName"`
-	ChildEmail  string  `json:"childEmail"`
-	ChildName   string  `json:"childName"`
+	ParentEmail string `json:"parentEmail"`
+	ParentName  string `json:"parentName"`
+	ChildEmail  string `json:"childEmail"`
+	ChildName   string `json:"childName"`
 	// ClassID/ClassName are the child's most-recently-joined active
 	// class in the org. Nullable — child may be in zero classes (rare,
 	// but possible if all class memberships were inactivated).

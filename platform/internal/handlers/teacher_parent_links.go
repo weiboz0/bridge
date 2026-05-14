@@ -13,7 +13,8 @@ import (
 // teachers need on their class-detail page (plan 070 phase 3).
 //
 // Routes:
-//   GET /api/teacher/classes/{classID}/parent-links
+//
+//	GET /api/teacher/classes/{classID}/parent-links
 //
 // Auth: caller must have `roster` access to the class — instructor
 // or TA in the class, or org_admin in the class's org, or platform

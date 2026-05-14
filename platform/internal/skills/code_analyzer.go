@@ -200,8 +200,8 @@ func codeMetrics(code string) map[string]any {
 		}
 	}
 	return map[string]any{
-		"line_count":     len(lines),
+		"line_count":      len(lines),
 		"non_empty_lines": nonEmpty,
-		"char_count":     len(code),
+		"char_count":      len(code),
 	}
 }

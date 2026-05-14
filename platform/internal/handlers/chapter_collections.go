@@ -16,22 +16,22 @@ import (
 // touches helper signatures, not just the inline block. See plan-075 §Out of
 // scope, Bucket 2 — needs a separate per-helper migration plan.
 
-// UnitCollectionHandler serves collection CRUD and item management endpoints.
+// ChapterCollectionHandler serves collection CRUD and item management endpoints.
 // Access follows the same scope-based pattern as teaching units.
-type UnitCollectionHandler struct {
-	Collections *store.UnitCollectionStore
+type ChapterCollectionHandler struct {
+	Collections *store.ChapterCollectionStore
 	Orgs        *store.OrgStore
 	// Plan 052 PR-C: needed for the candidate-unit visibility check
-	// in AddItem (CanViewUnit). Other endpoints don't yet require it
+	// in AddItem (CanViewChapter). Other endpoints don't yet require it
 	// — collections currently store unit IDs without re-checking
 	// visibility on read. If that changes, plumb the same check
 	// through ListItems.
-	TeachingUnits *store.TeachingUnitStore
+	Chapters *store.ChapterStore
 }
 
 const maxCollectionTitleLen = 255
 
-func (h *UnitCollectionHandler) Routes(r chi.Router) {
+func (h *ChapterCollectionHandler) Routes(r chi.Router) {
 	r.Route("/api/collections", func(r chi.Router) {
 		r.Get("/", h.ListCollections)
 		r.Post("/", h.CreateCollection)
@@ -42,8 +42,8 @@ func (h *UnitCollectionHandler) Routes(r chi.Router) {
 			r.Delete("/", h.DeleteCollection)
 			r.Post("/items", h.AddItem)
 			r.Get("/items", h.ListItems)
-			r.Route("/items/{unitId}", func(r chi.Router) {
-				r.Use(ValidateUUIDParam("unitId"))
+			r.Route("/items/{chapterId}", func(r chi.Router) {
+				r.Use(ValidateUUIDParam("chapterId"))
 				r.Delete("/", h.RemoveItem)
 			})
 		})
@@ -53,7 +53,7 @@ func (h *UnitCollectionHandler) Routes(r chi.Router) {
 // canViewCollection checks whether the caller may view a collection.
 // Platform → any auth. Org → teachers/admins. Personal → owner.
 // Platform admin bypass applies everywhere.
-func (h *UnitCollectionHandler) canViewCollection(ctx context.Context, c *auth.Claims, col *store.UnitCollection) bool {
+func (h *ChapterCollectionHandler) canViewCollection(ctx context.Context, c *auth.Claims, col *store.ChapterCollection) bool {
 	if c.IsPlatformAdmin {
 		return true
 	}
@@ -79,7 +79,7 @@ func (h *UnitCollectionHandler) canViewCollection(ctx context.Context, c *auth.C
 
 // canEditCollection checks whether the caller may create/update/delete a
 // collection in the given scope.
-func (h *UnitCollectionHandler) canEditCollection(ctx context.Context, c *auth.Claims, scope string, scopeID *string) bool {
+func (h *ChapterCollectionHandler) canEditCollection(ctx context.Context, c *auth.Claims, scope string, scopeID *string) bool {
 	if c.IsPlatformAdmin && scope == "platform" {
 		return true
 	}
@@ -104,7 +104,7 @@ func (h *UnitCollectionHandler) canEditCollection(ctx context.Context, c *auth.C
 }
 
 // ListCollections — GET /api/collections?scope=
-func (h *UnitCollectionHandler) ListCollections(w http.ResponseWriter, r *http.Request) {
+func (h *ChapterCollectionHandler) ListCollections(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
 		writeError(w, http.StatusUnauthorized, "Unauthorized")
@@ -112,7 +112,7 @@ func (h *UnitCollectionHandler) ListCollections(w http.ResponseWriter, r *http.R
 	}
 
 	scope := r.URL.Query().Get("scope")
-	if scope != "" && !validUnitScopes[scope] {
+	if scope != "" && !validChapterScopes[scope] {
 		writeError(w, http.StatusBadRequest, "scope must be platform, org, or personal")
 		return
 	}
@@ -143,7 +143,7 @@ func (h *UnitCollectionHandler) ListCollections(w http.ResponseWriter, r *http.R
 }
 
 // CreateCollection — POST /api/collections
-func (h *UnitCollectionHandler) CreateCollection(w http.ResponseWriter, r *http.Request) {
+func (h *ChapterCollectionHandler) CreateCollection(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
 		writeError(w, http.StatusUnauthorized, "Unauthorized")
@@ -160,7 +160,7 @@ func (h *UnitCollectionHandler) CreateCollection(w http.ResponseWriter, r *http.
 		return
 	}
 
-	if !validUnitScopes[body.Scope] {
+	if !validChapterScopes[body.Scope] {
 		writeError(w, http.StatusBadRequest, "scope must be platform, org, or personal")
 		return
 	}
@@ -203,7 +203,7 @@ func (h *UnitCollectionHandler) CreateCollection(w http.ResponseWriter, r *http.
 }
 
 // GetCollection — GET /api/collections/{id}
-func (h *UnitCollectionHandler) GetCollection(w http.ResponseWriter, r *http.Request) {
+func (h *ChapterCollectionHandler) GetCollection(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
 		writeError(w, http.StatusUnauthorized, "Unauthorized")
@@ -237,7 +237,7 @@ func (h *UnitCollectionHandler) GetCollection(w http.ResponseWriter, r *http.Req
 }
 
 // UpdateCollection — PATCH /api/collections/{id}
-func (h *UnitCollectionHandler) UpdateCollection(w http.ResponseWriter, r *http.Request) {
+func (h *ChapterCollectionHandler) UpdateCollection(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
 		writeError(w, http.StatusUnauthorized, "Unauthorized")
@@ -281,7 +281,7 @@ func (h *UnitCollectionHandler) UpdateCollection(w http.ResponseWriter, r *http.
 }
 
 // DeleteCollection — DELETE /api/collections/{id}
-func (h *UnitCollectionHandler) DeleteCollection(w http.ResponseWriter, r *http.Request) {
+func (h *ChapterCollectionHandler) DeleteCollection(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
 		writeError(w, http.StatusUnauthorized, "Unauthorized")
@@ -316,7 +316,7 @@ func (h *UnitCollectionHandler) DeleteCollection(w http.ResponseWriter, r *http.
 }
 
 // AddItem — POST /api/collections/{id}/items
-func (h *UnitCollectionHandler) AddItem(w http.ResponseWriter, r *http.Request) {
+func (h *ChapterCollectionHandler) AddItem(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
 		writeError(w, http.StatusUnauthorized, "Unauthorized")
@@ -339,14 +339,14 @@ func (h *UnitCollectionHandler) AddItem(w http.ResponseWriter, r *http.Request) 
 	}
 
 	var body struct {
-		UnitID    string `json:"unitId"`
+		ChapterID string `json:"chapterId"`
 		SortOrder *int   `json:"sortOrder"`
 	}
 	if !decodeJSON(w, r, &body) {
 		return
 	}
-	if body.UnitID == "" || !isValidUUID(body.UnitID) {
-		writeError(w, http.StatusBadRequest, "unitId is required and must be a valid UUID")
+	if body.ChapterID == "" || !isValidUUID(body.ChapterID) {
+		writeError(w, http.StatusBadRequest, "chapterId is required and must be a valid UUID")
 		return
 	}
 
@@ -357,20 +357,20 @@ func (h *UnitCollectionHandler) AddItem(w http.ResponseWriter, r *http.Request) 
 	// the collection's ListItems / projection paths.
 	//
 	// Returns 404 (not 403) on missing/invisible unit so we don't
-	// leak unit existence by ID — same shape as canViewUnit's
-	// failure mode in teaching_units.go (the not-found branch in
-	// the GetUnit-related read handlers).
-	if h.TeachingUnits == nil {
+	// leak unit existence by ID — same shape as canViewChapter's
+	// failure mode in chapters.go (the not-found branch in
+	// the GetChapter-related read handlers).
+	if h.Chapters == nil {
 		writeError(w, http.StatusInternalServerError, "Teaching units store unavailable")
 		return
 	}
-	candidate, err := h.TeachingUnits.GetUnit(r.Context(), body.UnitID)
+	candidate, err := h.Chapters.GetChapter(r.Context(), body.ChapterID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
 	}
-	if candidate == nil || !CanViewUnit(r.Context(), h.Orgs, h.TeachingUnits, claims, candidate) {
-		writeError(w, http.StatusNotFound, "Unit not found")
+	if candidate == nil || !CanViewChapter(r.Context(), h.Orgs, h.Chapters, claims, candidate) {
+		writeError(w, http.StatusNotFound, "Chapter not found")
 		return
 	}
 
@@ -379,10 +379,10 @@ func (h *UnitCollectionHandler) AddItem(w http.ResponseWriter, r *http.Request) 
 		sortOrder = *body.SortOrder
 	}
 
-	item, err := h.Collections.AddItem(r.Context(), colID, body.UnitID, sortOrder)
+	item, err := h.Collections.AddItem(r.Context(), colID, body.ChapterID, sortOrder)
 	if err != nil {
 		if isConstraintError(err) {
-			writeError(w, http.StatusBadRequest, "invalid unitId — unit does not exist")
+			writeError(w, http.StatusBadRequest, "invalid chapterId — unit does not exist")
 			return
 		}
 		writeError(w, http.StatusInternalServerError, "Database error")
@@ -392,7 +392,7 @@ func (h *UnitCollectionHandler) AddItem(w http.ResponseWriter, r *http.Request) 
 }
 
 // ListItems — GET /api/collections/{id}/items
-func (h *UnitCollectionHandler) ListItems(w http.ResponseWriter, r *http.Request) {
+func (h *ChapterCollectionHandler) ListItems(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
 		writeError(w, http.StatusUnauthorized, "Unauthorized")
@@ -418,15 +418,15 @@ func (h *UnitCollectionHandler) ListItems(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
-// RemoveItem — DELETE /api/collections/{id}/items/{unitId}
-func (h *UnitCollectionHandler) RemoveItem(w http.ResponseWriter, r *http.Request) {
+// RemoveItem — DELETE /api/collections/{id}/items/{chapterId}
+func (h *ChapterCollectionHandler) RemoveItem(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
 		writeError(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 	colID := chi.URLParam(r, "id")
-	unitID := chi.URLParam(r, "unitId")
+	chapterID := chi.URLParam(r, "chapterId")
 
 	col, err := h.Collections.GetCollection(r.Context(), colID)
 	if err != nil {
@@ -442,7 +442,7 @@ func (h *UnitCollectionHandler) RemoveItem(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	removed, err := h.Collections.RemoveItem(r.Context(), colID, unitID)
+	removed, err := h.Collections.RemoveItem(r.Context(), colID, chapterID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return

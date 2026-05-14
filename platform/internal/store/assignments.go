@@ -157,25 +157,25 @@ func (s *AssignmentStore) DeleteAssignment(ctx context.Context, id string) (*Ass
 // --- Submissions ---
 
 type Submission struct {
-	ID           string     `json:"id"`
-	AssignmentID string     `json:"assignmentId"`
-	StudentID    string     `json:"studentId"`
-	DocumentID   *string    `json:"documentId"`
-	Grade        *float64   `json:"grade"`
-	Feedback     *string    `json:"feedback"`
-	SubmittedAt  time.Time  `json:"submittedAt"`
+	ID           string    `json:"id"`
+	AssignmentID string    `json:"assignmentId"`
+	StudentID    string    `json:"studentId"`
+	DocumentID   *string   `json:"documentId"`
+	Grade        *float64  `json:"grade"`
+	Feedback     *string   `json:"feedback"`
+	SubmittedAt  time.Time `json:"submittedAt"`
 }
 
 type SubmissionWithStudent struct {
-	ID           string     `json:"id"`
-	AssignmentID string     `json:"assignmentId"`
-	StudentID    string     `json:"studentId"`
-	DocumentID   *string    `json:"documentId"`
-	Grade        *float64   `json:"grade"`
-	Feedback     *string    `json:"feedback"`
-	SubmittedAt  time.Time  `json:"submittedAt"`
-	StudentName  string     `json:"studentName"`
-	StudentEmail string     `json:"studentEmail"`
+	ID           string    `json:"id"`
+	AssignmentID string    `json:"assignmentId"`
+	StudentID    string    `json:"studentId"`
+	DocumentID   *string   `json:"documentId"`
+	Grade        *float64  `json:"grade"`
+	Feedback     *string   `json:"feedback"`
+	SubmittedAt  time.Time `json:"submittedAt"`
+	StudentName  string    `json:"studentName"`
+	StudentEmail string    `json:"studentEmail"`
 }
 
 func (s *AssignmentStore) CreateSubmission(ctx context.Context, assignmentID, studentID string, documentID *string) (*Submission, error) {

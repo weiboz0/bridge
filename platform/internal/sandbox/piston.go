@@ -30,13 +30,13 @@ func NewPistonClient(baseURL string) *PistonClient {
 
 // PistonExecuteRequest is the request body for Piston's /api/v2/execute endpoint.
 type PistonExecuteRequest struct {
-	Language string       `json:"language"`
-	Version  string       `json:"version"`
-	Files    []PistonFile `json:"files"`
-	Stdin    string       `json:"stdin,omitempty"`
-	Args     []string     `json:"args,omitempty"`
-	RunTimeout   int      `json:"run_timeout,omitempty"`   // ms
-	CompileTimeout int    `json:"compile_timeout,omitempty"` // ms
+	Language       string       `json:"language"`
+	Version        string       `json:"version"`
+	Files          []PistonFile `json:"files"`
+	Stdin          string       `json:"stdin,omitempty"`
+	Args           []string     `json:"args,omitempty"`
+	RunTimeout     int          `json:"run_timeout,omitempty"`     // ms
+	CompileTimeout int          `json:"compile_timeout,omitempty"` // ms
 }
 
 // PistonFile represents a source file for Piston execution.
@@ -47,19 +47,19 @@ type PistonFile struct {
 
 // PistonExecuteResponse is the response from Piston's /api/v2/execute endpoint.
 type PistonExecuteResponse struct {
-	Language string      `json:"language"`
-	Version  string      `json:"version"`
-	Run      PistonStage `json:"run"`
+	Language string       `json:"language"`
+	Version  string       `json:"version"`
+	Run      PistonStage  `json:"run"`
 	Compile  *PistonStage `json:"compile,omitempty"`
 }
 
 // PistonStage holds stdout/stderr/exit code for a run or compile step.
 type PistonStage struct {
-	Stdout string `json:"stdout"`
-	Stderr string `json:"stderr"`
-	Code   int    `json:"code"`
+	Stdout string  `json:"stdout"`
+	Stderr string  `json:"stderr"`
+	Code   int     `json:"code"`
 	Signal *string `json:"signal,omitempty"`
-	Output string `json:"output"` // combined stdout+stderr
+	Output string  `json:"output"` // combined stdout+stderr
 }
 
 // PistonRuntime describes an available language runtime.
