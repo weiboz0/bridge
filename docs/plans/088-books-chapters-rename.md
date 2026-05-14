@@ -67,6 +67,8 @@ CREATE INDEX chapters_book_idx ON chapters(book_id);
 - `topic_id` UNIQUE constraint preserved (Decision #6).
 - Existing course → topic → chapter delivery semantics unchanged.
 - All test fixture builders need updating (they reference `teaching_units` by name).
+- **Pre-impl audit step in Phase 1**: `\d teaching_units` to enumerate ALL existing indexes / constraints / triggers / sequences. The migration must rename each one (Postgres doesn't auto-rename `teaching_units_*`-prefixed objects when the table is renamed). Common renames expected: `teaching_units_pkey` → `chapters_pkey`, `teaching_units_topic_id_uniq` → `chapters_topic_id_uniq`, `teaching_units_scope_idx` → `chapters_scope_idx`, etc.
+- **FK constraint cosmetic names**: Postgres FK constraints carry their CREATE-time name (e.g., `assignments_unit_id_fkey`). Renaming the target table does NOT auto-rename the FK constraints on the source tables. These names are cosmetic (constraint behavior intact) but tools that dump schemas will show the legacy prefix. Decision: leave FK constraint names alone — cosmetic churn isn't worth the rename overhead. A future cleanup plan can audit and rename if it matters.
 
 #### 1b. Books store (NEW)
 
@@ -337,6 +339,7 @@ Rename `tests/unit/*-unit-*.test.tsx` (where they refer to the entity, not "unit
 9. **Hocuspocus collab keys**: if they reference "unit" in the key, rename to "chapter" in the same PR. In-flight dev sessions lose state — acceptable at current scale.
 10. **Plan files in `docs/plans/` keep their `unit` references** — archival record of decisions at the time. Only `docs/api.md` and forward-looking docs are updated.
 11. **Topics stay untouched.** They remain children of courses and continue to point at chapters (via the renamed `topic_id` column on `chapters`). Plan 088 does not deprecate topics.
+12. **String literals + log fields with "unit" get renamed** wherever they refer to the entity. This includes: API error messages ("Unit not found" → "Chapter not found"), `slog` log field names (`unit_id` → `chapter_id`), sentinel constraint-name strings in `dberr.go` if any (e.g., `teaching_units_topic_id_uniq` → `chapters_topic_id_uniq` — must match the renamed index name from §1a). Frontend toast / error copy ("Unit saved", "Failed to load unit"). Skip Go test-comment usage of "unit test" (the testing concept) — only rename when the word refers to the entity.
 
 ## Risks
 
@@ -373,7 +376,7 @@ Rename `tests/unit/*-unit-*.test.tsx` (where they refer to the entity, not "unit
 5. **Books store + handler** (§1b + §1d).
 6. **Cross-cutting renames** (§1f).
 7. **Hocuspocus key check** (§1g).
-8. **Run Go tests**: `cd platform && TEST_DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test go test ./... -count=1 -timeout 180s`. All green.
+8. **Run Go tests**: `cd platform && TEST_DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test go test ./... -count=1 -timeout 180s`. All green. **If sandbox restrictions block DB-backed tests (per plan 085 lessons learned), commit anyway — the orchestrator runs the full Go suite locally before signing off Phase 1.** Non-DB-dependent tests must pass.
 9. **Self-review on Opus**.
 10. **Commit + push** as `plan 088 phase 1 (backend)`.
 
@@ -440,7 +443,24 @@ Vitest baseline: 3 pre-existing failures in `tests/integration/auth-jwt-refresh.
 
 ## Plan Review
 
-(Placeholder — to be filled by 4-way plan review before implementation.)
+### Self-review (Opus 4.7) — 2026-05-14
+
+**Verdict: CONCUR with self-applied refinements.**
+
+Self-review concerns folded:
+
+1. **String literals + log fields with "unit"** — added Decision #12. The rename can't stop at type names; API error messages, slog fields, and `dberr.go` constraint-name sentinels all need updating.
+2. **All `teaching_units_*` prefixed indexes / constraints / sequences need explicit rename** in the migration. Pre-impl `\d teaching_units` audit added to Phase 1 step 1. Common renames enumerated.
+3. **FK constraint cosmetic names on source tables** (e.g., `assignments_unit_id_fkey`) survive the table rename and stay legacy-prefixed. Decision: leave alone — cosmetic churn not worth the overhead. Future cleanup plan can audit.
+4. **Codex sandbox stalls from plan 085 lessons** — Phase 1 step 8 explicitly says "commit anyway if sandbox blocks DB tests; orchestrator runs full suite before signing off". Avoids re-blocking on the same sandbox issue.
+
+Open concerns flagged for external reviewers:
+
+- **Mass-rename merge-conflict risk** is real. Plan calls for a single-PR rename. If any other branch is touching unit-related code during the rebase window, conflicts will be substantial. Worth a reviewer call on whether to defer plan 088 if other in-flight work touches the same files.
+- **Hocuspocus collab key migration** (§1g) — verify pre-impl. In-flight dev collab sessions lose state; acceptable at current scale but worth reviewer signoff.
+- **`book_id` NULLABLE leaves existing chapters unfiled** — UX implication: the new books UI will show every existing chapter as "unfiled" until manually assigned. Reviewer may want a backfill commitment (e.g., auto-create a "Legacy" book per org) — plan defers this to a future plan; reviewer should agree or push back.
+- **`unit_collections` rename to `chapter_collections`** — I haven't read this file in detail. If `unit_collections` is a course-pinned-collection concept distinct from chapters-in-a-book, the rename may be wrong. Reviewer should verify.
+- **Personal-scope books** (Decision #5) — may be unused in practice. Reviewer may push to drop personal scope to simplify.
 
 ## Code Review
 
