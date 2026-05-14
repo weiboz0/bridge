@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { api } from "@/lib/api-client";
 import { ApiError } from "@/lib/api-error";
@@ -9,6 +10,7 @@ interface Org {
   name: string;
   type: string;
   contactEmail: string;
+  contactName: string;
   slug: string;
   status: string;
 }
@@ -79,7 +81,14 @@ export default async function AdminOrgsPage({
             <Card key={org.id}>
               <CardContent className="flex items-center justify-between py-4">
                 <div>
-                  <p className="font-medium">{org.name}</p>
+                  <p className="font-medium">
+                    <Link
+                      href={`/admin/orgs/${org.id}`}
+                      className="underline-offset-2 hover:underline hover:text-primary"
+                    >
+                      {org.name}
+                    </Link>
+                  </p>
                   <p className="text-sm text-muted-foreground">
                     {org.type} · {org.contactEmail} · {org.slug}
                   </p>
@@ -92,7 +101,13 @@ export default async function AdminOrgsPage({
                   }`}>
                     {org.status}
                   </span>
-                  <OrgActions orgId={org.id} orgName={org.name} status={org.status} />
+                  <OrgActions
+                    orgId={org.id}
+                    orgName={org.name}
+                    status={org.status}
+                    contactName={org.contactName}
+                    contactEmail={org.contactEmail}
+                  />
                 </div>
               </CardContent>
             </Card>
