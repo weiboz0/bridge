@@ -11,7 +11,7 @@ Every plan — new or revised — must pass a 4-way review before any code is wr
 | 1 | **Self-review (Opus 4.7)** | Claude reads its own plan critically on Opus and lists concerns inline | claude-opus-4-7 |
 | 2 | **Codex** | `codex:codex-rescue` subagent with the plan path + review questions | Codex default |
 | 3 | **DeepSeek V4 Pro** | `opencode:opencode-review` subagent with `--model opencode-go/deepseek-v4-pro` | opencode-go/deepseek-v4-pro |
-| 4 | **GLM 5.1** | `opencode:opencode-review` subagent with `--model opencode-go/glm-5.1` | opencode-go/glm-5.1 |
+| 4 | **GLM 5.1** | `opencode:opencode-review` subagent with `--model volcengine-plan/glm-5.1` | volcengine-plan/glm-5.1 |
 
 ### Steps
 
@@ -34,7 +34,7 @@ Code reviews use the same 4-way pattern but with a **flash-tier model for DeepSe
 | 1 | **Self-review (Opus 4.7)** | Claude reads the diff critically on Opus before dispatching | claude-opus-4-7 |
 | 2 | **Codex** | `codex:codex-rescue` subagent with branch diff + review questions | Codex default |
 | 3 | **DeepSeek V4 Flash** | `opencode:opencode-review` subagent with `--model deepseek/deepseek-v4-flash` | deepseek/deepseek-v4-flash |
-| 4 | **GLM 5.1** | `opencode:opencode-review` subagent with `--model opencode-go/glm-5.1` | opencode-go/glm-5.1 |
+| 4 | **GLM 5.1** | `opencode:opencode-review` subagent with `--model volcengine-plan/glm-5.1` | volcengine-plan/glm-5.1 |
 
 ### Timing + format
 
@@ -59,7 +59,7 @@ Code reviews use the same 4-way pattern but with a **flash-tier model for DeepSe
 - Prompt style: same as Codex (plan path + questions, or branch diff + questions). The opencode subagent accepts free-form prompt text forwarded to the model.
 
 ### GLM 5.1 (via opencode)
-- All reviews: `--model opencode-go/glm-5.1`.
+- All reviews: `--model volcengine-plan/glm-5.1`.
 - Prompt style: same as above.
 
 **DeepSeek and GLM are review-only — never use them for implementation.** Implementation is split by domain: Codex for backend, Sonnet for frontend + tests, Opus for complex/cross-domain — see `docs/coding-agent.md`.
