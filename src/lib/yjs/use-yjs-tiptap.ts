@@ -67,8 +67,8 @@ export interface UseYjsTiptapReturn {
  * Tiptap editor's extension list.  When the component unmounts, call
  * `destroy()` to clean up the provider and Y.Doc.
  *
- * Document namespace: `unit:{unitId}` — Hocuspocus provides realtime sync only.
- * Persistence happens via the teaching-unit API (save button), NOT Hocuspocus.
+ * Document namespace: `chapter:{chapterId}` — Hocuspocus provides realtime sync only.
+ * Persistence happens via the chapter API (save button), NOT Hocuspocus.
  */
 export function useYjsTiptap({
   unitId,
@@ -89,7 +89,7 @@ export function useYjsTiptap({
   // Plan 068 phase 4 — `unavailable` is forwarded to the caller so
   // the consuming component (e.g., teaching-unit-editor) can render
   // the realtime-config banner at page level.
-  const documentName = unitId && unitId !== "noop" ? `unit:${unitId}` : "noop";
+  const documentName = unitId && unitId !== "noop" ? `chapter:${unitId}` : "noop";
   const { token: realtimeToken, unavailable: realtimeUnavailable } = useRealtimeToken(documentName);
 
   const shouldConnect =

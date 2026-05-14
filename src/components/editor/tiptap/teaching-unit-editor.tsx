@@ -20,7 +20,7 @@ import { TableToolbar } from "./table-toolbar"
 
 /** Options for enabling real-time collaborative editing via Yjs/Hocuspocus. */
 export interface CollaborativeOptions {
-  /** The unit ID — used as the Hocuspocus document name (`unit:{unitId}`). */
+  /** The chapter ID — used as the Hocuspocus document name (`chapter:{chapterId}`). */
   unitId: string
   /** Authenticated user ID — used for the Hocuspocus auth token and cursor color. */
   userId: string

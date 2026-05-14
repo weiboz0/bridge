@@ -20,6 +20,13 @@ interface Props {
   bookScope: "platform" | "org";
   bookScopeId: string | null;
   bookDescription: string;
+  /**
+   * Base path prefix for the detail-page link (e.g. `/admin/books` or
+   * `/teacher/books`). The caller passes whichever portal it lives in;
+   * defaults to `/admin/books` for backward compat with the admin-side
+   * call sites that were the first consumers.
+   */
+  detailBasePath?: string;
 }
 
 export function BookActions({
@@ -28,6 +35,7 @@ export function BookActions({
   bookScope,
   bookScopeId,
   bookDescription,
+  detailBasePath = "/admin/books",
 }: Props) {
   const router = useRouter();
   const [editOpen, setEditOpen] = useState(false);
@@ -55,7 +63,7 @@ export function BookActions({
           }
         />
         <DropdownMenuContent align="end">
-          <DropdownMenuItem render={<Link href={`/admin/books/${bookId}`} />}>
+          <DropdownMenuItem render={<Link href={`${detailBasePath}/${bookId}`} />}>
             View details
           </DropdownMenuItem>
           <DropdownMenuItem onClick={() => setEditOpen(true)}>

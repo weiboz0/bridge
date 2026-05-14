@@ -149,6 +149,7 @@ export default async function TeacherBooksPage() {
                       bookScope={book.scope}
                       bookScopeId={book.scopeId}
                       bookDescription={book.description}
+                      detailBasePath="/teacher/books"
                     />
                   </td>
                 </tr>

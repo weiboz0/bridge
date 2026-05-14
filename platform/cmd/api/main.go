@@ -346,7 +346,7 @@ func main() {
 		}
 		adminH.Routes(r)
 
-		bookH := &handlers.BookHandler{Books: stores.Books}
+		bookH := &handlers.BookHandler{Books: stores.Books, Orgs: stores.Orgs}
 		bookH.Routes(r)
 
 		chapterH := &handlers.ChapterHandler{

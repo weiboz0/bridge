@@ -46,7 +46,7 @@ func newBookFixture(t *testing.T) *bookFixture {
 		db.ExecContext(ctx, "DELETE FROM auth_providers WHERE user_id IN ($1, $2)", admin.ID, other.ID)
 		db.ExecContext(ctx, "DELETE FROM users WHERE id IN ($1, $2)", admin.ID, other.ID)
 	})
-	return &bookFixture{db: db, h: &BookHandler{Books: books}, admin: admin, other: other, orgID: org.ID, bookID: book.ID}
+	return &bookFixture{db: db, h: &BookHandler{Books: books, Orgs: store.NewOrgStore(db)}, admin: admin, other: other, orgID: org.ID, bookID: book.ID}
 }
 
 func (fx *bookFixture) claims(admin bool) *auth.Claims {

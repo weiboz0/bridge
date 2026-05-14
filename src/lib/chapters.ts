@@ -20,8 +20,6 @@ export interface Chapter {
   updatedAt: string
 }
 
-/** @deprecated Use Chapter instead */
-export type TeachingUnit = Chapter
 
 export interface ChapterDocument {
   chapterId: string
@@ -29,8 +27,6 @@ export interface ChapterDocument {
   updatedAt: string
 }
 
-/** @deprecated Use ChapterDocument instead */
-export type UnitDocument = ChapterDocument
 
 export interface CreateChapterInput {
   title: string
@@ -43,8 +39,6 @@ export interface CreateChapterInput {
   materialType?: "notes" | "slides" | "worksheet" | "reference"
 }
 
-/** @deprecated Use CreateChapterInput instead */
-export type CreateUnitInput = CreateChapterInput
 
 /**
  * Fetch a single chapter by ID. Returns null on 404/403.
@@ -66,8 +60,6 @@ export async function fetchChapterDocument(id: string): Promise<ChapterDocument 
   return res.json() as Promise<ChapterDocument>
 }
 
-/** @deprecated Use fetchChapterDocument instead */
-export const fetchUnitDocument = fetchChapterDocument
 
 /**
  * Create a new chapter. Returns the created chapter row.
@@ -111,8 +103,6 @@ export async function transitionChapter(id: string, status: string): Promise<Cha
   return res.json() as Promise<Chapter>
 }
 
-/** @deprecated Use transitionChapter instead */
-export const transitionUnit = transitionChapter
 
 /**
  * Fetch the projected (role-filtered) document for a chapter.
@@ -139,17 +129,6 @@ export interface ChapterOverlay {
   updatedAt: string
 }
 
-/**
- * UnitOverlay is kept for backward compat with code that destructures
- * childUnitId / parentUnitId. The API now returns childChapterId /
- * parentChapterId — callers should migrate to ChapterOverlay.
- * @deprecated Use ChapterOverlay instead
- */
-export type UnitOverlay = ChapterOverlay & {
-  childUnitId: string
-  parentUnitId: string
-}
-
 export interface LineageEntry {
   unitId: string
   title: string
@@ -166,8 +145,6 @@ export interface ChapterRevision {
   createdAt: string
 }
 
-/** @deprecated Use ChapterRevision instead */
-export type UnitRevision = ChapterRevision & { unitId: string }
 
 /**
  * Fork a chapter. Returns the new child chapter.
@@ -185,8 +162,6 @@ export async function forkChapter(
   return res.json() as Promise<Chapter>
 }
 
-/** @deprecated Use forkChapter instead */
-export const forkUnit = forkChapter
 
 /**
  * Fetch the overlay for a forked chapter. Returns null if the chapter has no overlay (not a fork).
@@ -262,8 +237,6 @@ export async function saveChapterDocument(id: string, blocks: unknown): Promise<
   return res.json() as Promise<ChapterDocument>
 }
 
-/** @deprecated Use saveChapterDocument instead */
-export const saveUnitDocument = saveChapterDocument
 
 // ---------- AI drafting (plan 035) ----------
 
