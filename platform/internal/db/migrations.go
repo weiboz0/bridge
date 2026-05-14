@@ -117,6 +117,10 @@ var ExpectedSchemaSentinels = SchemaSentinels{
 	Indexes: []string{
 		"books_scope_idx",
 		"books_created_by_idx",
+		// chapters_book_idx is on the chapters table, not books. Plan 088
+		// added it in the same migration. checkIndexes() looks indexes up
+		// by name only (not by table), so this works under the relaxed
+		// probe.
 		"chapters_book_idx",
 	},
 }

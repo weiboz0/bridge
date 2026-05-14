@@ -367,7 +367,7 @@ func (s *ChapterStore) ListChaptersByTopicIDs(ctx context.Context, topicIDs []st
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT u.id, u.scope, u.scope_id, u.title, u.slug, u.summary, u.grade_level,
 		        u.subject_tags, u.standards_tags, u.estimated_minutes, u.material_type,
-		        u.status, u.created_by, u.created_at, u.updated_at, u.topic_id
+		        u.status, u.created_by, u.created_at, u.updated_at, u.topic_id, u.book_id
 		 FROM chapters u
 		 INNER JOIN topics t ON t.id = u.topic_id
 		 INNER JOIN courses c ON c.id = t.course_id
@@ -1067,8 +1067,8 @@ func (s *ChapterStore) SearchChaptersForPicker(
 
 // UnitOverlay represents a row from chapter_overlays.
 type UnitOverlay struct {
-	ChildChapterID   string          `json:"childUnitId"`
-	ParentChapterID  string          `json:"parentUnitId"`
+	ChildChapterID   string          `json:"childChapterId"`
+	ParentChapterID  string          `json:"parentChapterId"`
 	ParentRevisionID *string         `json:"parentRevisionId"`
 	BlockOverrides   json.RawMessage `json:"blockOverrides"`
 	CreatedAt        time.Time       `json:"createdAt"`

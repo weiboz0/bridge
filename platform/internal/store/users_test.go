@@ -207,8 +207,8 @@ func addTestMembership(t *testing.T, db *sql.DB, userID, orgID, role string, cre
 	t.Helper()
 	ctx := context.Background()
 	_, err := db.ExecContext(ctx, `
-		INSERT INTO org_memberships (id, org_id, user_id, role, status, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, 'active', $5, $5)`,
+		INSERT INTO org_memberships (id, org_id, user_id, role, status, created_at)
+		VALUES ($1, $2, $3, $4, 'active', $5)`,
 		uuid.NewString(), orgID, userID, role, createdAt,
 	)
 	require.NoError(t, err)

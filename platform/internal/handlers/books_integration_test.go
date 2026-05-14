@@ -91,7 +91,9 @@ func TestBookHandler_Create_StatusPaths(t *testing.T) {
 func TestBookHandler_List_StatusPaths(t *testing.T) {
 	fx := newBookFixture(t)
 	assert.Equal(t, http.StatusUnauthorized, callBook(t, fx.h.ListBooks, http.MethodGet, "/api/books", nil, nil, nil).Code)
-	assert.Equal(t, http.StatusForbidden, callBook(t, fx.h.ListBooks, http.MethodGet, "/api/books", nil, fx.claims(false), nil).Code)
+	// Non-member sees an empty list (visibility-filtered, not 403) — books the
+	// caller can't view are dropped from the response, no existence leak.
+	assert.Equal(t, http.StatusOK, callBook(t, fx.h.ListBooks, http.MethodGet, "/api/books", nil, fx.claims(false), nil).Code)
 	assert.Equal(t, http.StatusOK, callBook(t, fx.h.ListBooks, http.MethodGet, "/api/books?scope=org&scopeId="+fx.orgID, nil, fx.claims(true), nil).Code)
 }
 
@@ -99,7 +101,8 @@ func TestBookHandler_Get_StatusPaths(t *testing.T) {
 	fx := newBookFixture(t)
 	params := map[string]string{"id": fx.bookID}
 	assert.Equal(t, http.StatusUnauthorized, callBook(t, fx.h.GetBook, http.MethodGet, "/api/books/"+fx.bookID, nil, nil, params).Code)
-	assert.Equal(t, http.StatusForbidden, callBook(t, fx.h.GetBook, http.MethodGet, "/api/books/"+fx.bookID, nil, fx.claims(false), params).Code)
+	// Non-member gets 404 (canViewBook → false → 404-no-leak, not 403).
+	assert.Equal(t, http.StatusNotFound, callBook(t, fx.h.GetBook, http.MethodGet, "/api/books/"+fx.bookID, nil, fx.claims(false), params).Code)
 	assert.Equal(t, http.StatusOK, callBook(t, fx.h.GetBook, http.MethodGet, "/api/books/"+fx.bookID, nil, fx.claims(true), params).Code)
 	assert.Equal(t, http.StatusNotFound, callBook(t, fx.h.GetBook, http.MethodGet, "/api/books/00000000-0000-0000-0000-000000000000", nil, fx.claims(true), map[string]string{"id": "00000000-0000-0000-0000-000000000000"}).Code)
 }
@@ -109,7 +112,8 @@ func TestBookHandler_Update_StatusPaths(t *testing.T) {
 	params := map[string]string{"id": fx.bookID}
 	body := map[string]any{"title": "Updated"}
 	assert.Equal(t, http.StatusUnauthorized, callBook(t, fx.h.UpdateBook, http.MethodPatch, "/api/books/"+fx.bookID, body, nil, params).Code)
-	assert.Equal(t, http.StatusForbidden, callBook(t, fx.h.UpdateBook, http.MethodPatch, "/api/books/"+fx.bookID, body, fx.claims(false), params).Code)
+	// Non-member gets 404 (canViewBook → false → 404-no-leak, not 403).
+	assert.Equal(t, http.StatusNotFound, callBook(t, fx.h.UpdateBook, http.MethodPatch, "/api/books/"+fx.bookID, body, fx.claims(false), params).Code)
 	assert.Equal(t, http.StatusBadRequest, callBook(t, fx.h.UpdateBook, http.MethodPatch, "/api/books/"+fx.bookID, map[string]any{"title": ""}, fx.claims(true), params).Code)
 	assert.Equal(t, http.StatusOK, callBook(t, fx.h.UpdateBook, http.MethodPatch, "/api/books/"+fx.bookID, body, fx.claims(true), params).Code)
 }
@@ -118,7 +122,8 @@ func TestBookHandler_Delete_StatusPaths(t *testing.T) {
 	fx := newBookFixture(t)
 	params := map[string]string{"id": fx.bookID}
 	assert.Equal(t, http.StatusUnauthorized, callBook(t, fx.h.DeleteBook, http.MethodDelete, "/api/books/"+fx.bookID, nil, nil, params).Code)
-	assert.Equal(t, http.StatusForbidden, callBook(t, fx.h.DeleteBook, http.MethodDelete, "/api/books/"+fx.bookID, nil, fx.claims(false), params).Code)
+	// Non-member gets 404 (canViewBook → false → 404-no-leak, not 403).
+	assert.Equal(t, http.StatusNotFound, callBook(t, fx.h.DeleteBook, http.MethodDelete, "/api/books/"+fx.bookID, nil, fx.claims(false), params).Code)
 	assert.Equal(t, http.StatusNoContent, callBook(t, fx.h.DeleteBook, http.MethodDelete, "/api/books/"+fx.bookID, nil, fx.claims(true), params).Code)
 	assert.Equal(t, http.StatusNotFound, callBook(t, fx.h.DeleteBook, http.MethodDelete, "/api/books/"+fx.bookID, nil, fx.claims(true), params).Code)
 }

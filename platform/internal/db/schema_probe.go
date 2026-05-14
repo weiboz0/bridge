@@ -110,14 +110,18 @@ func checkConstraints(ctx context.Context, sqlDB *sql.DB, s SchemaSentinels) err
 
 func checkIndexes(ctx context.Context, sqlDB *sql.DB, s SchemaSentinels) error {
 	for _, name := range s.Indexes {
+		// Plan 088 — relaxed: don't scope by tablename. A single migration
+		// can declare indexes on multiple tables (plan 088 added
+		// `chapters_book_idx` on `chapters` alongside the books-table
+		// indexes); the sentinel set is the union. `pg_indexes.indexname`
+		// is unique per schema, so dropping the tablename filter is safe.
 		var found sql.NullString
 		err := sqlDB.QueryRowContext(ctx, `
 			SELECT indexname
 			FROM pg_indexes
 			WHERE schemaname = 'public'
-			  AND tablename = $1
-			  AND indexname = $2
-		`, s.Table, name).Scan(&found)
+			  AND indexname = $1
+		`, name).Scan(&found)
 		if errors.Is(err, sql.ErrNoRows) {
 			return &ErrSchemaSentinelMissing{Table: s.Table, Kind: "index", Name: name}
 		}
