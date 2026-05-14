@@ -120,3 +120,59 @@ describe("ConfirmDialog", () => {
     expect(confirmBtn.className).not.toMatch(/bg-destructive/);
   });
 });
+
+describe("ConfirmDialog — type-to-confirm gate", () => {
+  it("disables Confirm when typeToConfirm is set and the input is empty", () => {
+    render(<ConfirmDialog {...defaultProps} typeToConfirm="Alice Teacher" confirmLabel="Grant" />);
+    const grantBtn = screen.getByRole("button", { name: "Grant" });
+    expect(grantBtn).toBeDisabled();
+  });
+
+  it("keeps Confirm disabled while the typed value doesn't match (case-sensitive)", () => {
+    render(<ConfirmDialog {...defaultProps} typeToConfirm="Alice Teacher" confirmLabel="Grant" />);
+    const input = screen.getByLabelText(/Type Alice Teacher to confirm/i);
+    fireEvent.change(input, { target: { value: "alice teacher" } });
+    expect(screen.getByRole("button", { name: "Grant" })).toBeDisabled();
+  });
+
+  it("enables Confirm when the typed value matches exactly (after trim)", () => {
+    render(<ConfirmDialog {...defaultProps} typeToConfirm="Alice Teacher" confirmLabel="Grant" />);
+    const input = screen.getByLabelText(/Type Alice Teacher to confirm/i);
+    fireEvent.change(input, { target: { value: "  Alice Teacher  " } });
+    expect(screen.getByRole("button", { name: "Grant" })).not.toBeDisabled();
+  });
+
+  it("clears the typed input when the dialog is reopened", () => {
+    const { rerender } = render(
+      <ConfirmDialog {...defaultProps} typeToConfirm="Alice Teacher" confirmLabel="Grant" />
+    );
+    const input = screen.getByLabelText(/Type Alice Teacher to confirm/i) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "Alice Teacher" } });
+    expect(input.value).toBe("Alice Teacher");
+
+    rerender(<ConfirmDialog {...defaultProps} typeToConfirm="Alice Teacher" confirmLabel="Grant" open={false} />);
+    rerender(<ConfirmDialog {...defaultProps} typeToConfirm="Alice Teacher" confirmLabel="Grant" open={true} />);
+
+    const reopened = screen.getByLabelText(/Type Alice Teacher to confirm/i) as HTMLInputElement;
+    expect(reopened.value).toBe("");
+  });
+
+  it("does NOT render the type-to-confirm input when typeToConfirm is omitted", () => {
+    render(<ConfirmDialog {...defaultProps} confirmLabel="Confirm" />);
+    expect(screen.queryByLabelText(/to confirm/i)).toBeNull();
+    // Confirm button is enabled (no gate) when typeToConfirm is unset.
+    expect(screen.getByRole("button", { name: "Confirm" })).not.toBeDisabled();
+  });
+
+  it("uses a custom typeToConfirmLabel when provided", () => {
+    render(
+      <ConfirmDialog
+        {...defaultProps}
+        typeToConfirm="org-abc"
+        typeToConfirmLabel="Type the org slug to confirm"
+        confirmLabel="Confirm"
+      />
+    );
+    expect(screen.getByLabelText("Type the org slug to confirm")).toBeInTheDocument();
+  });
+});

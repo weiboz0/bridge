@@ -2,6 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 
 interface ConfirmDialogProps {
   open: boolean;
@@ -13,6 +15,20 @@ interface ConfirmDialogProps {
   confirmLabel?: string;
   confirmingLabel?: string;
   destructive?: boolean;
+  /**
+   * If set, requires the user to type this string exactly (after trim) before
+   * the confirm button enables. Used to add extra friction to auth-changing
+   * operations that are reversible but high-impact (e.g. promote/demote
+   * platform admin). For irreversible ops (suspend), use SuspendUserDialog /
+   * SuspendOrgDialog instead — those are dedicated type-to-confirm dialogs.
+   */
+  typeToConfirm?: string;
+  /**
+   * Label for the type-to-confirm input. Defaults to "Type {typeToConfirm} to
+   * confirm". Provided callers can customize wording (e.g. "Type the user's
+   * name to confirm").
+   */
+  typeToConfirmLabel?: string;
 }
 
 export function ConfirmDialog({
@@ -25,9 +41,12 @@ export function ConfirmDialog({
   confirmLabel = "Confirm",
   confirmingLabel = "Confirming…",
   destructive = false,
+  typeToConfirm,
+  typeToConfirmLabel,
 }: ConfirmDialogProps) {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [typed, setTyped] = useState("");
 
   // Stable read of onClose from the keydown listener so the listener isn't
   // re-bound every parent render (callers commonly pass an inline arrow).
@@ -36,10 +55,11 @@ export function ConfirmDialog({
     onCloseRef.current = onClose;
   }, [onClose]);
 
-  // Reset error state each time the dialog opens.
+  // Reset error + typed state each time the dialog opens.
   useEffect(() => {
     if (open) {
       setError(null);
+      setTyped("");
     }
   }, [open]);
 
@@ -55,8 +75,12 @@ export function ConfirmDialog({
 
   if (!open) return null;
 
+  const typeToConfirmRequired = typeof typeToConfirm === "string" && typeToConfirm.length > 0;
+  const typeToConfirmSatisfied = !typeToConfirmRequired || typed.trim() === typeToConfirm.trim();
+  const confirmDisabled = submitting || !typeToConfirmSatisfied;
+
   async function handleConfirm() {
-    if (submitting) return;
+    if (confirmDisabled) return;
     setSubmitting(true);
     setError(null);
     let succeeded = false;
@@ -76,6 +100,9 @@ export function ConfirmDialog({
   }
 
   const titleId = "confirm-dialog-title";
+  const inputId = "confirm-dialog-type-input";
+  const resolvedTypeLabel =
+    typeToConfirmLabel ?? `Type ${typeToConfirm ?? ""} to confirm`;
 
   return (
     <div
@@ -92,6 +119,20 @@ export function ConfirmDialog({
           {title}
         </h2>
         <div className="text-sm text-muted-foreground mb-4">{body}</div>
+
+        {typeToConfirmRequired && (
+          <div className="space-y-1.5 mb-4">
+            <Label htmlFor={inputId}>{resolvedTypeLabel}</Label>
+            <Input
+              id={inputId}
+              autoFocus
+              value={typed}
+              onChange={(e) => setTyped(e.target.value)}
+              placeholder={typeToConfirm}
+              disabled={submitting}
+            />
+          </div>
+        )}
 
         {error && (
           <p role="alert" className="text-sm text-destructive mb-4">
@@ -110,9 +151,9 @@ export function ConfirmDialog({
           </Button>
           <Button
             type="button"
-            autoFocus
+            autoFocus={!typeToConfirmRequired}
             variant={destructive ? "destructive" : "default"}
-            disabled={submitting}
+            disabled={confirmDisabled}
             onClick={handleConfirm}
           >
             {submitting ? confirmingLabel : confirmLabel}
