@@ -148,9 +148,6 @@ export async function createTestChapter(
   return chapter;
 }
 
-/** @deprecated Use createTestChapter instead. */
-export const createTestTeachingUnit = createTestChapter;
-
 export async function createTestClass(
   courseId: string,
   orgId: string,

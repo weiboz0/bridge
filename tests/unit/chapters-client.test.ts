@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createUnit } from "@/lib/chapters";
+import { createChapter } from "@/lib/chapters";
 
-// Plan 054 drift fix / plan 088 phase 2 rename — `createUnit` was dropping
+// Plan 054 drift fix / plan 088 phase 2 rename — `createChapter` was dropping
 // `materialType` from the POST body. Without this assertion, the regression
 // silently returns; the picker becomes decorative and every chapter defaults to `notes`.
 
-describe("createUnit (Plan 054 drift fix)", () => {
+describe("createChapter (Plan 054 drift fix)", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
   });
@@ -19,7 +19,7 @@ describe("createUnit (Plan 054 drift fix)", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    await createUnit({
+    await createChapter({
       title: "Test Unit",
       scope: "personal",
       materialType: "worksheet",
@@ -42,7 +42,7 @@ describe("createUnit (Plan 054 drift fix)", () => {
       ),
     );
 
-    await createUnit({ title: "T", scope: "personal" });
+    await createChapter({ title: "T", scope: "personal" });
     const fetchMock = (globalThis.fetch as unknown) as ReturnType<typeof vi.fn>;
     const [, init] = fetchMock.mock.calls[0];
     const body = JSON.parse(init.body);
@@ -60,7 +60,7 @@ describe("createUnit (Plan 054 drift fix)", () => {
       );
       vi.stubGlobal("fetch", fetchMock);
 
-      await createUnit({ title: "T", scope: "personal", materialType: m });
+      await createChapter({ title: "T", scope: "personal", materialType: m });
       const [, init] = fetchMock.mock.calls[0];
       expect(JSON.parse(init.body).materialType).toBe(m);
     }

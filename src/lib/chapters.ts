@@ -56,9 +56,6 @@ export async function fetchChapter(id: string): Promise<Chapter | null> {
   return res.json() as Promise<Chapter>
 }
 
-/** @deprecated Use fetchChapter instead */
-export const fetchUnit = fetchChapter
-
 /**
  * Fetch the block document for a chapter. Returns null on 404/403.
  */
@@ -99,9 +96,6 @@ export async function createChapter(data: CreateChapterInput): Promise<Chapter> 
   }
   return res.json() as Promise<Chapter>
 }
-
-/** @deprecated Use createChapter instead */
-export const createUnit = createChapter
 
 /**
  * Transition a chapter to a new lifecycle status.
