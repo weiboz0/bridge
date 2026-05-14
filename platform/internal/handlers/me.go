@@ -45,6 +45,7 @@ func (h *MeHandler) GetIdentity(w http.ResponseWriter, r *http.Request) {
 		"email":           claims.Email,
 		"name":            claims.Name,
 		"isPlatformAdmin": claims.IsPlatformAdmin,
+		"status":          claims.Status,
 		"impersonatedBy":  claims.ImpersonatedBy,
 	})
 }

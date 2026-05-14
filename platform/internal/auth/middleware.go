@@ -160,6 +160,7 @@ func (m *Middleware) RequireAuth(next http.Handler) http.Handler {
 				Name:            "Dev User",
 				Email:           "dev@localhost",
 				IsPlatformAdmin: devUser == "admin",
+				Status:          "active",
 				ImpersonatedBy:  "",
 			}
 			// If it looks like a UUID, use it as-is. Otherwise treat "admin"
@@ -183,7 +184,11 @@ func (m *Middleware) RequireAuth(next http.Handler) http.Handler {
 		// impersonation overlay) reads it. ~80 handler sites read
 		// this field; the middleware-layer overwrite makes them all
 		// automatically live without per-handler changes.
-		m.injectLiveAdmin(r.Context(), claims)
+		m.injectLiveStatus(r.Context(), claims)
+		if claims.Status == "suspended" {
+			writeJSONError(w, http.StatusUnauthorized, "Account suspended. Contact your administrator.")
+			return
+		}
 
 		// Impersonation overlay runs AFTER live-admin injection so
 		// the gate (claims.IsPlatformAdmin) reflects the live DB
@@ -278,26 +283,34 @@ func bridgeClaimsToCanonical(c *BridgeSessionClaims) *Claims {
 	}
 }
 
-// injectLiveAdmin overwrites claims.IsPlatformAdmin with the live
-// value from the DB (cached for 60s by CachedAdminChecker). On any
-// error or absence of an AdminChecker, falls CLOSED — sets the
-// claim to false. We would rather temporarily 403 a real admin
-// during a DB hiccup than silently grant admin to a stale JWT.
+// injectLiveStatus overwrites claims.IsPlatformAdmin and claims.Status with
+// live values from the DB (cached for 60s by CachedAdminChecker).
+//
+// On lookup error, the failure mode is asymmetric:
+//   - IsPlatformAdmin → fail CLOSED (force false). We'd rather temporarily
+//     403 a real admin than silently grant admin from a stale JWT.
+//   - Status → fail OPEN (leave as ""). A suspended user would briefly slip
+//     through during a DB outage, but blocking ALL auth during DB hiccups is
+//     worse than the small window where suspended users still see "active"
+//     behavior. The cache is purged on suspend (admin handler calls Purge),
+//     so the only way to hit this fail-open window is a true DB outage AND
+//     no fresh cache entry — narrow surface, acceptable risk.
 //
 // Mutates *claims in place; safe because each request gets its
 // own claims instance from VerifyToken/VerifyBridgeSession.
-func (m *Middleware) injectLiveAdmin(ctx context.Context, claims *Claims) {
+func (m *Middleware) injectLiveStatus(ctx context.Context, claims *Claims) {
 	if m.AdminChecker == nil || claims == nil || claims.UserID == "" {
 		return
 	}
-	isAdmin, err := m.AdminChecker.IsAdmin(ctx, claims.UserID)
+	isAdmin, status, err := m.AdminChecker.AdminAndStatus(ctx, claims.UserID)
 	if err != nil {
-		slog.Warn("live admin lookup failed, fail-closing IsPlatformAdmin",
+		slog.Warn("live admin/status lookup failed, fail-closing IsPlatformAdmin (status left unset → fail-open)",
 			"err", err, "userID", claims.UserID)
 		claims.IsPlatformAdmin = false
 		return
 	}
 	claims.IsPlatformAdmin = isAdmin
+	claims.Status = status
 }
 
 // applyImpersonationOverlay returns either `claims` unchanged or a
@@ -328,7 +341,12 @@ func applyImpersonationOverlay(r *http.Request, claims *Claims) *Claims {
 		Email:           impData.TargetEmail,
 		Name:            impData.TargetName,
 		IsPlatformAdmin: false,
-		ImpersonatedBy:  impData.OriginalUserID,
+		// Hardcoded "active" — impersonation is an admin support tool, not a
+		// way to "experience" a suspended user's blocked state. The admin
+		// remains authenticated as the target's identity for handler purposes;
+		// the target's actual status is irrelevant to the impersonation flow.
+		Status:         "active",
+		ImpersonatedBy: impData.OriginalUserID,
 	}
 }
 
@@ -351,7 +369,15 @@ func (m *Middleware) OptionalAuth(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		m.injectLiveAdmin(r.Context(), claims)
+		m.injectLiveStatus(r.Context(), claims)
+		if claims.Status == "suspended" {
+			// Treat as unauthenticated: pass through without injecting claims
+			// into the request context. Downstream handlers see no identity,
+			// same as a logged-out request. This is the OptionalAuth analog of
+			// RequireAuth's 401-on-suspended.
+			next.ServeHTTP(w, r)
+			return
+		}
 		claims = applyImpersonationOverlay(r, claims)
 		r = r.WithContext(ContextWithClaims(r.Context(), claims))
 		next.ServeHTTP(w, r)

@@ -29,9 +29,10 @@ describe("Schema exports", () => {
     expect(schema.orgMemberStatusEnum).toBeDefined();
   });
 
-  it("users table has isPlatformAdmin and no role/schoolId", () => {
+  it("users table has isPlatformAdmin + status and no role/schoolId", () => {
     const columns = Object.keys(schema.users);
     expect(columns).toContain("isPlatformAdmin");
+    expect(columns).toContain("status");
     expect(columns).not.toContain("role");
     expect(columns).not.toContain("schoolId");
   });

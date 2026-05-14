@@ -18,6 +18,7 @@ type Claims struct {
 	Email           string `json:"email"`
 	Name            string `json:"name"`
 	IsPlatformAdmin bool   `json:"isPlatformAdmin"`
+	Status          string `json:"status,omitempty"`
 	ImpersonatedBy  string `json:"impersonatedBy,omitempty"`
 }
 
@@ -156,6 +157,12 @@ func extractClaims(raw map[string]any) *Claims {
 	if v, ok := raw["isPlatformAdmin"].(bool); ok {
 		claims.IsPlatformAdmin = v
 	}
+
+	// Claims.Status is intentionally NOT extracted from the JWT payload.
+	// It's populated downstream by injectLiveStatus from the live cache so
+	// suspensions take effect within the cache TTL (and immediately on
+	// admin-handler Purge), not at JWT expiry. Leaving it as "" here keeps
+	// the JWT shape stable and signals "not yet known".
 
 	// Handle "picture" → ignore (not needed in Claims)
 	_ = strings.TrimSpace // ensure strings is used

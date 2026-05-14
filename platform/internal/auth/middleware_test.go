@@ -40,6 +40,104 @@ func TestRequireAuth_ValidToken(t *testing.T) {
 	assert.Equal(t, "test@example.com", gotClaims.Email)
 }
 
+func TestRequireAuth_RejectsSuspended(t *testing.T) {
+	checker := &stubAdminChecker{result: false, status: "suspended"}
+	mw := NewMiddleware(testSecret)
+	mw.WithBridgeSession(nil, false, checker)
+	tokenStr := makeToken(t, jwt.MapClaims{
+		"id":    "user-1",
+		"email": "test@example.com",
+		"name":  "Test",
+		"exp":   time.Now().Add(time.Hour).Unix(),
+	}, testSecret)
+
+	handler := mw.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("handler should not be called for suspended user")
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Authorization", "Bearer "+tokenStr)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+	assert.Contains(t, w.Body.String(), "Account suspended")
+}
+
+func TestRequireAuth_ActiveStatusPasses(t *testing.T) {
+	checker := &stubAdminChecker{result: true, status: "active"}
+	mw := NewMiddleware(testSecret)
+	mw.WithBridgeSession(nil, false, checker)
+	tokenStr := makeToken(t, jwt.MapClaims{
+		"id":    "user-1",
+		"email": "test@example.com",
+		"name":  "Test",
+		"exp":   time.Now().Add(time.Hour).Unix(),
+	}, testSecret)
+
+	var gotClaims *Claims
+	handler := mw.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotClaims = GetClaims(r.Context())
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Authorization", "Bearer "+tokenStr)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.NotNil(t, gotClaims)
+	assert.True(t, gotClaims.IsPlatformAdmin)
+	assert.Equal(t, "active", gotClaims.Status)
+}
+
+func TestOptionalAuth_TreatsSuspendedAsUnauthenticated(t *testing.T) {
+	checker := &stubAdminChecker{result: false, status: "suspended"}
+	mw := NewMiddleware(testSecret)
+	mw.WithBridgeSession(nil, false, checker)
+	tokenStr := makeToken(t, jwt.MapClaims{
+		"id":    "user-1",
+		"email": "test@example.com",
+		"name":  "Test",
+		"exp":   time.Now().Add(time.Hour).Unix(),
+	}, testSecret)
+
+	var gotClaims *Claims
+	handler := mw.OptionalAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotClaims = GetClaims(r.Context())
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Authorization", "Bearer "+tokenStr)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Nil(t, gotClaims)
+}
+
+func TestRequireAuth_DevSkipAuth_SetsStatusActive(t *testing.T) {
+	t.Setenv("DEV_SKIP_AUTH", "admin")
+	mw := NewMiddleware(testSecret)
+
+	var gotClaims *Claims
+	handler := mw.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotClaims = GetClaims(r.Context())
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.NotNil(t, gotClaims)
+	assert.Equal(t, "active", gotClaims.Status)
+	assert.True(t, gotClaims.IsPlatformAdmin)
+}
+
 func TestRequireAuth_MissingHeader(t *testing.T) {
 	mw := NewMiddleware(testSecret)
 	handler := mw.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -194,9 +292,9 @@ func TestRequireAdmin_AllowedWhenImpersonating(t *testing.T) {
 	// Impersonated user is NOT admin, but the impersonator was
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	ctx := ContextWithClaims(req.Context(), &Claims{
-		UserID:         "target-1",
+		UserID:          "target-1",
 		IsPlatformAdmin: false,
-		ImpersonatedBy: "admin-1",
+		ImpersonatedBy:  "admin-1",
 	})
 	req = req.WithContext(ctx)
 	w := httptest.NewRecorder()

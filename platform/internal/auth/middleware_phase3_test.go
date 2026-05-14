@@ -30,6 +30,7 @@ const (
 // The result and error are programmable per-instance.
 type stubAdminChecker struct {
 	result bool
+	status string
 	err    error
 	calls  int
 }
@@ -38,6 +39,20 @@ func (s *stubAdminChecker) IsAdmin(_ context.Context, _ string) (bool, error) {
 	s.calls++
 	return s.result, s.err
 }
+
+func (s *stubAdminChecker) AdminAndStatus(_ context.Context, _ string) (bool, string, error) {
+	s.calls++
+	if s.err != nil {
+		return false, "", s.err
+	}
+	status := s.status
+	if status == "" {
+		status = "active"
+	}
+	return s.result, status, nil
+}
+
+func (s *stubAdminChecker) Purge(_ string) {}
 
 // makeBridgeToken signs a Bridge session JWT for tests.
 func makeBridgeToken(t *testing.T, secret, sub, email, name string, isAdmin bool) string {
@@ -270,7 +285,7 @@ func TestRequireAuth_LiveAdmin_DemotesAdminJWTViaDB(t *testing.T) {
 }
 
 func TestRequireAuth_LiveAdmin_DBErrorFailsClosed(t *testing.T) {
-	// AdminChecker returns an error (DB outage). injectLiveAdmin
+	// AdminChecker returns an error (DB outage). injectLiveStatus
 	// fails CLOSED — sets IsPlatformAdmin=false rather than
 	// trusting the JWT-carried value (which could be true). We'd
 	// rather temporarily 403 a real admin than silently grant.
@@ -414,7 +429,7 @@ func TestRequireAuth_LiveAdmin_DemotedAdminCannotImpersonate(t *testing.T) {
 
 func TestRequireAdmin_LiveDemoted_403(t *testing.T) {
 	// User signs in as admin, gets demoted in DB, hits an admin
-	// endpoint. The Phase-3 RequireAuth → injectLiveAdmin chain
+	// endpoint. The Phase-3 RequireAuth → injectLiveStatus chain
 	// overwrites IsPlatformAdmin to false; mw.RequireAdmin then
 	// 403s. End-to-end test of the live-revocation guarantee.
 	checker := &stubAdminChecker{result: false}

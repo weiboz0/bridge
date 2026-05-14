@@ -267,3 +267,96 @@ Join a session using an invite token. The user must be logged in.
 - `401` — Not authenticated
 - `404` — Invalid or unknown invite token
 - `410` — Invite link expired or session has ended
+
+---
+
+## Platform Admin — Users
+
+All endpoints require `is_platform_admin = true`. RequireAuth additionally returns 401 on `status = 'suspended'` users (admin or otherwise — the cached admin/status check shares a 60s TTL but is purged immediately on suspend / toggle-admin writes; see `platform/internal/auth/admin_check.go`).
+
+### `GET /api/admin/users`
+
+List platform-admin users with optional filters.
+
+**Query parameters:**
+- `role` (optional) — `org_admin` | `teacher` | `student` | `parent` | `platform_admin` | `unassigned`. Filters by primary org-membership role; `platform_admin` filters by `users.is_platform_admin`; `unassigned` returns users with no active org membership AND `is_platform_admin = false`.
+- `orgId` (optional, UUID) — filter to users whose primary org-membership is in this org. Combinable with `role` (AND).
+
+**Response (`200`):** array of `AdminUser`:
+```json
+[
+  {
+    "id": "uuid",
+    "name": "Alice",
+    "email": "alice@school.edu",
+    "avatarUrl": null,
+    "isPlatformAdmin": false,
+    "status": "active",
+    "orgRole": "teacher",
+    "orgId": "uuid",
+    "orgName": "Riverdale School",
+    "hasPassword": true,
+    "createdAt": "2026-04-01T00:00:00Z",
+    "updatedAt": "2026-05-01T00:00:00Z"
+  }
+]
+```
+
+Primary org-membership = earliest active membership by `created_at` (LATERAL `LIMIT 1`). Users with no active membership have null `orgRole` / `orgId` / `orgName`.
+
+**Errors:**
+- `400` — Unknown role value or malformed orgId UUID
+- `401` — Not authenticated (incl. suspended)
+- `403` — Not a platform admin
+
+### `GET /api/admin/users/{userID}`
+
+Return a single enriched user.
+
+**Response (`200`):** `AdminUser` (same shape as the list endpoint, single object).
+
+**Errors:**
+- `400` — Malformed UUID
+- `401` — Not authenticated (incl. suspended)
+- `403` — Not a platform admin
+- `404` — User not found
+
+### `PATCH /api/admin/users/{userID}/status`
+
+Suspend or reactivate a user. Invalidates the admin-status cache entry for the target user immediately (`AdminChecker.Purge(userID)`), so the change takes effect on the next request — no 60s wait.
+
+**Request body:**
+```json
+{ "status": "active" | "suspended" }
+```
+
+**Response (`200`):** the updated `AdminUser` row.
+
+**Errors:**
+- `400` — Invalid status value, malformed UUID, OR self-target (cannot change own status)
+- `401` — Not authenticated (incl. suspended)
+- `403` — Not a platform admin
+- `404` — User not found
+
+### `PATCH /api/admin/users/{userID}/platform-admin`
+
+Promote / demote a user as platform admin. Invalidates the cache entry for the target user immediately.
+
+**Request body:**
+```json
+{ "isPlatformAdmin": true | false }
+```
+
+**Response (`200`):** the updated `AdminUser` row.
+
+**Errors:**
+- `400` — Malformed UUID OR self-demote attempt (cannot remove own platform-admin role)
+- `401` — Not authenticated (incl. suspended)
+- `403` — Not a platform admin
+- `404` — User not found
+
+### Auth semantics for suspended users
+
+- `RequireAuth` returns `401` on `status='suspended'` regardless of admin status.
+- `OptionalAuth` treats suspended as unauthenticated (claims dropped, request proceeds without identity).
+- NextAuth `authorize()` does NOT currently check `users.status` — a suspended user can still complete sign-in but will 401 on the first subsequent Go-proxied request. Acceptable v1; a future plan will add the check for graceful "Account suspended" sign-in failure.
