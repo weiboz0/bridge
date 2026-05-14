@@ -519,7 +519,24 @@ Open concerns flagged for external reviewers:
 | DeepSeek V4 Pro | **CONCUR + caveat** | Caveat: Phase 1/2 commit push-timing must not leave the remote branch in half-renamed state → FIXED with explicit push-timing instructions at top of Phase 1. Additional folds: (a) Pre-impl `\d` audit also covers triggers/views/functions; (b) Frontend Yjs provider sites generating `"unit:"` doc names also rename; (c) SQL string-literal trap callout in pre-impl audit (Go `"SELECT ... FROM teaching_units"` survives compilation). Suggested cutting personal-scope books → FIXED (Decision #5 narrowed). |
 | GLM 5.1 | **BLOCKER + nits** | BLOCKER: 4 satellite tables (`unit_documents`, `unit_revisions`, `unit_overlays`, `unit_collection_items`) + their `unit_id` columns must rename → FIXED in §1a with explicit ALTER TABLE statements. Confirmed Hocuspocus collab keys at specific line numbers (server/hocuspocus.ts:140/164, realtime_token.go:308/335-340); folded into §1g. Confirmed fixture helpers are `newUnitFixture`, `mkUnit`, `linkUnitFixture`, `collectionFixture` (not `seedUnit` as I assumed); plan rename audit step catches all. |
 
-**Plan revised in commits `cae482f` → ⟨round-1-folds⟩**. GLM BLOCKER cleanly resolved (satellite tables explicit). Codex + DeepSeek nits all folded. Re-dispatching GLM only since they were the BLOCKER reviewer.
+**Plan revised in commits `cae482f` → `117e4ff`**. GLM BLOCKER cleanly resolved (satellite tables explicit). Codex + DeepSeek nits all folded.
+
+### Round 2 verdict — 2026-05-14
+
+| Reviewer | Verdict | Notes |
+|----------|---------|-------|
+| GLM 5.1 (round 2) | **CONCUR** | Satellite-table renames cleanly resolved per round-1 BLOCKER. One non-blocking note: satellite-table indexes/constraints aren't enumerated by name like the main table's (the pre-impl `\d` audit step + "spec all renames in this migration" instruction covers it). |
+
+### Final 4-way gate status
+
+| Reviewer | Final verdict |
+|----------|---------------|
+| Self (Opus 4.7) | CONCUR |
+| Codex | CONCUR (round 1) |
+| DeepSeek V4 Pro | CONCUR (round 1) |
+| GLM 5.1 | CONCUR (round 2) |
+
+**Gate is clean. Plan 088 ready for implementation.**
 
 ## Code Review
 
