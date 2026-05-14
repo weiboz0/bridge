@@ -1,10 +1,9 @@
 "use client";
 
-// book-picker-dialog.tsx — lets caller pick a book (or null = "Unfiled")
-// for assigning a chapter to a book.
-//
-// TODO(plan 088 phase 3): wire this into the chapter-edit page once the
-// chapter-edit page is updated to support bookId assignment.
+// book-picker-dialog.tsx — lets a caller pick a book (or null = "Unfiled")
+// for assigning a chapter to a book. Built as a reusable library component
+// in plan 088 phase 3; the chapter-edit page integration ships with the
+// next plan that touches that page.
 
 import { useEffect, useRef, useState } from "react";
 import { Input } from "@/components/ui/input";

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 
 	"github.com/weiboz0/bridge/platform/internal/auth"
 	"github.com/weiboz0/bridge/platform/internal/projection"
@@ -255,10 +256,12 @@ func joinBlockTypes() string {
 
 // ---------- Handlers ----------
 
-// ListChapters — GET /api/chapters?scope=&scopeId=
+// ListChapters — GET /api/chapters?scope=&scopeId=&bookId=
 // Returns units the caller can view. Scope + scopeId filter to a specific
 // bucket; omitting both returns all units visible to the caller (this plan
-// returns units from the requested bucket only for simplicity).
+// returns units from the requested bucket only for simplicity). bookId
+// optionally filters to chapters in a specific book; pass `unfiled` to
+// match chapters with NULL book_id.
 func (h *ChapterHandler) ListChapters(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
@@ -268,10 +271,25 @@ func (h *ChapterHandler) ListChapters(w http.ResponseWriter, r *http.Request) {
 
 	scope := r.URL.Query().Get("scope")
 	scopeIDRaw := r.URL.Query().Get("scopeId")
+	bookIDRaw := r.URL.Query().Get("bookId")
 
 	if scope != "" && !validChapterScopes[scope] {
 		writeError(w, http.StatusBadRequest, "scope must be platform, org, or personal")
 		return
+	}
+
+	var bookFilter store.ChapterBookFilter
+	if bookIDRaw != "" {
+		if bookIDRaw == "unfiled" {
+			empty := ""
+			bookFilter = &empty
+		} else {
+			if _, err := uuid.Parse(bookIDRaw); err != nil {
+				writeError(w, http.StatusBadRequest, "bookId must be a UUID or 'unfiled'")
+				return
+			}
+			bookFilter = &bookIDRaw
+		}
 	}
 
 	// If no scope is provided, default to returning units across all accessible
@@ -283,7 +301,7 @@ func (h *ChapterHandler) ListChapters(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	units, err := h.Units.ListChaptersForScope(r.Context(), scope, scopeIDRaw)
+	units, err := h.Units.ListChaptersForScope(r.Context(), scope, scopeIDRaw, bookFilter)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
@@ -338,6 +356,19 @@ func (h *ChapterHandler) SearchChapters(w http.ResponseWriter, r *http.Request) 
 	if filter.Scope != "" && !validChapterScopes[filter.Scope] {
 		writeError(w, http.StatusBadRequest, "scope must be platform, org, or personal")
 		return
+	}
+
+	if bookIDRaw := q.Get("bookId"); bookIDRaw != "" {
+		if bookIDRaw == "unfiled" {
+			empty := ""
+			filter.BookFilter = &empty
+		} else {
+			if _, err := uuid.Parse(bookIDRaw); err != nil {
+				writeError(w, http.StatusBadRequest, "bookId must be a UUID or 'unfiled'")
+				return
+			}
+			filter.BookFilter = &bookIDRaw
+		}
 	}
 
 	if tags := q.Get("tags"); tags != "" {

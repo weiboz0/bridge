@@ -59,10 +59,7 @@ export default async function AdminBookDetailPage({
   }
 
   let book: BookDetail;
-  // chapters in this book; backend filter by bookId not yet supported —
-  // TODO(plan 088 phase 3): backend doesn't filter chapters by bookId via
-  // GET /api/chapters yet. Leaving chapter list empty for now.
-  const chapters: Chapter[] = [];
+  let chapters: Chapter[] = [];
   let orgName: string | null = null;
 
   try {
@@ -120,6 +117,16 @@ export default async function AdminBookDetailPage({
     } catch {
       // Org might be deleted or inaccessible; fall back to ID.
     }
+  }
+
+  // Fetch chapters assigned to this book (scope-matched).
+  const chaptersQs = new URLSearchParams({ scope: book.scope, bookId: id });
+  if (book.scope === "org" && book.scopeId) chaptersQs.set("scopeId", book.scopeId);
+  try {
+    const resp = await api<{ items: Chapter[] }>(`/api/chapters?${chaptersQs.toString()}`);
+    chapters = resp.items ?? [];
+  } catch {
+    // Empty list on failure — non-critical for the metadata page.
   }
 
   function scopeBadgeClass(s: string) {
@@ -189,9 +196,7 @@ export default async function AdminBookDetailPage({
         <CardContent>
           {chapters.length === 0 ? (
             <p className="text-sm text-muted-foreground">
-              No chapters assigned yet.{" "}
-              {/* TODO(plan 088 phase 3): once backend supports ?bookId= filter
-                  on GET /api/chapters, fetch and display chapters here. */}
+              No chapters assigned yet.
             </p>
           ) : (
             <div className="border rounded-lg overflow-hidden">

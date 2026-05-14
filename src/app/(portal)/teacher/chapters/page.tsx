@@ -126,10 +126,8 @@ export default function ChapterLibraryPage() {
   const [gradeLevel, setGradeLevel] = useState("")
   const [tagsInput, setTagsInput] = useState("")
 
-  // Book filter state.
-  // TODO(plan 088 phase 3): backend GET /api/chapters/search doesn't accept
-  // a ?bookId= param yet. The state is wired in but not forwarded to the API
-  // until that backend gap is closed in a follow-up plan.
+  // Book filter state. "" = no filter; "unfiled" = chapters with NULL book_id;
+  // otherwise a book UUID.
   const [bookId, setBookId] = useState<string>("")
   const [books, setBooks] = useState<BookOption[]>([])
 
@@ -250,11 +248,12 @@ export default function ChapterLibraryPage() {
         scopeId,
         gradeLevel: gradeLevel || undefined,
         tags: tags.length > 0 ? tags : undefined,
+        bookId: bookId || undefined,
         limit: 20,
         cursor: cursor || undefined,
       }
     },
-    [activeTab, selectedOrgId, debouncedQuery, gradeLevel, tagsInput, session?.user?.id]
+    [activeTab, selectedOrgId, debouncedQuery, gradeLevel, tagsInput, bookId, session?.user?.id]
   )
 
   // Fresh search whenever filters change

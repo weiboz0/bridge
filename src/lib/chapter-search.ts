@@ -20,6 +20,9 @@ export interface SearchParams {
   limit?: number
   cursor?: string
   linkableForCourse?: string
+  /** Filter by book membership. Pass a book UUID or "unfiled" for chapters
+   *  with NULL book_id. Omit to disable the filter. */
+  bookId?: string
 }
 
 export interface SearchResultItem {
@@ -74,6 +77,7 @@ export async function searchChapters(params: SearchParams): Promise<SearchResult
   if (params.limit != null) query.set("limit", String(params.limit))
   if (params.cursor) query.set("cursor", params.cursor)
   if (params.linkableForCourse) query.set("linkableForCourse", params.linkableForCourse)
+  if (params.bookId) query.set("bookId", params.bookId)
 
   try {
     const res = await fetch(`/api/chapters/search?${query}`)
@@ -88,5 +92,3 @@ export async function searchChapters(params: SearchParams): Promise<SearchResult
   }
 }
 
-/** @deprecated Use searchChapters instead */
-export const searchUnits = searchChapters

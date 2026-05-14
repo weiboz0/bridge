@@ -542,7 +542,7 @@ func TestChapterStore_ListChaptersForScope_OrgUnits(t *testing.T) {
 		db.ExecContext(ctx, `DELETE FROM chapters WHERE id = $1`, otherUnit.ID)
 	})
 
-	list, err := units.ListChaptersForScope(ctx, "org", orgID)
+	list, err := units.ListChaptersForScope(ctx, "org", orgID, nil)
 	require.NoError(t, err)
 	require.Len(t, list, 2)
 
@@ -565,7 +565,7 @@ func TestChapterStore_ListChaptersForScope_PlatformUnits(t *testing.T) {
 		Scope: "platform", ScopeID: nil, Title: "Platform List Unit", CreatedBy: userID,
 	})
 
-	list, err := units.ListChaptersForScope(ctx, "platform", "")
+	list, err := units.ListChaptersForScope(ctx, "platform", "", nil)
 	require.NoError(t, err)
 	require.NotEmpty(t, list)
 
@@ -588,7 +588,7 @@ func TestChapterStore_ListChaptersForScope_PersonalUnits(t *testing.T) {
 		Scope: "personal", ScopeID: &userID, Title: "Personal Unit", CreatedBy: userID,
 	})
 
-	list, err := units.ListChaptersForScope(ctx, "personal", userID)
+	list, err := units.ListChaptersForScope(ctx, "personal", userID, nil)
 	require.NoError(t, err)
 	require.NotEmpty(t, list)
 
@@ -607,7 +607,7 @@ func TestChapterStore_ListChaptersForScope_EmptyScope(t *testing.T) {
 	ctx := context.Background()
 
 	// Use a non-existent scope_id for an org scope — should be empty
-	list, err := units.ListChaptersForScope(ctx, "org", "00000000-0000-0000-0000-000000000000")
+	list, err := units.ListChaptersForScope(ctx, "org", "00000000-0000-0000-0000-000000000000", nil)
 	require.NoError(t, err)
 	require.NotNil(t, list)
 	assert.Len(t, list, 0)
@@ -630,7 +630,7 @@ func TestChapterStore_ListChaptersForScope_OrderByUpdatedAtDesc(t *testing.T) {
 	_, err := db.ExecContext(ctx, "UPDATE chapters SET updated_at = $1 WHERE id = $2", future, u1.ID)
 	require.NoError(t, err)
 
-	list, err := units.ListChaptersForScope(ctx, "personal", userID)
+	list, err := units.ListChaptersForScope(ctx, "personal", userID, nil)
 	require.NoError(t, err)
 	require.Len(t, list, 2)
 	assert.Equal(t, u1.ID, list[0].ID, "unit with newer updated_at should come first")

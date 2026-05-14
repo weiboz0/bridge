@@ -539,26 +539,39 @@ func (s *ChapterStore) DeleteChapter(ctx context.Context, id string) (*Chapter, 
 		`DELETE FROM chapters WHERE id = $1 RETURNING `+chapterColumns, id))
 }
 
+// ChapterBookFilter scopes a chapter list by book membership. Values:
+//   - nil:               no filter (default).
+//   - non-nil ptr to ID: WHERE book_id = ID.
+//   - non-nil ptr to "": WHERE book_id IS NULL (the "unfiled" sentinel).
+type ChapterBookFilter = *string
+
 // ListChaptersForScope returns all units for the given scope and scopeID, ordered
-// by updated_at DESC. Pass an empty scopeID for scope="platform".
-func (s *ChapterStore) ListChaptersForScope(ctx context.Context, scope, scopeID string) ([]Chapter, error) {
+// by updated_at DESC. Pass an empty scopeID for scope="platform". Pass bookFilter
+// to additionally restrict by book membership (see ChapterBookFilter).
+func (s *ChapterStore) ListChaptersForScope(ctx context.Context, scope, scopeID string, bookFilter ChapterBookFilter) ([]Chapter, error) {
 	var (
-		rows *sql.Rows
-		err  error
+		query strings.Builder
+		args  []any
 	)
+	query.WriteString(`SELECT ` + chapterColumns + ` FROM chapters WHERE scope = $1`)
+	args = append(args, scope)
 	if scopeID == "" {
-		rows, err = s.db.QueryContext(ctx, `
-			SELECT `+chapterColumns+`
-			FROM chapters
-			WHERE scope = $1 AND scope_id IS NULL
-			ORDER BY updated_at DESC`, scope)
+		query.WriteString(` AND scope_id IS NULL`)
 	} else {
-		rows, err = s.db.QueryContext(ctx, `
-			SELECT `+chapterColumns+`
-			FROM chapters
-			WHERE scope = $1 AND scope_id = $2
-			ORDER BY updated_at DESC`, scope, scopeID)
+		args = append(args, scopeID)
+		query.WriteString(fmt.Sprintf(` AND scope_id = $%d`, len(args)))
 	}
+	if bookFilter != nil {
+		if *bookFilter == "" {
+			query.WriteString(` AND book_id IS NULL`)
+		} else {
+			args = append(args, *bookFilter)
+			query.WriteString(fmt.Sprintf(` AND book_id = $%d`, len(args)))
+		}
+	}
+	query.WriteString(` ORDER BY updated_at DESC`)
+
+	rows, err := s.db.QueryContext(ctx, query.String(), args...)
 	if err != nil {
 		return nil, err
 	}
@@ -727,6 +740,7 @@ type SearchChaptersFilter struct {
 	GradeLevel      string
 	MaterialType    string   // Plan 045: "" = any; notes | slides | worksheet | reference
 	SubjectTags     []string // AND semantics (subject_tags @> $tags)
+	BookFilter      ChapterBookFilter // nil=any; non-nil empty=unfiled; non-nil uuid=specific book
 	ViewerID        string
 	ViewerOrgs      []string // org IDs where viewer has teacher/admin membership
 	IsPlatformAdmin bool
@@ -806,6 +820,15 @@ func (s *ChapterStore) SearchChapters(ctx context.Context, f SearchChaptersFilte
 		where = append(where, fmt.Sprintf("grade_level = $%d", idx))
 		args = append(args, f.GradeLevel)
 		idx++
+	}
+	if f.BookFilter != nil {
+		if *f.BookFilter == "" {
+			where = append(where, "book_id IS NULL")
+		} else {
+			where = append(where, fmt.Sprintf("book_id = $%d", idx))
+			args = append(args, *f.BookFilter)
+			idx++
+		}
 	}
 	if f.MaterialType != "" {
 		where = append(where, fmt.Sprintf("material_type = $%d", idx))
