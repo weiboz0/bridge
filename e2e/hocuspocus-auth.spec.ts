@@ -120,7 +120,7 @@ test.describe("Plan 053 phase 3 — realtime token mint (HTTP)", () => {
     const unitId = unitsBody.units?.[0]?.id;
     expect(unitId).toBeDefined();
 
-    const documentName = `unit:${unitId}`;
+    const documentName = `chapter:${unitId}`;
     const res = await page.request.post("/api/realtime/token", {
       data: { documentName },
       headers: { "Content-Type": "application/json" },
@@ -151,7 +151,7 @@ test.describe("Plan 053 phase 3 — realtime token mint (HTTP)", () => {
 
   test("unauthenticated request to mint endpoint returns 401", async ({ request }) => {
     const res = await request.post("/api/realtime/token", {
-      data: { documentName: "unit:any" },
+      data: { documentName: "chapter:any" },
       headers: { "Content-Type": "application/json" },
     });
     expect(res.status()).toBe(401);
@@ -160,7 +160,7 @@ test.describe("Plan 053 phase 3 — realtime token mint (HTTP)", () => {
   test("authenticated request for an unauthorized doc-name returns 403/404", async ({ page }) => {
     await loginWithCredentials(page, ACCOUNTS.student.email, ACCOUNTS.student.password);
     const res = await page.request.post("/api/realtime/token", {
-      data: { documentName: "unit:00000000-0000-0000-0000-000000000000" },
+      data: { documentName: "chapter:00000000-0000-0000-0000-000000000000" },
       headers: { "Content-Type": "application/json" },
     });
     if (res.status() === 503) {
@@ -189,7 +189,7 @@ test.describe("Plan 053 phase 3 — Hocuspocus WebSocket auth", () => {
     const unitId = units?.[0]?.id;
     expect(unitId).toBeDefined();
 
-    const documentName = `unit:${unitId}`;
+    const documentName = `chapter:${unitId}`;
 
     // Mint via the real Go API so the JWT round-trips through the
     // production code path. Then drop into Node-side provider.
@@ -207,7 +207,7 @@ test.describe("Plan 053 phase 3 — Hocuspocus WebSocket auth", () => {
   });
 
   test("FORGED JWT — wrong secret signs → auth fails", async () => {
-    const documentName = "unit:00000000-0000-0000-0000-000000000099";
+    const documentName = "chapter:00000000-0000-0000-0000-000000000099";
     const forged = mintRealtimeJwt({
       secret: "WRONG-SECRET-attacker-does-not-have-the-real-one",
       sub: "any-user",
@@ -224,7 +224,7 @@ test.describe("Plan 053 phase 3 — Hocuspocus WebSocket auth", () => {
   });
 
   test("EXPIRED JWT — correct signature but exp in the past → auth fails", async () => {
-    const documentName = "unit:00000000-0000-0000-0000-000000000099";
+    const documentName = "chapter:00000000-0000-0000-0000-000000000099";
     const expired = mintRealtimeJwt({
       secret: TOKEN_SECRET,
       sub: "any-user",
