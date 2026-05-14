@@ -540,7 +540,51 @@ Open concerns flagged for external reviewers:
 
 ## Code Review
 
-(Placeholder — to be filled after Phase 4.)
+### Round 1 (after Phase 4 verify, against `cf691c5`)
+
+Dispatched 4-way in parallel (Codex, DeepSeek V4 Flash, GLM 5.1, plus self-review).
+
+| Reviewer | Verdict | Blockers |
+|---|---|---|
+| Self (Opus 4.7) | BLOCKER-aware CONCUR | Flagged the Hocuspocus key partial-migration risk before dispatch; raised with reviewers as area-to-stress-test. |
+| Codex | **BLOCKER × 5** | (1) `src/lib/yjs/use-yjs-tiptap.ts:92` still generates `unit:${id}` doc names — backend only accepts `chapter:` after the prefix migration → realtime collab broken on every chapter page. (2) `BookHandler` uses `requirePlatformAdmin` on every route but `/teacher/books` expects org-scoped teacher/admin access; teachers will get 403 across the new UI. (3) 9 `@deprecated` aliases survived Phase 2 cleanup (`TeachingUnit`, `UnitDocument`, `CreateUnitInput`, `fetchUnitDocument`, `transitionUnit`, `UnitOverlay`, `UnitRevision`, `forkUnit`, `saveUnitDocument`) — same-PR rename, no external consumers, CLAUDE.md says delete-don't-alias. (4) `/teacher/books/${book.id}` link target doesn't exist — Phase 3 added the route at `/admin/books/[id]` only, and `BookActions` hardcodes the `/admin/books/` prefix. (5) `store.UnitOverlay` JSON tags are `childUnitId`/`parentUnitId` but the TS overlay reader expects `childChapterId`/`parentChapterId` — wire format mismatch will break overlay fetches after the rename. |
+| DeepSeek V4 Flash | **BLOCKER × 1** | Books authz mismatch (same as Codex #2). Recommended mirroring `canViewChapter`/`canEditChapter` so the handler matches the new scope-aware UI contract. |
+| GLM 5.1 | **BLOCKER × 1** | Same Hocuspocus key migration finding as Codex #1, plus three additional test files still asserting `unit:` doc-name prefixes (`tests/unit/realtime-jwt.test.ts`, `tests/unit/use-realtime-token.test.tsx`, `e2e/hocuspocus-auth.spec.ts`). Originally flagged the 1 frontend file; round-2 surfaced the 3 test files after the frontend fix. |
+
+**Fixes (`ec39ddb`)**
+- Hocuspocus doc-name: flipped `unit:${unitId}` → `chapter:${unitId}` in `src/lib/yjs/use-yjs-tiptap.ts:92`, plus 4 test files (`tests/unit/realtime-jwt.test.ts`, `tests/unit/use-realtime-token.test.tsx`, `tests/unit/realtime-get-token.test.ts`, `e2e/hocuspocus-auth.spec.ts`).
+- BookHandler: replaced `requirePlatformAdmin` with scope-mirrored `canViewBook`/`canEditBook` helpers paralleling the chapter handler. List endpoint now returns 200 + visibility-filtered items (no existence leak); Get/Update/Delete return 404 for non-viewers (no existence leak). Test fixture updated to pass `OrgStore`; 4 assertions updated for the new shape.
+- Deprecated aliases: removed all 9 from `src/lib/chapters.ts` and confirmed zero callers across `src/` and `tests/`.
+- Teacher books route: added `/teacher/books/[id]/page.tsx` + `book-edit-trigger.tsx` (copied from admin, org-name resolution via `/api/orgs` instead of admin-gated `/api/admin/orgs`). Added `detailBasePath` prop to `BookActions` so teacher list rows route to `/teacher/books/${id}`.
+- `UnitOverlay` JSON tags: `ChildChapterID` → `childChapterId`, `ParentChapterID` → `parentChapterId` in `platform/internal/store/chapters.go`.
+
+### Round 2 (after `ec39ddb`)
+
+| Reviewer | Verdict | Blockers |
+|---|---|---|
+| GLM 5.1 (round 2) | **BLOCKER × 1** | 3 more test files still on `unit:` doc-name prefix (`tests/unit/realtime-jwt.test.ts`, `tests/unit/use-realtime-token.test.tsx`, `e2e/hocuspocus-auth.spec.ts`). The Hocuspocus key fix landed on the frontend in `ec39ddb` but the test-side assertions weren't all flipped. |
+| Codex (round 2) | **CONCUR** | All 5 round-1 BLOCKERs resolved cleanly. |
+| DeepSeek V4 Flash (round 2) | **CONCUR** | Books authz rewrite matches chapter pattern. |
+
+**Fixes (`4529262`)**: flipped the 3 additional test-file prefixes; verified all 7 `chapter:` references match the backend `RealtimeAccessControl` allowlist.
+
+### Cascade fixes (after running the full Go suite under `DATABASE_URL=postgresql://...bridge_test`)
+
+Running the Go suite with the correct env var (the suite was silently skipping previously due to `TEST_DATABASE_URL` vs `DATABASE_URL` mismatch) uncovered 6 cascading issues, all addressed in `0d9a1ed`:
+
+- `store/chapters.go:367` — `ListChaptersByTopicIDs` SELECT was missing `u.book_id` (scanChapter expects 17 cols, got 16 → "Database error" on session creation).
+- `store/chapters.go:1067-1071` — `UnitOverlay` JSON tag fix from round-1 confirmed; comment notes the rename rationale.
+- `store/users_test.go:209-212` — `addTestMembership` INSERT referenced non-existent `updated_at` column on `org_memberships` (pre-existing plan-085 bug, masked by silent suite skip).
+- `handlers/books_integration_test.go` — 4 assertions updated to match canViewBook semantics (List 403→200 visibility-filtered, Get/Update/Delete 403→404 no-leak).
+- `db/migrations.go:124` — restored `chapters_book_idx` in `ExpectedSchemaSentinels.Indexes` (plan 088 added it in the same migration that creates `books`; parity test demands bidirectional coverage).
+- `db/schema_probe.go:111-132` — relaxed `checkIndexes` to query `pg_indexes` by `indexname` only (drop `tablename` filter). Safe because index names are unique per schema, and necessary because a single migration can declare indexes on multiple tables.
+- `db/schema_probe_integration_test.go` — updated `TestCheckSchemaProbe_Missing{Column,Constraint,Index}` to drop current books-table sentinels (`description`, `books_scope_id_required`, `books_scope_idx`) instead of retired `parent_links` sentinels.
+
+### Round 3 — final confirmation
+
+Re-dispatched the 3 originally-blocking reviewers (Codex, DeepSeek V4 Flash, GLM 5.1) against `0d9a1ed` to confirm all round-1 BLOCKERs and round-2 GLM follow-up are cleanly resolved.
+
+(Verdicts pending — to be filled when round-3 returns.)
 
 ## Post-Execution Report
 
