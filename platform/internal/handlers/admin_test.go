@@ -136,7 +136,96 @@ func newAdminUsersFixture(t *testing.T) *adminUsersFixture {
 	}
 }
 
+type adminOrgsFixture struct {
+	router chi.Router
+	users  *store.UserStore
+	orgs   *store.OrgStore
+	admin  *store.RegisteredUser
+	other  *store.RegisteredUser
+	org    *store.Org
+}
+
+func newAdminOrgsFixture(t *testing.T) *adminOrgsFixture {
+	t.Helper()
+	db := integrationDB(t)
+	ctx := context.Background()
+	users := store.NewUserStore(db)
+	orgs := store.NewOrgStore(db)
+	mw := auth.NewMiddleware("admin-orgs-test-secret")
+	mw.WithBridgeSession(nil, false, &recordingAdminChecker{})
+	h := &AdminHandler{
+		Orgs:  orgs,
+		Users: users,
+		Stats: store.NewStatsStore(db),
+		Mw:    mw,
+	}
+
+	mkUser := func(label string, isAdmin bool) *store.RegisteredUser {
+		u, err := users.RegisterUser(ctx, store.RegisterInput{
+			Name:     "Admin Orgs " + label,
+			Email:    "admin-orgs-" + label + "-" + uuid.NewString()[:8] + "@example.com",
+			Password: "testpassword123",
+		})
+		require.NoError(t, err)
+		if isAdmin {
+			_, err = db.ExecContext(ctx, "UPDATE users SET is_platform_admin = true WHERE id = $1", u.ID)
+			require.NoError(t, err)
+		}
+		t.Cleanup(func() {
+			db.ExecContext(ctx, "DELETE FROM org_memberships WHERE user_id = $1", u.ID)
+			db.ExecContext(ctx, "DELETE FROM auth_providers WHERE user_id = $1", u.ID)
+			db.ExecContext(ctx, "DELETE FROM users WHERE id = $1", u.ID)
+		})
+		return u
+	}
+
+	admin := mkUser("admin", true)
+	other := mkUser("other", false)
+	org, err := orgs.CreateOrg(ctx, store.CreateOrgInput{
+		Name:         "Admin Orgs Test",
+		Slug:         "admin-orgs-" + uuid.NewString()[:8],
+		Type:         "school",
+		ContactEmail: "admin-orgs@example.com",
+		ContactName:  "Admin Orgs Contact",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		db.ExecContext(ctx, "DELETE FROM org_memberships WHERE org_id = $1", org.ID)
+		db.ExecContext(ctx, "DELETE FROM organizations WHERE id = $1", org.ID)
+	})
+
+	r := chi.NewRouter()
+	h.Routes(r)
+	return &adminOrgsFixture{
+		router: r,
+		users:  users,
+		orgs:   orgs,
+		admin:  admin,
+		other:  other,
+		org:    org,
+	}
+}
+
 func (fx *adminUsersFixture) doRequest(t *testing.T, method, path string, body any, claims *auth.Claims) *httptest.ResponseRecorder {
+	t.Helper()
+	var req *http.Request
+	if body != nil {
+		b, err := json.Marshal(body)
+		require.NoError(t, err)
+		req = httptest.NewRequest(method, path, bytes.NewReader(b))
+		req.Header.Set("Content-Type", "application/json")
+	} else {
+		req = httptest.NewRequest(method, path, nil)
+	}
+	if claims != nil {
+		req = withClaims(req, claims)
+	}
+	w := httptest.NewRecorder()
+	fx.router.ServeHTTP(w, req)
+	return w
+}
+
+func (fx *adminOrgsFixture) doRequest(t *testing.T, method, path string, body any, claims *auth.Claims) *httptest.ResponseRecorder {
 	t.Helper()
 	var req *http.Request
 	if body != nil {
@@ -257,4 +346,152 @@ func adminUserIDsForHandler(users []store.AdminUser) map[string]bool {
 		ids[u.ID] = true
 	}
 	return ids
+}
+
+func TestAdminHandler_GetAdminOrg_OK(t *testing.T) {
+	fx := newAdminOrgsFixture(t)
+	w := fx.doRequest(t, http.MethodGet, "/api/admin/orgs/"+fx.org.ID, nil, adminClaims(fx.admin))
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	var org store.AdminOrg
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &org))
+	assert.Equal(t, fx.org.ID, org.ID)
+	assert.Equal(t, fx.org.Name, org.Name)
+	assert.Equal(t, 0, org.TeacherCount)
+	assert.Equal(t, 0, org.TotalActive)
+}
+
+func TestAdminHandler_GetAdminOrg_BadUUID(t *testing.T) {
+	fx := newAdminOrgsFixture(t)
+	w := fx.doRequest(t, http.MethodGet, "/api/admin/orgs/not-a-uuid", nil, adminClaims(fx.admin))
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestAdminHandler_GetAdminOrg_NotFound(t *testing.T) {
+	fx := newAdminOrgsFixture(t)
+	w := fx.doRequest(t, http.MethodGet, "/api/admin/orgs/00000000-0000-0000-0000-000000000000", nil, adminClaims(fx.admin))
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func TestAdminHandler_GetAdminOrg_Unauthenticated(t *testing.T) {
+	fx := newAdminOrgsFixture(t)
+	w := fx.doRequest(t, http.MethodGet, "/api/admin/orgs/"+fx.org.ID, nil, nil)
+	assert.Equal(t, http.StatusForbidden, w.Code)
+}
+
+func TestAdminHandler_GetAdminOrg_NonAdmin(t *testing.T) {
+	fx := newAdminOrgsFixture(t)
+	w := fx.doRequest(t, http.MethodGet, "/api/admin/orgs/"+fx.org.ID, nil, &auth.Claims{
+		UserID: fx.other.ID,
+		Email:  fx.other.Email,
+		Name:   fx.other.Name,
+	})
+	assert.Equal(t, http.StatusForbidden, w.Code)
+}
+
+func TestAdminHandler_UpdateAdminOrgDetails_OK(t *testing.T) {
+	fx := newAdminOrgsFixture(t)
+	w := fx.doRequest(t, http.MethodPatch, "/api/admin/orgs/"+fx.org.ID+"/details", map[string]string{
+		"name":         "Updated Org",
+		"contactName":  "Updated Contact",
+		"contactEmail": "updated@example.com",
+	}, adminClaims(fx.admin))
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	var org store.AdminOrg
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &org))
+	assert.Equal(t, fx.org.ID, org.ID)
+	assert.Equal(t, "Updated Org", org.Name)
+	assert.Equal(t, "Updated Contact", org.ContactName)
+	assert.Equal(t, "updated@example.com", org.ContactEmail)
+}
+
+func TestAdminHandler_UpdateAdminOrgDetails_BadUUID(t *testing.T) {
+	fx := newAdminOrgsFixture(t)
+	w := fx.doRequest(t, http.MethodPatch, "/api/admin/orgs/not-a-uuid/details", map[string]string{
+		"name":         "Updated Org",
+		"contactName":  "Updated Contact",
+		"contactEmail": "updated@example.com",
+	}, adminClaims(fx.admin))
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestAdminHandler_UpdateAdminOrgDetails_EmptyName(t *testing.T) {
+	fx := newAdminOrgsFixture(t)
+	w := fx.doRequest(t, http.MethodPatch, "/api/admin/orgs/"+fx.org.ID+"/details", map[string]string{
+		"name":         "  ",
+		"contactName":  "Updated Contact",
+		"contactEmail": "updated@example.com",
+	}, adminClaims(fx.admin))
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestAdminHandler_UpdateAdminOrgDetails_EmptyContactName(t *testing.T) {
+	fx := newAdminOrgsFixture(t)
+	w := fx.doRequest(t, http.MethodPatch, "/api/admin/orgs/"+fx.org.ID+"/details", map[string]string{
+		"name":         "Updated Org",
+		"contactName":  "  ",
+		"contactEmail": "updated@example.com",
+	}, adminClaims(fx.admin))
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestAdminHandler_UpdateAdminOrgDetails_EmptyEmail(t *testing.T) {
+	fx := newAdminOrgsFixture(t)
+	w := fx.doRequest(t, http.MethodPatch, "/api/admin/orgs/"+fx.org.ID+"/details", map[string]string{
+		"name":         "Updated Org",
+		"contactName":  "Updated Contact",
+		"contactEmail": "  ",
+	}, adminClaims(fx.admin))
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestAdminHandler_UpdateAdminOrgDetails_MalformedEmail(t *testing.T) {
+	fx := newAdminOrgsFixture(t)
+	w := fx.doRequest(t, http.MethodPatch, "/api/admin/orgs/"+fx.org.ID+"/details", map[string]string{
+		"name":         "Updated Org",
+		"contactName":  "Updated Contact",
+		"contactEmail": "not-an-email",
+	}, adminClaims(fx.admin))
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestAdminHandler_UpdateAdminOrgDetails_TrimsLeadingTrailingWhitespace(t *testing.T) {
+	fx := newAdminOrgsFixture(t)
+	w := fx.doRequest(t, http.MethodPatch, "/api/admin/orgs/"+fx.org.ID+"/details", map[string]string{
+		"name":         "  Updated Org  ",
+		"contactName":  "  Updated Contact  ",
+		"contactEmail": "  updated@example.com  ",
+	}, adminClaims(fx.admin))
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	var org store.AdminOrg
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &org))
+	assert.Equal(t, "Updated Org", org.Name)
+	assert.Equal(t, "Updated Contact", org.ContactName)
+	assert.Equal(t, "updated@example.com", org.ContactEmail)
+}
+
+func TestAdminHandler_UpdateAdminOrgDetails_NotFound(t *testing.T) {
+	fx := newAdminOrgsFixture(t)
+	w := fx.doRequest(t, http.MethodPatch, "/api/admin/orgs/00000000-0000-0000-0000-000000000000/details", map[string]string{
+		"name":         "Updated Org",
+		"contactName":  "Updated Contact",
+		"contactEmail": "updated@example.com",
+	}, adminClaims(fx.admin))
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func TestAdminHandler_UpdateAdminOrgDetails_NonAdmin(t *testing.T) {
+	fx := newAdminOrgsFixture(t)
+	w := fx.doRequest(t, http.MethodPatch, "/api/admin/orgs/"+fx.org.ID+"/details", map[string]string{
+		"name":         "Updated Org",
+		"contactName":  "Updated Contact",
+		"contactEmail": "updated@example.com",
+	}, &auth.Claims{
+		UserID: fx.other.ID,
+		Email:  fx.other.Email,
+		Name:   fx.other.Name,
+	})
+	assert.Equal(t, http.StatusForbidden, w.Code)
 }

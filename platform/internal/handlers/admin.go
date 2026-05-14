@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/mail"
 	"net/url"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -43,7 +45,12 @@ func (h *AdminHandler) Routes(r chi.Router) {
 			r.Patch("/platform-admin", h.UpdateUserPlatformAdmin)
 		})
 		r.Get("/orgs", h.ListAllOrgs)
-		r.Patch("/orgs/{orgID}", h.UpdateOrgStatus)
+		r.Route("/orgs/{orgID}", func(r chi.Router) {
+			r.Use(ValidateUUIDParam("orgID"))
+			r.Get("/", h.GetAdminOrg)
+			r.Patch("/", h.UpdateOrgStatus)
+			r.Patch("/details", h.UpdateAdminOrgDetails)
+		})
 
 		r.Post("/impersonate", h.StartImpersonate)
 		r.Get("/impersonate/status", h.ImpersonateStatus)
@@ -220,6 +227,68 @@ func (h *AdminHandler) ListAllOrgs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, orgs)
+}
+
+// GetAdminOrg handles GET /api/admin/orgs/{orgID}
+func (h *AdminHandler) GetAdminOrg(w http.ResponseWriter, r *http.Request) {
+	orgID := chi.URLParam(r, "orgID")
+	org, err := h.Orgs.GetAdminOrgByID(r.Context(), orgID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if org == nil {
+		writeError(w, http.StatusNotFound, "Organization not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, org)
+}
+
+type updateOrgDetailsRequest struct {
+	Name         string `json:"name"`
+	ContactName  string `json:"contactName"`
+	ContactEmail string `json:"contactEmail"`
+}
+
+// UpdateAdminOrgDetails handles PATCH /api/admin/orgs/{orgID}/details
+func (h *AdminHandler) UpdateAdminOrgDetails(w http.ResponseWriter, r *http.Request) {
+	orgID := chi.URLParam(r, "orgID")
+
+	var body updateOrgDetailsRequest
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	body.Name = strings.TrimSpace(body.Name)
+	body.ContactName = strings.TrimSpace(body.ContactName)
+	body.ContactEmail = strings.TrimSpace(body.ContactEmail)
+
+	if body.Name == "" {
+		writeError(w, http.StatusBadRequest, "Invalid input: name is required")
+		return
+	}
+	if body.ContactName == "" {
+		writeError(w, http.StatusBadRequest, "Invalid input: contactName is required")
+		return
+	}
+	if body.ContactEmail == "" {
+		writeError(w, http.StatusBadRequest, "Invalid input: contactEmail is required")
+		return
+	}
+	if _, err := mail.ParseAddress(body.ContactEmail); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid input: contactEmail must be a valid email")
+		return
+	}
+
+	org, err := h.Orgs.UpdateOrgDetails(r.Context(), orgID, body.Name, body.ContactName, body.ContactEmail)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if org == nil {
+		writeError(w, http.StatusNotFound, "Organization not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, org)
 }
 
 // UpdateOrgStatus handles PATCH /api/admin/orgs/{orgID}
