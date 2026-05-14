@@ -36,7 +36,7 @@ describe("useRealtimeToken", () => {
     );
 
     const tokens: string[] = [];
-    render(<HookHarness docName="unit:abc" onToken={(t) => tokens.push(t)} />);
+    render(<HookHarness docName="chapter:abc" onToken={(t) => tokens.push(t)} />);
 
     // First render: empty.
     expect(tokens.at(-1)).toBe("");
@@ -76,7 +76,7 @@ describe("useRealtimeToken", () => {
 
     const tokens: string[] = [];
     const { rerender } = render(
-      <HookHarness docName="unit:A" onToken={(t) => tokens.push(t)} />,
+      <HookHarness docName="chapter:A" onToken={(t) => tokens.push(t)} />,
     );
 
     // Wait for tok-A to land.
@@ -88,7 +88,7 @@ describe("useRealtimeToken", () => {
     // expect the hook to flip back to "" synchronously — NOT keep
     // returning tok-A.
     await act(async () => {
-      rerender(<HookHarness docName="unit:B" onToken={(t) => tokens.push(t)} />);
+      rerender(<HookHarness docName="chapter:B" onToken={(t) => tokens.push(t)} />);
     });
     expect(tokens.at(-1), "stale tok-A must be cleared during B's mint window").toBe("");
   });
@@ -105,7 +105,7 @@ describe("useRealtimeToken", () => {
     const unavailables: boolean[] = [];
     render(
       <HookHarness
-        docName="unit:not-configured"
+        docName="chapter:not-configured"
         onToken={(t) => tokens.push(t)}
         onUnavailable={(u) => unavailables.push(u)}
       />,
@@ -134,7 +134,7 @@ describe("useRealtimeToken", () => {
       const unavailables: boolean[] = [];
       render(
         <HookHarness
-          docName="unit:non-503"
+          docName="chapter:non-503"
           onToken={(t) => tokens.push(t)}
           onUnavailable={(u) => unavailables.push(u)}
         />,
@@ -160,7 +160,7 @@ describe("useRealtimeToken", () => {
     );
     const tokens: string[] = [];
     const { unmount } = render(
-      <HookHarness docName="unit:unmount" onToken={(t) => tokens.push(t)} />,
+      <HookHarness docName="chapter:unmount" onToken={(t) => tokens.push(t)} />,
     );
 
     unmount();

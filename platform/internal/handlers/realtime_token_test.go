@@ -29,7 +29,7 @@ func newRealtimeHandlerForFixture(fx *sessionPageFixture) *RealtimeHandler {
 		Sessions:              store.NewSessionStore(fx.db),
 		Classes:               store.NewClassStore(fx.db),
 		Orgs:                  store.NewOrgStore(fx.db),
-		TeachingUnits:         store.NewTeachingUnitStore(fx.db),
+		Chapters:              store.NewChapterStore(fx.db),
 		Problems:              store.NewProblemStore(fx.db),
 		Attempts:              store.NewAttemptStore(fx.db),
 		Users:                 store.NewUserStore(fx.db),
@@ -55,7 +55,7 @@ func callMintToken(t *testing.T, h *RealtimeHandler, docName string, claims *aut
 
 func TestMintToken_NoClaims(t *testing.T) {
 	h := &RealtimeHandler{HocuspocusTokenSecret: rtSecret}
-	body, _ := json.Marshal(map[string]string{"documentName": "unit:x"})
+	body, _ := json.Marshal(map[string]string{"documentName": "chapter:x"})
 	req := httptest.NewRequest(http.MethodPost, "/api/realtime/token", bytes.NewReader(body))
 	w := httptest.NewRecorder()
 	h.MintToken(w, req)
@@ -64,7 +64,7 @@ func TestMintToken_NoClaims(t *testing.T) {
 
 func TestMintToken_NoSecret_503(t *testing.T) {
 	h := &RealtimeHandler{HocuspocusTokenSecret: ""} // unconfigured
-	body, _ := json.Marshal(map[string]string{"documentName": "unit:x"})
+	body, _ := json.Marshal(map[string]string{"documentName": "chapter:x"})
 	req := httptest.NewRequest(http.MethodPost, "/api/realtime/token", bytes.NewReader(body))
 	req = withClaims(req, &auth.Claims{UserID: "u-1"})
 	w := httptest.NewRecorder()
@@ -588,8 +588,8 @@ func TestMintToken_UnitDoc_OrgTeacherOK_StudentDenied(t *testing.T) {
 	h := newRealtimeHandlerForFixture(fx)
 
 	// Seed an org-scope unit in the fixture's org.
-	units := store.NewTeachingUnitStore(fx.db)
-	u, err := units.CreateUnit(t.Context(), store.CreateTeachingUnitInput{
+	units := store.NewChapterStore(fx.db)
+	u, err := units.CreateChapter(t.Context(), store.CreateChapterInput{
 		Scope:     "org",
 		ScopeID:   &fx.orgID,
 		Title:     "Realtime Unit",
@@ -598,10 +598,10 @@ func TestMintToken_UnitDoc_OrgTeacherOK_StudentDenied(t *testing.T) {
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		fx.db.ExecContext(context.Background(), "DELETE FROM teaching_units WHERE id = $1", u.ID)
+		fx.db.ExecContext(context.Background(), "DELETE FROM chapters WHERE id = $1", u.ID)
 	})
 
-	docName := "unit:" + u.ID
+	docName := "chapter:" + u.ID
 
 	// teacher (org member with role=teacher) OK
 	codeT, _ := callMintToken(t, h, docName, &auth.Claims{UserID: fx.teacher.ID})
@@ -637,19 +637,19 @@ func callInternalAuth(t *testing.T, h *RealtimeHandler, secretHeader, docName, s
 
 func TestInternalAuth_RejectsMissingBearer(t *testing.T) {
 	h := &RealtimeHandler{HocuspocusTokenSecret: rtSecret}
-	code, _ := callInternalAuth(t, h, "", "unit:x", "u-1")
+	code, _ := callInternalAuth(t, h, "", "chapter:x", "u-1")
 	assert.Equal(t, http.StatusUnauthorized, code)
 }
 
 func TestInternalAuth_RejectsWrongBearer(t *testing.T) {
 	h := &RealtimeHandler{HocuspocusTokenSecret: rtSecret}
-	code, _ := callInternalAuth(t, h, "wrong-secret", "unit:x", "u-1")
+	code, _ := callInternalAuth(t, h, "wrong-secret", "chapter:x", "u-1")
 	assert.Equal(t, http.StatusUnauthorized, code)
 }
 
 func TestInternalAuth_RejectsMissingFields(t *testing.T) {
 	h := &RealtimeHandler{HocuspocusTokenSecret: rtSecret}
-	body, _ := json.Marshal(map[string]string{"documentName": "unit:x"})
+	body, _ := json.Marshal(map[string]string{"documentName": "chapter:x"})
 	req := httptest.NewRequest(http.MethodPost, "/api/internal/realtime/auth", bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+rtSecret)
 	w := httptest.NewRecorder()
@@ -686,9 +686,9 @@ func TestInternalAuth_RehydratesPlatformAdminFromDB(t *testing.T) {
 	h := newRealtimeHandlerForFixture(fx)
 
 	// Seed an org-scope unit in the fixture's org; the outsider is
-	// NOT an org member and would otherwise fail authorizeUnitDoc.
-	units := store.NewTeachingUnitStore(fx.db)
-	u, err := units.CreateUnit(t.Context(), store.CreateTeachingUnitInput{
+	// NOT an org member and would otherwise fail authorizeChapterDoc.
+	units := store.NewChapterStore(fx.db)
+	u, err := units.CreateChapter(t.Context(), store.CreateChapterInput{
 		Scope:     "org",
 		ScopeID:   &fx.orgID,
 		Title:     "Internal Auth Unit",
@@ -697,9 +697,9 @@ func TestInternalAuth_RehydratesPlatformAdminFromDB(t *testing.T) {
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		fx.db.ExecContext(context.Background(), "DELETE FROM teaching_units WHERE id = $1", u.ID)
+		fx.db.ExecContext(context.Background(), "DELETE FROM chapters WHERE id = $1", u.ID)
 	})
-	docName := "unit:" + u.ID
+	docName := "chapter:" + u.ID
 
 	// Without DB admin: outsider is denied.
 	code, resp := callInternalAuth(t, h, rtSecret, docName, fx.outsider.ID)

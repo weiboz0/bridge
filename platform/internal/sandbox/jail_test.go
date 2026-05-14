@@ -23,14 +23,14 @@ func TestBwrapBuildCommand(t *testing.T) {
 	}
 
 	cfg := JailConfig{
-		Command:  "python3",
-		Args:     []string{"/skill/runner.py"},
-		UserID:   "user-1",
-		WorkDir:  "/tmp/work",
-		SkillDir: "/opt/skills/my_skill",
+		Command:   "python3",
+		Args:      []string{"/skill/runner.py"},
+		UserID:    "user-1",
+		WorkDir:   "/tmp/work",
+		SkillDir:  "/opt/skills/my_skill",
 		OutputDir: "/tmp/output",
-		MediaDir: "/home/user/media",
-		Env:      map[string]string{"FOO": "bar"},
+		MediaDir:  "/home/user/media",
+		Env:       map[string]string{"FOO": "bar"},
 	}
 
 	cmdPath, args, err := b.BuildCommand(cfg)

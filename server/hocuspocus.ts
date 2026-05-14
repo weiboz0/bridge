@@ -135,9 +135,9 @@ const server = new Server({
       }
     }
 
-    // unit:* documents are not persisted via Hocuspocus — realtime sync only.
+    // chapter:* documents are not persisted via Hocuspocus — realtime sync only.
     // The editor saves to the teaching-unit API on demand.
-    if (documentName.startsWith("broadcast:") || documentName === "noop" || documentName.startsWith("unit:")) return document;
+    if (documentName.startsWith("broadcast:") || documentName === "noop" || documentName.startsWith("chapter:")) return document;
 
     try {
       let yjsState: string | null = null;
@@ -160,9 +160,9 @@ const server = new Server({
   },
 
   async onStoreDocument({ document, documentName }: { document: Y.Doc; documentName: string }) {
-    // unit:* documents are not persisted via Hocuspocus — realtime sync only.
+    // chapter:* documents are not persisted via Hocuspocus — realtime sync only.
     // The editor saves to the teaching-unit API on demand.
-    if (documentName.startsWith("broadcast:") || documentName === "noop" || documentName.startsWith("unit:")) return;
+    if (documentName.startsWith("broadcast:") || documentName === "noop" || documentName.startsWith("chapter:")) return;
 
     try {
       const update = Y.encodeStateAsUpdate(document);

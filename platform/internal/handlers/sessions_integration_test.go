@@ -57,13 +57,13 @@ func newSessionFixture(t *testing.T, suffix string) *sessionFixture {
 	broadcaster := events.NewBroadcaster()
 
 	h := &SessionHandler{
-		Sessions:      sessions,
-		Classes:       classes,
-		Courses:       courses,
-		Topics:        store.NewTopicStore(db),
-		TeachingUnits: store.NewTeachingUnitStore(db),
-		Orgs:          orgs,
-		Broadcaster:   broadcaster,
+		Sessions:    sessions,
+		Classes:     classes,
+		Courses:     courses,
+		Topics:      store.NewTopicStore(db),
+		Chapters:    store.NewChapterStore(db),
+		Orgs:        orgs,
+		Broadcaster: broadcaster,
 	}
 
 	// Create org, teacher, students

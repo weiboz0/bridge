@@ -36,22 +36,22 @@ describe("getRealtimeToken", () => {
     const fetchMock = vi.fn().mockResolvedValue(mintResponse("ey.fake.tok", 25 * 60 * 1000));
     vi.stubGlobal("fetch", fetchMock);
 
-    const tok = await getRealtimeToken("unit:abc");
+    const tok = await getRealtimeToken("chapter:abc");
     expect(tok).toBe("ey.fake.tok");
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe("/api/realtime/token");
     expect(init.method).toBe("POST");
     expect(init.credentials).toBe("include");
-    expect(JSON.parse(init.body)).toEqual({ documentName: "unit:abc" });
+    expect(JSON.parse(init.body)).toEqual({ documentName: "chapter:abc" });
   });
 
   it("caches by documentName — second call within TTL doesn't refetch", async () => {
     const fetchMock = vi.fn().mockResolvedValue(mintResponse("ey.tok-1", 25 * 60 * 1000));
     vi.stubGlobal("fetch", fetchMock);
 
-    await getRealtimeToken("unit:abc");
-    await getRealtimeToken("unit:abc");
+    await getRealtimeToken("chapter:abc");
+    await getRealtimeToken("chapter:abc");
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
@@ -63,8 +63,8 @@ describe("getRealtimeToken", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const [a, b] = await Promise.all([
-      getRealtimeToken("unit:A"),
-      getRealtimeToken("unit:B"),
+      getRealtimeToken("chapter:A"),
+      getRealtimeToken("chapter:B"),
     ]);
     expect(a).toBe("tok-A");
     expect(b).toBe("tok-B");
@@ -81,9 +81,9 @@ describe("getRealtimeToken", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    const p1 = getRealtimeToken("unit:race");
-    const p2 = getRealtimeToken("unit:race");
-    const p3 = getRealtimeToken("unit:race");
+    const p1 = getRealtimeToken("chapter:race");
+    const p2 = getRealtimeToken("chapter:race");
+    const p3 = getRealtimeToken("chapter:race");
     resolveFetch(mintResponse("ey.shared", 25 * 60 * 1000));
     const [a, b, c] = await Promise.all([p1, p2, p3]);
     expect([a, b, c]).toEqual(["ey.shared", "ey.shared", "ey.shared"]);
@@ -99,8 +99,8 @@ describe("getRealtimeToken", () => {
       .mockResolvedValueOnce(mintResponse("second", 25 * 60 * 1000));
     vi.stubGlobal("fetch", fetchMock);
 
-    await getRealtimeToken("unit:short");
-    const next = await getRealtimeToken("unit:short");
+    await getRealtimeToken("chapter:short");
+    const next = await getRealtimeToken("chapter:short");
     expect(next).toBe("second");
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
@@ -115,7 +115,7 @@ describe("getRealtimeToken", () => {
         }),
       ),
     );
-    await expect(getRealtimeToken("unit:abc")).rejects.toMatchObject({
+    await expect(getRealtimeToken("chapter:abc")).rejects.toMatchObject({
       name: "RealtimeMintError",
       status: 503,
       message: expect.stringContaining("not configured"),
@@ -143,7 +143,7 @@ describe("getRealtimeToken", () => {
       "fetch",
       vi.fn().mockRejectedValue(new TypeError("connection refused")),
     );
-    await expect(getRealtimeToken("unit:abc")).rejects.toThrow(/network error.*connection refused/);
+    await expect(getRealtimeToken("chapter:abc")).rejects.toThrow(/network error.*connection refused/);
   });
 
   it("clears in-flight on failure so the next caller can retry", async () => {
@@ -160,9 +160,9 @@ describe("getRealtimeToken", () => {
         return Promise.resolve(mintResponse("recovered", 25 * 60 * 1000));
       }),
     );
-    await expect(getRealtimeToken("unit:abc")).rejects.toThrow();
+    await expect(getRealtimeToken("chapter:abc")).rejects.toThrow();
     // Second call must NOT see the cached failure — should re-fetch.
-    const tok = await getRealtimeToken("unit:abc");
+    const tok = await getRealtimeToken("chapter:abc");
     expect(tok).toBe("recovered");
   });
 
@@ -176,7 +176,7 @@ describe("getRealtimeToken", () => {
         }),
       ),
     );
-    await expect(getRealtimeToken("unit:abc")).rejects.toThrow(/missing fields/);
+    await expect(getRealtimeToken("chapter:abc")).rejects.toThrow(/missing fields/);
   });
 
   it("rejects responses with unparseable expiresAt", async () => {
@@ -189,7 +189,7 @@ describe("getRealtimeToken", () => {
         }),
       ),
     );
-    await expect(getRealtimeToken("unit:abc")).rejects.toThrow(/unparseable/);
+    await expect(getRealtimeToken("chapter:abc")).rejects.toThrow(/unparseable/);
   });
 
   it("RealtimeMintError class is exported and named", () => {

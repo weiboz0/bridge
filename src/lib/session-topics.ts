@@ -2,7 +2,7 @@ import { eq, and, or, inArray } from "drizzle-orm";
 import {
   sessionTopics,
   topics,
-  teachingUnits,
+  chapters,
   courses,
 } from "@/lib/db/schema";
 import type { Database } from "@/lib/db";
@@ -40,20 +40,20 @@ export async function getSessionTopics(db: Database, sessionId: string) {
       title: topics.title,
       description: topics.description,
       sortOrder: topics.sortOrder,
-      unitId: teachingUnits.id,
-      unitTitle: teachingUnits.title,
-      unitMaterialType: teachingUnits.materialType,
+      unitId: chapters.id,
+      unitTitle: chapters.title,
+      unitMaterialType: chapters.materialType,
     })
     .from(sessionTopics)
     .innerJoin(topics, eq(sessionTopics.topicId, topics.id))
     .innerJoin(courses, eq(courses.id, topics.courseId))
     .leftJoin(
-      teachingUnits,
+      chapters,
       and(
-        eq(teachingUnits.topicId, topics.id),
+        eq(chapters.topicId, topics.id),
         or(
-          eq(teachingUnits.scope, "platform"),
-          eq(teachingUnits.scopeId, courses.orgId)
+          eq(chapters.scope, "platform"),
+          eq(chapters.scopeId, courses.orgId)
         )
       )
     )
@@ -68,20 +68,20 @@ export async function getSessionTopics(db: Database, sessionId: string) {
 export async function getTopicLinkedUnit(db: Database, topicId: string) {
   const [unit] = await db
     .select({
-      unitId: teachingUnits.id,
-      unitTitle: teachingUnits.title,
-      unitMaterialType: teachingUnits.materialType,
-      unitStatus: teachingUnits.status,
+      unitId: chapters.id,
+      unitTitle: chapters.title,
+      unitMaterialType: chapters.materialType,
+      unitStatus: chapters.status,
     })
     .from(topics)
     .innerJoin(courses, eq(courses.id, topics.courseId))
     .innerJoin(
-      teachingUnits,
+      chapters,
       and(
-        eq(teachingUnits.topicId, topics.id),
+        eq(chapters.topicId, topics.id),
         or(
-          eq(teachingUnits.scope, "platform"),
-          eq(teachingUnits.scopeId, courses.orgId)
+          eq(chapters.scope, "platform"),
+          eq(chapters.scopeId, courses.orgId)
         )
       )
     )
@@ -100,19 +100,19 @@ export async function listLinkedUnitsByTopicIds(
   const rows = await db
     .select({
       topicId: topics.id,
-      unitId: teachingUnits.id,
-      unitTitle: teachingUnits.title,
-      unitMaterialType: teachingUnits.materialType,
+      unitId: chapters.id,
+      unitTitle: chapters.title,
+      unitMaterialType: chapters.materialType,
     })
     .from(topics)
     .innerJoin(courses, eq(courses.id, topics.courseId))
     .innerJoin(
-      teachingUnits,
+      chapters,
       and(
-        eq(teachingUnits.topicId, topics.id),
+        eq(chapters.topicId, topics.id),
         or(
-          eq(teachingUnits.scope, "platform"),
-          eq(teachingUnits.scopeId, courses.orgId)
+          eq(chapters.scope, "platform"),
+          eq(chapters.scopeId, courses.orgId)
         )
       )
     )

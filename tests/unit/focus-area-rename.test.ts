@@ -11,7 +11,7 @@ import { readFileSync } from "node:fs";
  *  - parent live-session viewer (same)
  *  - teacher dashboard ("No topics linked to this session yet")
  *  - add-topic-form ("Add Topic" button, "New topic title" placeholder)
- *  - unit-picker-dialog ("Linked to another topic" tooltip)
+ *  - chapter-picker-dialog ("Linked to another topic" tooltip)
  *  - topic editor heading + card title (covered by phase 4)
  *
  * Tests assert SPECIFIC rendered JSX strings — no blanket /Topic/
@@ -99,8 +99,8 @@ describe("Plan 048 phase 5 — Topic → Focus Area rename", () => {
     });
   });
 
-  describe("unit-picker-dialog.tsx", () => {
-    const path = "src/components/teacher/unit-picker-dialog.tsx";
+  describe("chapter-picker-dialog.tsx", () => {
+    const path = "src/components/teacher/chapter-picker-dialog.tsx";
     it("tooltip references focus area not topic", () => {
       expect(source(path)).toMatch(/"Linked to another focus area"/);
       expect(source(path)).not.toMatch(/"Linked to another topic"/);
@@ -119,10 +119,10 @@ describe("Plan 048 phase 5 — Topic → Focus Area rename", () => {
     });
     it("409 link-error message says 'focus area' not 'topic'", () => {
       expect(source(path)).toMatch(
-        /This focus area is already linked to a different unit\./
+        /This focus area is already linked to a different chapter\./
       );
       expect(source(path)).not.toMatch(
-        /This topic is already linked to a different unit\./
+        /This topic is already linked to a different chapter\./
       );
     });
   });

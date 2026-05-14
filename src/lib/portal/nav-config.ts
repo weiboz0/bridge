@@ -11,7 +11,7 @@ export const portalConfigs: Record<string, PortalConfig> = {
     navItems: [
       { label: "Organizations", href: "/admin/orgs", icon: "building-2" },
       { label: "Users", href: "/admin/users", icon: "users" },
-      { label: "Units", href: "/admin/units", icon: "file-text" },
+      { label: "Chapters", href: "/admin/chapters", icon: "file-text" },
     ],
   },
   org_admin: {
@@ -24,7 +24,7 @@ export const portalConfigs: Record<string, PortalConfig> = {
       { label: "Students", href: "/org/students", icon: "users" },
       { label: "Courses", href: "/org/courses", icon: "book-open" },
       { label: "Classes", href: "/org/classes", icon: "school" },
-      { label: "Units", href: "/org/units", icon: "file-text" },
+      { label: "Chapters", href: "/org/chapters", icon: "file-text" },
       { label: "Parent links", href: "/org/parent-links", icon: "link" },
       { label: "Settings", href: "/org/settings", icon: "settings" },
     ],
@@ -35,7 +35,7 @@ export const portalConfigs: Record<string, PortalConfig> = {
     basePath: "/teacher",
     navItems: [
       { label: "Dashboard", href: "/teacher", icon: "layout-dashboard" },
-      { label: "Units", href: "/teacher/units", icon: "file-text" },
+      { label: "Chapters", href: "/teacher/chapters", icon: "file-text" },
       { label: "Problems", href: "/teacher/problems", icon: "puzzle" },
       { label: "Sessions", href: "/teacher/sessions", icon: "video" },
       { label: "Courses", href: "/teacher/courses", icon: "book-open" },

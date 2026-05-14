@@ -12,10 +12,10 @@ import {
   orgMemberships,
   problems,
   problemSolutions,
-  teachingUnits,
+  chapters,
   topicProblems,
   topics,
-  unitDocuments,
+  chapterDocuments as unitDocuments,
   users,
 } from "@/lib/db/schema";
 import { runImporter } from "../../scripts/python-101/import";
@@ -277,15 +277,15 @@ describe("python-101 importer", () => {
 
     // Both units have topic_id set.
     const unitRows = await testDb
-      .select({ id: teachingUnits.id, topicId: teachingUnits.topicId })
-      .from(teachingUnits);
+      .select({ id: chapters.id, topicId: chapters.topicId })
+      .from(chapters);
     const ourUnits = unitRows.filter((r) => tree.unitIds.includes(r.id));
     expect(ourUnits).toHaveLength(2);
     for (const u of ourUnits) expect(u.topicId).not.toBeNull();
 
     // unit_documents rebuilt as { type: doc, content: [problem-ref...] }
     const docRows = await testDb.select().from(unitDocuments);
-    const ourDocs = docRows.filter((d) => tree.unitIds.includes(d.unitId));
+    const ourDocs = docRows.filter((d) => tree.unitIds.includes(d.chapterId));
     expect(ourDocs).toHaveLength(2);
     const u1Doc = ourDocs.find(
       (d) => (d.blocks as { content?: unknown[] }).content?.length === 2,
@@ -385,7 +385,7 @@ describe("python-101 importer", () => {
     });
 
     // Library content present
-    const unitRows = await testDb.select().from(teachingUnits);
+    const unitRows = await testDb.select().from(chapters);
     const ourUnits = unitRows.filter((r) => tree.unitIds.includes(r.id));
     expect(ourUnits).toHaveLength(1);
     expect(ourUnits[0].topicId).toBeNull();
@@ -476,7 +476,7 @@ describe("python-101 importer", () => {
     });
     // Pre-claim the topic_id with a different unit so Pass 3 fails.
     const conflictUnitId = uuidv4();
-    await testDb.insert(teachingUnits).values({
+    await testDb.insert(chapters).values({
       id: conflictUnitId,
       scope: "platform",
       title: "Conflict Unit",
@@ -509,9 +509,9 @@ describe("python-101 importer", () => {
       sortOrder: 0,
     });
     await testDb
-      .update(teachingUnits)
+      .update(chapters)
       .set({ topicId: tree.topicIds[0] })
-      .where(eq(teachingUnits.id, conflictUnitId));
+      .where(eq(chapters.id, conflictUnitId));
 
     await expect(
       runImporter({
@@ -641,8 +641,8 @@ describe("python-101 importer", () => {
       expect(cloneTopics).toHaveLength(1);
       const cloneUnits = await testDb
         .select()
-        .from(teachingUnits)
-        .where(eq(teachingUnits.scopeId, BRIDGE_DEMO_SCHOOL_ORG_ID));
+        .from(chapters)
+        .where(eq(chapters.scopeId, BRIDGE_DEMO_SCHOOL_ORG_ID));
       const ourCloneUnits = cloneUnits.filter((u) => u.slug?.endsWith("-demo"));
       expect(ourCloneUnits).toHaveLength(1);
       expect(ourCloneUnits[0].scope).toBe("org");
@@ -654,7 +654,7 @@ describe("python-101 importer", () => {
       const [cloneDoc] = await testDb
         .select({ blocks: unitDocuments.blocks })
         .from(unitDocuments)
-        .where(eq(unitDocuments.unitId, ourCloneUnits[0].id));
+        .where(eq(unitDocuments.chapterId, ourCloneUnits[0].id));
       expect(cloneDoc).toBeTruthy();
       expect((cloneDoc.blocks as { type: string }).type).toBe("doc");
 
@@ -715,8 +715,8 @@ describe("python-101 importer", () => {
       // Cloned units count stays at 1 — no duplicates.
       const cloneUnits = await testDb
         .select()
-        .from(teachingUnits)
-        .where(eq(teachingUnits.scopeId, BRIDGE_DEMO_SCHOOL_ORG_ID));
+        .from(chapters)
+        .where(eq(chapters.scopeId, BRIDGE_DEMO_SCHOOL_ORG_ID));
       expect(cloneUnits.filter((u) => u.slug?.endsWith("-demo"))).toHaveLength(1);
     });
 
@@ -760,12 +760,12 @@ describe("python-101 importer", () => {
       await runImporter(baseArgs);
 
       const cloneUnitsBeforeStaleWrite = await testDb
-        .select({ id: teachingUnits.id, topicId: teachingUnits.topicId })
-        .from(teachingUnits)
+        .select({ id: chapters.id, topicId: chapters.topicId })
+        .from(chapters)
         .where(
           and(
-            eq(teachingUnits.scope, "org"),
-            eq(teachingUnits.scopeId, BRIDGE_DEMO_SCHOOL_ORG_ID),
+            eq(chapters.scope, "org"),
+            eq(chapters.scopeId, BRIDGE_DEMO_SCHOOL_ORG_ID),
           ),
         );
       expect(cloneUnitsBeforeStaleWrite).toHaveLength(1);
@@ -773,9 +773,9 @@ describe("python-101 importer", () => {
       expect(cloneUnit.topicId).toBeTruthy();
 
       await testDb
-        .update(teachingUnits)
+        .update(chapters)
         .set({ title: "1. Print & Comments" })
-        .where(eq(teachingUnits.id, cloneUnit.id));
+        .where(eq(chapters.id, cloneUnit.id));
       await testDb
         .update(topics)
         .set({ title: "1. Print & Comments" })
@@ -785,9 +785,9 @@ describe("python-101 importer", () => {
       expect(second.demoWire?.cloned).toBe(false);
 
       const [refreshedUnit] = await testDb
-        .select({ title: teachingUnits.title })
-        .from(teachingUnits)
-        .where(eq(teachingUnits.id, cloneUnit.id));
+        .select({ title: chapters.title })
+        .from(chapters)
+        .where(eq(chapters.id, cloneUnit.id));
       const [refreshedTopic] = await testDb
         .select({ title: topics.title })
         .from(topics)
@@ -798,11 +798,11 @@ describe("python-101 importer", () => {
 
       const cloneUnits = await testDb
         .select()
-        .from(teachingUnits)
+        .from(chapters)
         .where(
           and(
-            eq(teachingUnits.scope, "org"),
-            eq(teachingUnits.scopeId, BRIDGE_DEMO_SCHOOL_ORG_ID),
+            eq(chapters.scope, "org"),
+            eq(chapters.scopeId, BRIDGE_DEMO_SCHOOL_ORG_ID),
           ),
         );
       expect(cloneUnits.filter((u) => u.slug?.endsWith("-demo"))).toHaveLength(1);

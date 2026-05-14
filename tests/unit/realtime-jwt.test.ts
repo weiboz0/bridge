@@ -43,7 +43,7 @@ function mint(args: MintArgs = {}): string {
   if (args.role !== undefined) payload.role = args.role;
   else payload.role = "user";
   if (args.scope !== undefined) payload.scope = args.scope;
-  else payload.scope = "unit:abc";
+  else payload.scope = "chapter:abc";
 
   const encHeader = b64url(JSON.stringify(header));
   const encPayload = b64url(JSON.stringify(payload));
@@ -56,11 +56,11 @@ function mint(args: MintArgs = {}): string {
 
 describe("verifyRealtimeJwt", () => {
   it("returns claims for a freshly-minted token", () => {
-    const tok = mint({ sub: "u-7", role: "teacher", scope: "unit:abc-123" });
+    const tok = mint({ sub: "u-7", role: "teacher", scope: "chapter:abc-123" });
     const claims = verifyRealtimeJwt(tok, SECRET);
     expect(claims.sub).toBe("u-7");
     expect(claims.role).toBe("teacher");
-    expect(claims.scope).toBe("unit:abc-123");
+    expect(claims.scope).toBe("chapter:abc-123");
     expect(claims.iss).toBe(REALTIME_ISSUER);
   });
 
@@ -78,7 +78,7 @@ describe("verifyRealtimeJwt", () => {
     // Sign over the ORIGINAL payload, then swap the encoded payload for a
     // different one — exactly the bit-flip / claim-substitution attack.
     const header = { alg: "HS256", typ: "JWT" };
-    const original = { sub: "u-1", role: "user", scope: "unit:abc", iss: REALTIME_ISSUER, iat: 0, exp: 9999999999 };
+    const original = { sub: "u-1", role: "user", scope: "chapter:abc", iss: REALTIME_ISSUER, iat: 0, exp: 9999999999 };
     const tampered = { ...original, role: "teacher", scope: "broadcast:secret" };
     const encH = b64url(JSON.stringify(header));
     const encP = b64url(JSON.stringify(tampered));

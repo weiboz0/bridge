@@ -99,14 +99,14 @@ export default async function TeacherDashboard() {
         </Card>
       </div>
 
-      <Link href="/teacher/units">
+      <Link href="/teacher/chapters">
         <Card className="border-zinc-200 bg-white transition-colors hover:border-zinc-300 hover:bg-zinc-50 cursor-pointer">
           <CardHeader>
             <div className="flex items-center justify-between">
               <div className="space-y-1">
-                <CardTitle className="text-lg text-zinc-900">Unit Library</CardTitle>
+                <CardTitle className="text-lg text-zinc-900">Chapter Library</CardTitle>
                 <CardDescription className="text-zinc-500">
-                  Browse, search, and manage your teaching units across personal, org, and platform scopes.
+                  Browse, search, and manage your teaching chapters across personal, org, and platform scopes.
                 </CardDescription>
               </div>
               <span className="text-sm text-zinc-400">View all</span>

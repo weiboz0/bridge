@@ -26,7 +26,7 @@ const RealtimeIssuer = "bridge-platform"
 
 // RealtimeClaims is the JWT body for a Hocuspocus connection token.
 // `Scope` is the FULL Hocuspocus documentName the caller is allowed
-// to open (e.g., `session:{sid}:user:{uid}`, `unit:{uid}`,
+// to open (e.g., `session:{sid}:user:{uid}`, `chapter:{cid}`,
 // `attempt:{aid}`, `broadcast:{sid}`).
 type RealtimeClaims struct {
 	Sub   string `json:"sub"`   // user id of the holder

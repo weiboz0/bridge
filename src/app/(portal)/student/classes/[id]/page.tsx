@@ -149,7 +149,7 @@ export default async function StudentClassDetailPage({
                 <CardContent>
                   {linkedUnit ? (
                     <Link
-                      href={`/student/units/${linkedUnit.unitId}`}
+                      href={`/student/chapters/${linkedUnit.unitId}`}
                       className="inline-flex items-center gap-2 rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm hover:border-amber-400 hover:text-amber-800"
                     >
                       <span className="font-medium">{linkedUnit.unitTitle}</span>

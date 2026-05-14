@@ -66,7 +66,7 @@ package db
 // ExpectedSchemaProbe is the public table name created by the latest
 // schema-affecting migration. Boot-time check verifies the table
 // exists; mismatch → refuse to start.
-const ExpectedSchemaProbe = "parent_links"
+const ExpectedSchemaProbe = "books"
 
 // SchemaSentinels enumerates the columns, named constraints, and
 // indexes that must be present on the ExpectedSchemaProbe table for
@@ -94,36 +94,33 @@ type SchemaSentinels struct {
 }
 
 // ExpectedSchemaSentinels is the sentinel set for the latest
-// schema-affecting migration (`drizzle/0024_parent_links.sql`).
+// schema-affecting migration (`drizzle/0026_books_and_chapters.sql`).
 //
 // Bump rule: every PR that adds or modifies a schema-affecting
 // migration MUST update this struct. The CI parity test verifies
 // bidirectional parity with the migration source.
 var ExpectedSchemaSentinels = SchemaSentinels{
-	Table: "parent_links",
+	Table: "books",
 	Columns: []string{
 		"id",
-		"parent_user_id",
-		"child_user_id",
-		"status",
+		"title",
+		"description",
+		"scope",
+		"scope_id",
 		"created_by",
 		"created_at",
-		"revoked_at",
+		"updated_at",
 	},
 	Constraints: []string{
-		// CHECK constraints declared inline in CREATE TABLE
-		// (drizzle/0024_parent_links.sql:20-23).
-		"parent_links_status_check",
-		"parent_links_no_self_link",
+		"books_scope_id_required",
 	},
 	Indexes: []string{
-		// btree on parent_user_id (drizzle/0024:26-27).
-		"parent_links_parent_idx",
-		// btree on child_user_id (drizzle/0024:29-30).
-		"parent_links_child_idx",
-		// PARTIAL unique on (parent_user_id, child_user_id) WHERE
-		// status='active' (drizzle/0024:35-37). Enforces the
-		// at-most-one-active-link-per-pair invariant.
-		"parent_links_active_uniq",
+		"books_scope_idx",
+		"books_created_by_idx",
+		// chapters_book_idx is on the chapters table, not books. Plan 088
+		// added it in the same migration. checkIndexes() looks indexes up
+		// by name only (not by table), so this works under the relaxed
+		// probe.
+		"chapters_book_idx",
 	},
 }

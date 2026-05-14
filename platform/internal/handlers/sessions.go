@@ -26,15 +26,15 @@ import (
 // docs/plans/075-require-org-authority.md §Out of scope, Bucket 1.
 
 type SessionHandler struct {
-	Sessions      *store.SessionStore
-	Schedules     *store.ScheduleStore
-	Classes       *store.ClassStore
-	Courses       *store.CourseStore
-	Topics        *store.TopicStore
-	TeachingUnits *store.TeachingUnitStore // Plan 044: per-topic Unit refs.
-	Orgs          *store.OrgStore
-	ParentLinks   *store.ParentLinkStore // Plan 064: parent-of-participant gate for GetSessionTopics.
-	Broadcaster   *events.Broadcaster
+	Sessions    *store.SessionStore
+	Schedules   *store.ScheduleStore
+	Classes     *store.ClassStore
+	Courses     *store.CourseStore
+	Topics      *store.TopicStore
+	Chapters    *store.ChapterStore // Plan 044: per-topic Unit refs.
+	Orgs        *store.OrgStore
+	ParentLinks *store.ParentLinkStore // Plan 064: parent-of-participant gate for GetSessionTopics.
+	Broadcaster *events.Broadcaster
 }
 
 type sessionListResponse struct {
@@ -87,6 +87,7 @@ func (h *SessionHandler) Routes(r chi.Router) {
 // ConfirmUnlinkedTopics=true. Two body codes distinguish:
 //   - "all_topics_unlinked": every topic has no Unit (strong dialog)
 //   - "some_topics_unlinked": at least one is unlinked (softer dialog)
+//
 // Both are overridable by re-POSTing with the confirm flag — the UI
 // shows a confirmation Dialog explicitly before flipping that flag.
 func (h *SessionHandler) CreateSession(w http.ResponseWriter, r *http.Request) {
@@ -137,13 +138,13 @@ func (h *SessionHandler) CreateSession(w http.ResponseWriter, r *http.Request) {
 		// runs when the caller hasn't already confirmed via the UI.
 		// Reuses `class` from the auth check above; no refetch.
 		//
-		// Codex post-impl review: a nil Topics or TeachingUnits store
+		// Codex post-impl review: a nil Topics or Chapters store
 		// is misconfiguration, not a "skip the guard" signal — silently
 		// no-op'ing here would let unguarded session creation through.
 		// Production main.go wires both; if a test or future caller
 		// builds a SessionHandler without them, fail loud.
 		if !body.ConfirmUnlinkedTopics && class != nil {
-			if h.Topics == nil || h.TeachingUnits == nil {
+			if h.Topics == nil || h.Chapters == nil {
 				writeError(w, http.StatusInternalServerError,
 					"Session handler misconfigured: topic/unit stores not wired")
 				return
@@ -186,7 +187,7 @@ func (h *SessionHandler) CreateSession(w http.ResponseWriter, r *http.Request) {
 }
 
 // checkUnlinkedTopicsGuard inspects the course's topics + their linked
-// teaching_units. Returns true (and writes the 422 response) when the
+// chapters. Returns true (and writes the 422 response) when the
 // caller MUST be shown a confirmation dialog before the session is
 // created. Returns false when the create can proceed normally.
 //
@@ -214,7 +215,7 @@ func (h *SessionHandler) checkUnlinkedTopicsGuard(w http.ResponseWriter, r *http
 	for i, t := range topics {
 		topicIDs[i] = t.ID
 	}
-	linked, err := h.TeachingUnits.ListUnitsByTopicIDs(r.Context(), topicIDs)
+	linked, err := h.Chapters.ListChaptersByTopicIDs(r.Context(), topicIDs)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return true
@@ -1341,7 +1342,7 @@ type teacherPagePayload struct {
 type teacherPageTopicRef struct {
 	TopicID          string  `json:"topicId"`
 	Title            string  `json:"title"`
-	UnitID           *string `json:"unitId"`
+	ChapterID        *string `json:"chapterId"`
 	UnitTitle        *string `json:"unitTitle"`
 	UnitMaterialType *string `json:"unitMaterialType"`
 }
@@ -1441,7 +1442,7 @@ func (h *SessionHandler) GetTeacherPage(w http.ResponseWriter, r *http.Request) 
 			// (the same source the student page uses), not from the
 			// class's course topics. Pre-048 these diverged whenever a
 			// new session didn't auto-snapshot the course's topics —
-			// teacher would see all course topics with unitId: null,
+			// teacher would see all course topics with chapterId: null,
 			// student would see nothing. CreateSession now atomically
 			// snapshots into session_topics; this read returns whatever
 			// the agenda currently is (post-snapshot, post-mid-session
@@ -1461,7 +1462,7 @@ func (h *SessionHandler) GetTeacherPage(w http.ResponseWriter, r *http.Request) 
 				refs = append(refs, teacherPageTopicRef{
 					TopicID:          t.TopicID,
 					Title:            t.Title,
-					UnitID:           t.UnitID,
+					ChapterID:        t.ChapterID,
 					UnitTitle:        t.UnitTitle,
 					UnitMaterialType: t.UnitMaterialType,
 				})

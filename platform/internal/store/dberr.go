@@ -13,7 +13,7 @@ import (
 // pgx for the pool but lib/pq error types still appear in some
 // paths (e.g., array binding via pq.Array on the bound parameters).
 //
-// Promoted from teaching_units.go::isUniqueViolationOn so problems.go
+// Promoted from chapters.go::isUniqueViolationOn so problems.go
 // (and any future store) can reuse the dual-driver check without
 // duplicating it.
 func IsUniqueViolationOn(err error, constraint string) bool {

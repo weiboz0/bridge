@@ -254,4 +254,4 @@ func (w *limitedWriter) Write(p []byte) (int, error) {
 }
 
 func (w *limitedWriter) Len() int       { return len(w.buf) }
-func (w *limitedWriter) String() string  { return string(w.buf) }
+func (w *limitedWriter) String() string { return string(w.buf) }

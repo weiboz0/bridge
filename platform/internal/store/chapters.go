@@ -1,0 +1,1429 @@
+package store
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/lib/pq"
+	overlayPkg "github.com/weiboz0/bridge/platform/internal/overlay"
+)
+
+var (
+	// ErrChapterNotFound is returned when an operation targets a unit that
+	// doesn't exist.
+	ErrChapterNotFound = errors.New("chapter not found")
+	// ErrTopicAlreadyLinked is returned when LinkChapterToTopic finds a
+	// different chapter already claiming the requested topic_id (1:1 enforced
+	// by chapters_topic_id_uniq).
+	ErrTopicAlreadyLinked = errors.New("topic is already linked to a different chapter")
+)
+
+// Chapter is the core row from chapters. Scope is "platform"
+// (global), "org" (shared within an org), or "personal" (owned by one user).
+// ScopeID is NULL iff Scope == "platform"; otherwise it points at the owning
+// org or user.
+type Chapter struct {
+	ID               string    `json:"id"`
+	Scope            string    `json:"scope"`
+	ScopeID          *string   `json:"scopeId"`
+	Title            string    `json:"title"`
+	Slug             *string   `json:"slug"`
+	Summary          string    `json:"summary"`
+	GradeLevel       *string   `json:"gradeLevel"`
+	SubjectTags      []string  `json:"subjectTags"`
+	StandardsTags    []string  `json:"standardsTags"`
+	EstimatedMinutes *int      `json:"estimatedMinutes"`
+	MaterialType     string    `json:"materialType"`
+	Status           string    `json:"status"`
+	CreatedBy        string    `json:"createdBy"`
+	CreatedAt        time.Time `json:"createdAt"`
+	UpdatedAt        time.Time `json:"updatedAt"`
+	TopicID          *string   `json:"topicId"`
+	BookID           *string   `json:"bookId"`
+}
+
+// ChapterDocument is the single document (block-based content) row for a unit.
+type ChapterDocument struct {
+	ChapterID string          `json:"chapterId"`
+	Blocks    json.RawMessage `json:"blocks"`
+	UpdatedAt time.Time       `json:"updatedAt"`
+}
+
+// CreateChapterInput carries the fields required to create a teaching unit.
+// Status defaults to "draft" when empty.
+type CreateChapterInput struct {
+	Scope            string
+	ScopeID          *string
+	Title            string
+	Slug             *string
+	Summary          string
+	GradeLevel       *string
+	SubjectTags      []string
+	StandardsTags    []string
+	EstimatedMinutes *int
+	MaterialType     string // "" → "notes"
+	Status           string // "" → "draft"
+	CreatedBy        string
+	BookID           *string
+}
+
+// UpdateChapterInput carries optional partial-update fields.
+// Nil fields are left untouched. For SubjectTags/StandardsTags:
+//   - nil = leave unchanged
+//   - empty slice = clear to '{}'
+//
+// For Slug/GradeLevel: pointer to "" = clear to NULL.
+type UpdateChapterInput struct {
+	Title            *string
+	Slug             *string
+	Summary          *string
+	GradeLevel       *string
+	SubjectTags      []string // nil = unchanged; empty = clear
+	StandardsTags    []string // nil = unchanged; empty = clear
+	EstimatedMinutes *int
+	Status           *string
+	BookID           *string
+}
+
+// ChapterRevision is a snapshot of a unit's blocks content captured when the unit
+// transitions to classroom_ready or coach_ready. Reason records the target
+// status that triggered the snapshot (e.g. "classroom_ready").
+type ChapterRevision struct {
+	ID        string          `json:"id"`
+	ChapterID string          `json:"chapterId"`
+	Blocks    json.RawMessage `json:"blocks"`
+	Reason    *string         `json:"reason"`
+	CreatedBy string          `json:"createdBy"`
+	CreatedAt time.Time       `json:"createdAt"`
+}
+
+// ChapterStore manages chapters and chapter_documents rows.
+type ChapterStore struct{ db *sql.DB }
+
+// NewChapterStore constructs a store backed by db.
+func NewChapterStore(db *sql.DB) *ChapterStore { return &ChapterStore{db: db} }
+
+const chapterColumns = `id, scope, scope_id, title, slug, summary,
+  grade_level, subject_tags, standards_tags, estimated_minutes, material_type,
+  status, created_by, created_at, updated_at, topic_id, book_id`
+
+// scanChapter reads a chapters row. Returns (nil, nil) on
+// sql.ErrNoRows so callers can use a uniform "not found" check.
+func scanChapter(row interface{ Scan(...any) error }) (*Chapter, error) {
+	var u Chapter
+	var scopeID, slug, gradeLevel, topicID, bookID sql.NullString
+	var estimatedMinutes sql.NullInt32
+	var subjectTags, standardsTags pq.StringArray
+
+	err := row.Scan(
+		&u.ID, &u.Scope, &scopeID, &u.Title, &slug, &u.Summary,
+		&gradeLevel, &subjectTags, &standardsTags, &estimatedMinutes, &u.MaterialType,
+		&u.Status, &u.CreatedBy, &u.CreatedAt, &u.UpdatedAt, &topicID, &bookID,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	if scopeID.Valid {
+		v := scopeID.String
+		u.ScopeID = &v
+	}
+	if slug.Valid {
+		v := slug.String
+		u.Slug = &v
+	}
+	if gradeLevel.Valid {
+		v := gradeLevel.String
+		u.GradeLevel = &v
+	}
+	if estimatedMinutes.Valid {
+		v := int(estimatedMinutes.Int32)
+		u.EstimatedMinutes = &v
+	}
+	if topicID.Valid {
+		v := topicID.String
+		u.TopicID = &v
+	}
+	if bookID.Valid {
+		v := bookID.String
+		u.BookID = &v
+	}
+	if subjectTags == nil {
+		u.SubjectTags = []string{}
+	} else {
+		u.SubjectTags = []string(subjectTags)
+	}
+	if standardsTags == nil {
+		u.StandardsTags = []string{}
+	} else {
+		u.StandardsTags = []string(standardsTags)
+	}
+
+	return &u, nil
+}
+
+// CreateChapter inserts a new teaching unit row and seeds an empty chapter_documents
+// row in a single transaction. Status defaults to "draft".
+func (s *ChapterStore) CreateChapter(ctx context.Context, in CreateChapterInput) (*Chapter, error) {
+	if in.Status == "" {
+		in.Status = "draft"
+	}
+	if in.MaterialType == "" {
+		in.MaterialType = "notes"
+	}
+	if in.SubjectTags == nil {
+		in.SubjectTags = []string{}
+	}
+	if in.StandardsTags == nil {
+		in.StandardsTags = []string{}
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	unit, err := scanChapter(tx.QueryRowContext(ctx, `
+		INSERT INTO chapters (
+		  scope, scope_id, title, slug, summary,
+		  grade_level, subject_tags, standards_tags,
+		  estimated_minutes, material_type, status, created_by, book_id
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+		RETURNING `+chapterColumns,
+		in.Scope, in.ScopeID, in.Title, in.Slug, in.Summary,
+		in.GradeLevel, pq.Array(in.SubjectTags), pq.Array(in.StandardsTags),
+		in.EstimatedMinutes, in.MaterialType, in.Status, in.CreatedBy, in.BookID,
+	))
+	if err != nil {
+		return nil, err
+	}
+	if unit == nil {
+		return nil, fmt.Errorf("create chapter: insert returned no row")
+	}
+
+	// Seed the empty document. The DEFAULT in the schema handles the blocks
+	// value; we explicitly insert so tests can assert the row exists immediately.
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO chapter_documents (chapter_id)
+		VALUES ($1)
+		ON CONFLICT (chapter_id) DO NOTHING`,
+		unit.ID,
+	); err != nil {
+		return nil, fmt.Errorf("create chapter: seed document: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return unit, nil
+}
+
+// GetChapter returns the unit with the given id, or (nil, nil) if not found.
+func (s *ChapterStore) GetChapter(ctx context.Context, id string) (*Chapter, error) {
+	return scanChapter(s.db.QueryRowContext(ctx,
+		`SELECT `+chapterColumns+` FROM chapters WHERE id = $1`, id))
+}
+
+// LinkChapterToTopic sets `topic_id` on a unit. Idempotent for the
+// (chapterId, topicId) pair: re-linking the same pair is a no-op.
+//
+// Plan 044 phase 2: backs the teacher topic-edit page's primitive
+// "paste a Chapter ID to attach" UX. The unique index on
+// chapters.topic_id WHERE topic_id IS NOT NULL enforces 1:1
+// (one Chapter per Topic). Callers should pre-check via GetChapterByTopicID
+// to surface a clean "already linked to a different chapter" error
+// rather than relying on the constraint violation.
+//
+// Returns:
+//   - (unit, nil)  on success
+//   - (nil, ErrChapterNotFound)  if the unit doesn't exist
+//   - (nil, ErrTopicAlreadyLinked)  if a different chapter already owns
+//     this topic_id, OR if THIS unit is already linked to a DIFFERENT
+//     topic (silent-move guard added per Codex post-impl review).
+//   - (nil, err)  for other DB errors
+func (s *ChapterStore) LinkChapterToTopic(ctx context.Context, chapterID, topicID string) (*Chapter, error) {
+	// Pre-check 1: is this topic already claimed by a DIFFERENT unit?
+	existing, err := s.GetChapterByTopicID(ctx, topicID)
+	if err != nil {
+		return nil, err
+	}
+	if existing != nil && existing.ID != chapterID {
+		return nil, ErrTopicAlreadyLinked
+	}
+
+	// Pre-check 2: is THIS unit already linked to a DIFFERENT topic?
+	// Without this guard, a direct POST that bypasses the picker's
+	// disabled-row UI would silently move the Unit from its previous
+	// topic — surprising and indistinguishable from "the previous topic
+	// was unlinked first." Surface 409 instead.
+	currentUnit, err := s.GetChapter(ctx, chapterID)
+	if err != nil {
+		return nil, err
+	}
+	if currentUnit == nil {
+		return nil, ErrChapterNotFound
+	}
+	if currentUnit.TopicID != nil && *currentUnit.TopicID != topicID {
+		return nil, ErrTopicAlreadyLinked
+	}
+
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE chapters SET topic_id = $1, updated_at = now() WHERE id = $2`,
+		topicID, chapterID,
+	)
+	if err != nil {
+		// The pre-check above is best-effort — a concurrent linker can win
+		// the race between GetChapterByTopicID and UPDATE. Catch the unique
+		// index violation (chapters_topic_id_uniq) and surface the
+		// same clean ErrTopicAlreadyLinked rather than an opaque 500.
+		if IsUniqueViolationOn(err, "chapters_topic_id_uniq") {
+			return nil, ErrTopicAlreadyLinked
+		}
+		return nil, err
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return nil, err
+	}
+	if rows == 0 {
+		return nil, ErrChapterNotFound
+	}
+	return s.GetChapter(ctx, chapterID)
+}
+
+// UnlinkChapterFromTopic clears the topic_id on the given unit. Plan 045
+// powers the topic editor's "Unlink" affordance. Idempotent: if the
+// unit has no topic_id, the UPDATE affects zero rows but no error is
+// returned. Caller is responsible for ensuring the unit ID exists; if
+// you need a "did anything change" signal, call GetChapterByTopicID first.
+func (s *ChapterStore) UnlinkChapterFromTopic(ctx context.Context, chapterID string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE chapters SET topic_id = NULL, updated_at = now() WHERE id = $1`,
+		chapterID,
+	)
+	return err
+}
+
+// GetChapterByTopicID returns the unit linked to the given topic, or (nil, nil) if
+// no unit has that topic_id. Each topic maps to at most one unit (enforced by a
+// partial unique index on chapters.topic_id WHERE topic_id IS NOT NULL).
+func (s *ChapterStore) GetChapterByTopicID(ctx context.Context, topicID string) (*Chapter, error) {
+	return scanChapter(s.db.QueryRowContext(ctx,
+		`SELECT `+chapterColumns+` FROM chapters WHERE topic_id = $1`, topicID))
+}
+
+// IsStudentInTopicCourse reports whether `userID` has a class
+// membership row in any class whose `course_id` matches the
+// `course_id` of `topicID`. Existence-only — `class_memberships`
+// has no `status` column and existing course-access checks
+// (`UserHasAccessToCourse` in store/courses.go) don't filter on
+// one either.
+//
+// Plan 061 — used by `CanViewChapter` to widen access for students
+// whose class is wired into the unit's topic.
+func (s *ChapterStore) IsStudentInTopicCourse(ctx context.Context, userID, topicID string) (bool, error) {
+	if userID == "" || topicID == "" {
+		return false, nil
+	}
+	var exists bool
+	err := s.db.QueryRowContext(ctx,
+		`SELECT EXISTS (
+			SELECT 1
+			FROM topics t
+			INNER JOIN classes c ON c.course_id = t.course_id
+			INNER JOIN class_memberships cm ON cm.class_id = c.id
+			WHERE t.id = $1 AND cm.user_id = $2
+		)`,
+		topicID, userID,
+	).Scan(&exists)
+	if err != nil {
+		return false, err
+	}
+	return exists, nil
+}
+
+// ListChaptersByTopicIDs returns a map of topic_id → linked Chapter for
+// the given topic IDs, with the same cross-org leak guard as the TS-side
+// listLinkedUnitsByTopicIds (units must be platform-scope OR scope_id
+// must match the topic's course org_id). Topics without a linked unit are
+// omitted from the map.
+//
+// Plan 044 phase 2: powers the teacher session-page payload's per-topic
+// Unit refs in one query.
+func (s *ChapterStore) ListChaptersByTopicIDs(ctx context.Context, topicIDs []string) (map[string]*Chapter, error) {
+	out := map[string]*Chapter{}
+	if len(topicIDs) == 0 {
+		return out, nil
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT u.id, u.scope, u.scope_id, u.title, u.slug, u.summary, u.grade_level,
+		        u.subject_tags, u.standards_tags, u.estimated_minutes, u.material_type,
+		        u.status, u.created_by, u.created_at, u.updated_at, u.topic_id, u.book_id
+		 FROM chapters u
+		 INNER JOIN topics t ON t.id = u.topic_id
+		 INNER JOIN courses c ON c.id = t.course_id
+		 WHERE u.topic_id = ANY($1)
+		   AND (u.scope = 'platform' OR u.scope_id = c.org_id)`,
+		pq.Array(topicIDs),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		u, err := scanChapter(rows)
+		if err != nil {
+			return nil, err
+		}
+		if u.TopicID != nil {
+			out[*u.TopicID] = u
+		}
+	}
+	return out, rows.Err()
+}
+
+// GetDocument returns the chapter_documents row for chapterID.
+func (s *ChapterStore) GetDocument(ctx context.Context, chapterID string) (*ChapterDocument, error) {
+	var doc ChapterDocument
+	var blocks []byte
+	err := s.db.QueryRowContext(ctx,
+		`SELECT chapter_id, blocks, updated_at FROM chapter_documents WHERE chapter_id = $1`, chapterID,
+	).Scan(&doc.ChapterID, &blocks, &doc.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	doc.Blocks = json.RawMessage(blocks)
+	return &doc, nil
+}
+
+// UpdateChapter applies partial updates to the teaching unit. Nil fields are
+// unchanged. For Slug/GradeLevel, a pointer to "" clears the column to NULL.
+// For SubjectTags/StandardsTags, nil leaves unchanged; an empty slice clears.
+func (s *ChapterStore) UpdateChapter(ctx context.Context, id string, in UpdateChapterInput) (*Chapter, error) {
+	setClauses := []string{}
+	args := []any{}
+	argIdx := 1
+
+	if in.Title != nil {
+		setClauses = append(setClauses, fmt.Sprintf("title = $%d", argIdx))
+		args = append(args, *in.Title)
+		argIdx++
+	}
+	if in.Slug != nil {
+		setClauses = append(setClauses, fmt.Sprintf("slug = $%d", argIdx))
+		if *in.Slug == "" {
+			args = append(args, nil)
+		} else {
+			args = append(args, *in.Slug)
+		}
+		argIdx++
+	}
+	if in.Summary != nil {
+		setClauses = append(setClauses, fmt.Sprintf("summary = $%d", argIdx))
+		args = append(args, *in.Summary)
+		argIdx++
+	}
+	if in.GradeLevel != nil {
+		setClauses = append(setClauses, fmt.Sprintf("grade_level = $%d", argIdx))
+		if *in.GradeLevel == "" {
+			args = append(args, nil)
+		} else {
+			args = append(args, *in.GradeLevel)
+		}
+		argIdx++
+	}
+	if in.SubjectTags != nil {
+		setClauses = append(setClauses, fmt.Sprintf("subject_tags = $%d", argIdx))
+		args = append(args, pq.Array(in.SubjectTags))
+		argIdx++
+	}
+	if in.StandardsTags != nil {
+		setClauses = append(setClauses, fmt.Sprintf("standards_tags = $%d", argIdx))
+		args = append(args, pq.Array(in.StandardsTags))
+		argIdx++
+	}
+	if in.EstimatedMinutes != nil {
+		setClauses = append(setClauses, fmt.Sprintf("estimated_minutes = $%d", argIdx))
+		args = append(args, *in.EstimatedMinutes)
+		argIdx++
+	}
+	if in.Status != nil {
+		setClauses = append(setClauses, fmt.Sprintf("status = $%d", argIdx))
+		args = append(args, *in.Status)
+		argIdx++
+	}
+	if in.BookID != nil {
+		setClauses = append(setClauses, fmt.Sprintf("book_id = $%d", argIdx))
+		if *in.BookID == "" {
+			args = append(args, nil)
+		} else {
+			args = append(args, *in.BookID)
+		}
+		argIdx++
+	}
+
+	if len(setClauses) == 0 {
+		return s.GetChapter(ctx, id)
+	}
+
+	setClauses = append(setClauses, fmt.Sprintf("updated_at = $%d", argIdx))
+	args = append(args, time.Now())
+	argIdx++
+
+	args = append(args, id)
+	q := fmt.Sprintf(
+		`UPDATE chapters SET %s WHERE id = $%d RETURNING `+chapterColumns,
+		strings.Join(setClauses, ", "), argIdx,
+	)
+	return scanChapter(s.db.QueryRowContext(ctx, q, args...))
+}
+
+// SaveDocument upserts the blocks content for the given unit. It bumps
+// chapter_documents.updated_at and chapters.updated_at in the same
+// transaction so cache-busting consumers always see a consistent pair.
+func (s *ChapterStore) SaveDocument(ctx context.Context, chapterID string, blocks json.RawMessage) (*ChapterDocument, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	now := time.Now()
+
+	var doc ChapterDocument
+	var rawBlocks []byte
+	err = tx.QueryRowContext(ctx, `
+		INSERT INTO chapter_documents (chapter_id, blocks, updated_at)
+		VALUES ($1, $2::jsonb, $3)
+		ON CONFLICT (chapter_id) DO UPDATE
+		  SET blocks = EXCLUDED.blocks,
+		      updated_at = EXCLUDED.updated_at
+		RETURNING chapter_id, blocks, updated_at`,
+		chapterID, []byte(blocks), now,
+	).Scan(&doc.ChapterID, &rawBlocks, &doc.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	doc.Blocks = json.RawMessage(rawBlocks)
+
+	// Bump the parent unit's updated_at so API consumers can detect
+	// that the unit content has changed without fetching the document.
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE chapters SET updated_at = $1 WHERE id = $2`, now, chapterID,
+	); err != nil {
+		return nil, fmt.Errorf("save document: bump unit updated_at: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return &doc, nil
+}
+
+// DeleteChapter hard-deletes the unit and returns the deleted row (or nil if not
+// found). Cascades in the schema remove chapter_documents and chapter_revisions.
+func (s *ChapterStore) DeleteChapter(ctx context.Context, id string) (*Chapter, error) {
+	return scanChapter(s.db.QueryRowContext(ctx,
+		`DELETE FROM chapters WHERE id = $1 RETURNING `+chapterColumns, id))
+}
+
+// ChapterBookFilter scopes a chapter list by book membership. Values:
+//   - nil:               no filter (default).
+//   - non-nil ptr to ID: WHERE book_id = ID.
+//   - non-nil ptr to "": WHERE book_id IS NULL (the "unfiled" sentinel).
+type ChapterBookFilter = *string
+
+// ListChaptersForScope returns all units for the given scope and scopeID, ordered
+// by updated_at DESC. Pass an empty scopeID for scope="platform". Pass bookFilter
+// to additionally restrict by book membership (see ChapterBookFilter).
+func (s *ChapterStore) ListChaptersForScope(ctx context.Context, scope, scopeID string, bookFilter ChapterBookFilter) ([]Chapter, error) {
+	var (
+		query strings.Builder
+		args  []any
+	)
+	query.WriteString(`SELECT ` + chapterColumns + ` FROM chapters WHERE scope = $1`)
+	args = append(args, scope)
+	if scopeID == "" {
+		query.WriteString(` AND scope_id IS NULL`)
+	} else {
+		args = append(args, scopeID)
+		query.WriteString(fmt.Sprintf(` AND scope_id = $%d`, len(args)))
+	}
+	if bookFilter != nil {
+		if *bookFilter == "" {
+			query.WriteString(` AND book_id IS NULL`)
+		} else {
+			args = append(args, *bookFilter)
+			query.WriteString(fmt.Sprintf(` AND book_id = $%d`, len(args)))
+		}
+	}
+	query.WriteString(` ORDER BY updated_at DESC`)
+
+	rows, err := s.db.QueryContext(ctx, query.String(), args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []Chapter{}
+	for rows.Next() {
+		u, err := scanChapter(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *u)
+	}
+	return out, rows.Err()
+}
+
+// validChapterTransitions encodes the spec-012 state machine. Keys are
+// "currentStatus→targetStatus" pairs.
+var validChapterTransitions = map[string]bool{
+	"draft→reviewed":           true,
+	"reviewed→classroom_ready": true,
+	"reviewed→coach_ready":     true,
+	// Any non-draft → archived.
+	"reviewed→archived":        true,
+	"classroom_ready→archived": true,
+	"coach_ready→archived":     true,
+	"archived→archived":        true, // idempotent archive
+	// Unarchive.
+	"archived→classroom_ready": true,
+}
+
+// snapshotStatuses are target statuses that trigger a chapter_revisions snapshot.
+var snapshotStatuses = map[string]bool{
+	"classroom_ready": true,
+	"coach_ready":     true,
+}
+
+// SetUnitStatus atomically transitions a teaching unit's status and, when the
+// target is classroom_ready or coach_ready, snapshots the current
+// chapter_documents.blocks into a chapter_revisions row. Returns the updated unit.
+//
+// Invalid transitions return ErrInvalidTransition (defined in problems.go).
+// A non-existent unit returns sql.ErrNoRows (handler maps to 404).
+func (s *ChapterStore) SetUnitStatus(ctx context.Context, chapterID, newStatus, callerID string) (*Chapter, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	var currentStatus string
+	err = tx.QueryRowContext(ctx,
+		`SELECT status FROM chapters WHERE id = $1 FOR UPDATE`, chapterID,
+	).Scan(&currentStatus)
+	if err == sql.ErrNoRows {
+		return nil, sql.ErrNoRows
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	key := currentStatus + "→" + newStatus
+	if !validChapterTransitions[key] {
+		return nil, ErrInvalidTransition
+	}
+
+	// Snapshot blocks if transitioning to a publish status.
+	if snapshotStatuses[newStatus] {
+		reason := newStatus
+		_, err = tx.ExecContext(ctx, `
+			INSERT INTO chapter_revisions (chapter_id, blocks, reason, created_by)
+			SELECT $1, blocks, $2, $3
+			FROM chapter_documents
+			WHERE chapter_id = $1`,
+			chapterID, reason, callerID,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("set unit status: create revision: %w", err)
+		}
+	}
+
+	// Update the status.
+	now := time.Now()
+	unit, err := scanChapter(tx.QueryRowContext(ctx,
+		`UPDATE chapters SET status = $1, updated_at = $2
+		 WHERE id = $3
+		 RETURNING `+chapterColumns,
+		newStatus, now, chapterID,
+	))
+	if err != nil {
+		return nil, err
+	}
+	if unit == nil {
+		return nil, fmt.Errorf("set unit status: update returned no row")
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return unit, nil
+}
+
+// scanChapterRevision reads a single chapter_revisions row.
+func scanChapterRevision(row interface{ Scan(...any) error }) (*ChapterRevision, error) {
+	var r ChapterRevision
+	var blocks []byte
+	var reason sql.NullString
+
+	err := row.Scan(&r.ID, &r.ChapterID, &blocks, &reason, &r.CreatedBy, &r.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	r.Blocks = json.RawMessage(blocks)
+	if reason.Valid {
+		r.Reason = &reason.String
+	}
+	return &r, nil
+}
+
+// ListRevisions returns all revisions for the given unit, ordered by
+// created_at DESC (newest first).
+func (s *ChapterStore) ListRevisions(ctx context.Context, chapterID string) ([]ChapterRevision, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, chapter_id, blocks, reason, created_by, created_at
+		FROM chapter_revisions
+		WHERE chapter_id = $1
+		ORDER BY created_at DESC`, chapterID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []ChapterRevision{}
+	for rows.Next() {
+		r, err := scanChapterRevision(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *r)
+	}
+	return out, rows.Err()
+}
+
+// GetRevision returns a single chapter_revisions row by ID, or (nil, nil) if not
+// found.
+func (s *ChapterStore) GetRevision(ctx context.Context, revisionID string) (*ChapterRevision, error) {
+	return scanChapterRevision(s.db.QueryRowContext(ctx, `
+		SELECT id, chapter_id, blocks, reason, created_by, created_at
+		FROM chapter_revisions
+		WHERE id = $1`, revisionID))
+}
+
+// ── Search ──────────────────────────────────────────────────────────────────
+
+// SearchChaptersFilter describes the filter / pagination for SearchChapters.
+// When Query is non-empty, results are ranked by FTS relevance; otherwise
+// they are ordered by updated_at DESC (recent-first browse).
+type SearchChaptersFilter struct {
+	Query           string // FTS query text (plainto_tsquery)
+	Scope           string // "" = all visible; platform | org | personal
+	ScopeID         *string
+	Status          string // "" = any visible
+	GradeLevel      string
+	MaterialType    string   // Plan 045: "" = any; notes | slides | worksheet | reference
+	SubjectTags     []string // AND semantics (subject_tags @> $tags)
+	BookFilter      ChapterBookFilter // nil=any; non-nil empty=unfiled; non-nil uuid=specific book
+	ViewerID        string
+	ViewerOrgs      []string // org IDs where viewer has teacher/admin membership
+	IsPlatformAdmin bool
+	Limit           int        // default 20, max 100
+	CursorCreatedAt *time.Time // keyset cursor for non-FTS browse
+	CursorID        *string
+}
+
+// UnitWithLinkedTopic is SearchChaptersForPicker's row shape: a regular
+// Chapter decorated with the topic it's currently linked to (if
+// any). LinkedTopicTitle is null whenever the linked topic's course is
+// in a different org than the picker's course (cross-org leak guard) —
+// the topic exists but its title is redacted. LinkedTopicID is always
+// surfaced when set; the bare ID isn't sensitive.
+type UnitWithLinkedTopic struct {
+	Chapter
+	LinkedTopicID    *string `json:"linkedTopicId"`
+	LinkedTopicTitle *string `json:"linkedTopicTitle"`
+}
+
+// SearchChapters returns teaching units matching the filter. When Query is
+// non-empty, results are filtered by FTS (plainto_tsquery) and ranked by
+// ts_rank. Otherwise results are ordered by updated_at DESC with keyset
+// cursor pagination.
+func (s *ChapterStore) SearchChapters(ctx context.Context, f SearchChaptersFilter) ([]Chapter, error) {
+	where := []string{}
+	args := []any{}
+	idx := 1
+
+	// ── Visibility gate (mirrors canViewChapter in the handler) ──
+	if f.IsPlatformAdmin {
+		// platform admins see everything — no visibility filter
+	} else {
+		clauses := []string{
+			// Platform scope: published statuses visible to any authenticated user.
+			"(scope = 'platform' AND status IN ('classroom_ready','coach_ready','archived'))",
+		}
+		// Org scope: teachers/admins in the org can see all statuses.
+		if len(f.ViewerOrgs) > 0 {
+			clauses = append(clauses, fmt.Sprintf(
+				"(scope = 'org' AND scope_id = ANY($%d))", idx))
+			args = append(args, pq.Array(f.ViewerOrgs))
+			idx++
+		}
+		// Personal scope: owner only.
+		if f.ViewerID != "" {
+			clauses = append(clauses, fmt.Sprintf(
+				"(scope = 'personal' AND scope_id = $%d)", idx))
+			args = append(args, f.ViewerID)
+			idx++
+			// Authors always see their own units regardless of scope.
+			clauses = append(clauses, fmt.Sprintf(
+				"(created_by = $%d)", idx))
+			args = append(args, f.ViewerID)
+			idx++
+		}
+		where = append(where, "("+strings.Join(clauses, " OR ")+")")
+	}
+
+	// ── Structured filters ──
+	if f.Scope != "" {
+		where = append(where, fmt.Sprintf("scope = $%d", idx))
+		args = append(args, f.Scope)
+		idx++
+	}
+	if f.ScopeID != nil {
+		where = append(where, fmt.Sprintf("scope_id = $%d", idx))
+		args = append(args, *f.ScopeID)
+		idx++
+	}
+	if f.Status != "" {
+		where = append(where, fmt.Sprintf("status = $%d", idx))
+		args = append(args, f.Status)
+		idx++
+	}
+	if f.GradeLevel != "" {
+		where = append(where, fmt.Sprintf("grade_level = $%d", idx))
+		args = append(args, f.GradeLevel)
+		idx++
+	}
+	if f.BookFilter != nil {
+		if *f.BookFilter == "" {
+			where = append(where, "book_id IS NULL")
+		} else {
+			where = append(where, fmt.Sprintf("book_id = $%d", idx))
+			args = append(args, *f.BookFilter)
+			idx++
+		}
+	}
+	if f.MaterialType != "" {
+		where = append(where, fmt.Sprintf("material_type = $%d", idx))
+		args = append(args, f.MaterialType)
+		idx++
+	}
+	if len(f.SubjectTags) > 0 {
+		where = append(where, fmt.Sprintf("subject_tags @> $%d", idx))
+		args = append(args, pq.Array(f.SubjectTags))
+		idx++
+	}
+
+	// ── FTS vs browse ──
+	hasFTS := f.Query != ""
+	var queryParamIdx int
+	if hasFTS {
+		where = append(where, fmt.Sprintf(
+			"search_vector @@ plainto_tsquery('english', $%d)", idx))
+		queryParamIdx = idx
+		args = append(args, f.Query)
+		idx++
+	}
+
+	// ── Cursor (browse mode only — FTS sorts by rank) ──
+	if !hasFTS && f.CursorCreatedAt != nil && f.CursorID != nil {
+		where = append(where, fmt.Sprintf(
+			"(updated_at, id) < ($%d, $%d)", idx, idx+1))
+		args = append(args, *f.CursorCreatedAt, *f.CursorID)
+		idx += 2
+	}
+
+	// ── Limit ──
+	limit := f.Limit
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
+	}
+
+	// ── Build query ──
+	q := `SELECT ` + chapterColumns + ` FROM chapters`
+	if len(where) > 0 {
+		q += ` WHERE ` + strings.Join(where, " AND ")
+	}
+	if hasFTS {
+		q += fmt.Sprintf(
+			` ORDER BY ts_rank(search_vector, plainto_tsquery('english', $%d)) DESC, id DESC`,
+			queryParamIdx)
+	} else {
+		q += ` ORDER BY updated_at DESC, id DESC`
+	}
+	q += fmt.Sprintf(` LIMIT %d`, limit)
+
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []Chapter{}
+	for rows.Next() {
+		u, err := scanChapter(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *u)
+	}
+	return out, rows.Err()
+}
+
+// SearchChaptersForPicker is the picker-mode variant of SearchChapters used
+// by GET /api/chapters/search?linkableForCourse=. The caller is the
+// course's teacher (or a platform admin) — the visibility scope is
+// constrained to Units linkable to that course (platform-scope OR
+// org-scope where the unit's scope_id == pickerCourseOrgID), so the
+// SearchChaptersFilter's normal visibility/scope rules are bypassed in
+// favor of this tighter set.
+//
+// Each result is decorated with `linked_topic_id` (raw) and
+// `linked_topic_title`. The title is CASE-redacted to NULL when the
+// linked topic's course is in a different org than pickerCourseOrgID,
+// unless callerIsPlatformAdmin is true. This is the same cross-org
+// leak guard plan 044 introduced for the read-side join.
+//
+// Note: this method intentionally duplicates some of SearchChapters's
+// FTS / cursor / limit handling. Sharing more would require a much
+// larger SQL builder refactor; the picker is a single, well-bounded
+// caller, so the duplication is bounded.
+func (s *ChapterStore) SearchChaptersForPicker(
+	ctx context.Context,
+	f SearchChaptersFilter,
+	pickerCourseOrgID string,
+	callerIsPlatformAdmin bool,
+	restrictPlatformToPublished bool,
+) ([]UnitWithLinkedTopic, error) {
+	where := []string{}
+	args := []any{}
+	idx := 1
+
+	// ── Picker-specific visibility scope.
+	//
+	// Platform-scope: visible to non-admin callers ONLY in published
+	// statuses (matches the regular SearchChapters visibility gate at
+	// chapters.go::SearchChapters — without this filter the picker
+	// would leak draft titles/summaries that the regular search hides).
+	// Admins see all statuses.
+	//
+	// Org-scope: visible only when the Unit's scope_id matches the
+	// picker's course org_id (cross-org reachability gate).
+	//
+	// Personal-scope: excluded — the read-side join filters them out
+	// regardless, so showing them in the picker would only generate
+	// canLink=false noise.
+	if restrictPlatformToPublished {
+		where = append(where, fmt.Sprintf(
+			"((u.scope = 'platform' AND u.status IN ('classroom_ready','coach_ready','archived'))"+
+				" OR (u.scope = 'org' AND u.scope_id = $%d))", idx))
+	} else {
+		where = append(where, fmt.Sprintf(
+			"(u.scope = 'platform' OR (u.scope = 'org' AND u.scope_id = $%d))", idx))
+	}
+	args = append(args, pickerCourseOrgID)
+	idx++
+
+	// ── Structured filters (status, gradeLevel, materialType, tags) ──
+	if f.Status != "" {
+		where = append(where, fmt.Sprintf("u.status = $%d", idx))
+		args = append(args, f.Status)
+		idx++
+	}
+	if f.GradeLevel != "" {
+		where = append(where, fmt.Sprintf("u.grade_level = $%d", idx))
+		args = append(args, f.GradeLevel)
+		idx++
+	}
+	if f.MaterialType != "" {
+		where = append(where, fmt.Sprintf("u.material_type = $%d", idx))
+		args = append(args, f.MaterialType)
+		idx++
+	}
+	if len(f.SubjectTags) > 0 {
+		where = append(where, fmt.Sprintf("u.subject_tags @> $%d", idx))
+		args = append(args, pq.Array(f.SubjectTags))
+		idx++
+	}
+
+	hasFTS := f.Query != ""
+	var queryParamIdx int
+	if hasFTS {
+		where = append(where, fmt.Sprintf(
+			"u.search_vector @@ plainto_tsquery('english', $%d)", idx))
+		queryParamIdx = idx
+		args = append(args, f.Query)
+		idx++
+	}
+
+	// Cursor (browse mode only).
+	if !hasFTS && f.CursorCreatedAt != nil && f.CursorID != nil {
+		where = append(where, fmt.Sprintf(
+			"(u.updated_at, u.id) < ($%d, $%d)", idx, idx+1))
+		args = append(args, *f.CursorCreatedAt, *f.CursorID)
+		idx += 2
+	}
+
+	limit := f.Limit
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
+	}
+
+	// Cross-org redaction param for the linked_topic_title CASE.
+	pickerOrgIdx := idx
+	args = append(args, pickerCourseOrgID)
+	idx++
+	platformAdminIdx := idx
+	args = append(args, callerIsPlatformAdmin)
+	idx++
+
+	q := `SELECT
+	  u.id, u.scope, u.scope_id, u.title, u.slug, u.summary,
+	  u.grade_level, u.subject_tags, u.standards_tags, u.estimated_minutes,
+	  u.material_type, u.status, u.created_by, u.created_at, u.updated_at,
+	  u.topic_id,
+	  t.id AS linked_topic_id,
+	  CASE
+	    WHEN t.id IS NULL THEN NULL
+	    WHEN $` + fmt.Sprintf("%d", platformAdminIdx) + `::bool THEN t.title
+	    WHEN linked_course.org_id = $` + fmt.Sprintf("%d", pickerOrgIdx) + ` THEN t.title
+	    ELSE NULL
+	  END AS linked_topic_title
+	FROM chapters u
+	LEFT JOIN topics t ON t.id = u.topic_id
+	LEFT JOIN courses linked_course ON linked_course.id = t.course_id`
+	if len(where) > 0 {
+		q += ` WHERE ` + strings.Join(where, " AND ")
+	}
+	if hasFTS {
+		q += fmt.Sprintf(
+			` ORDER BY ts_rank(u.search_vector, plainto_tsquery('english', $%d)) DESC, u.id DESC`,
+			queryParamIdx)
+	} else {
+		q += ` ORDER BY u.updated_at DESC, u.id DESC`
+	}
+	q += fmt.Sprintf(` LIMIT %d`, limit)
+
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []UnitWithLinkedTopic{}
+	for rows.Next() {
+		var u UnitWithLinkedTopic
+		var subjectTagsArr, standardsTagsArr pq.StringArray
+		if err := rows.Scan(
+			&u.ID, &u.Scope, &u.ScopeID, &u.Title, &u.Slug, &u.Summary,
+			&u.GradeLevel, &subjectTagsArr, &standardsTagsArr, &u.EstimatedMinutes,
+			&u.MaterialType, &u.Status, &u.CreatedBy, &u.CreatedAt, &u.UpdatedAt,
+			&u.TopicID,
+			&u.LinkedTopicID, &u.LinkedTopicTitle,
+		); err != nil {
+			return nil, err
+		}
+		u.SubjectTags = []string(subjectTagsArr)
+		u.StandardsTags = []string(standardsTagsArr)
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
+// ── Overlay / Fork ──────────────────────────────────────────────────────────
+
+// UnitOverlay represents a row from chapter_overlays.
+type UnitOverlay struct {
+	ChildChapterID   string          `json:"childChapterId"`
+	ParentChapterID  string          `json:"parentChapterId"`
+	ParentRevisionID *string         `json:"parentRevisionId"`
+	BlockOverrides   json.RawMessage `json:"blockOverrides"`
+	CreatedAt        time.Time       `json:"createdAt"`
+	UpdatedAt        time.Time       `json:"updatedAt"`
+}
+
+// ForkTarget is defined in problems.go and reused here for unit forks.
+
+// UpdateOverlayInput carries the optional partial-update fields for an overlay.
+// A nil pointer means "leave unchanged". For ParentRevisionID, a pointer to ""
+// means "set to NULL" (floating).
+type UpdateOverlayInput struct {
+	ParentRevisionID *string         // nil = unchanged; ptr to "" = set NULL (float)
+	BlockOverrides   json.RawMessage // nil = unchanged
+}
+
+// LineageEntry is a single node in the overlay chain (root-first).
+type LineageEntry struct {
+	ChapterID string    `json:"chapterId"`
+	Title     string    `json:"title"`
+	Scope     string    `json:"scope"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+// ForkChapter creates a new teaching unit derived from sourceID. A transaction
+// inserts the child unit, seeds an empty chapter_documents row, and creates a
+// chapter_overlays row linking child → source (parent_revision_id = NULL = floating).
+// Returns the new child unit, or (nil, nil) if the source does not exist.
+func (s *ChapterStore) ForkChapter(ctx context.Context, sourceID string, target ForkTarget) (*Chapter, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	// Load the source unit to copy its title.
+	src, err := scanChapter(tx.QueryRowContext(ctx,
+		`SELECT `+chapterColumns+` FROM chapters WHERE id = $1 FOR UPDATE`, sourceID))
+	if err != nil {
+		return nil, err
+	}
+	if src == nil {
+		return nil, nil
+	}
+
+	title := src.Title + " (fork)"
+	if target.Title != nil && *target.Title != "" {
+		title = *target.Title
+	}
+
+	child, err := scanChapter(tx.QueryRowContext(ctx, `
+		INSERT INTO chapters (
+		  scope, scope_id, title, summary, status, created_by
+		) VALUES ($1,$2,$3,$4,'draft',$5)
+		RETURNING `+chapterColumns,
+		target.Scope, target.ScopeID, title, src.Summary, target.CallerID,
+	))
+	if err != nil {
+		return nil, fmt.Errorf("fork chapter: insert child: %w", err)
+	}
+	if child == nil {
+		return nil, fmt.Errorf("fork chapter: insert returned no row")
+	}
+
+	// Seed an empty document for the child.
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO chapter_documents (chapter_id)
+		VALUES ($1)
+		ON CONFLICT (chapter_id) DO NOTHING`, child.ID,
+	); err != nil {
+		return nil, fmt.Errorf("fork chapter: seed document: %w", err)
+	}
+
+	// Create the overlay row linking child → parent (floating).
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO chapter_overlays (child_chapter_id, parent_chapter_id, parent_revision_id, block_overrides)
+		VALUES ($1, $2, NULL, '{}'::jsonb)`,
+		child.ID, sourceID,
+	); err != nil {
+		return nil, fmt.Errorf("fork chapter: insert overlay: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return child, nil
+}
+
+// GetOverlay returns the overlay row for the given child unit, or (nil, nil)
+// if the unit has no overlay (i.e. it is not a fork).
+func (s *ChapterStore) GetOverlay(ctx context.Context, childChapterID string) (*UnitOverlay, error) {
+	var o UnitOverlay
+	var parentRevID sql.NullString
+	var overrides []byte
+
+	err := s.db.QueryRowContext(ctx, `
+		SELECT child_chapter_id, parent_chapter_id, parent_revision_id,
+		       block_overrides, created_at, updated_at
+		FROM chapter_overlays
+		WHERE child_chapter_id = $1`, childChapterID,
+	).Scan(&o.ChildChapterID, &o.ParentChapterID, &parentRevID,
+		&overrides, &o.CreatedAt, &o.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if parentRevID.Valid {
+		v := parentRevID.String
+		o.ParentRevisionID = &v
+	}
+	o.BlockOverrides = json.RawMessage(overrides)
+	return &o, nil
+}
+
+// UpdateOverlay applies partial updates to the overlay row. Nil fields are
+// unchanged. For ParentRevisionID, a pointer to "" clears the column to NULL
+// (switches to floating mode).
+func (s *ChapterStore) UpdateOverlay(ctx context.Context, childChapterID string, in UpdateOverlayInput) (*UnitOverlay, error) {
+	setClauses := []string{}
+	args := []any{}
+	argIdx := 1
+
+	if in.ParentRevisionID != nil {
+		setClauses = append(setClauses, fmt.Sprintf("parent_revision_id = $%d", argIdx))
+		if *in.ParentRevisionID == "" {
+			args = append(args, nil)
+		} else {
+			args = append(args, *in.ParentRevisionID)
+		}
+		argIdx++
+	}
+	if in.BlockOverrides != nil {
+		setClauses = append(setClauses, fmt.Sprintf("block_overrides = $%d::jsonb", argIdx))
+		args = append(args, []byte(in.BlockOverrides))
+		argIdx++
+	}
+
+	if len(setClauses) == 0 {
+		return s.GetOverlay(ctx, childChapterID)
+	}
+
+	setClauses = append(setClauses, fmt.Sprintf("updated_at = $%d", argIdx))
+	args = append(args, time.Now())
+	argIdx++
+
+	args = append(args, childChapterID)
+	q := fmt.Sprintf(
+		`UPDATE chapter_overlays SET %s WHERE child_chapter_id = $%d
+		 RETURNING child_chapter_id, parent_chapter_id, parent_revision_id,
+		           block_overrides, created_at, updated_at`,
+		strings.Join(setClauses, ", "), argIdx,
+	)
+
+	var o UnitOverlay
+	var parentRevID sql.NullString
+	var overrides []byte
+
+	err := s.db.QueryRowContext(ctx, q, args...).Scan(
+		&o.ChildChapterID, &o.ParentChapterID, &parentRevID,
+		&overrides, &o.CreatedAt, &o.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if parentRevID.Valid {
+		v := parentRevID.String
+		o.ParentRevisionID = &v
+	}
+	o.BlockOverrides = json.RawMessage(overrides)
+	return &o, nil
+}
+
+// GetComposedDocument returns the composed (overlay-merged) document for a unit.
+//   - If the unit has no overlay, it returns the unit's own document blocks.
+//   - If the unit has an overlay, it loads the parent blocks (from a pinned
+//     revision or the latest published revision), the child's own blocks, and the
+//     overlay's block_overrides, then calls overlay.ComposeDocument.
+//
+// Returns (nil, nil) if the unit has no document row.
+func (s *ChapterStore) GetComposedDocument(ctx context.Context, chapterID string) (json.RawMessage, error) {
+	ov, err := s.GetOverlay(ctx, chapterID)
+	if err != nil {
+		return nil, err
+	}
+
+	// No overlay — return the unit's own blocks directly.
+	if ov == nil {
+		doc, err := s.GetDocument(ctx, chapterID)
+		if err != nil {
+			return nil, err
+		}
+		if doc == nil {
+			return nil, nil
+		}
+		return doc.Blocks, nil
+	}
+
+	// Load parent blocks.
+	var parentBlocks json.RawMessage
+	if ov.ParentRevisionID != nil {
+		// Pinned to a specific revision.
+		rev, err := s.GetRevision(ctx, *ov.ParentRevisionID)
+		if err != nil {
+			return nil, fmt.Errorf("composed doc: load pinned revision: %w", err)
+		}
+		if rev == nil || rev.ChapterID != ov.ParentChapterID {
+			// Pinned revision was deleted or belongs to wrong unit —
+			// fall through to latest published, same as floating.
+			parentBlocks, err = s.latestPublishedBlocks(ctx, ov.ParentChapterID)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			parentBlocks = rev.Blocks
+		}
+	} else {
+		// Floating — use the parent's latest published revision.
+		parentBlocks, err = s.latestPublishedBlocks(ctx, ov.ParentChapterID)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// If the parent has no published revision, fall back to the parent's
+	// current document. This handles draft-to-draft forks where the parent
+	// has never been published.
+	if parentBlocks == nil {
+		parentDoc, err := s.GetDocument(ctx, ov.ParentChapterID)
+		if err != nil {
+			return nil, fmt.Errorf("composed doc: load parent document: %w", err)
+		}
+		if parentDoc != nil {
+			parentBlocks = parentDoc.Blocks
+		}
+	}
+
+	// Load child's own document blocks.
+	childDoc, err := s.GetDocument(ctx, chapterID)
+	if err != nil {
+		return nil, fmt.Errorf("composed doc: load child document: %w", err)
+	}
+
+	// Parse blocks into slices.
+	parentContent := extractContent(parentBlocks)
+	childContent := extractContent(childDoc.Blocks)
+
+	// Parse block overrides.
+	overrides := map[string]overlayPkg.BlockOverride{}
+	if len(ov.BlockOverrides) > 0 && string(ov.BlockOverrides) != "{}" {
+		if err := json.Unmarshal(ov.BlockOverrides, &overrides); err != nil {
+			return nil, fmt.Errorf("composed doc: parse block_overrides: %w", err)
+		}
+	}
+
+	// Compose.
+	composed := overlayPkg.ComposeDocument(parentContent, childContent, overrides)
+
+	// Wrap in document envelope.
+	result := map[string]any{
+		"type":    "doc",
+		"content": composed,
+	}
+	return json.Marshal(result)
+}
+
+// latestPublishedBlocks returns the blocks from the parent's latest published
+// revision (reason IN ('classroom_ready', 'coach_ready'), newest first).
+// Returns nil if the parent has no published revision.
+func (s *ChapterStore) latestPublishedBlocks(ctx context.Context, chapterID string) (json.RawMessage, error) {
+	var blocks []byte
+	err := s.db.QueryRowContext(ctx, `
+		SELECT blocks FROM chapter_revisions
+		WHERE chapter_id = $1 AND reason IN ('classroom_ready', 'coach_ready')
+		ORDER BY created_at DESC
+		LIMIT 1`, chapterID,
+	).Scan(&blocks)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return json.RawMessage(blocks), nil
+}
+
+// extractContent parses a doc-envelope JSON and returns the content array
+// as individual raw messages. Returns nil for nil/empty input.
+func extractContent(raw json.RawMessage) []json.RawMessage {
+	if len(raw) == 0 {
+		return nil
+	}
+	var envelope struct {
+		Content []json.RawMessage `json:"content"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return nil
+	}
+	return envelope.Content
+}
+
+// GetLineage walks the overlay chain from the given unit up to its root,
+// returning a root-first ordered list of LineageEntry. Max depth is 10 to
+// prevent infinite loops.
+func (s *ChapterStore) GetLineage(ctx context.Context, chapterID string) ([]LineageEntry, error) {
+	const maxDepth = 10
+
+	// Collect the chain bottom-up with cycle detection.
+	chain := []LineageEntry{}
+	visited := map[string]bool{}
+	currentID := chapterID
+
+	for i := 0; i < maxDepth; i++ {
+		var entry LineageEntry
+		var scopeID sql.NullString
+		err := s.db.QueryRowContext(ctx, `
+			SELECT id, title, scope, created_at FROM chapters WHERE id = $1`,
+			currentID,
+		).Scan(&entry.ChapterID, &entry.Title, &entry.Scope, &entry.CreatedAt)
+		if err == sql.ErrNoRows {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		_ = scopeID // not used in LineageEntry
+
+		chain = append(chain, entry)
+		visited[currentID] = true
+
+		// Look for a parent overlay.
+		var parentID string
+		err = s.db.QueryRowContext(ctx, `
+			SELECT parent_chapter_id FROM chapter_overlays WHERE child_chapter_id = $1`,
+			currentID,
+		).Scan(&parentID)
+		if err == sql.ErrNoRows {
+			break // reached the root
+		}
+		if err != nil {
+			return nil, err
+		}
+		if visited[parentID] {
+			break // cycle detected — stop traversal
+		}
+		currentID = parentID
+	}
+
+	// Reverse to root-first order.
+	for i, j := 0, len(chain)-1; i < j; i, j = i+1, j-1 {
+		chain[i], chain[j] = chain[j], chain[i]
+	}
+
+	return chain, nil
+}

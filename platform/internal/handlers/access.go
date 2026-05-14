@@ -22,17 +22,17 @@ var ErrAccessHelperMisconfigured = errors.New("access helper misconfigured: requ
 // The names describe the *use case*, not a privilege ladder:
 //
 //   - AccessRead:   "view class metadata"
-//                   any class member; plus org_admin / platform admin.
+//     any class member; plus org_admin / platform admin.
 //   - AccessRoster: "view who is in the class"
-//                   instructor or TA only; plus org_admin / platform admin.
-//                   Students DO NOT pass — `ListMembers` returns email +
-//                   name PII (`store/classes.go:45-52`); the help-queue
-//                   UI uses `session_participants`, not class members,
-//                   so students don't need this view.
+//     instructor or TA only; plus org_admin / platform admin.
+//     Students DO NOT pass — `ListMembers` returns email +
+//     name PII (`store/classes.go:45-52`); the help-queue
+//     UI uses `session_participants`, not class members,
+//     so students don't need this view.
 //   - AccessMutate: "change class membership or class state"
-//                   instructor only; plus org_admin / platform admin.
-//                   TAs DO NOT pass — TA is a teaching role, not a
-//                   class-admin role.
+//     instructor only; plus org_admin / platform admin.
+//     TAs DO NOT pass — TA is a teaching role, not a
+//     class-admin role.
 //
 // Platform admin and impersonator-of-admin (per plan 039) bypass all
 // three levels — admins inspecting a class while impersonating a
@@ -50,13 +50,13 @@ const (
 //
 //   - (class, true,  nil)  — access granted; caller can use the class.
 //   - (nil,   false, nil)  — class not found OR caller has no access
-//                            at this level. Per the plan-052 deny
-//                            convention, the CALLER decides whether to
-//                            return 404 (class subsystem) or 403
-//                            (other subsystems). 404 is preferred for
-//                            the class subsystem because the existing
-//                            `CanAccessClass` precedent at
-//                            `classes.go:218-225` does so.
+//     at this level. Per the plan-052 deny
+//     convention, the CALLER decides whether to
+//     return 404 (class subsystem) or 403
+//     (other subsystems). 404 is preferred for
+//     the class subsystem because the existing
+//     `CanAccessClass` precedent at
+//     `classes.go:218-225` does so.
 //   - (nil,   false, err)  — DB error.
 //
 // This function is the per-plan-052 free-function replacement for
@@ -147,15 +147,15 @@ func RequireClassAuthority(
 // own membership rule. The names describe the *use case*:
 //
 //   - OrgRead:  "view org metadata or list members"
-//               any active member of any role; plus platform admin and
-//               impersonator-of-admin.
+//     any active member of any role; plus platform admin and
+//     impersonator-of-admin.
 //   - OrgTeach: "create classes/courses scoped to this org"
-//               active teacher OR active org_admin; plus platform admin
-//               and impersonator-of-admin. Students and parents do NOT
-//               pass — class/course creation is a teaching action.
+//     active teacher OR active org_admin; plus platform admin
+//     and impersonator-of-admin. Students and parents do NOT
+//     pass — class/course creation is a teaching action.
 //   - OrgAdmin: "mutate org metadata or manage memberships and parent links"
-//               active org_admin only; plus platform admin and
-//               impersonator-of-admin.
+//     active org_admin only; plus platform admin and
+//     impersonator-of-admin.
 //
 // Bypass order:
 //
@@ -249,7 +249,7 @@ func RequireOrgAuthority(
 	return false, nil
 }
 
-// CanViewUnit reports whether `claims` may view `unit`. The rules
+// CanViewChapter reports whether `claims` may view `unit`. The rules
 // mirror spec 012 §Access:
 //
 //   - platform scope: classroom_ready/coach_ready/archived
@@ -263,16 +263,16 @@ func RequireOrgAuthority(
 //   - personal scope: owner only.
 //   - platform admin: bypass at every scope/status.
 //
-// Plan 052 PR-C: free-function form so non-TeachingUnitHandler
-// callers (UnitCollectionHandler.AddItem) can apply the same rule.
-// `TeachingUnitHandler.canViewUnit` is a thin wrapper around this.
+// Plan 052 PR-C: free-function form so non-ChapterHandler
+// callers (ChapterCollectionHandler.AddItem) can apply the same rule.
+// `ChapterHandler.canViewChapter` is a thin wrapper around this.
 //
-// Plan 061: takes a TeachingUnitStore so the student-binding check
+// Plan 061: takes a ChapterStore so the student-binding check
 // can be done in a single SQL query without callers wiring it
 // themselves. Pass nil if the caller doesn't have one wired —
 // student-binding will be skipped (so callers that don't yet take
 // the store fall back to the pre-061 behavior).
-func CanViewUnit(ctx context.Context, orgs *store.OrgStore, units *store.TeachingUnitStore, claims *auth.Claims, unit *store.TeachingUnit) bool {
+func CanViewChapter(ctx context.Context, orgs *store.OrgStore, units *store.ChapterStore, claims *auth.Claims, unit *store.Chapter) bool {
 	if claims == nil || unit == nil {
 		return false
 	}

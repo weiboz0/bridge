@@ -328,9 +328,9 @@ func TestGetSessionTopics_ClassMember_Allowed(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &topics))
 }
 
-// Plan 044 phase 1: GetSessionTopics surfaces unitId/unitTitle/
+// Plan 044 phase 1: GetSessionTopics surfaces chapterId/unitTitle/
 // unitMaterialType when a teaching_unit is linked to the topic via
-// teaching_units.topic_id (and the unit's scope_id matches the topic's
+// chapters.topic_id (and the unit's scope_id matches the topic's
 // course org_id).
 func TestGetSessionTopics_LinkedUnit_AppearsInResponse(t *testing.T) {
 	fx := newSessionPageFixture(t, "gst-unit")
@@ -370,17 +370,17 @@ func TestGetSessionTopics_LinkedUnit_AppearsInResponse(t *testing.T) {
 	})
 
 	// Create a teaching_unit in the same org, linked to the topic.
-	var unitID string
+	var chapterID string
 	err = fx.db.QueryRowContext(ctx,
-		`INSERT INTO teaching_units
+		`INSERT INTO chapters
 		 (id, scope, scope_id, title, summary, material_type, status, topic_id, created_by, created_at, updated_at)
 		 VALUES (gen_random_uuid(), 'org', $1, 'Loops Unit', '', 'slides', 'draft', $2, $3, now(), now())
 		 RETURNING id`,
 		fx.orgID, topic.ID, fx.teacher.ID,
-	).Scan(&unitID)
+	).Scan(&chapterID)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		fx.db.ExecContext(ctx, "DELETE FROM teaching_units WHERE id = $1", unitID)
+		fx.db.ExecContext(ctx, "DELETE FROM chapters WHERE id = $1", chapterID)
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/sessions/"+fx.sessionID+"/topics", nil)
@@ -394,7 +394,7 @@ func TestGetSessionTopics_LinkedUnit_AppearsInResponse(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &topicRows))
 	require.Len(t, topicRows, 1)
 	assert.Equal(t, topic.ID, topicRows[0]["topicId"])
-	assert.Equal(t, unitID, topicRows[0]["unitId"])
+	assert.Equal(t, chapterID, topicRows[0]["chapterId"])
 	assert.Equal(t, "Loops Unit", topicRows[0]["unitTitle"])
 	assert.Equal(t, "slides", topicRows[0]["unitMaterialType"])
 }
@@ -441,17 +441,17 @@ func TestGetSessionTopics_CrossOrgUnit_NotSurfaced(t *testing.T) {
 		fx.db.ExecContext(ctx, "DELETE FROM organizations WHERE id = $1", otherOrg.ID)
 	})
 
-	var leakedUnitID string
+	var leakedChapterID string
 	err = fx.db.QueryRowContext(ctx,
-		`INSERT INTO teaching_units
+		`INSERT INTO chapters
 		 (id, scope, scope_id, title, summary, material_type, status, topic_id, created_by, created_at, updated_at)
 		 VALUES (gen_random_uuid(), 'org', $1, 'Leaked', '', 'notes', 'draft', $2, $3, now(), now())
 		 RETURNING id`,
 		otherOrg.ID, topic.ID, fx.teacher.ID,
-	).Scan(&leakedUnitID)
+	).Scan(&leakedChapterID)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		fx.db.ExecContext(ctx, "DELETE FROM teaching_units WHERE id = $1", leakedUnitID)
+		fx.db.ExecContext(ctx, "DELETE FROM chapters WHERE id = $1", leakedChapterID)
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/sessions/"+fx.sessionID+"/topics", nil)
@@ -465,6 +465,6 @@ func TestGetSessionTopics_CrossOrgUnit_NotSurfaced(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &topicRows))
 	require.Len(t, topicRows, 1)
 	// Unit should NOT surface — scope_id is the other org.
-	assert.Nil(t, topicRows[0]["unitId"])
+	assert.Nil(t, topicRows[0]["chapterId"])
 	assert.Nil(t, topicRows[0]["unitTitle"])
 }

@@ -72,7 +72,7 @@ type SessionTopicWithDetails struct {
 	// Plan 044 phase 1: linked Unit identity surfaced. Null when no
 	// Unit is linked OR when the Unit's scope_id doesn't match the
 	// topic's course org (cross-org-leak guard in the JOIN).
-	UnitID           *string `json:"unitId"`
+	ChapterID        *string `json:"chapterId"`
 	UnitTitle        *string `json:"unitTitle"`
 	UnitMaterialType *string `json:"unitMaterialType"`
 }
@@ -585,8 +585,8 @@ func (s *SessionStore) UnlinkSessionTopic(ctx context.Context, sessionID, topicI
 }
 
 func (s *SessionStore) GetSessionTopics(ctx context.Context, sessionID string) ([]SessionTopicWithDetails, error) {
-	// Plan 044 phase 1: LEFT JOIN against teaching_units to surface the
-	// linked Unit (1:1 via teaching_units.topic_id unique index). The
+	// Plan 044 phase 1: LEFT JOIN against chapters to surface the
+	// linked Unit (1:1 via chapters.topic_id unique index). The
 	// outer JOIN on courses + the scope/scope_id check is the cross-org
 	// leak guard from Codex correction #3 — a teaching_unit's scope_id
 	// must match the topic's course org_id (or be platform-scope).
@@ -596,7 +596,7 @@ func (s *SessionStore) GetSessionTopics(ctx context.Context, sessionID string) (
 		 FROM session_topics st
 		 INNER JOIN topics t ON st.topic_id = t.id
 		 INNER JOIN courses c ON c.id = t.course_id
-		 LEFT JOIN teaching_units u
+		 LEFT JOIN chapters u
 		   ON u.topic_id = t.id
 		   AND (u.scope = 'platform' OR u.scope_id = c.org_id)
 		 WHERE st.session_id = $1
@@ -611,7 +611,7 @@ func (s *SessionStore) GetSessionTopics(ctx context.Context, sessionID string) (
 		var t SessionTopicWithDetails
 		if err := rows.Scan(
 			&t.TopicID, &t.Title, &t.Description, &t.SortOrder,
-			&t.UnitID, &t.UnitTitle, &t.UnitMaterialType,
+			&t.ChapterID, &t.UnitTitle, &t.UnitMaterialType,
 		); err != nil {
 			return nil, err
 		}

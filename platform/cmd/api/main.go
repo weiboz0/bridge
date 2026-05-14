@@ -171,7 +171,7 @@ func main() {
 		Sessions:                    stores.Sessions,
 		Classes:                     stores.Classes,
 		Orgs:                        stores.Orgs,
-		TeachingUnits:               stores.TeachingUnits,
+		Chapters:                    stores.Chapters,
 		Problems:                    stores.Problems,
 		Attempts:                    stores.Attempts,
 		Users:                       stores.Users,
@@ -217,7 +217,7 @@ func main() {
 		courseH := &handlers.CourseHandler{Courses: stores.Courses, Orgs: stores.Orgs}
 		courseH.Routes(r)
 
-		topicH := &handlers.TopicHandler{Topics: stores.Topics, Courses: stores.Courses, Orgs: stores.Orgs, TeachingUnits: stores.TeachingUnits}
+		topicH := &handlers.TopicHandler{Topics: stores.Topics, Courses: stores.Courses, Orgs: stores.Orgs, Chapters: stores.Chapters}
 		topicH.Routes(r)
 
 		problemH := &handlers.ProblemHandler{
@@ -254,7 +254,7 @@ func main() {
 		classH := &handlers.ClassHandler{Classes: stores.Classes, Orgs: stores.Orgs, Users: stores.Users}
 		classH.Routes(r)
 
-		sessionH := &handlers.SessionHandler{Sessions: stores.Sessions, Schedules: stores.Schedules, Classes: stores.Classes, Courses: stores.Courses, Topics: stores.Topics, TeachingUnits: stores.TeachingUnits, Orgs: stores.Orgs, ParentLinks: stores.ParentLinks, Broadcaster: broadcaster}
+		sessionH := &handlers.SessionHandler{Sessions: stores.Sessions, Schedules: stores.Schedules, Classes: stores.Classes, Courses: stores.Courses, Topics: stores.Topics, Chapters: stores.Chapters, Orgs: stores.Orgs, ParentLinks: stores.ParentLinks, Broadcaster: broadcaster}
 		sessionH.Routes(r)
 
 		scheduleH := &handlers.ScheduleHandler{
@@ -346,24 +346,27 @@ func main() {
 		}
 		adminH.Routes(r)
 
-		unitH := &handlers.TeachingUnitHandler{
-			Units:   stores.TeachingUnits,
+		bookH := &handlers.BookHandler{Books: stores.Books, Orgs: stores.Orgs}
+		bookH.Routes(r)
+
+		chapterH := &handlers.ChapterHandler{
+			Units:   stores.Chapters,
 			Orgs:    stores.Orgs,
 			Courses: stores.Courses,
 		}
-		unitH.Routes(r)
+		chapterH.Routes(r)
 
-		unitAIH := &handlers.UnitAIHandler{
-			Units:   stores.TeachingUnits,
+		chapterAIH := &handlers.ChapterAIHandler{
+			Units:   stores.Chapters,
 			Orgs:    stores.Orgs,
 			Backend: llmBackend, // may be nil — handler returns 503
 		}
-		unitAIH.Routes(r)
+		chapterAIH.Routes(r)
 
-		collectionH := &handlers.UnitCollectionHandler{
-			Collections:   stores.UnitCollections,
-			Orgs:          stores.Orgs,
-			TeachingUnits: stores.TeachingUnits,
+		collectionH := &handlers.ChapterCollectionHandler{
+			Collections: stores.ChapterCollections,
+			Orgs:        stores.Orgs,
+			Chapters:    stores.Chapters,
 		}
 		collectionH.Routes(r)
 

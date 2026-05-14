@@ -13,7 +13,7 @@ import (
 const realtimeTestSecret = "realtime-test-secret-do-not-leak-into-production"
 
 func TestSignAndVerifyRealtimeToken_RoundTrip(t *testing.T) {
-	tok, err := SignRealtimeToken(realtimeTestSecret, "user-123", "teacher", "unit:abc-123", 5*time.Minute)
+	tok, err := SignRealtimeToken(realtimeTestSecret, "user-123", "teacher", "chapter:abc-123", 5*time.Minute)
 	require.NoError(t, err)
 	require.NotEmpty(t, tok)
 
@@ -21,13 +21,13 @@ func TestSignAndVerifyRealtimeToken_RoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "user-123", claims.Sub)
 	assert.Equal(t, "teacher", claims.Role)
-	assert.Equal(t, "unit:abc-123", claims.Scope)
+	assert.Equal(t, "chapter:abc-123", claims.Scope)
 	assert.Equal(t, RealtimeIssuer, claims.Issuer)
 	assert.WithinDuration(t, time.Now().Add(5*time.Minute), claims.ExpiresAt.Time, 5*time.Second)
 }
 
 func TestSignRealtimeToken_RejectsEmptySecret(t *testing.T) {
-	_, err := SignRealtimeToken("", "u", "user", "unit:x", time.Minute)
+	_, err := SignRealtimeToken("", "u", "user", "chapter:x", time.Minute)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "HOCUSPOCUS_TOKEN_SECRET is empty")
 }
@@ -37,8 +37,8 @@ func TestSignRealtimeToken_RejectsEmptyFields(t *testing.T) {
 		name           string
 		sub, role, sco string
 	}{
-		{"missing sub", "", "user", "unit:x"},
-		{"missing role", "u", "", "unit:x"},
+		{"missing sub", "", "user", "chapter:x"},
+		{"missing role", "u", "", "chapter:x"},
 		{"missing scope", "u", "user", ""},
 	}
 	for _, tc := range cases {
@@ -51,14 +51,14 @@ func TestSignRealtimeToken_RejectsEmptyFields(t *testing.T) {
 
 func TestSignRealtimeToken_ClampsTTL(t *testing.T) {
 	// Negative TTL → clamped to 30 minutes.
-	tok, err := SignRealtimeToken(realtimeTestSecret, "u", "user", "unit:x", -time.Hour)
+	tok, err := SignRealtimeToken(realtimeTestSecret, "u", "user", "chapter:x", -time.Hour)
 	require.NoError(t, err)
 	claims, err := VerifyRealtimeToken(realtimeTestSecret, tok)
 	require.NoError(t, err)
 	assert.WithinDuration(t, time.Now().Add(30*time.Minute), claims.ExpiresAt.Time, 5*time.Second)
 
 	// > 30 min → clamped to 30 minutes.
-	tok2, err := SignRealtimeToken(realtimeTestSecret, "u", "user", "unit:x", 2*time.Hour)
+	tok2, err := SignRealtimeToken(realtimeTestSecret, "u", "user", "chapter:x", 2*time.Hour)
 	require.NoError(t, err)
 	claims2, err := VerifyRealtimeToken(realtimeTestSecret, tok2)
 	require.NoError(t, err)
@@ -66,7 +66,7 @@ func TestSignRealtimeToken_ClampsTTL(t *testing.T) {
 }
 
 func TestVerifyRealtimeToken_RejectsWrongSecret(t *testing.T) {
-	tok, err := SignRealtimeToken(realtimeTestSecret, "u", "user", "unit:x", time.Minute)
+	tok, err := SignRealtimeToken(realtimeTestSecret, "u", "user", "chapter:x", time.Minute)
 	require.NoError(t, err)
 
 	_, err = VerifyRealtimeToken("different-secret", tok)
@@ -80,7 +80,7 @@ func TestVerifyRealtimeToken_RejectsWrongIssuer(t *testing.T) {
 	claims := RealtimeClaims{
 		Sub:   "u",
 		Role:  "user",
-		Scope: "unit:x",
+		Scope: "chapter:x",
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    "evil-platform",
 			IssuedAt:  jwt.NewNumericDate(now),
@@ -102,7 +102,7 @@ func TestVerifyRealtimeToken_RejectsExpired(t *testing.T) {
 	claims := RealtimeClaims{
 		Sub:   "u",
 		Role:  "user",
-		Scope: "unit:x",
+		Scope: "chapter:x",
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    RealtimeIssuer,
 			IssuedAt:  jwt.NewNumericDate(now.Add(-time.Hour)),
@@ -129,7 +129,7 @@ func TestSignRealtimeToken_ProducesEyPrefix(t *testing.T) {
 	// The base64url-encoded JWT header `{"alg":"HS256","typ":"JWT"}`
 	// always starts with "ey". Lock this in so the token format
 	// stays spec-compliant regardless of library changes.
-	tok, err := SignRealtimeToken(realtimeTestSecret, "u", "user", "unit:x", time.Minute)
+	tok, err := SignRealtimeToken(realtimeTestSecret, "u", "user", "chapter:x", time.Minute)
 	require.NoError(t, err)
 	assert.True(t, strings.HasPrefix(tok, "ey"), "token should start with `ey` (base64url JWT header prefix)")
 }

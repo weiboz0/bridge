@@ -208,7 +208,7 @@ async function callAITransform(
   context: string,
   documentSummary: string,
 ): Promise<string> {
-  const res = await fetch(`/api/units/${unitId}/ai-transform`, {
+  const res = await fetch(`/api/chapters/${unitId}/ai-transform`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ action, selectedText, context, documentSummary }),

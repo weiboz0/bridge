@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/weiboz0/bridge/platform/internal/llm"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/weiboz0/bridge/platform/internal/llm"
 )
 
 // mockTool is a test tool implementation.
@@ -15,7 +15,7 @@ type mockTool struct {
 	spec ToolSpec
 }
 
-func (m *mockTool) GetName() string  { return m.name }
+func (m *mockTool) GetName() string   { return m.name }
 func (m *mockTool) GetSpec() ToolSpec { return m.spec }
 func (m *mockTool) Invoke(_ context.Context, inv ToolInvocation) (ToolResult, error) {
 	return ToolResult{

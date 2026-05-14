@@ -26,18 +26,18 @@ import (
 // the same way they do in production.
 
 type orgParentLinksFixture struct {
-	router      chi.Router
-	orgID       string
-	otherOrgID  string
-	classID     string
+	router       chi.Router
+	orgID        string
+	otherOrgID   string
+	classID      string
 	otherClassID string
-	admin       *store.RegisteredUser // org_admin in orgID
-	teacher     *store.RegisteredUser // teacher in orgID, NOT admin
-	parent      *store.RegisteredUser // unrelated user → "parent" in tests
-	child       *store.RegisteredUser // student in classID
-	otherChild  *store.RegisteredUser // student in otherClassID (other org)
-	parentLinks *store.ParentLinkStore
-	orgs        *store.OrgStore
+	admin        *store.RegisteredUser // org_admin in orgID
+	teacher      *store.RegisteredUser // teacher in orgID, NOT admin
+	parent       *store.RegisteredUser // unrelated user → "parent" in tests
+	child        *store.RegisteredUser // student in classID
+	otherChild   *store.RegisteredUser // student in otherClassID (other org)
+	parentLinks  *store.ParentLinkStore
+	orgs         *store.OrgStore
 }
 
 func newOrgParentLinksFixture(t *testing.T, suffix string) *orgParentLinksFixture {

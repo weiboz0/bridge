@@ -24,10 +24,10 @@ import (
 
 func newTopicHandlerForFixture(fx *sessionPageFixture) *TopicHandler {
 	return &TopicHandler{
-		Topics:        store.NewTopicStore(fx.db),
-		Courses:       store.NewCourseStore(fx.db),
-		Orgs:          store.NewOrgStore(fx.db),
-		TeachingUnits: store.NewTeachingUnitStore(fx.db),
+		Topics:   store.NewTopicStore(fx.db),
+		Courses:  store.NewCourseStore(fx.db),
+		Orgs:     store.NewOrgStore(fx.db),
+		Chapters: store.NewChapterStore(fx.db),
 	}
 }
 

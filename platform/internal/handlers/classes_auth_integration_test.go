@@ -142,11 +142,11 @@ func TestArchiveClass_AuthMatrix(t *testing.T) {
 		role     string
 		expected int
 	}{
-		{"outsider", http.StatusNotFound},  // not a class member
-		{"student", http.StatusNotFound},   // member but not instructor
-		{"instructor", http.StatusOK},      // class instructor
-		{"orgAdmin", http.StatusOK},        // org_admin of class's org
-		{"platformAdmin", http.StatusOK},   // platform admin
+		{"outsider", http.StatusNotFound}, // not a class member
+		{"student", http.StatusNotFound},  // member but not instructor
+		{"instructor", http.StatusOK},     // class instructor
+		{"orgAdmin", http.StatusOK},       // org_admin of class's org
+		{"platformAdmin", http.StatusOK},  // platform admin
 	}
 	for _, tc := range cases {
 		t.Run(tc.role, func(t *testing.T) {

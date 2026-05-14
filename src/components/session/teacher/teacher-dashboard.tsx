@@ -308,7 +308,7 @@ export function TeacherDashboard({
                 <h3 className="mb-2 text-lg font-semibold">{topic.title}</h3>
                 {topic.unitId ? (
                   <Link
-                    href={`/teacher/units/${topic.unitId}/edit`}
+                    href={`/teacher/chapters/${topic.unitId}/edit`}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="inline-flex items-center gap-2 rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm hover:border-amber-400 hover:text-amber-800"

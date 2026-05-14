@@ -55,10 +55,10 @@ import {
   courses,
   problems,
   problemSolutions,
-  teachingUnits,
+  chapters,
   topicProblems,
   topics,
-  unitDocuments,
+  chapterDocuments as unitDocuments,
 } from "../../src/lib/db/schema";
 import {
   courseManifestSchema,
@@ -343,9 +343,9 @@ async function checkIdentities(
   const unitIds = Array.from(expectedUnitSlugs.keys());
   if (unitIds.length > 0) {
     const rows = await tx
-      .select({ id: teachingUnits.id, slug: teachingUnits.slug })
-      .from(teachingUnits)
-      .where(inArray(teachingUnits.id, unitIds));
+      .select({ id: chapters.id, slug: chapters.slug })
+      .from(chapters)
+      .where(inArray(chapters.id, unitIds));
     for (const row of rows) {
       const want = expectedUnitSlugs.get(row.id);
       if (want === undefined) continue;
@@ -512,7 +512,7 @@ async function runLibraryPass(tx: Tx, tree: ContentTree): Promise<void> {
   for (const [, unit] of tree.units) {
     // teaching_units (topic_id NULL — Pass 3 sets it).
     await tx
-      .insert(teachingUnits)
+      .insert(chapters)
       .values({
         id: unit.id,
         scope: "platform",
@@ -530,7 +530,7 @@ async function runLibraryPass(tx: Tx, tree: ContentTree): Promise<void> {
         createdBy: BRIDGE_HQ_SYSTEM_USER_ID,
       })
       .onConflictDoUpdate({
-        target: teachingUnits.id,
+        target: chapters.id,
         set: {
           title: unit.title,
           slug: unit.slug,
@@ -629,11 +629,11 @@ async function runLibraryPass(tx: Tx, tree: ContentTree): Promise<void> {
     await tx
       .insert(unitDocuments)
       .values({
-        unitId: unit.id,
+        chapterId: unit.id,
         blocks: docBlocks,
       })
       .onConflictDoUpdate({
-        target: unitDocuments.unitId,
+        target: unitDocuments.chapterId,
         set: {
           blocks: docBlocks,
           updatedAt: new Date(),
@@ -733,9 +733,9 @@ async function runLinkPass(tx: Tx, tree: ContentTree): Promise<void> {
     // bumping updated_at on idempotent re-runs). Matches the Go
     // LinkUnitToTopic semantics.
     const [current] = await tx
-      .select({ topicId: teachingUnits.topicId })
-      .from(teachingUnits)
-      .where(eq(teachingUnits.id, unit.id));
+      .select({ topicId: chapters.topicId })
+      .from(chapters)
+      .where(eq(chapters.id, unit.id));
     if (!current) {
       throw new Error(
         `link pass: unit ${unit.id} not found (Pass 1 should have inserted it)`,
@@ -750,9 +750,9 @@ async function runLinkPass(tx: Tx, tree: ContentTree): Promise<void> {
 
     try {
       await tx
-        .update(teachingUnits)
+        .update(chapters)
         .set({ topicId: topicEntry.id, updatedAt: new Date() })
-        .where(eq(teachingUnits.id, unit.id));
+        .where(eq(chapters.id, unit.id));
     } catch (e) {
       // Drizzle wraps the postgres-js error as "Failed query: ...";
       // the constraint name lives on the cause chain. Walk it.
@@ -767,7 +767,7 @@ async function runLinkPass(tx: Tx, tree: ContentTree): Promise<void> {
           break;
         }
       }
-      if (needle.includes("teaching_units_topic_id_uniq")) {
+      if (needle.includes("chapters_topic_id_uniq")) {
         throw new Error(
           `link pass: topic ${topicEntry.id} is already claimed by another unit (uniq violation)`,
         );
@@ -788,8 +788,8 @@ async function postInsertVerification(
   const orphanRows = await tx
     .select({ topicId: topics.id, title: topics.title })
     .from(topics)
-    .leftJoin(teachingUnits, eq(teachingUnits.topicId, topics.id))
-    .where(and(eq(topics.courseId, tree.course.id), isNull(teachingUnits.id)));
+    .leftJoin(chapters, eq(chapters.topicId, topics.id))
+    .where(and(eq(topics.courseId, tree.course.id), isNull(chapters.id)));
   if (orphanRows.length > 0) {
     const list = orphanRows
       .map((r) => `${r.topicId} "${r.title}"`)
@@ -878,16 +878,16 @@ async function normalizeExistingDemoCloneTitles(tx: Tx): Promise<number> {
 
   const cloneUnits = await tx
     .select({
-      id: teachingUnits.id,
-      title: teachingUnits.title,
+      id: chapters.id,
+      title: chapters.title,
     })
-    .from(teachingUnits)
+    .from(chapters)
     .where(
       and(
-        eq(teachingUnits.scope, "org"),
-        eq(teachingUnits.scopeId, BRIDGE_DEMO_SCHOOL_ORG_ID),
+        eq(chapters.scope, "org"),
+        eq(chapters.scopeId, BRIDGE_DEMO_SCHOOL_ORG_ID),
         inArray(
-          teachingUnits.topicId,
+          chapters.topicId,
           cloneTopics.map((topic) => topic.id),
         ),
       ),
@@ -897,9 +897,9 @@ async function normalizeExistingDemoCloneTitles(tx: Tx): Promise<number> {
     const normalizedTitle = withoutDisplayOrderPrefix(unit.title, "Untitled unit");
     if (normalizedTitle !== unit.title) {
       await tx
-        .update(teachingUnits)
+        .update(chapters)
         .set({ title: normalizedTitle, updatedAt: new Date() })
-        .where(eq(teachingUnits.id, unit.id));
+        .where(eq(chapters.id, unit.id));
     }
   }
 
@@ -1027,8 +1027,8 @@ async function wireDemoClass(
     // Find the source unit linked to this topic.
     const [sourceUnit] = await tx
       .select()
-      .from(teachingUnits)
-      .where(eq(teachingUnits.topicId, st.id));
+      .from(chapters)
+      .where(eq(chapters.topicId, st.id));
     if (!sourceUnit) {
       throw new Error(
         `wire-demo-class: source topic ${st.id} has no linked unit (1:1 invariant violated)`,
@@ -1040,7 +1040,7 @@ async function wireDemoClass(
     // colliding with any existing org-scope unit. status starts at
     // classroom_ready so eve doesn't have to transition each one.
     const [clonedUnit] = await tx
-      .insert(teachingUnits)
+      .insert(chapters)
       .values({
         scope: "org",
         scopeId: BRIDGE_DEMO_SCHOOL_ORG_ID,
@@ -1056,26 +1056,26 @@ async function wireDemoClass(
         topicId: null,
         createdBy: EVE_DEMO_USER_ID,
       })
-      .returning({ id: teachingUnits.id });
+      .returning({ id: chapters.id });
 
     // Clone unit_document (the blocks JSON references platform
     // problems via problemId attrs — those stay valid).
     const [sourceDoc] = await tx
       .select({ blocks: unitDocuments.blocks })
       .from(unitDocuments)
-      .where(eq(unitDocuments.unitId, sourceUnit.id));
+      .where(eq(unitDocuments.chapterId, sourceUnit.id));
     if (sourceDoc) {
       await tx.insert(unitDocuments).values({
-        unitId: clonedUnit.id,
+        chapterId: clonedUnit.id,
         blocks: sourceDoc.blocks,
       });
     }
 
     // Link cloned topic ↔ cloned unit (1:1).
     await tx
-      .update(teachingUnits)
+      .update(chapters)
       .set({ topicId: clonedTopic.id })
-      .where(eq(teachingUnits.id, clonedUnit.id));
+      .where(eq(chapters.id, clonedUnit.id));
 
     // Copy topic_problems for the cloned topic. Problems stay
     // platform-scope and shared.

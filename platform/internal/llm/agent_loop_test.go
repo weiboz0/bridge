@@ -51,8 +51,8 @@ func (m *mockAgenticBackend) StreamChat(ctx context.Context, messages []Message,
 	return ch, nil
 }
 
-func (m *mockAgenticBackend) Name() string          { return "mock" }
-func (m *mockAgenticBackend) SupportsTools() bool   { return true }
+func (m *mockAgenticBackend) Name() string        { return "mock" }
+func (m *mockAgenticBackend) SupportsTools() bool { return true }
 func (m *mockAgenticBackend) ListModels(ctx context.Context) ([]string, error) {
 	return nil, nil
 }

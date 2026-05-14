@@ -429,3 +429,71 @@ Validation: each field is `strings.TrimSpace`'d before the non-empty check (lead
 
 - `GET /api/admin/orgs?status=...` — list orgs (optional status filter).
 - `PATCH /api/admin/orgs/{orgID}` — status changes only (`{status: "active" | "suspended"}`). Distinct from `/details` to keep status-change semantics narrow.
+
+---
+
+## Books (library)
+
+Plan 088 introduced a static curriculum library: a `book` contains many `chapters`. Distinct from courses (the per-class delivery layer that pulls from books). All endpoints require an authenticated user with appropriate scope access.
+
+### `Book` shape
+
+```json
+{
+  "id": "uuid",
+  "title": "Python for K-8 Beginners",
+  "description": "Curriculum for first-time Python learners",
+  "scope": "platform" | "org",
+  "scopeId": "uuid-or-null",
+  "createdBy": "uuid",
+  "createdAt": "2026-05-14T00:00:00Z",
+  "updatedAt": "2026-05-14T00:00:00Z"
+}
+```
+
+`scope = "platform"` → `scopeId` is null. `scope = "org"` → `scopeId` is the owning org UUID. There is no "personal" scope (plan 088 Decision #5).
+
+### `POST /api/books`
+
+Create a book. Body: `{title, description, scope, scopeId}`. Validation:
+- `title` trimmed 1-255 chars.
+- `scope` ∈ {`platform`, `org`}.
+- `scopeId` nil iff `scope = "platform"`; required UUID for `scope = "org"`.
+
+Returns `201` + Book. `400` on validation failure. `401`/`403` as usual.
+
+### `GET /api/books?scope=&scopeId=`
+
+List books visible to the caller. Optional filters narrow to a single scope bucket. Returns `200` + `{items: Book[]}`.
+
+### `GET /api/books/{id}`
+
+Single book by ID. `404` if not found, `403` if not visible to caller.
+
+### `PATCH /api/books/{id}`
+
+Update `title` + `description` (scope + scopeId are immutable post-create). Returns the updated `Book`. Same validation rules as create for the writable fields.
+
+### `DELETE /api/books/{id}`
+
+Delete a book. Chapters previously assigned to the book have their `book_id` set to NULL (`ON DELETE SET NULL`) — they become "unfiled".
+
+Returns `204` on success. `404` if not found. `403` if not authorized.
+
+---
+
+## Chapters (formerly Units)
+
+Plan 088 renamed `teaching_units` → `chapters` across the stack. All `/api/units/*` paths are removed; `/api/chapters/*` is the canonical path. Frontend bookmarks under `/teacher/units/*`, `/admin/units/*`, etc. are redirected via Next.js 308 to the new `/chapters/*` paths.
+
+### Chapter list filter additions (plan 088)
+
+`GET /api/chapters?scope=&scopeId=&bookId=` and `GET /api/chapters/search?...&bookId=` both accept a new `bookId` query parameter:
+
+- Omit → no filter.
+- UUID → `WHERE book_id = $1`.
+- `unfiled` (literal string) → `WHERE book_id IS NULL`.
+
+Bad value returns `400 "bookId must be a UUID or 'unfiled'"`.
+
+The `Chapter` JSON response shape gains a `bookId: string | null` field.

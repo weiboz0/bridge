@@ -27,12 +27,12 @@ const maxUploadSize = 10 << 20 // 10 MB
 
 // allowedMIMETypes is the set of MIME types we accept for upload.
 var allowedMIMETypes = map[string]bool{
-	"image/png":         true,
-	"image/jpeg":        true,
-	"image/gif":         true,
-	"image/webp":        true,
-	"image/svg+xml":     true,
-	"application/pdf":   true,
+	"image/png":       true,
+	"image/jpeg":      true,
+	"image/gif":       true,
+	"image/webp":      true,
+	"image/svg+xml":   true,
+	"application/pdf": true,
 }
 
 // mimeToExt maps MIME types to preferred file extensions.

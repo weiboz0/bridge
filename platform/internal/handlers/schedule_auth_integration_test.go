@@ -71,10 +71,10 @@ func TestScheduleList_AuthMatrix(t *testing.T) {
 	}{
 		// 403 on deny per `schedule.go:85-87` precedent.
 		{"outsider", http.StatusForbidden},
-		{"student", http.StatusOK},      // class member, AccessRead passes
-		{"ta", http.StatusOK},           // TA added inline; AccessRead passes
-		{"instructor", http.StatusOK},   // class instructor
-		{"orgAdmin", http.StatusOK},     // org_admin of class's org
+		{"student", http.StatusOK},    // class member, AccessRead passes
+		{"ta", http.StatusOK},         // TA added inline; AccessRead passes
+		{"instructor", http.StatusOK}, // class instructor
+		{"orgAdmin", http.StatusOK},   // org_admin of class's org
 		{"platformAdmin", http.StatusOK},
 	}
 	for _, tc := range cases {
