@@ -544,4 +544,39 @@ Open concerns flagged for external reviewers:
 
 ## Post-Execution Report
 
-(Placeholder — to be filled before opening the PR.)
+### Commits on the branch (in order)
+
+- Plan iterations: `1d51299` (draft) → `cae482f` (self-review) → `117e4ff` (round-1 reviewer folds incl. GLM BLOCKER) → `6a1772b` (round-2 GLM CONCUR / gate clean).
+- Phase 1 backend (`ad372e0`): Codex implementation — migration 0026, books table + 5 satellite-table renames + chapters.book_id + all index/constraint renames + new BookStore + new BookHandler + chapter store/handler renames + Hocuspocus key prefix migration. 62 files, 2719 ins / 2038 del. Codex sandbox stalled before commit; orchestrator verified locally + committed.
+- Phase 2 frontend (`8ddfd40`): Sonnet — page directories renamed via `git mv`, components, types, fetch URLs, 308 redirects in `next.config.ts`, middleware updates.
+- Phase 2 cleanup (`83752eb`): orchestrator dropped Sonnet's backward-compat aliases (`fetchUnit`, `createUnit`, `createTestTeachingUnit`, `chapters as teachingUnits` import alias) per CLAUDE.md "delete unused, don't alias".
+- Phase 3 books UI (`968bf83`): Sonnet — admin + teacher list/detail/edit pages, OrgFilter-style filters, BookEditDialog, BookPickerDialog, BookActions (with type-to-confirm Delete), chapter list `bookId` dropdown.
+- Phase 3 follow-up (`f868da6`): orchestrator closed the backend gap Sonnet flagged — added `ChapterBookFilter` type + `bookId` query param to both `GET /api/chapters` and `GET /api/chapters/search`. Wired admin book detail page (chapters card) + teacher chapters page (book dropdown). Dropped one more deprecated alias (`searchUnits`). Removed all "TODO(plan 088 phase 3)" comments.
+
+### Deviations from the plan
+
+- **Compat-alias rip-out wasn't anticipated**: Sonnet (both Phase 2 and Phase 3) defaulted to adding `@deprecated` aliases on renamed exports. Orchestrator removed all of them in cleanup commits — same-PR rename means there are no external consumers to compat-with. Now codified for future Sonnet briefs (the Phase 3 brief explicitly forbade them; they didn't show up in Sonnet's Phase 3 output, but `searchUnits` slipped through earlier).
+- **Phase 3 finished WITHOUT the chapter-edit-page picker integration**. Plan 088 §3d explicitly permitted shipping the `BookPickerDialog` as a library component without a caller. Future plan that touches the chapter-edit page will wire it.
+- **Backend gap caught + closed mid-Phase-3**: `GET /api/chapters` initially had no `bookId` filter, so the admin book detail page was empty and the teacher book dropdown was non-functional. Closed in `f868da6` (added `ChapterBookFilter` + 2 handler updates + frontend wiring) rather than deferring to a follow-up plan.
+
+### Verification (final)
+
+- Migration applied cleanly to both `bridge` (dev) and `bridge_test`.
+- Go: `cd platform && TEST_DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test go test ./... -count=1 -timeout 240s` — all packages pass.
+- Vitest: `bun run test` — 796 passed + 3 pre-existing failures in `tests/integration/auth-jwt-refresh.test.ts` (unchanged from main).
+- Lint: 100 errors / 45 warnings (baseline unchanged).
+- TSC: 7 errors (baseline unchanged).
+
+### Known limitations / follow-up work
+
+- **Chapter-edit page book picker integration** — `BookPickerDialog` exists as a reusable library component; the chapter-edit page (`src/app/(portal)/teacher/chapters/[id]/edit/page.tsx`) doesn't yet expose a "Move to book" affordance. Natural fit for the next plan that touches the chapter-edit page.
+- **Existing chapters all have `book_id = NULL`** per Decision #4. The admin UI shows them as "Unfiled". An admin must manually assign each chapter to a book (or a future backfill plan can auto-assign org chapters to a "Legacy" book per org).
+- **Books list query** displays `—` for chapter count rather than actual counts. Future enhancement could either hit the chapters endpoint per book (N+1) or add a denormalized count.
+- **Inbound FK constraint names** on satellite tables (e.g., `chapter_documents` references `chapters` via constraints still named `unit_documents_unit_id_fkey`). Cosmetic legacy names per plan policy; future cleanup plan can rename.
+- **No audit log** for book admin operations (create/edit/delete) — same gap as plans 085/086 for user/org admin ops. Future plan should add an `admin_actions` table and retrofit.
+
+### File census (branch vs main)
+
+86 files changed, 4 new migrations, ~50 renamed (Go + TS), ~10 new files (books domain).
+
+Ready for 4-way code review against the consolidated branch diff.
