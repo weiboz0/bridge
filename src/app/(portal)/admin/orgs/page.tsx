@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { api } from "@/lib/api-client";
 import { ApiError } from "@/lib/api-error";
@@ -9,6 +10,7 @@ interface Org {
   name: string;
   type: string;
   contactEmail: string;
+  contactName: string;
   slug: string;
   status: string;
 }
@@ -49,7 +51,7 @@ export default async function AdminOrgsPage({
               </p>
               <p>
                 If you don&apos;t expect to be a platform admin, return to{" "}
-                <a href="/" className="underline text-primary">your dashboard</a>.
+                <Link href="/" className="underline text-primary">your dashboard</Link>.
               </p>
             </CardContent>
           </Card>
@@ -64,10 +66,10 @@ export default async function AdminOrgsPage({
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Organizations</h1>
         <div className="flex gap-2 text-sm">
-          <a href="/admin/orgs" className={`px-2 py-1 rounded ${!status ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}>All</a>
-          <a href="/admin/orgs?status=pending" className={`px-2 py-1 rounded ${status === "pending" ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}>Pending</a>
-          <a href="/admin/orgs?status=active" className={`px-2 py-1 rounded ${status === "active" ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}>Active</a>
-          <a href="/admin/orgs?status=suspended" className={`px-2 py-1 rounded ${status === "suspended" ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}>Suspended</a>
+          <Link href="/admin/orgs" className={`px-2 py-1 rounded ${!status ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}>All</Link>
+          <Link href="/admin/orgs?status=pending" className={`px-2 py-1 rounded ${status === "pending" ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}>Pending</Link>
+          <Link href="/admin/orgs?status=active" className={`px-2 py-1 rounded ${status === "active" ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}>Active</Link>
+          <Link href="/admin/orgs?status=suspended" className={`px-2 py-1 rounded ${status === "suspended" ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}>Suspended</Link>
         </div>
       </div>
 
@@ -79,7 +81,14 @@ export default async function AdminOrgsPage({
             <Card key={org.id}>
               <CardContent className="flex items-center justify-between py-4">
                 <div>
-                  <p className="font-medium">{org.name}</p>
+                  <p className="font-medium">
+                    <Link
+                      href={`/admin/orgs/${org.id}`}
+                      className="underline-offset-2 hover:underline hover:text-primary"
+                    >
+                      {org.name}
+                    </Link>
+                  </p>
                   <p className="text-sm text-muted-foreground">
                     {org.type} · {org.contactEmail} · {org.slug}
                   </p>
@@ -92,7 +101,13 @@ export default async function AdminOrgsPage({
                   }`}>
                     {org.status}
                   </span>
-                  <OrgActions orgId={org.id} orgName={org.name} status={org.status} />
+                  <OrgActions
+                    orgId={org.id}
+                    orgName={org.name}
+                    status={org.status}
+                    contactName={org.contactName}
+                    contactEmail={org.contactEmail}
+                  />
                 </div>
               </CardContent>
             </Card>

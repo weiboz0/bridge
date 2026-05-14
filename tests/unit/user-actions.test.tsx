@@ -19,7 +19,6 @@ beforeEach(() => {
   (globalThis as unknown as { fetch: typeof fetch | undefined }).fetch = undefined;
   mockRefresh.mockReset();
   mockPush.mockReset();
-  vi.spyOn(window, "confirm").mockReturnValue(true);
 });
 
 function mockFetch(status: number, body?: unknown) {
@@ -98,18 +97,23 @@ describe("UserActions — self row (isSelf=true)", () => {
   });
 });
 
-describe("UserActions — Reactivate action", () => {
-  it("fires confirm + PATCH /status with {status:active} + calls router.refresh", async () => {
+describe("UserActions — Reactivate action (via ConfirmDialog)", () => {
+  it("opens ConfirmDialog (not window.confirm) and fires PATCH /status with {status:active} + calls router.refresh", async () => {
     const fetchMock = mockFetch(200, { id: "user-001", status: "active" });
     render(<UserActions {...BASE_PROPS} status="suspended" />);
     openMenu();
 
     fireEvent.click(screen.getByText("Reactivate account"));
 
+    // ConfirmDialog should open — no window.confirm.
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).toBeInTheDocument();
+    expect(screen.getByText(/Alice Teacher will be able to sign in again/i)).toBeInTheDocument();
+
+    // Click the Confirm button in the dialog.
+    fireEvent.click(screen.getByRole("button", { name: "Reactivate" }));
+
     await waitFor(() => expect(mockRefresh).toHaveBeenCalledTimes(1));
-    expect(window.confirm).toHaveBeenCalledWith(
-      expect.stringContaining("Reactivate Alice Teacher")
-    );
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/admin/users/user-001/status",
       expect.objectContaining({
@@ -120,18 +124,24 @@ describe("UserActions — Reactivate action", () => {
   });
 });
 
-describe("UserActions — Toggle platform-admin action", () => {
-  it("fires confirm + PATCH /platform-admin with inverted boolean + calls router.refresh", async () => {
+describe("UserActions — Toggle platform-admin action (via ConfirmDialog)", () => {
+  it("opens ConfirmDialog (not window.confirm) and fires PATCH /platform-admin with {isPlatformAdmin: true}", async () => {
     const fetchMock = mockFetch(200, { id: "user-001", isPlatformAdmin: true });
     render(<UserActions {...BASE_PROPS} isPlatformAdmin={false} />);
     openMenu();
 
     fireEvent.click(screen.getByText(/Make Alice a platform admin/i));
 
+    // ConfirmDialog should open — no window.confirm.
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).toBeInTheDocument();
+    expect(screen.getByText(/Grant platform-admin role/i)).toBeInTheDocument();
+    expect(screen.getByText(/full access to \/admin/i)).toBeInTheDocument();
+
+    // Click the Grant button in the dialog.
+    fireEvent.click(screen.getByRole("button", { name: "Grant" }));
+
     await waitFor(() => expect(mockRefresh).toHaveBeenCalledTimes(1));
-    expect(window.confirm).toHaveBeenCalledWith(
-      expect.stringContaining("Make Alice Teacher a platform admin")
-    );
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/admin/users/user-001/platform-admin",
       expect.objectContaining({
@@ -141,11 +151,35 @@ describe("UserActions — Toggle platform-admin action", () => {
     );
   });
 
-  it("uses remove-admin copy when user is already a platform admin", () => {
+  it("uses Remove platform-admin role copy and destructive confirm when user is already a platform admin", () => {
     render(<UserActions {...BASE_PROPS} isPlatformAdmin={true} />);
     openMenu();
 
-    expect(screen.getByText(/Remove Alice/i)).toBeInTheDocument();
-    expect(screen.queryByText(/Make Alice a platform admin/i)).toBeNull();
+    // Click the menu item.
+    fireEvent.click(screen.getByText(/Remove Alice/i));
+
+    // ConfirmDialog opens with remove-admin copy.
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(screen.getByText("Remove platform-admin role")).toBeInTheDocument();
+    expect(screen.getByText(/lose access to \/admin/i)).toBeInTheDocument();
+
+    // The Remove button should use the destructive variant (bg-destructive/10).
+    const removeBtn = screen.getByRole("button", { name: "Remove" });
+    expect(removeBtn.className).toMatch(/bg-destructive/);
+  });
+
+  it("uses Grant platform-admin role copy (non-destructive) when user is not an admin", () => {
+    render(<UserActions {...BASE_PROPS} isPlatformAdmin={false} />);
+    openMenu();
+
+    fireEvent.click(screen.getByText(/Make Alice a platform admin/i));
+
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(screen.getByText("Grant platform-admin role")).toBeInTheDocument();
+
+    // The Grant button should use the primary variant (not bg-destructive/10).
+    const grantBtn = screen.getByRole("button", { name: "Grant" });
+    expect(grantBtn.className).toMatch(/bg-primary/);
+    expect(grantBtn.className).not.toMatch(/bg-destructive/);
   });
 });

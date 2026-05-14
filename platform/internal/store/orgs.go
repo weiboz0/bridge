@@ -26,6 +26,16 @@ type Org struct {
 	UpdatedAt    time.Time  `json:"updatedAt"`
 }
 
+// AdminOrg is the enriched organization shape for platform-admin views.
+type AdminOrg struct {
+	Org
+	TeacherCount int `json:"teacherCount"`
+	StudentCount int `json:"studentCount"`
+	ParentCount  int `json:"parentCount"`
+	AdminCount   int `json:"adminCount"`
+	TotalActive  int `json:"totalActive"`
+}
+
 // OrgMembership represents a row in the org_memberships table.
 type OrgMembership struct {
 	ID        string    `json:"id"`
@@ -109,6 +119,42 @@ func (s *OrgStore) GetOrg(ctx context.Context, orgID string) (*Org, error) {
 		 FROM organizations WHERE id = $1`,
 		orgID,
 	).Scan(&org.ID, &org.Name, &org.Slug, &org.Type, &org.Status, &org.ContactEmail, &org.ContactName, &org.Domain, &org.Settings, &org.VerifiedAt, &org.CreatedAt, &org.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &org, nil
+}
+
+// GetAdminOrgByID retrieves an organization with active membership counts.
+func (s *OrgStore) GetAdminOrgByID(ctx context.Context, orgID string) (*AdminOrg, error) {
+	var org AdminOrg
+	err := s.db.QueryRowContext(ctx,
+		`SELECT o.id, o.name, o.slug, o.type, o.status, o.contact_email, o.contact_name,
+		        o.domain, o.settings, o.verified_at, o.created_at, o.updated_at,
+		        COALESCE(m.teacher_count, 0), COALESCE(m.student_count, 0),
+		        COALESCE(m.parent_count, 0), COALESCE(m.admin_count, 0),
+		        COALESCE(m.total_active, 0)
+		 FROM organizations o
+		 LEFT JOIN LATERAL (
+		   SELECT
+		     COUNT(*) FILTER (WHERE role = 'teacher' AND status = 'active') AS teacher_count,
+		     COUNT(*) FILTER (WHERE role = 'student' AND status = 'active') AS student_count,
+		     COUNT(*) FILTER (WHERE role = 'parent' AND status = 'active') AS parent_count,
+		     COUNT(*) FILTER (WHERE role = 'org_admin' AND status = 'active') AS admin_count,
+		     COUNT(*) FILTER (WHERE status = 'active') AS total_active
+		   FROM org_memberships
+		   WHERE org_id = o.id
+		 ) m ON TRUE
+		 WHERE o.id = $1`,
+		orgID,
+	).Scan(
+		&org.ID, &org.Name, &org.Slug, &org.Type, &org.Status, &org.ContactEmail, &org.ContactName,
+		&org.Domain, &org.Settings, &org.VerifiedAt, &org.CreatedAt, &org.UpdatedAt,
+		&org.TeacherCount, &org.StudentCount, &org.ParentCount, &org.AdminCount, &org.TotalActive,
+	)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -232,6 +278,27 @@ func (s *OrgStore) UpdateOrg(ctx context.Context, orgID string, input UpdateOrgI
 		return nil, err
 	}
 	return &org, nil
+}
+
+// UpdateOrgDetails updates required admin-editable org details and returns the enriched org.
+func (s *OrgStore) UpdateOrgDetails(ctx context.Context, orgID, name, contactName, contactEmail string) (*AdminOrg, error) {
+	result, err := s.db.ExecContext(ctx,
+		`UPDATE organizations
+		 SET name = $1, contact_name = $2, contact_email = $3, updated_at = NOW()
+		 WHERE id = $4`,
+		name, contactName, contactEmail, orgID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return nil, err
+	}
+	if affected == 0 {
+		return nil, nil
+	}
+	return s.GetAdminOrgByID(ctx, orgID)
 }
 
 // UpdateOrgStatus updates an org's status and optionally sets verifiedAt.
