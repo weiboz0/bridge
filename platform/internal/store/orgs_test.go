@@ -242,6 +242,161 @@ func TestOrgStore_UpdateOrgStatus_NotFound(t *testing.T) {
 	assert.Nil(t, updated)
 }
 
+func TestOrgStore_GetAdminOrgByID_NotFound(t *testing.T) {
+	db := testDB(t)
+	store := NewOrgStore(db)
+
+	org, err := store.GetAdminOrgByID(context.Background(), "00000000-0000-0000-0000-000000000000")
+	assert.NoError(t, err)
+	assert.Nil(t, org)
+}
+
+func TestOrgStore_GetAdminOrgByID_ZeroMemberships(t *testing.T) {
+	db := testDB(t)
+	store := NewOrgStore(db)
+	ctx := context.Background()
+	org := createTestOrg(t, db, store, t.Name())
+
+	adminOrg, err := store.GetAdminOrgByID(ctx, org.ID)
+	require.NoError(t, err)
+	require.NotNil(t, adminOrg)
+	assert.Equal(t, org.ID, adminOrg.ID)
+	assert.Equal(t, org.Name, adminOrg.Name)
+	assert.Equal(t, 0, adminOrg.TeacherCount)
+	assert.Equal(t, 0, adminOrg.StudentCount)
+	assert.Equal(t, 0, adminOrg.ParentCount)
+	assert.Equal(t, 0, adminOrg.AdminCount)
+	assert.Equal(t, 0, adminOrg.TotalActive)
+}
+
+func TestOrgStore_GetAdminOrgByID_MixedRoles(t *testing.T) {
+	db := testDB(t)
+	orgStore := NewOrgStore(db)
+	userStore := NewUserStore(db)
+	ctx := context.Background()
+	org := createTestOrg(t, db, orgStore, t.Name())
+
+	for _, tc := range []struct {
+		suffix string
+		role   string
+	}{
+		{"teacher", "teacher"},
+		{"student-1", "student"},
+		{"student-2", "student"},
+		{"parent", "parent"},
+		{"admin", "org_admin"},
+	} {
+		user := createTestUser(t, db, userStore, t.Name()+"-"+tc.suffix)
+		_, err := orgStore.AddOrgMember(ctx, AddMemberInput{
+			OrgID:  org.ID,
+			UserID: user.ID,
+			Role:   tc.role,
+			Status: "active",
+		})
+		require.NoError(t, err)
+	}
+
+	adminOrg, err := orgStore.GetAdminOrgByID(ctx, org.ID)
+	require.NoError(t, err)
+	require.NotNil(t, adminOrg)
+	assert.Equal(t, 1, adminOrg.TeacherCount)
+	assert.Equal(t, 2, adminOrg.StudentCount)
+	assert.Equal(t, 1, adminOrg.ParentCount)
+	assert.Equal(t, 1, adminOrg.AdminCount)
+	assert.Equal(t, 5, adminOrg.TotalActive)
+}
+
+func TestOrgStore_GetAdminOrgByID_ExcludesSuspendedMemberships(t *testing.T) {
+	db := testDB(t)
+	orgStore := NewOrgStore(db)
+	userStore := NewUserStore(db)
+	ctx := context.Background()
+	org := createTestOrg(t, db, orgStore, t.Name())
+	activeTeacher := createTestUser(t, db, userStore, t.Name()+"-teacher")
+	suspendedStudent := createTestUser(t, db, userStore, t.Name()+"-student")
+
+	_, err := orgStore.AddOrgMember(ctx, AddMemberInput{
+		OrgID:  org.ID,
+		UserID: activeTeacher.ID,
+		Role:   "teacher",
+		Status: "active",
+	})
+	require.NoError(t, err)
+	_, err = orgStore.AddOrgMember(ctx, AddMemberInput{
+		OrgID:  org.ID,
+		UserID: suspendedStudent.ID,
+		Role:   "student",
+		Status: "suspended",
+	})
+	require.NoError(t, err)
+
+	adminOrg, err := orgStore.GetAdminOrgByID(ctx, org.ID)
+	require.NoError(t, err)
+	require.NotNil(t, adminOrg)
+	assert.Equal(t, 1, adminOrg.TeacherCount)
+	assert.Equal(t, 0, adminOrg.StudentCount)
+	assert.Equal(t, 0, adminOrg.ParentCount)
+	assert.Equal(t, 0, adminOrg.AdminCount)
+	assert.Equal(t, 1, adminOrg.TotalActive)
+}
+
+func TestOrgStore_UpdateOrgDetails_HappyPath(t *testing.T) {
+	db := testDB(t)
+	orgStore := NewOrgStore(db)
+	userStore := NewUserStore(db)
+	ctx := context.Background()
+	org := createTestOrg(t, db, orgStore, t.Name())
+	user := createTestUser(t, db, userStore, t.Name()+"-teacher")
+	_, err := orgStore.AddOrgMember(ctx, AddMemberInput{
+		OrgID:  org.ID,
+		UserID: user.ID,
+		Role:   "teacher",
+		Status: "active",
+	})
+	require.NoError(t, err)
+
+	updated, err := orgStore.UpdateOrgDetails(ctx, org.ID, "Updated Org", "Updated Contact", "updated@example.com")
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	assert.Equal(t, org.ID, updated.ID)
+	assert.Equal(t, "Updated Org", updated.Name)
+	assert.Equal(t, "Updated Contact", updated.ContactName)
+	assert.Equal(t, "updated@example.com", updated.ContactEmail)
+	assert.Equal(t, 1, updated.TeacherCount)
+	assert.Equal(t, 1, updated.TotalActive)
+
+	fetched, err := orgStore.GetOrg(ctx, org.ID)
+	require.NoError(t, err)
+	require.NotNil(t, fetched)
+	assert.Equal(t, "Updated Org", fetched.Name)
+	assert.Equal(t, "Updated Contact", fetched.ContactName)
+	assert.Equal(t, "updated@example.com", fetched.ContactEmail)
+}
+
+func TestOrgStore_UpdateOrgDetails_SameValuesNoOp(t *testing.T) {
+	db := testDB(t)
+	store := NewOrgStore(db)
+	ctx := context.Background()
+	org := createTestOrg(t, db, store, t.Name())
+
+	updated, err := store.UpdateOrgDetails(ctx, org.ID, org.Name, org.ContactName, org.ContactEmail)
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	assert.Equal(t, org.ID, updated.ID)
+	assert.Equal(t, org.Name, updated.Name)
+	assert.Equal(t, org.ContactName, updated.ContactName)
+	assert.Equal(t, org.ContactEmail, updated.ContactEmail)
+}
+
+func TestOrgStore_UpdateOrgDetails_MissingOrg(t *testing.T) {
+	db := testDB(t)
+	store := NewOrgStore(db)
+
+	updated, err := store.UpdateOrgDetails(context.Background(), "00000000-0000-0000-0000-000000000000", "Missing", "No One", "missing@example.com")
+	assert.NoError(t, err)
+	assert.Nil(t, updated)
+}
+
 // --- Membership operations ---
 
 func TestOrgStore_AddOrgMember(t *testing.T) {
