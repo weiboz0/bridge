@@ -156,3 +156,32 @@ describe("OrgActions — Edit action (active)", () => {
     expect(screen.getByText("Edit organization")).toBeInTheDocument();
   });
 });
+
+describe("OrgActions — Suspend action (active)", () => {
+  it("clicking Suspend organization… opens SuspendOrgDialog (type-to-confirm)", () => {
+    render(<OrgActions {...BASE_PROPS} status="active" />);
+
+    openMenu();
+    fireEvent.click(screen.getByText("Suspend organization…"));
+
+    // SuspendOrgDialog opens with type-to-confirm gate.
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).toBeInTheDocument();
+    // Dialog header (heading element disambiguates from the submit button label).
+    expect(within(dialog).getByRole("heading", { name: "Suspend organization" })).toBeInTheDocument();
+    // The destructive submit button starts disabled (org-name not yet typed).
+    expect(within(dialog).getByRole("button", { name: "Suspend organization" })).toBeDisabled();
+  });
+});
+
+describe("OrgActions — View details navigation", () => {
+  it("renders View details as a link to /admin/orgs/{id} on each status", () => {
+    for (const status of ["pending", "active", "suspended"] as const) {
+      const { unmount } = render(<OrgActions {...BASE_PROPS} status={status} />);
+      openMenu();
+      const link = screen.getByRole("link", { name: "View details" });
+      expect(link).toHaveAttribute("href", "/admin/orgs/org-001");
+      unmount();
+    }
+  });
+});

@@ -373,7 +373,32 @@ Open concerns flagged for external reviewers:
 
 ## Code Review
 
-(Placeholder — to be filled after Phase 3.)
+### Round 1 — 2026-05-13
+
+4-way gate against plan 086 diff (against feat/085 parent): 18 files, 2324 ins, 93 del. Commits `bbf3685` (Phase 1) + `655fee8` (Phase 2) + `dc8aa4e` (cleanup + docs).
+
+| Reviewer | Verdict | Findings |
+|----------|---------|----------|
+| Self (Opus 4.7) | CONCUR | — |
+| Codex | **CONCUR / NIT** | 11 review questions verified. Single NIT: `tests/unit/org-actions.test.tsx` didn't exercise the Suspend menu action or View-details navigation path. |
+| DeepSeek V4 Flash | **CONCUR with 3 NITs** | (a) `UpdateOrgDetails` uses `ExecContext + RowsAffected()` vs codebase's prevailing `QueryRowContext + RETURNING` — by-design per plan self-review; stylistic inconsistency. (b) SQL `NOW()` vs `time.Now()` parameter inconsistency with `UpdateOrgStatus`. (c) `org-edit-trigger.tsx` introduces a new client-island wrapper pattern; could become a generic `withClientDialog` wrapper if more pages adopt it. |
+| GLM 5.1 | **CONCUR + 2 informational NITs** | (a) `UpdateOrgStatus` gained `ValidateUUIDParam` middleware via route-group consolidation — improvement, not regression. (b) Client + server both trim — idempotent, harmless. |
+
+### NIT fixes (folded inline)
+
+- `[FIXED]` Codex NIT — added 2 new test cases to `tests/unit/org-actions.test.tsx`:
+  - "OrgActions — Suspend action (active)" — verifies clicking Suspend opens `SuspendOrgDialog` with type-to-confirm gate (button disabled until org-name typed).
+  - "OrgActions — View details navigation" — verifies View details renders as a `<Link href="/admin/orgs/{id}">` on every status (pending / active / suspended).
+
+### Non-blocking NITs (acknowledged, not fixed)
+
+- `[WONTFIX]` DeepSeek NIT (a) — `ExecContext + RowsAffected` is explicitly the chosen pattern per Decision #1c-equivalent and plan self-review. Switching to `RETURNING` with a LATERAL subquery is messier SQL for negligible benefit on a low-frequency admin write.
+- `[WONTFIX]` DeepSeek NIT (b) — SQL `NOW()` is acceptable; `time.Now()` parameter style is one of several conventions in the codebase. Not worth a separate commit.
+- `[DEFERRED]` DeepSeek NIT (c) — `withClientDialog` HOC abstraction is premature. If a third page adopts this pattern, extract then.
+- `[ACK]` GLM NIT (a) — accepted as improvement.
+- `[ACK]` GLM NIT (b) — idempotent double-trim is harmless.
+
+All `[OPEN]` items resolved. Gate clean for merge.
 
 ## Post-Execution Report
 
