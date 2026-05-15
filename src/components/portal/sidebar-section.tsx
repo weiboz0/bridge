@@ -95,8 +95,8 @@ interface SectionItemsProps {
 function SectionItems({ items, collapsed, pathname }: SectionItemsProps) {
   // Longest-match wins (Codex review of plan 067 phases 2+3): the
   // naive `startsWith(itemPath + "/")` check would highlight both
-  // "Dashboard" (/teacher) and "Chapters" (/teacher/chapters) on
-  // /teacher/chapters. Compute a single active index per render.
+  // "Dashboard" (/teacher) and "Library" (/teacher/books) on
+  // /teacher/books. Compute a single active index per render.
   const activeIndex = findActiveIndex(pathname, items);
   return (
     <nav className="py-1">

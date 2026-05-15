@@ -11,7 +11,7 @@ export const portalConfigs: Record<string, PortalConfig> = {
     navItems: [
       { label: "Organizations", href: "/admin/orgs", icon: "building-2" },
       { label: "Users", href: "/admin/users", icon: "users" },
-      { label: "Chapters", href: "/admin/chapters", icon: "file-text" },
+      { label: "Library", href: "/admin/books", icon: "library" },
     ],
   },
   org_admin: {
@@ -24,7 +24,9 @@ export const portalConfigs: Record<string, PortalConfig> = {
       { label: "Students", href: "/org/students", icon: "users" },
       { label: "Courses", href: "/org/courses", icon: "book-open" },
       { label: "Classes", href: "/org/classes", icon: "school" },
-      { label: "Chapters", href: "/org/chapters", icon: "file-text" },
+      // /org/books page not yet built — clicking "Library" lands on the flat
+      // chapter list for now. Follow-up plan to mirror /teacher/books here.
+      { label: "Library", href: "/org/chapters", icon: "library" },
       { label: "Parent links", href: "/org/parent-links", icon: "link" },
       { label: "Settings", href: "/org/settings", icon: "settings" },
     ],
@@ -35,7 +37,7 @@ export const portalConfigs: Record<string, PortalConfig> = {
     basePath: "/teacher",
     navItems: [
       { label: "Dashboard", href: "/teacher", icon: "layout-dashboard" },
-      { label: "Chapters", href: "/teacher/chapters", icon: "file-text" },
+      { label: "Library", href: "/teacher/books", icon: "library" },
       { label: "Problems", href: "/teacher/problems", icon: "puzzle" },
       { label: "Sessions", href: "/teacher/sessions", icon: "video" },
       { label: "Courses", href: "/teacher/courses", icon: "book-open" },

@@ -17,6 +17,7 @@ export function getIconChar(iconName: string): string {
     "code": "⌨",
     "help-circle": "❓",
     "file-text": "📄",
+    "library": "📚",
     "video": "🎥",
     "puzzle": "🧩",
     "link": "🔗",
