@@ -10,9 +10,9 @@ Bridge uses **domain-based dispatch** for coding work. The orchestrator (Opus 4.
 | **Frontend** — Next.js App Router, React components, `src/` UI code | Claude Sonnet 4.6 | `Agent` tool, `model: "sonnet"` | Pattern-heavy work with fast feedback loops. |
 | **Tests** (all domains) | Claude Sonnet 4.6 | `Agent` tool, `model: "sonnet"` | Tests are pattern-heavy + repetitive across backend and frontend alike. |
 | **Complex / cross-domain / new patterns** | Claude Opus 4.7 | Orchestrator inline OR `Agent` tool, `model: "opus"` | See "When to escalate to Opus" below. |
-| **Review** | Claude Opus 4.7 + Codex + DeepSeek + GLM | See `docs/reviewers.md` | Codex reviews even when it also wrote the code (other reviewers carry the independence). |
+| **Review** | Claude Opus 4.7 + Codex (+ GLM for code review only) | See `docs/reviewers.md` | Codex reviews even when it also wrote the code (other reviewers carry the independence). |
 
-DeepSeek and GLM remain **review-only**. Do NOT delegate implementation to them.
+GLM remains **review-only** (code review). Do NOT delegate implementation to it.
 
 ## Why domain instead of complexity
 
@@ -90,10 +90,10 @@ The **self-review stage** of both gates (plan review #1 and code review #1) ALWA
 
 ## Codex's dual role
 
-Codex implements backend code AND participates in plan + code reviews (see `docs/reviewers.md`). When Codex wrote the code, its own review naturally has familiarity bias — but Codex still runs as one of the four reviewers because the gate's strength comes from the ensemble: GLM, DeepSeek, and Opus-self provide independent perspectives on Codex-authored code.
+Codex implements backend code AND participates in plan + code reviews (see `docs/reviewers.md`). When Codex wrote the code, its own review naturally has familiarity bias — but Codex still runs as one of the reviewers because the gate's strength comes from the ensemble: GLM (code review) and Opus-self provide independent perspectives on Codex-authored code.
 
 ## All routes — same rules
 
-- Both Codex and Sonnet follow the 4-way review gates for plans and code (with Opus on self-review).
+- Both Codex and Sonnet follow the review gates for plans (self + Codex) and code (self + Codex + GLM).
 - Both respect the branch-first rule and the development workflow.
 - Both must honor the conventions in `CLAUDE.md` ## Coding Conventions.
