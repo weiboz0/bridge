@@ -13,7 +13,10 @@ interface PortalAccessResponse {
 }
 
 interface PortalShellProps {
-  portalRole: PortalRole;
+  // When null, the shell accepts any authenticated user with ≥1 portal role
+  // (Decision #13, plan 089 phase 1). Pass a specific PortalRole to gate
+  // access to users who hold that role.
+  portalRole: PortalRole | null;
   children: React.ReactNode;
 }
 
@@ -40,23 +43,34 @@ export async function PortalShell({ portalRole, children }: PortalShellProps) {
     redirect("/login");
   }
 
-  // Check if user has the required role for this portal
-  const hasRole = data.roles.some((r) => r.role === portalRole);
-  if (!hasRole) {
-    redirect("/");
+  // When portalRole is null (role-neutral shell), require at least one portal
+  // role. When a specific role is given, require the user to hold that role.
+  if (portalRole === null) {
+    if (data.roles.length === 0) {
+      redirect("/");
+    }
+  } else {
+    const hasRole = data.roles.some((r) => r.role === portalRole);
+    if (!hasRole) {
+      redirect("/");
+    }
+
+    const config = getPortalConfig(portalRole);
+    if (!config) {
+      redirect("/");
+    }
   }
 
-  const config = getPortalConfig(portalRole);
-  if (!config) {
-    redirect("/");
-  }
+  // When role-neutral (portalRole===null), use the first role for sidebar
+  // currentRole so the prop stays populated (kept for backward compat).
+  const currentRole: PortalRole = portalRole ?? data.roles[0]?.role ?? "student";
 
   return (
     <div className="flex min-h-screen">
       <Sidebar
         userName={data.userName || "User"}
         roles={data.roles}
-        currentRole={portalRole}
+        currentRole={currentRole}
       />
       <main className="flex-1 min-h-screen pb-16 md:pb-0">
         <IdentityDriftBanner />
