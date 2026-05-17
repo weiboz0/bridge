@@ -18,13 +18,16 @@ export const portalConfigs: Record<string, PortalConfig> = {
     role: "org_admin",
     label: "Organization",
     basePath: "/org",
+    // Library is placed at index 1 (after Dashboard) so it survives the
+    // mobile bottom-nav `slice(0, 4)` cut. Risk #2 in plan 089: at the
+    // previous position (index 5) it dropped off mobile.
     navItems: [
       { label: "Dashboard", href: "/org", icon: "layout-dashboard" },
+      { label: "Library", href: "/library", icon: "library" },
       { label: "Teachers", href: "/org/teachers", icon: "graduation-cap" },
       { label: "Students", href: "/org/students", icon: "users" },
       { label: "Courses", href: "/org/courses", icon: "book-open" },
       { label: "Classes", href: "/org/classes", icon: "school" },
-      { label: "Library", href: "/library", icon: "library" },
       { label: "Parent links", href: "/org/parent-links", icon: "link" },
       { label: "Settings", href: "/org/settings", icon: "settings" },
     ],

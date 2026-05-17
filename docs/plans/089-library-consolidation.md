@@ -196,7 +196,19 @@ Items 1 (Decision #3), 2 (Decision #4), and 3 (no remaining contradictions acros
 
 ## Code Review
 
-(Pending — after Phase 4.)
+### Self-review (Opus 4.7) — 1 fix folded
+
+After reading the consolidated diff, found one issue Risk #2 had warned about:
+
+- **`org_admin` had Library at index 5 in nav-config**, which falls outside the mobile bottom-nav `slice(0, 4)`. The other 2 roles (admin index 2, teacher index 1) were safe. **Fixed**: moved Library to index 1 for `org_admin` (right after Dashboard, mirroring the teacher pattern). All 7 sidebar-dedupe tests still pass.
+
+Other concerns considered + resolved without changes:
+- **Dedupe key vs `?orgId=` suffix**: dedupe runs before `SidebarSection` appends the suffix, so the key is the raw nav-config href. Correct.
+- **Multi-role active-match on `/library`**: highlight fires for whichever role section keeps the entry post-dedupe (the user's primary role per `roles` order). Acceptable — the user sees they're on Library either way.
+- **Mobile uses pre-dedupe `primaryConfig.navItems`**: no dedupe needed for mobile (it's single-role). Correct.
+- **canEdit gate on detail page chapter list** (Phase 1 deviation): correct UX — verified the chapter-link path renders for read-only viewers too (just no edit button).
+
+Ready for Codex + GLM dispatch.
 
 ## Post-Execution Report
 
