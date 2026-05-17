@@ -21,10 +21,10 @@ interface Props {
   bookScopeId: string | null;
   bookDescription: string;
   /**
-   * Base path prefix for the detail-page link (e.g. `/admin/books` or
-   * `/teacher/books`). The caller passes whichever portal it lives in;
-   * defaults to `/admin/books` for backward compat with the admin-side
-   * call sites that were the first consumers.
+   * Base path prefix for the detail-page link. Defaults to `/library`
+   * (the consolidated library page — plan 089 phase 2). The two legacy
+   * per-role callers (admin list page, teacher list page) will be deleted
+   * in Phase 3; any explicit override they pass keeps working until then.
    */
   detailBasePath?: string;
 }
@@ -35,7 +35,7 @@ export function BookActions({
   bookScope,
   bookScopeId,
   bookDescription,
-  detailBasePath = "/admin/books",
+  detailBasePath = "/library",
 }: Props) {
   const router = useRouter();
   const [editOpen, setEditOpen] = useState(false);

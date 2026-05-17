@@ -69,12 +69,12 @@ describe("BookActions", () => {
     expect(screen.getByText("Delete book…")).toBeInTheDocument();
   });
 
-  it("View details links to /admin/books/{bookId}", () => {
+  it("View details links to /library/{bookId} by default (plan 089 phase 2)", () => {
     render(<BookActions {...DEFAULT_PROPS} />);
     openMenu();
     expect(screen.getByRole("link", { name: "View details" })).toHaveAttribute(
       "href",
-      `/admin/books/${DEFAULT_PROPS.bookId}`
+      `/library/${DEFAULT_PROPS.bookId}`
     );
   });
 
