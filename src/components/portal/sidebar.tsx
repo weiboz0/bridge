@@ -63,6 +63,27 @@ export function Sidebar({ userName, roles, currentRole: _currentRole }: SidebarP
 
   const multiRole = sections.length > 1;
 
+  // Plan 089 phase 2 — href dedupe for multi-role sidebar.
+  //
+  // When multiple roles share the same nav href (e.g. all three portal roles
+  // now point at `/library`), a multi-role user would see duplicated entries.
+  // Walk sections in `roles` order, track which raw hrefs (the nav-config href,
+  // NOT the `?orgId=…`-augmented form appended later by SidebarSection) have
+  // already been surfaced, and strip them from subsequent sections.
+  //
+  // If filtering leaves a section with zero items, the section still renders
+  // its header (so the multi-role UI structure stays intact) but with an empty
+  // items list — SidebarSection handles that gracefully.
+  const seenHrefs = new Set<string>();
+  const sectionsWithDeduped = sections.map(({ role, config }) => {
+    const filteredNavItems = config.navItems.filter((item) => {
+      if (seenHrefs.has(item.href)) return false;
+      seenHrefs.add(item.href);
+      return true;
+    });
+    return { role, config, filteredNavItems };
+  });
+
   // Mobile bottom-nav uses the primary role's nav items (Decisions §4)
   // — uniform across portals so the user sees the same 4-icon strip
   // regardless of which page they're on.
@@ -81,14 +102,14 @@ export function Sidebar({ userName, roles, currentRole: _currentRole }: SidebarP
       >
         <SidebarHeader collapsed={collapsed} onToggle={toggle} />
         <div className="flex-1 overflow-auto">
-          {sections.map(({ role, config }) => {
+          {sectionsWithDeduped.map(({ role, config, filteredNavItems }) => {
             const key = sectionKey(role.role, role.orgId);
             return (
               <SidebarSection
                 key={key}
                 role={role}
                 label={ROLE_LABELS[role.role] ?? config.label}
-                navItems={config.navItems}
+                navItems={filteredNavItems}
                 collapsed={collapsed}
                 expanded={isExpanded(key)}
                 multiRole={multiRole}
@@ -101,8 +122,8 @@ export function Sidebar({ userName, roles, currentRole: _currentRole }: SidebarP
       </aside>
 
       {/* Mobile bottom nav — uses primary role's nav items uniformly.
-          Active item highlighted via longest-match (so /teacher/chapters
-          highlights "Chapters", not "Dashboard"). */}
+          Active item highlighted via longest-match (so /library
+          highlights "Library", not "Dashboard"). */}
       <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-background border-t border-border z-40 flex justify-around py-2">
         {mobileItems.map((item, i) => {
           const isActive = i === mobileActiveIndex;
