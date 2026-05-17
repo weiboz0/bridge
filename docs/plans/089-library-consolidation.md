@@ -200,4 +200,48 @@ Items 1 (Decision #3), 2 (Decision #4), and 3 (no remaining contradictions acros
 
 ## Post-Execution Report
 
-(Pending.)
+### Commits on the branch (in order)
+
+- Plan iterations (`671e66c → 821fbbf → 2815c90 → e7345a2 → b25cc9c → b8610c0`): draft → self-review fold → Codex round-1 fold (5 BLOCKERs) → round-2 fold (1 BLOCKER) → round-3 fold (2 stale contradictions) → round-4 Codex CONCUR (2-way gate clean).
+- Reviewer-policy update (`49e3fb2`): switch to 2-way plan review + 3-way code review; drop DeepSeek; bundled into this branch per "no trivial / doc-only PRs" feedback.
+- Phase 1 (4 commits `f6f7e9c → 25649a1`): Sonnet — extend `PortalShell` for null role + 9-case test; new `/library/layout.tsx`, list page (199 lines), detail page (289 lines), create+edit triggers (33+35 lines).
+- Phase 2 (4 commits `852e249 → 11961ab`): Sonnet — nav-config + library icon, sidebar href-dedupe + 7-case test, 4× 308 redirects in `next.config.ts`, `BookActions detailBasePath` default flipped to `/library` + test update.
+- Phase 3 (2 commits `76556fa → b2dbede`): Sonnet — `git rm` 8 old per-role book files + 2 stale test files; new `library-page.test.tsx` (21 cases) + `library-book-detail-page.test.tsx` (17 cases).
+- Phase 4 (this commit): orchestrator — `docs/api.md` Library-consolidation note, post-execution report.
+
+### File census (branch vs main)
+
+- 28 files changed, **net –728 lines** (1370 deleted vs 642 added).
+- 8 source files deleted (the old admin/books + teacher/books pages).
+- 2 source files added (`/library/page.tsx`, `/library/[id]/page.tsx`).
+- 4 new helper/trigger files (layout, create-trigger, edit-trigger).
+- 5 modified files: `portal-shell.tsx`, `sidebar.tsx`, `sidebar-section.tsx`, `active-match.ts`, `nav-config.ts`, `icons.ts`, `book-actions.tsx`, `next.config.ts`.
+- 4 new test files (`portal-shell.test.tsx`, `sidebar-dedupe.test.tsx`, `library-page.test.tsx`, `library-book-detail-page.test.tsx`) + 2 deleted (`admin-books-page.test.tsx`, `admin-book-detail-page.test.tsx`) + 1 modified (`book-actions.test.tsx`).
+- 54 new/updated test cases across 5 test files.
+
+### Deviations from the plan
+
+- **`PortalShellProps` type lived inline** in `portal-shell.tsx`, not in `src/lib/portal/types.ts` as the plan assumed. Modified in place. Phase 1 deliverable #7 was a no-op.
+- **No `canCreatePlatformBook` prop** added to `library-book-create-trigger.tsx` (Phase 1) — would require a corresponding `BookEditDialog` prop change, which is Phase 2 scope at best and arguably its own follow-up. Backend `canEditBook` will 403 illegitimate creates as a safety net. Noted in the trigger's comment.
+- **`canEdit` gate added to detail page chapter list** (Phase 1) — plan was silent but it's the correct UX. Edit button shows only for platform admin or for org members whose `orgId` matches `book.scopeId`.
+- **`docs/project-structure.md` portal-routes table doesn't exist** — Phase 4 deliverable #2 was a no-op. The doc is a 37-line directory map; routes aren't enumerated there.
+
+### Verification (final)
+
+- `bunx tsc --noEmit` — 8 errors, identical to main baseline. Zero from plan-089 files.
+- `bun run lint` — 145 problems, identical to main baseline. Zero introduced.
+- `bun run test` — 830 pass / 3 pre-existing `auth-jwt-refresh` failures / 11 skipped. Same baseline as plan 088.
+- New test files all pass: `portal-shell` (9), `sidebar-dedupe` (7), `library-page` (21), `library-book-detail-page` (17) — 54 new cases, 100% pass.
+- Manual smoke (deferred to user): clicking "Library" from any portal → `/library`; `/admin/books` → 308 → `/library`; visiting `/library/<book-id>` shows the chapter list.
+
+### Known limitations / follow-up work
+
+- **Flat `/admin/chapters`, `/teacher/chapters`, `/org/chapters` pages remain** (Decision #8). They're no longer in nav but still reachable by URL — useful for "show all chapters across books" until Library exposes that view directly. A follow-up plan can either delete them or surface a `Library → All chapters` tab.
+- **No e2e smoke test added** for `/library` — plan 089 doesn't add e2e (none existed for the old book pages either). A future plan touching Library should add one Playwright spec.
+- **Sidebar dedupe is implemented for the Library case** but generalizes. If two roles ever share another href, dedupe applies automatically — no per-href config needed.
+- **`/org/books` doesn't exist as a separate route** (org admin lands at `/library` like everyone else). The plan-088 follow-up about creating a dedicated `/org/books` page is moot.
+
+### PR notes
+
+- Supersedes PR #154 (closed `2026-05-17` with supersession comment).
+- 3-way code review gate (self + Codex + GLM per new reviewer policy) pending dispatch before PR open.
