@@ -190,7 +190,9 @@ Round-2 BLOCKER (Risk #1) confirmed RESOLVED, but Codex flagged 2 more contradic
 
 ### Round 4
 
-#### Codex — pending re-dispatch against Decisions #3 + #4 fix.
+#### Codex — CONCUR (gate clean)
+
+Items 1 (Decision #3), 2 (Decision #4), and 3 (no remaining contradictions across Decisions / Risks / Phases) all confirmed PASS. The 2-way plan gate is satisfied: **self-review ✓ + Codex ✓**. Plan 089 ready for implementation.
 
 ## Code Review
 
