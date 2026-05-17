@@ -131,7 +131,7 @@ Supersedes PR #154 entirely — single nav entry repointed once, instead of 3 en
 
 ## Risks
 
-1. **Role detection in server component**: NextAuth session shape on the server differs from the client hook. Need to use `auth()` from `@/lib/auth` — verify the helper exists and returns `isPlatformAdmin` + memberships. If memberships aren't on the session, fetch via `/api/orgs` as the page does today.
+1. **Role detection in server component**: resolved per Decision #11 — use `api<PortalAccessResponse>("/api/me/portal-access")` (same endpoint `PortalShell` already calls). Do NOT use `auth()` from `@/lib/auth` directly and do NOT fall back to `/api/orgs` — both contradict Decision #11. Risk-level concern: a future change to `/api/me/portal-access`'s response shape (currently `{ authorized, userName, roles: UserRole[] }`) breaks the page in step with `PortalShell` — one breakage point, not two.
 2. **Mobile bottom-nav 4-item slice**: `sidebar.tsx:71` slices `navItems.slice(0, 4)`. If "Library" lands at index 5+ in some role's config after the rewrite, it drops off mobile. Sequence: dashboard → library → next 2 items.
 3. **PR #154 supersession**: with #154 unmerged, the relabel work it did still applies — I'll fold the icon-map addition and label rename into Phase 2 inline rather than rebasing #154's branch.
 4. **Detail page chapter list relies on `chapters?bookId=` filter** added in plan 088 phase 3 follow-up (`f868da6`). Confirmed present.
@@ -168,6 +168,17 @@ No remaining blockers from self-review. Ready for Codex dispatch.
 6. **(Low)** No e2e regression risk from the redirect — captured in revised Risk #5.
 
 **Verdict after fold-in**: pending re-dispatch of Codex against the revised plan tip.
+
+### Round 2
+
+#### Codex — BLOCKER (1 new finding from round-1 fold)
+
+- Findings 1, 2, 4, 5 confirmed RESOLVED.
+- **New blocker**: Risk #1 still described `auth()` + `/api/orgs` fallback, contradicting Decision #11's `/api/me/portal-access`-only mandate. An implementer reading Risk #1 could choose the wrong auth path. → **Fixed in next commit**: Risk #1 rewritten to cite Decision #11 explicitly and forbid the old paths.
+
+### Round 3
+
+#### Codex — pending re-dispatch against Risk #1 fix.
 
 ## Code Review
 
