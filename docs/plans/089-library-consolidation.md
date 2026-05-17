@@ -228,7 +228,11 @@ Ready for Codex + GLM dispatch.
 - **L2 — Scope-filter dropdown dropped vs admin-books-page.** Plan 089 Phase 1 explicitly deferred this (no admin-specific scope filter in MVP). Acceptable. → Noted as follow-up.
 - **L3 — Student-only user can hit `/library`** and sees empty list. Confusing UX but not a security issue. → Noted; future plan can role-gate `/library` if needed.
 
-### Round 2 — pending Codex re-dispatch against the BLOCKER fixes.
+### Round 2 — Codex APPROVED FOR MERGE
+
+Both round-1 BLOCKERs confirmed RESOLVED at `bb1d632`. Sidebar second-pass match handles both `[admin, teacher]` and `[teacher, admin]` ordering correctly. `chapterBasePath` org_admin+teacher edge case returns `/teacher/chapters` (correct — that user has teacher portal access). No new regressions.
+
+**Gate clean — 3-way code review satisfied**: self ✓ + Codex ✓ + GLM ✓. PR ready to open.
 
 ## Post-Execution Report
 
