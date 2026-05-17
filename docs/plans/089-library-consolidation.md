@@ -27,11 +27,12 @@ Supersedes PR #154 entirely — single nav entry repointed once, instead of 3 en
 
 1. **URL**: `/library` (matches the nav label, role-neutral, easy to redirect to from old paths). Detail at `/library/[id]`.
 2. **File location**: `src/app/(portal)/library/` — inside the portal shell so it inherits auth + sidebar. Not under `/admin`, `/teacher`, or `/org`.
-3. **Role detection inside the page**: read the NextAuth session server-side; branch on `session.user.isPlatformAdmin` and on the set of active org memberships from `/api/orgs`.
+3. **Role detection inside the page**: fetch `/api/me/portal-access` (see Decision #11 for the full rationale). Branch on `isPlatformAdmin = roles.some(r => r.role === "admin")` and on `orgMemberships = roles.filter(r => r.role === "teacher" || r.role === "org_admin")`. Do NOT call `auth()` directly or fetch `/api/orgs` — both contradict Decision #11.
 4. **Owner-name resolution**:
-   - Always call `/api/orgs` (caller's memberships) — covers teacher / org_admin.
-   - If platform admin, additionally call `/api/admin/orgs` — covers cross-org books.
-   - Org-name map merges both sources; unknown `scopeId` falls back to the raw UUID rendered as `Org · <prefix>`.
+   - Build the org-name map from `roles[]` of the `/api/me/portal-access` response (each `UserRole` carries `orgId` + `orgName`).
+   - If platform admin, additionally fetch `api<{ items: Org[] }>("/api/admin/orgs")` and merge — covers cross-org books the caller isn't a member of.
+   - Unknown `scopeId` falls back to the raw UUID rendered as `Org · <prefix>`.
+   - Do NOT call `/api/orgs` separately — its data is already inside `/api/me/portal-access`.
 5. **Create-button affordances**:
    - Platform admin: "Create book" with scope picker (platform | any org from `/api/admin/orgs`).
    - Org member with `teacher` or `org_admin` role in ≥1 active org: "Create book" restricted to their own org(s) — scope picker shows org(s) only.
@@ -178,7 +179,18 @@ No remaining blockers from self-review. Ready for Codex dispatch.
 
 ### Round 3
 
-#### Codex — pending re-dispatch against Risk #1 fix.
+#### Codex — BLOCKER (2 stale contradictions surfaced)
+
+Round-2 BLOCKER (Risk #1) confirmed RESOLVED, but Codex flagged 2 more contradictions the round-2 fold missed:
+
+- **Decision #3** still read "read the NextAuth session server-side; branch on `session.user.isPlatformAdmin` and on the set of active org memberships from `/api/orgs`" — contradicts Decision #11.
+- **Decision #4** still read "Always call `/api/orgs`" — contradicts Decision #11.
+
+→ **Fixed in next commit**: Decisions #3 and #4 rewritten to source role + memberships from `/api/me/portal-access` and explicitly prohibit `auth()` / `/api/orgs` direct calls. All references to `/api/orgs` in Decisions / Risks / Phases now appear only as explicit "do NOT" warnings or historical-audit-trail notes.
+
+### Round 4
+
+#### Codex — pending re-dispatch against Decisions #3 + #4 fix.
 
 ## Code Review
 
