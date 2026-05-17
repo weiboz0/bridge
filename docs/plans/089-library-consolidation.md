@@ -37,15 +37,17 @@ Supersedes PR #154 entirely — single nav entry repointed once, instead of 3 en
    - Org member with `teacher` or `org_admin` role in ≥1 active org: "Create book" restricted to their own org(s) — scope picker shows org(s) only.
    - All other roles (student / parent / unaffiliated): no create button (backend would 403 anyway).
 6. **Detail page**: same role-aware data fetches; chapter list is already scope-filtered correctly by the existing `/api/chapters?bookId=…` endpoint. The 403 fallback UI from `/admin/books/[id]` is dropped — the new page uses 404-no-leak semantics for unauthorized callers (consistent with `canViewBook` behavior).
-7. **Nav consolidation**: one entry per portal config still — but all three (`admin`, `org_admin`, `teacher`) point at `/library`. Justification for keeping the entry in each role config: the sidebar groups entries by role section, so removing it from one role would hide it for users with only that role. Identical href across roles is fine; the active-match logic already handles it.
-8. **Redirects**: 308 in `next.config.ts` for old paths:
+7. **Nav consolidation**: dedupe by href in the sidebar render layer rather than in nav-config. The 3 role configs (`admin`, `org_admin`, `teacher`) each keep their own "Library" entry pointing at `/library`. Sidebar groups entries by role section, but when a user has multiple roles and the same href appears in 2+ sections, the second occurrence is suppressed — keeps single-role users covered while multi-role users see one "Library" link.
+8. **Redirects**: 308 in `next.config.ts` for old book paths only:
    - `/admin/books` → `/library`
    - `/admin/books/:id` → `/library/:id`
    - `/teacher/books` → `/library`
    - `/teacher/books/:id` → `/library/:id`
-   - `/org/chapters` → `/library` (this one is debatable — `/org/chapters` is the old flat chapter list; it's about to be removed from nav, but the page itself is still useful as "all chapters under this org". Decision: redirect to `/library` since the user explicitly framed this as "Library" navigation. If the flat chapter list is still needed, surface it from inside `/library` under a tab/filter later.)
-9. **Cleanup**: delete the 6 old role-specific files (admin/books/page.tsx, admin/books/[id]/page.tsx, admin/books/book-create-trigger.tsx, admin/books/[id]/book-edit-trigger.tsx, teacher/books/page.tsx, teacher/books/[id]/page.tsx, teacher/books/teacher-book-create-trigger.tsx, teacher/books/[id]/book-edit-trigger.tsx — 8 files actually). Leave `src/components/books/` (BookActions, BookEditDialog, BookPickerDialog, etc.) intact — they're shared library components.
+   - **NOT redirected**: `/org/chapters`, `/admin/chapters`, `/teacher/chapters`. Those are the legacy flat chapter lists — semantically different from "Library = books". They stay reachable by URL; nav stops linking them. A follow-up plan can deprecate them once a "show all my chapters across books" view exists inside Library (if needed).
+9. **Cleanup**: delete the 8 old role-specific book files (admin/books/page.tsx, admin/books/[id]/page.tsx, admin/books/book-create-trigger.tsx, admin/books/[id]/book-edit-trigger.tsx, teacher/books/page.tsx, teacher/books/[id]/page.tsx, teacher/books/teacher-book-create-trigger.tsx, teacher/books/[id]/book-edit-trigger.tsx). Leave the legacy `/{admin,teacher,org}/chapters` flat-list pages and `src/components/books/` shared components intact.
 10. **BookActions `detailBasePath` prop**: change default from `/admin/books` to `/library`, drop the prop everywhere it was being passed (since there's now only one detail base).
+11. **Role-detection helper**: use the existing server-side session helper from `@/lib/auth/session` (search for `getSession()` or `auth()` import in current `(portal)` pages and follow the same import). Memberships not on the session → fall back to `/api/orgs` call as the teacher books page does today.
+12. **Backend reference points** (no changes — confirming existing surface): `/api/books` visibility filter at `platform/internal/store/books.go:103-138`; `canViewBook`/`canEditBook` helpers at `platform/internal/handlers/books.go:34-74`; chapter-by-book filter at `platform/internal/handlers/chapters.go` via `ChapterBookFilter` (added in plan 088 phase 3 follow-up `f868da6`).
 
 ## Non-goals
 
@@ -125,7 +127,21 @@ Supersedes PR #154 entirely — single nav entry repointed once, instead of 3 en
 
 ## Plan Review
 
-(Pending — Codex dispatch after self-review.)
+### Round 1
+
+#### Self-review (Opus 4.7) — CONCUR with 5 fixes folded
+
+Concerns folded into Decisions #7-12:
+
+1. Original Decision #7 contradicted the user framing by keeping 3 separate Library nav entries. Revised: dedupe by href in the sidebar render layer; keep single-role coverage via per-role configs.
+2. Original Decision #8 redirected `/org/chapters → /library`, conflating "flat chapter list" with "books library". Revised: only redirect old book paths; leave legacy flat-chapter pages reachable by URL but unlinked from nav.
+3. Role-detection helper was unpinned. New Decision #11 specifies the session helper + fallback path.
+4. Backend reference points weren't called out — implementer would re-discover them. New Decision #12 cites file:line for the `/api/books` filter, `canViewBook`/`canEditBook`, and `ChapterBookFilter` from plan 088 phase 3 follow-up.
+5. Phase 3 file-delete list said "6 old role-specific files" but counted 8. Phrasing corrected.
+
+No remaining blockers from self-review. Ready for Codex dispatch.
+
+#### Codex — pending
 
 ## Code Review
 
