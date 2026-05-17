@@ -20,8 +20,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 
+// Mutable so individual tests can pin a pathname (e.g. "/library" for the
+// plan-089 active-section regression test).
+let mockPathname = "/teacher";
 vi.mock("next/navigation", () => ({
-  usePathname: () => "/teacher",
+  usePathname: () => mockPathname,
   useSearchParams: () => new URLSearchParams(),
 }));
 
@@ -224,6 +227,64 @@ describe("Case 3 — dedupe key is raw nav-config href, ignores ?orgId= suffix",
     // Total: exactly one /library-prefixed link.
     const allLibraryLinks = aside.querySelectorAll('a[href^="/library"]');
     expect(allLibraryLinks).toHaveLength(1);
+  });
+});
+
+// ── Case 5 (plan 089 code review): /library auto-expands its dedupe section ─
+
+describe("Case 5 — /library auto-expands the section that owns it (Codex BLOCKER fix)", () => {
+  // Codex code review BLOCKER #1: computeActiveKey only matched role basePaths,
+  // so a multi-role user on /library (no basePath match) got activeKey=null and
+  // every section collapsed. The Library link was hidden inside its collapsed
+  // dedupe section. Fix: second-pass match by nav-item href when no basePath
+  // matches.
+
+  it("multi-role user on /library — admin section auto-expands so Library is visible", () => {
+    mockPathname = "/library";
+
+    configs.admin = adminConfig();
+    configs.teacher = teacherConfig();
+
+    // Do NOT seed localStorage — we want to verify the AUTO-expand path,
+    // not the manual override.
+    localStorage.clear();
+
+    const roles: UserRole[] = [{ role: "admin" }, { role: "teacher" }];
+    render(<Sidebar userName="Test" roles={roles} currentRole="admin" />);
+
+    // Admin section auto-expanded → its Library link is rendered.
+    const aside = getAside();
+    const libraryLinks = aside.querySelectorAll('a[href="/library"]');
+    expect(libraryLinks.length).toBe(1);
+
+    // Reset for subsequent tests.
+    mockPathname = "/teacher";
+  });
+
+  it("walks roles in dedupe order — teacher-first user lands in teacher's section", () => {
+    mockPathname = "/library";
+
+    configs.admin = adminConfig();
+    configs.teacher = teacherConfig();
+
+    localStorage.clear();
+
+    // teacher first → teacher claims /library in dedupe, teacher section
+    // auto-expands.
+    const roles: UserRole[] = [{ role: "teacher" }, { role: "admin" }];
+    render(<Sidebar userName="Test" roles={roles} currentRole="teacher" />);
+
+    const aside = getAside();
+    const libraryLinks = aside.querySelectorAll('a[href="/library"]');
+    expect(libraryLinks.length).toBe(1);
+
+    // The Library link should be a sibling of the Teacher section header
+    // (the Dashboard link is also in teacher, so finding both inside the
+    // same section confirms teacher expanded — not admin).
+    const dashboardLinks = aside.querySelectorAll('a[href="/teacher"]');
+    expect(dashboardLinks.length).toBe(1);
+
+    mockPathname = "/teacher";
   });
 });
 

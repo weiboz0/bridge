@@ -120,6 +120,12 @@ const STUDENT_PORTAL_ACCESS = {
   roles: [{ role: "student" }],
 };
 
+const ORG_ADMIN_ONLY_PORTAL_ACCESS = {
+  authorized: true,
+  userName: "Org Admin User",
+  roles: [{ role: "org_admin", orgId: ORG_ID, orgName: "Riverside School" }],
+};
+
 // ---------------------------------------------------------------------------
 // Helper
 // ---------------------------------------------------------------------------
@@ -326,5 +332,41 @@ describe("LibraryBookDetailPage — unauthorized", () => {
       LibraryBookDetailPage({ params: Promise.resolve({ id: VALID_UUID }) })
     ).rejects.toThrow("NEXT_REDIRECT: /login");
     expect(mockedRedirect).toHaveBeenCalledWith("/login");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 7. org_admin (no teacher role) — chapter links must route to /org/chapters
+//
+// Plan 089 code review Codex BLOCKER #2: an org_admin without teacher role
+// can't reach /teacher/chapters (the teacher portal layout gates on
+// portalRole="teacher"). The detail page's chapterBasePath() helper must
+// route org_admin to /org/chapters specifically.
+// ---------------------------------------------------------------------------
+
+describe("LibraryBookDetailPage — org_admin (no teacher role) chapter links", () => {
+  beforeEach(() => {
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/api/me/portal-access") return ORG_ADMIN_ONLY_PORTAL_ACCESS;
+      if (path === `/api/books/${VALID_UUID}`) return ORG_BOOK;
+      if (path.startsWith("/api/chapters")) return { items: SAMPLE_CHAPTERS };
+      throw new Error(`Unexpected API call: ${path}`);
+    });
+  });
+
+  it("renders chapter links pointing at /org/chapters (not /teacher/chapters)", async () => {
+    await renderPage(VALID_UUID);
+
+    const chapterOneLink = screen.getByText("Chapter One").closest("a");
+    expect(chapterOneLink).not.toBeNull();
+    expect(chapterOneLink?.getAttribute("href")).toBe(`/org/chapters/ch-1`);
+
+    const chapterTwoLink = screen.getByText("Chapter Two").closest("a");
+    expect(chapterTwoLink?.getAttribute("href")).toBe(`/org/chapters/ch-2`);
+  });
+
+  it("shows the edit button (org_admin in book's org)", async () => {
+    await renderPage(VALID_UUID);
+    expect(screen.getByTestId("edit-book-trigger")).toBeInTheDocument();
   });
 });

@@ -210,6 +210,26 @@ Other concerns considered + resolved without changes:
 
 Ready for Codex + GLM dispatch.
 
+### Round 1 — Codex + GLM (parallel, dispatched against `e793a2a`)
+
+#### Codex — BLOCKER (2 findings + 1 WARNING)
+
+1. **BLOCKER — multi-role users on `/library` see Library hidden inside collapsed section.** `computeActiveKey` in `src/components/portal/sidebar.tsx:157` only matched role `basePath`s; `/library` isn't under any basePath, so the helper returned `null` and every section stayed collapsed. The Library link lives in the deduped first section, but a collapsed `SidebarSection` doesn't render its nav list. Tests in `sidebar-dedupe.test.tsx` pre-seeded sections as expanded, so the bug slipped through. → **FIXED in `<next commit>`**: `computeActiveKey` now does a second pass after the basePath loop, walking roles in dedupe order and matching by nav-item href. Plus 2 new Case-5 tests in `sidebar-dedupe.test.tsx` that exercise the auto-expand path (no localStorage seed).
+
+2. **BLOCKER — `org_admin` chapter links route to `/teacher/chapters`, but `/teacher/*` requires teacher role.** `chapterBasePath()` at `src/app/(portal)/library/[id]/page.tsx:62` mapped `org_admin` → `/teacher/chapters`. An org_admin without teacher role would hit the teacher portal layout's role gate (`portalRole="teacher"` at `src/app/(portal)/teacher/layout.tsx:1`) and bounce. Detail-page tests missed it (no `org_admin` case). → **FIXED in `<next commit>`**: `chapterBasePath()` now splits — admin → `/admin/chapters`, teacher → `/teacher/chapters`, org_admin (no teacher) → `/org/chapters`, else null. New "Case 7" test block in `library-book-detail-page.test.tsx` adds 2 cases verifying org_admin chapter links target `/org/chapters/*` and the edit button shows.
+
+3. **WARNING — PortalShell null-role branch is dead code.** `PortalShell` redirects on `!data.authorized` before reaching the `roles.length === 0` branch, and `/api/me/portal-access` sets `authorized = (len(roles) > 0)`. So the null-role fallback inside PortalShell is unreachable for the current backend. → **WONTFIX**: the branch is defensive code in case the backend's `authorized` semantics ever drift (e.g., if it starts gating purely on session validity instead of role count). The current redirect-to-`/login` for no-role users is also arguably correct UX (they need an admin to assign a role). Documented inline in the plan; no code change.
+
+#### GLM 5.1 — CONCUR (2 medium + 3 low)
+
+- **M1 — Double fetch of `/api/me/portal-access`** (layout's PortalShell + page both call it). Next.js App Router auto-dedupes same-URL `fetch` calls within a single server render pass, so this is likely a non-issue in practice. → **WONTFIX with verification deferred**: if perf measurement later shows it matters, wrap with React `cache()`. Not blocking.
+- **M2 — `Promise.all([portalAccess, book])` priority inversion.** If book rejects with 404 before portal-access rejects with 401, we'd show "Book not found" instead of redirecting to /login. → **WONTFIX**: PortalShell's layout already enforces 401 before the page renders. The race is theoretical (session expires between layout and page, same request) and the user-visible difference (404 vs login) is minor. If it ever matters, split the `Promise.all`.
+- **L1 — Empty-chapters case untested**: `[id]/page.tsx:211` renders "No chapters assigned yet" but no test exercises it. → Noted; not blocking.
+- **L2 — Scope-filter dropdown dropped vs admin-books-page.** Plan 089 Phase 1 explicitly deferred this (no admin-specific scope filter in MVP). Acceptable. → Noted as follow-up.
+- **L3 — Student-only user can hit `/library`** and sees empty list. Confusing UX but not a security issue. → Noted; future plan can role-gate `/library` if needed.
+
+### Round 2 — pending Codex re-dispatch against the BLOCKER fixes.
+
 ## Post-Execution Report
 
 ### Commits on the branch (in order)

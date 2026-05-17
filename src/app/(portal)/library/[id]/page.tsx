@@ -60,12 +60,16 @@ function scopeBadgeClass(scope: string) {
 }
 
 // Resolve the chapter detail base path based on the user's highest-priority
-// role. Admin → /admin/chapters; teacher/org_admin → /teacher/chapters;
-// others → null (chapters rendered as plain text, not links).
+// role. admin → /admin/chapters; teacher → /teacher/chapters; org_admin (no
+// teacher) → /org/chapters; others → null (chapters rendered as plain text).
+// org_admin must NOT route to /teacher/chapters — the teacher portal layout
+// gates on portalRole="teacher" and would bounce an org_admin without that
+// role. Each of /admin, /teacher, /org has its own chapter detail page; pick
+// the highest-privilege option the caller actually qualifies for.
 function chapterBasePath(roles: UserRole[]): string | null {
   if (roles.some((r) => r.role === "admin")) return "/admin/chapters";
-  if (roles.some((r) => r.role === "teacher" || r.role === "org_admin"))
-    return "/teacher/chapters";
+  if (roles.some((r) => r.role === "teacher")) return "/teacher/chapters";
+  if (roles.some((r) => r.role === "org_admin")) return "/org/chapters";
   return null;
 }
 

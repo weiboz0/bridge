@@ -155,6 +155,7 @@ export function Sidebar({ userName, roles, currentRole: _currentRole }: SidebarP
 // or null when no section matches (e.g., user is on an org_admin page
 // without an orgId in the URL).
 function computeActiveKey(pathname: string, urlOrgId: string | null, roles: UserRole[]): string | null {
+  // First pass — match by role basePath (the original plan-067 rule).
   for (const role of roles) {
     const config = getPortalConfig(role.role);
     if (!config) continue;
@@ -179,5 +180,25 @@ function computeActiveKey(pathname: string, urlOrgId: string | null, roles: User
       return sectionKey(role.role, role.orgId);
     }
   }
+
+  // Plan 089 second pass — role-neutral pages like /library don't live
+  // under any role's basePath, so the first pass returns null and (for
+  // multi-role users) every section stays collapsed. The Library link
+  // lives in the deduped first section whose nav-config contains a
+  // matching href — auto-expand that section so the link is reachable.
+  // Walk roles in the same order as the dedupe pass so "first section
+  // to claim the href" matches what the sidebar actually renders.
+  for (const role of roles) {
+    const config = getPortalConfig(role.role);
+    if (!config) continue;
+    for (const item of config.navItems) {
+      const itemPath = item.href.split("?")[0];
+      const matches = pathname === itemPath || pathname.startsWith(itemPath + "/");
+      if (matches) {
+        return sectionKey(role.role, role.orgId);
+      }
+    }
+  }
+
   return null;
 }
