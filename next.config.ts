@@ -87,6 +87,15 @@ const nextConfig: NextConfig = {
       { source: "/admin/units/:path*",   destination: "/admin/chapters/:path*",   permanent: true },
       { source: "/org/units/:path*",     destination: "/org/chapters/:path*",     permanent: true },
       { source: "/student/units/:path*", destination: "/student/chapters/:path*", permanent: true },
+      // Plan 089 phase 2 — redirect old per-role book paths to the consolidated
+      // /library page. Only book paths are redirected; legacy flat-chapter paths
+      // (/admin/chapters, /teacher/chapters, /org/chapters) are NOT redirected
+      // per Decision #8 — they remain reachable by URL but are no longer linked
+      // from nav.
+      { source: "/admin/books",          destination: "/library",                 permanent: true },
+      { source: "/admin/books/:id",      destination: "/library/:id",             permanent: true },
+      { source: "/teacher/books",        destination: "/library",                 permanent: true },
+      { source: "/teacher/books/:id",    destination: "/library/:id",             permanent: true },
     ]
   },
   async rewrites() {

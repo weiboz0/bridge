@@ -486,6 +486,8 @@ Returns `204` on success. `404` if not found. `403` if not authorized.
 
 Plan 088 renamed `teaching_units` → `chapters` across the stack. All `/api/units/*` paths are removed; `/api/chapters/*` is the canonical path. Frontend bookmarks under `/teacher/units/*`, `/admin/units/*`, etc. are redirected via Next.js 308 to the new `/chapters/*` paths.
 
+Plan 089 consolidated the per-role book pages (`/admin/books`, `/teacher/books`) into a single role-aware `/library` route + `/library/[id]` detail. The backend `/api/books` and `/api/books/:id` endpoints are unchanged; the consolidation is frontend-only. Old book paths redirect via Next.js 308.
+
 ### Chapter list filter additions (plan 088)
 
 `GET /api/chapters?scope=&scopeId=&bookId=` and `GET /api/chapters/search?...&bookId=` both accept a new `bookId` query parameter:

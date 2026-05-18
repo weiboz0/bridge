@@ -6,23 +6,29 @@ import { Button } from "@/components/ui/button";
 import { BookEditDialog } from "@/components/books/book-edit-dialog";
 
 interface Props {
-  availableOrgs: { id: string; name: string }[];
+  book: {
+    id: string;
+    title: string;
+    description: string;
+    scope: "platform" | "org";
+    scopeId: string | null;
+  };
 }
 
-export function TeacherBookCreateTrigger({ availableOrgs }: Props) {
+export function LibraryBookEditTrigger({ book }: Props) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
 
   return (
     <>
       <Button size="sm" onClick={() => setOpen(true)}>
-        + New book
+        Edit book
       </Button>
       <BookEditDialog
+        book={book}
         open={open}
         onClose={() => setOpen(false)}
         onSaved={() => router.refresh()}
-        availableOrgs={availableOrgs}
       />
     </>
   );

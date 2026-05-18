@@ -23,6 +23,12 @@ interface SidebarSectionProps {
 // common case). When the sidebar itself is icon-collapsed, the
 // section renders as a vertical icon strip with hover tooltips —
 // the role label moves into the tooltip.
+//
+// Plan 089 phase 2 — empty-after-dedupe handling: if `navItems` is
+// empty after the sidebar's href-dedupe pass, single-role mode renders
+// nothing (shouldn't occur — each role has ≥1 non-Library entry).
+// Multi-role mode still renders the section header so the role is
+// visible in the sidebar, but suppresses the empty `<nav>` list.
 
 export function SidebarSection({
   role,
@@ -50,6 +56,10 @@ export function SidebarSection({
   // directly. Multi-role users get a collapsible group with the role
   // label as the header.
   if (!multiRole) {
+    // Post-dedupe: if zero items remain (shouldn't happen for single-role
+    // since each role has ≥1 non-Library entry, but be defensive), render
+    // nothing so the sidebar stays clean.
+    if (itemsWithOrgContext.length === 0) return null;
     return <SectionItems items={itemsWithOrgContext} collapsed={collapsed} pathname={pathname} />;
   }
 
@@ -61,6 +71,8 @@ export function SidebarSection({
   if (collapsed) {
     // Icon-only: render the items as a vertical strip with tooltips.
     // Skip the header — there's no room for chevron + label.
+    // If no items remain after dedupe, render nothing (no empty divs).
+    if (itemsWithOrgContext.length === 0) return null;
     return (
       <div className="border-b border-border/30 py-1" title={headerLabel}>
         <SectionItems items={itemsWithOrgContext} collapsed={true} pathname={pathname} />
@@ -79,7 +91,11 @@ export function SidebarSection({
         <span className="truncate">{headerLabel}</span>
         <span className="text-[10px] opacity-60">{expanded ? "▾" : "▸"}</span>
       </button>
-      {expanded && <SectionItems items={itemsWithOrgContext} collapsed={false} pathname={pathname} />}
+      {/* Render the nav list only when items exist — empty-after-dedupe
+          sections still show their header for multi-role context. */}
+      {expanded && itemsWithOrgContext.length > 0 && (
+        <SectionItems items={itemsWithOrgContext} collapsed={false} pathname={pathname} />
+      )}
     </div>
   );
 }
