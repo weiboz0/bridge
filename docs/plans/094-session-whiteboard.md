@@ -106,7 +106,19 @@ Because a canvas's stored visibility is always kept `≥ floor`, "floor = `host`
 
 ## Plan Review
 
-_Pending — Tier A, 4-way (self Opus 5 + Codex + independent Opus + GLM). Reviewers MUST confirm the named integration-tests phase (present) and scrutinize the realtime-auth mint + read-only enforcement._
+### Round 1 — 4-way (2026-08-06). **Codex + independent Opus + GLM all CHANGES REQUESTED.** Autopilot halted for user decisions.
+
+Convergent blockers (found by ≥2 reviewers):
+
+1. `[BLOCKER]` `[codex][opus]` **No read-only mechanism exists.** `RealtimeClaims` (`auth/realtime_jwt.go` + `server/realtime-jwt.ts`) carries only `sub`/`role`/`scope` — no `readOnly`. `hocuspocus.ts` hardcodes `ctx.readOnly=false` and Hocuspocus enforces writes via `connectionConfig.readOnly`, not a context field. The viewer boundary the whole plan rests on isn't there. Fix needs a new `readOnly` claim in **both** JWT files (out of scope) + setting `connectionConfig.readOnly`. → **needs scope widening (user).**
+2. `[BLOCKER]` `[codex][opus]` **Create races the floor bump.** `visibility ≥ floor` is application-only (no cross-table CHECK in PG). A create reading floor=`private` can insert after a floor-raise commits, landing below floor. → mechanical fix: `SELECT … FOR UPDATE` on the session row in create + set-floor, or `GREATEST(requested, floor)` under lock.
+3. `[BLOCKER]` `[opus]` **"Outlives the session" contradicts the auth model.** Every membership path returns `ended → no_access` for *everyone incl. the owner*, so a persisted canvas becomes inaccessible the moment the session ends. → **needs a product decision (user):** who can open a canvas after the session ends?
+4. `[BLOCKER/CONCERN]` `[codex]` **Stale read token after tightening.** Auth is checked at connect + `onLoadDocument`, tokens live ~25 min; a viewer connected before a canvas is tightened keeps getting updates. → **needs a decision (user):** forbid tightening (the strict "loosen-only" reading — reverses Decision 7) vs. accept ≤25-min staleness vs. add eviction.
+5. `[CONCERN]` `[codex][opus][glm]` **"session member" must reuse the plan-090 guard** (`CanAccessSession` / participant check), not a fresh query — a hand-rolled membership check is exactly how 090's cross-org leak would reappear. → mechanical: mandate reuse.
+
+Other findings (mechanical, will fold on revise): file-scope also needs `main.go` (handler + store wiring); use **native pgEnum ordering** (`visibility < 'host'` works by declaration order — my "enums aren't ordered" note was wrong, per Opus N1); migration needs `NOT NULL DEFAULT 'private'` + backfill; split Phase 1 and give read-only *enforcement* first-class treatment (Phase 2 under-specified); add tests for host-denied-private, member-denied-host, cross-session, canvas/path mismatch, concurrent create-vs-raise, stale-token; decide owner-leaves-session; add a per-session canvas cap; add a canvas DELETE/lifecycle endpoint.
+
+**Verdict: CHANGES REQUESTED ×3. Not cleared. Revision pending user decisions on blockers 3, 4, and the scope-widening for blocker 1.**
 
 ## Code Review
 
