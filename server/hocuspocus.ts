@@ -192,7 +192,10 @@ export async function storeCanvasYjsState(canvasId: string, yjsState: string): P
   return rows.length === 1;
 }
 
-const server = new Server({
+// Exporting the configuration makes the installed callbacks independently
+// executable in a no-listen test process. The production Server receives this
+// exact object below; it is not a parallel test-only implementation.
+export const hocuspocusHooks = {
   port: HOCUSPOCUS_PORT,
   debounce: 30000, // Save to DB every 30 seconds (also saves on disconnect)
 
@@ -335,7 +338,9 @@ const server = new Server({
   async onDisconnect({ documentName }: { documentName: string }) {
     console.log(`[hocuspocus] Client disconnected from: ${documentName}`);
   },
-});
+};
+
+const server = new Server(hocuspocusHooks);
 
 if (import.meta.main) {
   server.listen().then(() => {
