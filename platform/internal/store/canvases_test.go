@@ -2,18 +2,67 @@ package store
 
 import (
 	"context"
-	"errors"
+	"database/sql"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
+const defaultCanvasTestDatabaseURL = "postgresql://work@127.0.0.1:5432/bridge_test"
+
+func canvasTestDatabaseURL(candidate string) (string, error) {
+	if candidate == "" {
+		candidate = defaultCanvasTestDatabaseURL
+	}
+	parsed, err := url.Parse(candidate)
+	if err != nil {
+		return "", fmt.Errorf("parse canvas test database URL: %w", err)
+	}
+	if parsed.Scheme != "postgres" && parsed.Scheme != "postgresql" {
+		return "", fmt.Errorf("canvas test database URL must use postgres: %q", parsed.Scheme)
+	}
+	database, err := url.PathUnescape(strings.TrimPrefix(parsed.EscapedPath(), "/"))
+	if err != nil {
+		return "", fmt.Errorf("decode canvas test database name: %w", err)
+	}
+	if database == "" || (!strings.HasSuffix(database, "_test") && database != "bridge_test") {
+		return "", fmt.Errorf("refusing non-test canvas database %q", database)
+	}
+	return candidate, nil
+}
+
+func canvasTestDB(t *testing.T) *sql.DB {
+	t.Helper()
+	databaseURL, err := canvasTestDatabaseURL(os.Getenv("TEST_DATABASE_URL"))
+	require.NoError(t, err)
+	db, err := sql.Open("pgx", databaseURL)
+	require.NoError(t, err)
+	require.NoError(t, db.PingContext(context.Background()))
+	t.Cleanup(func() { _ = db.Close() })
+	return db
+}
+
+func TestCanvasTestDatabaseURLRejectsUnsafeDatabase(t *testing.T) {
+	_, err := canvasTestDatabaseURL("postgresql://work@127.0.0.1:5432/bridge")
+	assert.Error(t, err)
+
+	url, err := canvasTestDatabaseURL("postgresql://work@127.0.0.1:5432/bridge_test")
+	require.NoError(t, err)
+	assert.Equal(t, "postgresql://work@127.0.0.1:5432/bridge_test", url)
+
+	url, err = canvasTestDatabaseURL("")
+	require.NoError(t, err)
+	assert.Equal(t, defaultCanvasTestDatabaseURL, url)
+}
+
 func TestCanvasStore_DefaultFloor(t *testing.T) {
-	db := testDB(t)
+	db := canvasTestDB(t)
 	ctx := context.Background()
 	canvases := NewCanvasStore(db)
 	sessions := NewSessionStore(db)
@@ -41,16 +90,60 @@ func TestCanvasStore_DefaultFloor(t *testing.T) {
 }
 
 func TestCanvasStore_MigrationBackfillsCanvasFloor(t *testing.T) {
+	db := canvasTestDB(t)
+	ctx := context.Background()
+	conn, err := db.Conn(ctx)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+
+	// A connection-local pg_temp schema is unique to this dedicated connection,
+	// requires no database-level CREATE privilege, and is dropped on Close.
+	_, err = conn.ExecContext(ctx, `CREATE TEMP TABLE users (id uuid PRIMARY KEY)`)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(ctx, `
+		CREATE TEMP TABLE sessions (
+			id uuid PRIMARY KEY,
+			teacher_id uuid NOT NULL REFERENCES users(id)
+		)`)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(ctx, `SET search_path TO pg_temp`)
+	require.NoError(t, err)
+	userID := uuid.NewString()
+	sessionID := uuid.NewString()
+	_, err = conn.ExecContext(ctx, `INSERT INTO users (id) VALUES ($1)`, userID)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(ctx, `INSERT INTO sessions (id, teacher_id) VALUES ($1, $2)`, sessionID, userID)
+	require.NoError(t, err)
+
 	migration, err := os.ReadFile("../../../drizzle/0028_session_canvases.sql")
 	require.NoError(t, err)
-	sql := string(migration)
-	assert.True(t, strings.Contains(sql, "UPDATE sessions\nSET canvas_floor = 'private'\nWHERE canvas_floor IS NULL"))
-	assert.True(t, strings.Contains(sql, "ALTER COLUMN canvas_floor SET DEFAULT 'private'"))
-	assert.True(t, strings.Contains(sql, "ALTER COLUMN canvas_floor SET NOT NULL"))
+	_, err = conn.ExecContext(ctx, string(migration))
+	require.NoError(t, err)
+
+	var floor, defaultValue, enumOrder string
+	var nullable bool
+	require.NoError(t, conn.QueryRowContext(ctx,
+		`SELECT canvas_floor FROM sessions WHERE id = $1`, sessionID,
+	).Scan(&floor))
+	require.NoError(t, conn.QueryRowContext(ctx, `
+		SELECT column_default, is_nullable = 'YES'
+		FROM information_schema.columns
+		WHERE table_schema = current_schema() AND table_name = 'sessions' AND column_name = 'canvas_floor'`,
+	).Scan(&defaultValue, &nullable))
+	require.NoError(t, conn.QueryRowContext(ctx, `
+		SELECT string_agg(e.enumlabel, ',' ORDER BY e.enumsortorder)
+		FROM pg_enum e
+		JOIN pg_type t ON t.oid = e.enumtypid
+		WHERE t.typname = 'canvas_visibility' AND t.typnamespace = current_schema()::regnamespace`,
+	).Scan(&enumOrder))
+	assert.Equal(t, "private", floor)
+	assert.Contains(t, defaultValue, "private")
+	assert.False(t, nullable)
+	assert.Equal(t, "private,host,participants,session", enumOrder)
 }
 
 func TestCanvasStore_CreateGreatestWithSessionFloor(t *testing.T) {
-	db := testDB(t)
+	db := canvasTestDB(t)
 	ctx := context.Background()
 	canvases := NewCanvasStore(db)
 	sessions := NewSessionStore(db)
@@ -68,7 +161,7 @@ func TestCanvasStore_CreateGreatestWithSessionFloor(t *testing.T) {
 }
 
 func TestCanvasStore_GetCanvasScopesToSession(t *testing.T) {
-	db := testDB(t)
+	db := canvasTestDB(t)
 	ctx := context.Background()
 	canvases := NewCanvasStore(db)
 	sessions := NewSessionStore(db)
@@ -91,7 +184,7 @@ func TestCanvasStore_GetCanvasScopesToSession(t *testing.T) {
 }
 
 func TestCanvasStore_SetVisibility_RejectsTightenAndBelowFloor(t *testing.T) {
-	db := testDB(t)
+	db := canvasTestDB(t)
 	ctx := context.Background()
 	canvases := NewCanvasStore(db)
 	sessions := NewSessionStore(db)
@@ -126,7 +219,7 @@ func TestCanvasStore_SetFloor_RejectsSession(t *testing.T) {
 }
 
 func TestCanvasStore_RaiseFloor_BumpsCanvases(t *testing.T) {
-	db := testDB(t)
+	db := canvasTestDB(t)
 	ctx := context.Background()
 	canvases := NewCanvasStore(db)
 	sessions := NewSessionStore(db)
@@ -151,8 +244,32 @@ func TestCanvasStore_RaiseFloor_BumpsCanvases(t *testing.T) {
 	assert.ErrorIs(t, err, ErrCanvasFloorTooLoose)
 }
 
+func TestCanvasStore_LowerFloorLeavesExistingCanvasesUnchanged(t *testing.T) {
+	db := canvasTestDB(t)
+	ctx := context.Background()
+	canvases := NewCanvasStore(db)
+	sessions := NewSessionStore(db)
+	_, teacherID := setupSessionTest(t, db, t.Name())
+	session, err := sessions.CreateSession(ctx, CreateSessionInput{TeacherID: teacherID, Title: "Canvas floor lower"})
+	require.NoError(t, err)
+	t.Cleanup(func() { _, _ = db.ExecContext(ctx, "DELETE FROM sessions WHERE id = $1", session.ID) })
+	canvas, err := canvases.CreateCanvas(ctx, CreateCanvasInput{SessionID: session.ID, OwnerID: teacherID, Title: "Board", Visibility: "private"})
+	require.NoError(t, err)
+
+	_, err = canvases.SetSessionCanvasFloor(ctx, session.ID, teacherID, "participants")
+	require.NoError(t, err)
+	floor, err := canvases.SetSessionCanvasFloor(ctx, session.ID, teacherID, "private")
+	require.NoError(t, err)
+	assert.Equal(t, "private", floor)
+
+	updated, err := canvases.GetCanvas(ctx, session.ID, canvas.ID)
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	assert.Equal(t, "participants", updated.Visibility)
+}
+
 func TestCanvasStore_ListVisible_ByRole(t *testing.T) {
-	db := testDB(t)
+	db := canvasTestDB(t)
 	ctx := context.Background()
 	canvases := NewCanvasStore(db)
 	sessions := NewSessionStore(db)
@@ -199,7 +316,7 @@ func TestCanvasStore_ListVisible_ByRole(t *testing.T) {
 }
 
 func TestCanvasStore_DeleteCanvasRemovesPersistedDocument(t *testing.T) {
-	db := testDB(t)
+	db := canvasTestDB(t)
 	ctx := context.Background()
 	canvases := NewCanvasStore(db)
 	sessions := NewSessionStore(db)
@@ -223,30 +340,48 @@ func TestCanvasStore_DeleteCanvasRemovesPersistedDocument(t *testing.T) {
 }
 
 func TestCanvasStore_ConcurrentCreateVsRaiseFloor_NoneBelowFloor(t *testing.T) {
-	db := testDB(t)
+	db := canvasTestDB(t)
 	ctx := context.Background()
-	canvases := NewCanvasStore(db)
 	sessions := NewSessionStore(db)
-	_, teacherID := setupSessionTest(t, db, t.Name())
+	_, teacherID := setupSessionTest(t, db, t.Name()+"-"+uuid.NewString())
 	session, err := sessions.CreateSession(ctx, CreateSessionInput{TeacherID: teacherID, Title: "Create race"})
 	require.NoError(t, err)
 	t.Cleanup(func() { _, _ = db.ExecContext(ctx, "DELETE FROM sessions WHERE id = $1", session.ID) })
 
-	start := make(chan struct{})
+	createStore := NewCanvasStore(db)
+	floorStore := NewCanvasStore(db)
+	createRead := make(chan struct{})
+	releaseCreate := make(chan struct{})
+	floorRead := make(chan struct{})
+	createStore.testHooks = &canvasStoreTestHooks{afterSessionLock: func(operation canvasStoreOperation) {
+		if operation == canvasStoreOperationCreate {
+			close(createRead)
+			<-releaseCreate
+		}
+	}}
+	floorStore.testHooks = &canvasStoreTestHooks{afterSessionLock: func(operation canvasStoreOperation) {
+		if operation == canvasStoreOperationSetFloor {
+			close(floorRead)
+		}
+	}}
+
 	errs := make(chan error, 2)
 	go func() {
-		<-start
-		_, err := canvases.CreateCanvas(ctx, CreateCanvasInput{SessionID: session.ID, OwnerID: teacherID, Title: "Race board", Visibility: "private"})
+		_, err := createStore.CreateCanvas(ctx, CreateCanvasInput{SessionID: session.ID, OwnerID: teacherID, Title: "Race board", Visibility: "private"})
 		errs <- err
 	}()
+	<-createRead
 	go func() {
-		<-start
-		_, err := canvases.SetSessionCanvasFloor(ctx, session.ID, teacherID, "participants")
+		_, err := floorStore.SetSessionCanvasFloor(ctx, session.ID, teacherID, "participants")
 		errs <- err
 	}()
-	close(start)
+	// The create transaction has already read its floor. Releasing it now lets
+	// the floor transaction obtain the same lock only after create commits.
+	// Without the session-row lock, floor could commit before this stale create.
+	close(releaseCreate)
 	require.NoError(t, <-errs)
 	require.NoError(t, <-errs)
+	<-floorRead
 
 	var belowFloor int
 	require.NoError(t, db.QueryRowContext(ctx, `
@@ -258,37 +393,48 @@ func TestCanvasStore_ConcurrentCreateVsRaiseFloor_NoneBelowFloor(t *testing.T) {
 }
 
 func TestCanvasStore_ConcurrentSetVisibilityVsRaiseFloor_NoneBelowFloor(t *testing.T) {
-	db := testDB(t)
+	db := canvasTestDB(t)
 	ctx := context.Background()
 	canvases := NewCanvasStore(db)
 	sessions := NewSessionStore(db)
-	_, teacherID := setupSessionTest(t, db, t.Name())
+	_, teacherID := setupSessionTest(t, db, t.Name()+"-"+uuid.NewString())
 	session, err := sessions.CreateSession(ctx, CreateSessionInput{TeacherID: teacherID, Title: "Visibility race"})
 	require.NoError(t, err)
 	t.Cleanup(func() { _, _ = db.ExecContext(ctx, "DELETE FROM sessions WHERE id = $1", session.ID) })
 	canvas, err := canvases.CreateCanvas(ctx, CreateCanvasInput{SessionID: session.ID, OwnerID: teacherID, Title: "Race board", Visibility: "private"})
 	require.NoError(t, err)
 
-	start := make(chan struct{})
+	visibilityStore := NewCanvasStore(db)
+	floorStore := NewCanvasStore(db)
+	visibilityRead := make(chan struct{})
+	releaseVisibility := make(chan struct{})
+	floorRead := make(chan struct{})
+	visibilityStore.testHooks = &canvasStoreTestHooks{afterSessionLock: func(operation canvasStoreOperation) {
+		if operation == canvasStoreOperationSetVisibility {
+			close(visibilityRead)
+			<-releaseVisibility
+		}
+	}}
+	floorStore.testHooks = &canvasStoreTestHooks{afterSessionLock: func(operation canvasStoreOperation) {
+		if operation == canvasStoreOperationSetFloor {
+			close(floorRead)
+		}
+	}}
+
 	errs := make(chan error, 2)
 	go func() {
-		<-start
-		_, err := canvases.SetCanvasVisibility(ctx, session.ID, canvas.ID, teacherID, "host")
+		_, err := visibilityStore.SetCanvasVisibility(ctx, session.ID, canvas.ID, teacherID, "host")
 		errs <- err
 	}()
+	<-visibilityRead
 	go func() {
-		<-start
-		_, err := canvases.SetSessionCanvasFloor(ctx, session.ID, teacherID, "participants")
+		_, err := floorStore.SetSessionCanvasFloor(ctx, session.ID, teacherID, "participants")
 		errs <- err
 	}()
-	close(start)
-	for range 2 {
-		err := <-errs
-		require.True(t,
-			err == nil || errors.Is(err, ErrCanvasBelowFloor) || errors.Is(err, ErrCanvasVisibilityTighten),
-			"unexpected concurrent error: %v", err,
-		)
-	}
+	close(releaseVisibility)
+	require.NoError(t, <-errs)
+	require.NoError(t, <-errs)
+	<-floorRead
 
 	var belowFloor int
 	require.NoError(t, db.QueryRowContext(ctx, `
@@ -300,7 +446,7 @@ func TestCanvasStore_ConcurrentSetVisibilityVsRaiseFloor_NoneBelowFloor(t *testi
 }
 
 func TestCanvasStore_PerSessionCap(t *testing.T) {
-	db := testDB(t)
+	db := canvasTestDB(t)
 	ctx := context.Background()
 	canvases := NewCanvasStore(db)
 	sessions := NewSessionStore(db)
@@ -318,7 +464,7 @@ func TestCanvasStore_PerSessionCap(t *testing.T) {
 }
 
 func TestCanvasStore_EnumOrdinalOrder(t *testing.T) {
-	db := testDB(t)
+	db := canvasTestDB(t)
 	ctx := context.Background()
 	var ordered bool
 	require.NoError(t, db.QueryRowContext(ctx, `
@@ -334,7 +480,7 @@ func TestCanvasStore_EnumOrdinalOrder(t *testing.T) {
 }
 
 func TestCanvases_ListEndedArchive_ByRole(t *testing.T) {
-	db := testDB(t)
+	db := canvasTestDB(t)
 	ctx := context.Background()
 	canvases := NewCanvasStore(db)
 	sessions := NewSessionStore(db)
@@ -388,16 +534,21 @@ func TestCanvases_ListEndedArchive_ByRole(t *testing.T) {
 }
 
 func TestCanvases_CrossOrgIsolation(t *testing.T) {
-	db := testDB(t)
+	db := canvasTestDB(t)
 	ctx := context.Background()
 	canvases := NewCanvasStore(db)
 	sessions := NewSessionStore(db)
-	_, teacherID := setupSessionTest(t, db, t.Name()+"-owner")
+	classID, teacherID := setupSessionTest(t, db, t.Name()+"-owner")
 	_, otherTeacherID := setupSessionTest(t, db, t.Name()+"-other")
-	session, err := sessions.CreateSession(ctx, CreateSessionInput{TeacherID: teacherID, Title: "Tenant canvas"})
+	session, err := sessions.CreateSession(ctx, CreateSessionInput{
+		ClassID:    strPtr(classID),
+		TeacherID:  teacherID,
+		Title:      "Tenant canvas",
+		Visibility: "public",
+	})
 	require.NoError(t, err)
 	t.Cleanup(func() { _, _ = db.ExecContext(ctx, "DELETE FROM sessions WHERE id = $1", session.ID) })
-	_, err = canvases.CreateCanvas(ctx, CreateCanvasInput{SessionID: session.ID, OwnerID: teacherID, Title: "Private board", Visibility: "private"})
+	_, err = canvases.CreateCanvas(ctx, CreateCanvasInput{SessionID: session.ID, OwnerID: teacherID, Title: "Session board", Visibility: "session"})
 	require.NoError(t, err)
 
 	visible, err := canvases.ListVisibleCanvases(ctx, session.ID, otherTeacherID)

@@ -40,12 +40,33 @@ type CreateCanvasInput struct {
 }
 
 type CanvasStore struct {
-	db       *sql.DB
-	sessions *SessionStore
+	db        *sql.DB
+	sessions  *SessionStore
+	testHooks *canvasStoreTestHooks
+}
+
+type canvasStoreOperation string
+
+const (
+	canvasStoreOperationCreate        canvasStoreOperation = "create"
+	canvasStoreOperationSetVisibility canvasStoreOperation = "set_visibility"
+	canvasStoreOperationSetFloor      canvasStoreOperation = "set_floor"
+)
+
+// canvasStoreTestHooks is nil in production. It lets the store tests hold an
+// operation immediately after its session-row lock has supplied current state.
+type canvasStoreTestHooks struct {
+	afterSessionLock func(canvasStoreOperation)
 }
 
 func NewCanvasStore(db *sql.DB) *CanvasStore {
 	return &CanvasStore{db: db, sessions: NewSessionStore(db)}
+}
+
+func (s *CanvasStore) afterSessionLock(operation canvasStoreOperation) {
+	if s.testHooks != nil && s.testHooks.afterSessionLock != nil {
+		s.testHooks.afterSessionLock(operation)
+	}
 }
 
 const canvasColumns = `id, session_id, owner_id, title, visibility, created_at, updated_at`
@@ -94,6 +115,7 @@ func (s *CanvasStore) CreateCanvas(ctx context.Context, input CreateCanvasInput)
 	} else if err != nil {
 		return nil, err
 	}
+	s.afterSessionLock(canvasStoreOperationCreate)
 
 	var count int
 	if err := tx.QueryRowContext(ctx,
@@ -149,6 +171,7 @@ func (s *CanvasStore) SetCanvasVisibility(ctx context.Context, sessionID, canvas
 	} else if err != nil {
 		return nil, err
 	}
+	s.afterSessionLock(canvasStoreOperationSetVisibility)
 
 	var current string
 	if err := tx.QueryRowContext(ctx,
@@ -215,6 +238,7 @@ func (s *CanvasStore) SetSessionCanvasFloor(ctx context.Context, sessionID, host
 	} else if err != nil {
 		return "", err
 	}
+	s.afterSessionLock(canvasStoreOperationSetFloor)
 	if teacherID != hostID {
 		return "", ErrCanvasFloorUnauthorized
 	}
