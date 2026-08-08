@@ -723,3 +723,29 @@ func TestCanvases_CrossOrgIsolation(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, visible)
 }
+
+func TestCanvasStore_MutationsRejectEndedSession(t *testing.T) {
+	db := canvasTestDB(t)
+	ctx := context.Background()
+	canvases := NewCanvasStore(db)
+	sessions := NewSessionStore(db)
+	_, teacherID := setupSessionTest(t, db, t.Name())
+	session, err := sessions.CreateSession(ctx, CreateSessionInput{TeacherID: teacherID, Title: "Archive"})
+	require.NoError(t, err)
+	t.Cleanup(func() { _, _ = db.ExecContext(ctx, "DELETE FROM sessions WHERE id = $1", session.ID) })
+	canvas, err := canvases.CreateCanvas(ctx, CreateCanvasInput{SessionID: session.ID, OwnerID: teacherID, Title: "Board", Visibility: "private"})
+	require.NoError(t, err)
+	_, err = sessions.EndSession(ctx, session.ID)
+	require.NoError(t, err)
+
+	_, err = canvases.CreateCanvas(ctx, CreateCanvasInput{SessionID: session.ID, OwnerID: teacherID, Title: "Late board", Visibility: "private"})
+	assert.ErrorIs(t, err, ErrSessionEnded)
+	_, err = canvases.UpdateCanvas(ctx, session.ID, canvas.ID, teacherID, strPtr("Late title"), nil)
+	assert.ErrorIs(t, err, ErrSessionEnded)
+	_, err = canvases.SetCanvasVisibility(ctx, session.ID, canvas.ID, teacherID, "host")
+	assert.ErrorIs(t, err, ErrSessionEnded)
+	_, err = canvases.SetSessionCanvasFloor(ctx, session.ID, teacherID, "host")
+	assert.ErrorIs(t, err, ErrSessionEnded)
+	_, err = canvases.DeleteCanvas(ctx, session.ID, canvas.ID, teacherID)
+	assert.ErrorIs(t, err, ErrSessionEnded)
+}

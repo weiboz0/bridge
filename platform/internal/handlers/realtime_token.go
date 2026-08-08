@@ -37,6 +37,7 @@ type RealtimeHandler struct {
 	Attempts    *store.AttemptStore
 	Users       *store.UserStore
 	ParentLinks *store.ParentLinkStore // Plan 053b Phase 4 — parent-of-doc-owner gate.
+	Canvases    *store.CanvasStore
 	// HocuspocusTokenSecret is the HMAC key shared between the Go API
 	// and the Hocuspocus Node process. Empty = realtime endpoints
 	// return 503 (server misconfigured).
@@ -178,14 +179,14 @@ func (h *RealtimeHandler) MintToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	role, decision := h.authorizeDocument(r.Context(), claims, body.DocumentName)
+	access, decision := h.authorizeDocumentResult(r.Context(), claims, body.DocumentName)
 	if decision != nil {
 		writeError(w, decision.Status, decision.Message)
 		return
 	}
 
 	const ttl = 25 * time.Minute
-	token, err := auth.SignRealtimeToken(h.HocuspocusTokenSecret, claims.UserID, role, body.DocumentName, ttl)
+	token, err := auth.SignRealtimeTokenWithReadOnly(h.HocuspocusTokenSecret, claims.UserID, access.Role, body.DocumentName, access.ReadOnly, ttl)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Token sign failed")
 		return
@@ -205,8 +206,9 @@ type internalAuthRequest struct {
 // internalAuthResponse tells Hocuspocus whether to allow the
 // document load.
 type internalAuthResponse struct {
-	Allowed bool   `json:"allowed"`
-	Reason  string `json:"reason,omitempty"`
+	Allowed  bool   `json:"allowed"`
+	Reason   string `json:"reason,omitempty"`
+	ReadOnly bool   `json:"readOnly"`
 }
 
 // InternalAuth handles POST /api/internal/realtime/auth.
@@ -272,7 +274,7 @@ func (h *RealtimeHandler) InternalAuth(w http.ResponseWriter, r *http.Request) {
 		// is a session-level superpower; the internal recheck enforces
 		// the underlying user's actual permissions.
 	}
-	_, decision := h.authorizeDocument(r.Context(), rehydratedClaims, body.DocumentName)
+	access, decision := h.authorizeDocumentResult(r.Context(), rehydratedClaims, body.DocumentName)
 	if decision != nil {
 		// Only forbid-decisions become {allowed: false}. Anything
 		// else (400 malformed doc-name, 404 missing session/unit/
@@ -286,13 +288,82 @@ func (h *RealtimeHandler) InternalAuth(w http.ResponseWriter, r *http.Request) {
 		writeError(w, decision.Status, decision.Message)
 		return
 	}
-	writeJSON(w, http.StatusOK, internalAuthResponse{Allowed: true})
+	writeJSON(w, http.StatusOK, internalAuthResponse{Allowed: true, ReadOnly: access.ReadOnly})
 }
 
 // authDecision carries a non-200 result for either endpoint.
 type authDecision struct {
 	Status  int
 	Message string
+}
+
+type documentAuthorization struct {
+	Role     string
+	ReadOnly bool
+}
+
+// authorizeDocumentResult preserves all existing document decisions while
+// carrying the current connection write decision for canvas documents.
+func (h *RealtimeHandler) authorizeDocumentResult(ctx context.Context, claims *auth.Claims, docName string) (documentAuthorization, *authDecision) {
+	parts := strings.Split(docName, ":")
+	if len(parts) == 2 && parts[0] == "canvas" {
+		return h.authorizeCanvasDoc(ctx, claims, parts[1])
+	}
+	role, decision := h.authorizeDocument(ctx, claims, docName)
+	if decision != nil {
+		return documentAuthorization{}, decision
+	}
+	return documentAuthorization{Role: role}, nil
+}
+
+func (h *RealtimeHandler) authorizeCanvasDoc(ctx context.Context, claims *auth.Claims, canvasID string) (documentAuthorization, *authDecision) {
+	if h.Canvases == nil || h.Sessions == nil {
+		return documentAuthorization{}, &authDecision{Status: http.StatusInternalServerError, Message: "Canvas store unavailable"}
+	}
+	canvas, err := h.Canvases.GetCanvasByID(ctx, canvasID)
+	if err != nil {
+		return documentAuthorization{}, &authDecision{Status: http.StatusInternalServerError, Message: "Database error"}
+	}
+	if canvas == nil {
+		return documentAuthorization{}, &authDecision{Status: http.StatusNotFound, Message: "Canvas not found"}
+	}
+	session, err := h.Sessions.GetSession(ctx, canvas.SessionID)
+	if err != nil {
+		return documentAuthorization{}, &authDecision{Status: http.StatusInternalServerError, Message: "Database error"}
+	}
+	if session == nil {
+		return documentAuthorization{}, &authDecision{Status: http.StatusNotFound, Message: "Session not found"}
+	}
+	if canvas.OwnerID == claims.UserID {
+		return documentAuthorization{Role: "user", ReadOnly: session.Status == "ended"}, nil
+	}
+	participant, err := h.Sessions.GetSessionParticipant(ctx, session.ID, claims.UserID)
+	if err != nil {
+		return documentAuthorization{}, &authDecision{Status: http.StatusInternalServerError, Message: "Database error"}
+	}
+	if session.Status == "ended" {
+		if session.TeacherID == claims.UserID && canvas.Visibility != "private" {
+			return documentAuthorization{Role: "teacher", ReadOnly: true}, nil
+		}
+		if participant != nil && (participant.Status == "present" || participant.Status == "left") && (canvas.Visibility == "participants" || canvas.Visibility == "session") {
+			return documentAuthorization{Role: "user", ReadOnly: true}, nil
+		}
+		return documentAuthorization{}, &authDecision{Status: http.StatusForbidden, Message: "Not authorized"}
+	}
+	if session.TeacherID == claims.UserID && canvas.Visibility != "private" {
+		return documentAuthorization{Role: "teacher", ReadOnly: true}, nil
+	}
+	if participant != nil && participant.Status == "present" && (canvas.Visibility == "participants" || canvas.Visibility == "session") {
+		return documentAuthorization{Role: "user", ReadOnly: true}, nil
+	}
+	allowed, _, err := h.Sessions.CanAccessSession(ctx, session.ID, claims.UserID)
+	if err != nil {
+		return documentAuthorization{}, &authDecision{Status: http.StatusInternalServerError, Message: "Database error"}
+	}
+	if canvas.Visibility == "session" && allowed {
+		return documentAuthorization{Role: "user", ReadOnly: true}, nil
+	}
+	return documentAuthorization{}, &authDecision{Status: http.StatusForbidden, Message: "Not authorized"}
 }
 
 // authorizeDocument resolves a Hocuspocus documentName to an access

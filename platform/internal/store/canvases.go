@@ -135,15 +135,18 @@ func (s *CanvasStore) CreateCanvas(ctx context.Context, input CreateCanvasInput)
 		return nil, err
 	}
 
-	var floor string
+	var floor, status string
 	if err := tx.QueryRowContext(ctx,
-		`SELECT canvas_floor FROM sessions WHERE id = $1 FOR UPDATE`, input.SessionID,
-	).Scan(&floor); err == sql.ErrNoRows {
+		`SELECT canvas_floor, status FROM sessions WHERE id = $1 FOR UPDATE`, input.SessionID,
+	).Scan(&floor, &status); err == sql.ErrNoRows {
 		return nil, nil
 	} else if err != nil {
 		return nil, err
 	}
 	s.afterSessionLock(canvasStoreOperationCreate, backendPID)
+	if status == "ended" {
+		return nil, ErrSessionEnded
+	}
 
 	var count int
 	if err := tx.QueryRowContext(ctx,
@@ -178,11 +181,39 @@ func (s *CanvasStore) GetCanvas(ctx context.Context, sessionID, canvasID string)
 	))
 }
 
+// GetCanvasByID resolves a realtime document name to its canvas. Callers must
+// still authorize against the returned session and owner.
+func (s *CanvasStore) GetCanvasByID(ctx context.Context, canvasID string) (*Canvas, error) {
+	return scanCanvas(s.db.QueryRowContext(ctx,
+		`SELECT `+canvasColumns+` FROM session_canvases WHERE id = $1`, canvasID,
+	))
+}
+
 // SetCanvasVisibility may only loosen a canvas and never cross below its
 // session floor. The session-row lock serializes this check with floor raises.
 func (s *CanvasStore) SetCanvasVisibility(ctx context.Context, sessionID, canvasID, ownerID, visibility string) (*Canvas, error) {
-	if !validCanvasVisibility(visibility) {
-		return nil, fmt.Errorf("unsupported canvas visibility %q", visibility)
+	return s.UpdateCanvas(ctx, sessionID, canvasID, ownerID, nil, &visibility)
+}
+
+// UpdateCanvas changes an owner canvas's title and/or visibility under the
+// session-row lock. This makes the ended-session check and floor comparison
+// atomic with the write, closing the handler-to-store TOCTOU window.
+func (s *CanvasStore) UpdateCanvas(ctx context.Context, sessionID, canvasID, ownerID string, title *string, visibility *string) (*Canvas, error) {
+	if title == nil && visibility == nil {
+		return nil, errors.New("canvas update is required")
+	}
+	var normalizedTitle string
+	if title != nil {
+		normalizedTitle = strings.TrimSpace(*title)
+		if normalizedTitle == "" {
+			return nil, errors.New("canvas title is required")
+		}
+		if utf8.RuneCountInString(normalizedTitle) > MaxCanvasTitleRunes {
+			return nil, ErrCanvasTitleTooLong
+		}
+	}
+	if visibility != nil && !validCanvasVisibility(*visibility) {
+		return nil, fmt.Errorf("unsupported canvas visibility %q", *visibility)
 	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -195,15 +226,18 @@ func (s *CanvasStore) SetCanvasVisibility(ctx context.Context, sessionID, canvas
 		return nil, err
 	}
 
-	var floor string
+	var floor, status string
 	if err := tx.QueryRowContext(ctx,
-		`SELECT canvas_floor FROM sessions WHERE id = $1 FOR UPDATE`, sessionID,
-	).Scan(&floor); err == sql.ErrNoRows {
+		`SELECT canvas_floor, status FROM sessions WHERE id = $1 FOR UPDATE`, sessionID,
+	).Scan(&floor, &status); err == sql.ErrNoRows {
 		return nil, nil
 	} else if err != nil {
 		return nil, err
 	}
 	s.afterSessionLock(canvasStoreOperationSetVisibility, backendPID)
+	if status == "ended" {
+		return nil, ErrSessionEnded
+	}
 
 	var current string
 	if err := tx.QueryRowContext(ctx,
@@ -215,27 +249,31 @@ func (s *CanvasStore) SetCanvasVisibility(ctx context.Context, sessionID, canvas
 		return nil, err
 	}
 
-	var tightens, belowFloor bool
-	if err := tx.QueryRowContext(ctx,
-		`SELECT $1::canvas_visibility <= $2::canvas_visibility,
-		        $1::canvas_visibility < $3::canvas_visibility`,
-		visibility, current, floor,
-	).Scan(&tightens, &belowFloor); err != nil {
-		return nil, err
-	}
-	if tightens {
-		return nil, ErrCanvasVisibilityTighten
-	}
-	if belowFloor {
-		return nil, ErrCanvasBelowFloor
+	if visibility != nil {
+		var tightens, belowFloor bool
+		if err := tx.QueryRowContext(ctx,
+			`SELECT $1::canvas_visibility <= $2::canvas_visibility,
+			        $1::canvas_visibility < $3::canvas_visibility`,
+			*visibility, current, floor,
+		).Scan(&tightens, &belowFloor); err != nil {
+			return nil, err
+		}
+		if tightens {
+			return nil, ErrCanvasVisibilityTighten
+		}
+		if belowFloor {
+			return nil, ErrCanvasBelowFloor
+		}
 	}
 
-	canvas, err := scanCanvas(tx.QueryRowContext(ctx,
-		`UPDATE session_canvases SET visibility = $1, updated_at = now()
-		 WHERE id = $2 AND session_id = $3 AND owner_id = $4
-		 RETURNING `+canvasColumns,
-		visibility, canvasID, sessionID, ownerID,
-	))
+	var canvas *Canvas
+	if title != nil && visibility != nil {
+		canvas, err = scanCanvas(tx.QueryRowContext(ctx, `UPDATE session_canvases SET title = $1, visibility = $2, updated_at = now() WHERE id = $3 AND session_id = $4 AND owner_id = $5 RETURNING `+canvasColumns, normalizedTitle, *visibility, canvasID, sessionID, ownerID))
+	} else if title != nil {
+		canvas, err = scanCanvas(tx.QueryRowContext(ctx, `UPDATE session_canvases SET title = $1, updated_at = now() WHERE id = $2 AND session_id = $3 AND owner_id = $4 RETURNING `+canvasColumns, normalizedTitle, canvasID, sessionID, ownerID))
+	} else {
+		canvas, err = scanCanvas(tx.QueryRowContext(ctx, `UPDATE session_canvases SET visibility = $1, updated_at = now() WHERE id = $2 AND session_id = $3 AND owner_id = $4 RETURNING `+canvasColumns, *visibility, canvasID, sessionID, ownerID))
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -266,15 +304,18 @@ func (s *CanvasStore) SetSessionCanvasFloor(ctx context.Context, sessionID, host
 		return "", err
 	}
 
-	var teacherID, current string
+	var teacherID, current, status string
 	if err := tx.QueryRowContext(ctx,
-		`SELECT teacher_id, canvas_floor FROM sessions WHERE id = $1 FOR UPDATE`, sessionID,
-	).Scan(&teacherID, &current); err == sql.ErrNoRows {
+		`SELECT teacher_id, canvas_floor, status FROM sessions WHERE id = $1 FOR UPDATE`, sessionID,
+	).Scan(&teacherID, &current, &status); err == sql.ErrNoRows {
 		return "", nil
 	} else if err != nil {
 		return "", err
 	}
 	s.afterSessionLock(canvasStoreOperationSetFloor, backendPID)
+	if status == "ended" {
+		return "", ErrSessionEnded
+	}
 	if teacherID != hostID {
 		return "", ErrCanvasFloorUnauthorized
 	}
@@ -372,7 +413,21 @@ func (s *CanvasStore) ListVisibleCanvases(ctx context.Context, sessionID, userID
 
 // DeleteCanvas deletes the canvas row containing its persisted Yjs state.
 func (s *CanvasStore) DeleteCanvas(ctx context.Context, sessionID, canvasID, ownerID string) (bool, error) {
-	result, err := s.db.ExecContext(ctx,
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	var status string
+	if err := tx.QueryRowContext(ctx, `SELECT status FROM sessions WHERE id = $1 FOR UPDATE`, sessionID).Scan(&status); err == sql.ErrNoRows {
+		return false, nil
+	} else if err != nil {
+		return false, err
+	}
+	if status == "ended" {
+		return false, ErrSessionEnded
+	}
+	result, err := tx.ExecContext(ctx,
 		`DELETE FROM session_canvases WHERE id = $1 AND session_id = $2 AND owner_id = $3`,
 		canvasID, sessionID, ownerID,
 	)
@@ -381,6 +436,9 @@ func (s *CanvasStore) DeleteCanvas(ctx context.Context, sessionID, canvasID, own
 	}
 	rows, err := result.RowsAffected()
 	if err != nil {
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
 		return false, err
 	}
 	return rows == 1, nil

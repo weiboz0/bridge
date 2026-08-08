@@ -22,8 +22,18 @@ func TestSignAndVerifyRealtimeToken_RoundTrip(t *testing.T) {
 	assert.Equal(t, "user-123", claims.Sub)
 	assert.Equal(t, "teacher", claims.Role)
 	assert.Equal(t, "chapter:abc-123", claims.Scope)
+	assert.False(t, claims.ReadOnly, "existing signing API must default to writable")
 	assert.Equal(t, RealtimeIssuer, claims.Issuer)
 	assert.WithinDuration(t, time.Now().Add(5*time.Minute), claims.ExpiresAt.Time, 5*time.Second)
+}
+
+func TestSignAndVerifyRealtimeToken_ReadOnlyClaim(t *testing.T) {
+	tok, err := SignRealtimeTokenWithReadOnly(realtimeTestSecret, "user-123", "teacher", "canvas:abc-123", true, 5*time.Minute)
+	require.NoError(t, err)
+
+	claims, err := VerifyRealtimeToken(realtimeTestSecret, tok)
+	require.NoError(t, err)
+	assert.True(t, claims.ReadOnly)
 }
 
 func TestSignRealtimeToken_RejectsEmptySecret(t *testing.T) {

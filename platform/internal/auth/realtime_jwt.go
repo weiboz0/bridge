@@ -29,15 +29,23 @@ const RealtimeIssuer = "bridge-platform"
 // to open (e.g., `session:{sid}:user:{uid}`, `chapter:{cid}`,
 // `attempt:{aid}`, `broadcast:{sid}`).
 type RealtimeClaims struct {
-	Sub   string `json:"sub"`   // user id of the holder
-	Role  string `json:"role"`  // "teacher" | "user" | "parent"
-	Scope string `json:"scope"` // exact documentName
+	Sub      string `json:"sub"`      // user id of the holder
+	Role     string `json:"role"`     // "teacher" | "user" | "parent"
+	Scope    string `json:"scope"`    // exact documentName
+	ReadOnly bool   `json:"readOnly"` // server-enforced connection write permission
 	jwt.RegisteredClaims
 }
 
 // SignRealtimeToken mints a short-lived HS256 JWT. `ttl` is clamped
 // to (0, 30 minutes]. Returns the compact-serialized token.
 func SignRealtimeToken(secret string, sub, role, scope string, ttl time.Duration) (string, error) {
+	return SignRealtimeTokenWithReadOnly(secret, sub, role, scope, false, ttl)
+}
+
+// SignRealtimeTokenWithReadOnly mints a short-lived token with its
+// server-enforced write decision. Existing scopes use SignRealtimeToken and
+// therefore remain writable by default.
+func SignRealtimeTokenWithReadOnly(secret string, sub, role, scope string, readOnly bool, ttl time.Duration) (string, error) {
 	if secret == "" {
 		return "", errors.New("auth.SignRealtimeToken: HOCUSPOCUS_TOKEN_SECRET is empty")
 	}
@@ -49,9 +57,10 @@ func SignRealtimeToken(secret string, sub, role, scope string, ttl time.Duration
 	}
 	now := time.Now()
 	claims := RealtimeClaims{
-		Sub:   sub,
-		Role:  role,
-		Scope: scope,
+		Sub:      sub,
+		Role:     role,
+		Scope:    scope,
+		ReadOnly: readOnly,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    RealtimeIssuer,
 			IssuedAt:  jwt.NewNumericDate(now),

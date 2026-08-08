@@ -23,6 +23,7 @@ import (
 	"github.com/weiboz0/bridge/platform/internal/llm"
 	"github.com/weiboz0/bridge/platform/internal/sandbox"
 	"github.com/weiboz0/bridge/platform/internal/skills"
+	"github.com/weiboz0/bridge/platform/internal/store"
 )
 
 func main() {
@@ -176,6 +177,7 @@ func main() {
 		Attempts:                    stores.Attempts,
 		Users:                       stores.Users,
 		ParentLinks:                 stores.ParentLinks, // plan 053b phase 4
+		Canvases:                    store.NewCanvasStore(database),
 		HocuspocusTokenSecret:       cfg.Realtime.HocuspocusTokenSecret,
 		BridgeSessionSecrets:        cfg.BridgeSession.Secrets,
 		BridgeSessionInternalBearer: cfg.BridgeSession.InternalBearer,
@@ -256,6 +258,9 @@ func main() {
 
 		sessionH := &handlers.SessionHandler{Sessions: stores.Sessions, Schedules: stores.Schedules, Classes: stores.Classes, Courses: stores.Courses, Topics: stores.Topics, Chapters: stores.Chapters, Orgs: stores.Orgs, ParentLinks: stores.ParentLinks, Broadcaster: broadcaster}
 		sessionH.Routes(r)
+
+		canvasH := &handlers.CanvasHandler{Sessions: stores.Sessions, Canvases: realtimeH.Canvases}
+		canvasH.Routes(r)
 
 		scheduleH := &handlers.ScheduleHandler{
 			Schedules: stores.Schedules, Sessions: stores.Sessions, Classes: stores.Classes,

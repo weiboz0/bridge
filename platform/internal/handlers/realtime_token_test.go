@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -70,6 +71,145 @@ func TestMintToken_NoSecret_503(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.MintToken(w, req)
 	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+}
+
+func TestCanvasMint_OwnerWrite(t *testing.T) {
+	fx := newCanvasHandlerFixture(t)
+	canvas, err := fx.h.Canvases.CreateCanvas(context.Background(), store.CreateCanvasInput{SessionID: fx.session.ID, OwnerID: fx.student.ID, Title: "Owner board", Visibility: "private"})
+	require.NoError(t, err)
+	h := newRealtimeHandlerForCanvasFixture(fx)
+	code, response := callMintToken(t, h, "canvas:"+canvas.ID, fx.claims(fx.student))
+	require.Equal(t, http.StatusOK, code)
+	claims, err := auth.VerifyRealtimeToken(rtSecret, response.Token)
+	require.NoError(t, err)
+	assert.False(t, claims.ReadOnly)
+}
+
+func TestCanvasMint_HostReadWhenHostVisible(t *testing.T) {
+	fx := newCanvasHandlerFixture(t)
+	canvas, err := fx.h.Canvases.CreateCanvas(context.Background(), store.CreateCanvasInput{SessionID: fx.session.ID, OwnerID: fx.student.ID, Title: "Host board", Visibility: "host"})
+	require.NoError(t, err)
+	h := newRealtimeHandlerForCanvasFixture(fx)
+	code, response := callMintToken(t, h, "canvas:"+canvas.ID, fx.claims(fx.teacher))
+	require.Equal(t, http.StatusOK, code)
+	claims, err := auth.VerifyRealtimeToken(rtSecret, response.Token)
+	require.NoError(t, err)
+	assert.True(t, claims.ReadOnly)
+}
+
+func TestCanvasMintMatrix(t *testing.T) {
+	fx := newCanvasHandlerFixture(t)
+	present := fx.addUser(t, "present")
+	left := fx.addUser(t, "left")
+	invitee := fx.addUser(t, "invitee")
+	require.NoError(t, func() error {
+		_, err := fx.h.Sessions.JoinSession(context.Background(), fx.session.ID, present.ID)
+		return err
+	}())
+	require.NoError(t, func() error {
+		_, err := fx.h.Sessions.JoinSession(context.Background(), fx.session.ID, left.ID)
+		return err
+	}())
+	require.NoError(t, func() error {
+		_, err := fx.h.Sessions.LeaveSession(context.Background(), fx.session.ID, left.ID)
+		return err
+	}())
+	require.NoError(t, func() error {
+		_, err := fx.h.Sessions.AddParticipant(context.Background(), fx.session.ID, invitee.ID, fx.teacher.ID)
+		return err
+	}())
+	makeCanvas := func(visibility string) *store.Canvas {
+		canvas, err := fx.h.Canvases.CreateCanvas(context.Background(), store.CreateCanvasInput{SessionID: fx.session.ID, OwnerID: fx.student.ID, Title: visibility, Visibility: visibility})
+		require.NoError(t, err)
+		return canvas
+	}
+	private, host, participants, session := makeCanvas("private"), makeCanvas("host"), makeCanvas("participants"), makeCanvas("session")
+	h := newRealtimeHandlerForCanvasFixture(fx)
+	mint := func(t *testing.T, canvas *store.Canvas, user *store.RegisteredUser, want int, readOnly bool) {
+		t.Helper()
+		code, response := callMintToken(t, h, "canvas:"+canvas.ID, fx.claims(user))
+		require.Equal(t, want, code)
+		if want == http.StatusOK {
+			claims, err := auth.VerifyRealtimeToken(rtSecret, response.Token)
+			require.NoError(t, err)
+			require.Equal(t, readOnly, claims.ReadOnly)
+		}
+	}
+	t.Run("HostDeniedWhenPrivate", func(t *testing.T) { mint(t, private, fx.teacher, http.StatusForbidden, false) })
+	t.Run("ParticipantReadWhenParticipantsVisible", func(t *testing.T) { mint(t, participants, present, http.StatusOK, true) })
+	t.Run("NonParticipantDeniedWhenParticipantsVisible", func(t *testing.T) { mint(t, participants, fx.outsider, http.StatusForbidden, false) })
+	t.Run("MemberDeniedWhenHostVisible", func(t *testing.T) { mint(t, host, present, http.StatusForbidden, false) })
+	t.Run("NonMemberDenied", func(t *testing.T) { mint(t, private, fx.outsider, http.StatusForbidden, false) })
+	t.Run("HostReadsParticipantsAndSessionLevels", func(t *testing.T) {
+		mint(t, participants, fx.teacher, http.StatusOK, true)
+		mint(t, session, fx.teacher, http.StatusOK, true)
+	})
+
+	require.NoError(t, func() error {
+		_, err := fx.db.ExecContext(context.Background(), "UPDATE sessions SET visibility = 'public' WHERE id = $1", fx.session.ID)
+		return err
+	}())
+	t.Run("SessionVisiblePublicAllowsAnyAuthed", func(t *testing.T) { mint(t, session, fx.outsider, http.StatusOK, true) })
+	require.NoError(t, func() error { _, err := fx.h.Sessions.EndSession(context.Background(), fx.session.ID); return err }())
+	t.Run("EndedArchive_OwnerRead", func(t *testing.T) { mint(t, private, fx.student, http.StatusOK, true) })
+	t.Run("TeacherReadWhenHostVisible", func(t *testing.T) { mint(t, host, fx.teacher, http.StatusOK, true) })
+	t.Run("FormerParticipantReadNotInvitee", func(t *testing.T) {
+		mint(t, participants, left, http.StatusOK, true)
+		mint(t, participants, invitee, http.StatusForbidden, false)
+	})
+	t.Run("OutsiderDenied", func(t *testing.T) { mint(t, session, fx.outsider, http.StatusForbidden, false) })
+	t.Run("AllReadOnly", func(t *testing.T) { mint(t, participants, present, http.StatusOK, true) })
+}
+
+func TestCanvasMint_SessionVisibleClassBoundDeniesOutsider(t *testing.T) {
+	fx := newCanvasHandlerFixture(t)
+	ctx := context.Background()
+	orgs, courses, classes := store.NewOrgStore(fx.db), store.NewCourseStore(fx.db), store.NewClassStore(fx.db)
+	org, err := orgs.CreateOrg(ctx, store.CreateOrgInput{Name: t.Name(), Slug: "canvas-" + strings.ToLower(strings.ReplaceAll(t.Name(), "_", "-")), Type: "school", ContactEmail: "canvas@example.com", ContactName: "Canvas"})
+	require.NoError(t, err)
+	course, err := courses.CreateCourse(ctx, store.CreateCourseInput{OrgID: org.ID, CreatedBy: fx.teacher.ID, Title: "Course", GradeLevel: "K-5"})
+	require.NoError(t, err)
+	class, err := classes.CreateClass(ctx, store.CreateClassInput{OrgID: org.ID, CourseID: course.ID, CreatedBy: fx.teacher.ID, Title: "Class"})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = fx.db.ExecContext(ctx, "DELETE FROM classes WHERE id = $1", class.ID)
+		_, _ = fx.db.ExecContext(ctx, "DELETE FROM courses WHERE id = $1", course.ID)
+		_, _ = fx.db.ExecContext(ctx, "DELETE FROM organizations WHERE id = $1", org.ID)
+	})
+	_, err = fx.db.ExecContext(ctx, "UPDATE sessions SET class_id = $1, visibility = 'public' WHERE id = $2", class.ID, fx.session.ID)
+	require.NoError(t, err)
+	canvas, err := fx.h.Canvases.CreateCanvas(ctx, store.CreateCanvasInput{SessionID: fx.session.ID, OwnerID: fx.student.ID, Title: "Class board", Visibility: "session"})
+	require.NoError(t, err)
+	code, _ := callMintToken(t, newRealtimeHandlerForCanvasFixture(fx), "canvas:"+canvas.ID, fx.claims(fx.outsider))
+	require.Equal(t, http.StatusForbidden, code)
+}
+
+func TestCanvasMint_OtherSessionMemberDenied(t *testing.T) {
+	fx := newCanvasHandlerFixture(t)
+	other, err := fx.h.Sessions.CreateSession(context.Background(), store.CreateSessionInput{TeacherID: fx.teacher.ID, Title: "Other"})
+	require.NoError(t, err)
+	t.Cleanup(func() { _, _ = fx.db.ExecContext(context.Background(), "DELETE FROM sessions WHERE id = $1", other.ID) })
+	canvas, err := fx.h.Canvases.CreateCanvas(context.Background(), store.CreateCanvasInput{SessionID: other.ID, OwnerID: fx.teacher.ID, Title: "Other board", Visibility: "participants"})
+	require.NoError(t, err)
+	code, _ := callMintToken(t, newRealtimeHandlerForCanvasFixture(fx), "canvas:"+canvas.ID, fx.claims(fx.student))
+	require.Equal(t, http.StatusForbidden, code)
+}
+
+func TestInternalAuth_CanvasReturnsCurrentReadOnly(t *testing.T) {
+	fx := newCanvasHandlerFixture(t)
+	canvas, err := fx.h.Canvases.CreateCanvas(context.Background(), store.CreateCanvasInput{SessionID: fx.session.ID, OwnerID: fx.student.ID, Title: "Board", Visibility: "host"})
+	require.NoError(t, err)
+	h := newRealtimeHandlerForCanvasFixture(fx)
+	code, response := callInternalAuth(t, h, rtSecret, "canvas:"+canvas.ID, fx.teacher.ID)
+	require.Equal(t, http.StatusOK, code)
+	require.True(t, response.Allowed)
+	require.True(t, response.ReadOnly)
+	_, err = fx.h.Sessions.EndSession(context.Background(), fx.session.ID)
+	require.NoError(t, err)
+	code, response = callInternalAuth(t, h, rtSecret, "canvas:"+canvas.ID, fx.student.ID)
+	require.Equal(t, http.StatusOK, code)
+	require.True(t, response.Allowed)
+	require.True(t, response.ReadOnly)
 }
 
 func TestRealtimeHealth_MissingSecretIsDegraded(t *testing.T) {

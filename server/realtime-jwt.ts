@@ -13,6 +13,7 @@ export interface RealtimeClaims {
   sub: string;
   role: string;
   scope: string;
+  readOnly: boolean;
   iss: string;
   iat: number;
   exp: number;
@@ -89,6 +90,9 @@ export function verifyRealtimeJwt(token: string, secret: string): RealtimeClaims
   if (!claims.scope || typeof claims.scope !== "string") {
     throw new JwtVerifyError("missing scope");
   }
+  if (typeof claims.readOnly !== "boolean") {
+    throw new JwtVerifyError("missing readOnly");
+  }
   return claims as RealtimeClaims;
 }
 
@@ -102,7 +106,7 @@ export async function rechckDocumentAccess(args: {
   secret: string;
   documentName: string;
   sub: string;
-}): Promise<{ allowed: boolean; reason?: string }> {
+}): Promise<{ allowed: boolean; reason?: string; readOnly: boolean }> {
   const { apiBaseUrl, secret, documentName, sub } = args;
   const res = await fetch(`${apiBaseUrl}/api/internal/realtime/auth`, {
     method: "POST",
@@ -113,8 +117,8 @@ export async function rechckDocumentAccess(args: {
     body: JSON.stringify({ documentName, sub }),
   });
   if (res.status === 200) {
-    const body = (await res.json()) as { allowed?: boolean; reason?: string };
-    return { allowed: !!body.allowed, reason: body.reason };
+    const body = (await res.json()) as { allowed?: boolean; reason?: string; readOnly?: boolean };
+    return { allowed: !!body.allowed, reason: body.reason, readOnly: !!body.readOnly };
   }
   // Anything other than 200 means the recheck couldn't render an
   // authorization decision (4xx malformed input, 404 missing
