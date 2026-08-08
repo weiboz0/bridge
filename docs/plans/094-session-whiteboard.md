@@ -261,3 +261,8 @@ _Plan-wide report pending later phases._
 - Independent contract and quality/security reviewers both approved after the registered-hook tests and database-cleanup guard were added.
 - The final mutation regression dispatches the exact hook object passed to `new Server`, then proves an ended-session update neither changes the Yjs document nor reaches an observer.
 - The final persistence regressions dispatch the registered load and store hooks, reject a valid missing canvas row, restore the pre-end snapshot, and leave it unchanged after an ended-session store attempt.
+
+### Phase 3 — archive interaction regression (2026-08-08)
+
+- Added `tests/unit/whiteboard-archive.test.tsx` for the neutral archive's list-first/token-on-selection boundary, generic empty state, absent mutation controls, forced `readOnly` binding options, and inert archive board-change path.
+- The first isolated command was blocked by the test harness because the inherited `DATABASE_URL` named `bridge`; rerunning against the explicitly pinned `bridge_test` database exposed the missing mocked auth context rather than production behavior.  The final focused Vitest run passed 3 tests, and `bunx --bun tsc --noEmit` passed; neither command ran a migration or started a service.
