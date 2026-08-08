@@ -1,7 +1,7 @@
 # Plan 094 — Excalidraw whiteboards in live sessions
 
 **Branch:** `feat/094-session-whiteboard`
-**Status:** Draft — awaiting plan-review gate (Tier A: `platform/internal/{store,handlers}`, realtime auth, `drizzle/`, `server/hocuspocus.ts` → 4-way)
+**Status:** Revision 2 — folds plan-review round 1 (3× CHANGES REQUESTED) + user decisions. Awaiting re-review.
 
 ## File scope
 
@@ -10,115 +10,118 @@
 `platform/internal/store/canvases.go` (new) + `platform/internal/store/canvases_test.go` (new) ·
 `platform/internal/handlers/canvases.go` (new) + `platform/internal/handlers/canvases_integration_test.go` (new) ·
 `platform/internal/handlers/realtime_token.go` + `platform/internal/handlers/realtime_token_test.go` ·
-`platform/internal/handlers/routes.go` (or wherever session routes register) ·
+**`platform/internal/auth/realtime_jwt.go`** (add `readOnly` claim — scope-widened R1) ·
+**`server/realtime-jwt.ts`** (mirror the claim — scope-widened R1) ·
+**`platform/cmd/api/main.go`** (wire `CanvasStore` + handler — scope-widened R1) ·
+`platform/internal/handlers/routes.go` (or where session routes register) ·
 `server/hocuspocus.ts` ·
-`next.config.ts` (proxy route for `/api/sessions/{id}/canvases` if not already covered by `/api/sessions/:path*`) ·
-`src/lib/whiteboard/**` (new — the y-excalidraw binding + hook) ·
-`src/components/session/whiteboard/**` (new — canvas list, board surface, share control) ·
-`src/components/session/teacher/teacher-dashboard.tsx` · `src/components/session/student/student-session.tsx` (add the whiteboard surface/tab) ·
+`next.config.ts` (only if `/api/sessions/{id}/canvases` isn't already covered by `/api/sessions/:path*`) ·
+`src/lib/whiteboard/**` (new — the binding + hook) ·
+`src/components/session/whiteboard/**` (new — canvas list, board surface, visibility control) ·
+`src/components/session/teacher/teacher-dashboard.tsx` · `src/components/session/student/student-session.tsx` (add the whiteboard surface) ·
 `package.json` (add `@excalidraw/excalidraw`, `y-excalidraw`) ·
 `docs/api.md` · `docs/architecture/decisions.md` · `README.md` · this plan file.
 
-Changes nothing under `e2e/` except adding one spec (named integration-tests phase).
+Scope-widening (R1 blocker 1 / concern C1) authorized by the user 2026-08-06: the read-only viewer boundary cannot be built without a `readOnly` claim in both JWT files, and `CanvasStore` must be wired in `main.go`.
 
 ## Problem / goal
 
-A live session today is a shared code editor. Teachers want a **whiteboard** to sketch, diagram, and explain visually. Add Excalidraw canvases to a session, synced in real time over the existing Yjs/Hocuspocus plumbing, with an **ownership + sharing** permission model.
+A live session is a shared code editor today. Add Excalidraw whiteboards, synced over the existing Yjs/Hocuspocus plumbing, with an **ownership + floor-based visibility** model. Persisted, and viewable after the session ends.
 
 ## Decisions (settled with the user)
 
 | # | Decision | Source |
 |---|----------|--------|
-| 1 | **Ownership.** A *canvas* is a first-class entity with one **owner** who has write access. Who else may **read** is governed by the canvas's visibility level (Decision 4). | User |
-| 2 | **Persisted + restored.** Canvas content survives reconnects and outlives the live session, persisted the same way session/attempt Yjs docs are today (Hocuspocus `onLoadDocument`/`onStoreDocument` → store). | User |
-| 3 | **Binding: `y-excalidraw` community package** — with a Phase-1 vetting gate (maintenance, license, React 19 compat, honors a read-only/view mode). **Fallback:** a thin custom onChange↔Y.Map binding modeled on `src/lib/yjs/use-yjs-tiptap.ts`. Server-side read-only enforcement is ours regardless of the package. | User |
-| 4 | **Visibility = three ordered levels + a session floor.** Levels tightest→loosest: **`private`** (owner only) < **`host`** (owner + teacher) < **`session`** (all session members). The host sets one **session-level floor** = the minimum visibility any canvas may have; **default `private`**. A canvas's visibility is any level **≥ floor**, chosen by its owner. The owner may **loosen** (raise) but **never set below the floor**. Raising the floor bumps every canvas below it up to the new floor; lowering the floor leaves existing canvases where they are. "Host sees everything" is simply floor = `host`. | User |
-| 5 | **Multiple canvases per owner** allowed (canvas is first-class, not one-per-user). | User |
-| 6 | **Host override: floor only, for MVP.** The host controls the session floor; owners set their own canvas within `[floor, session]`. No direct per-canvas host override (moderation) yet — the floor is the host's supervision lever. Deferred to a follow-up. | User |
-| 7 | **Owner visibility change is floor-relative, not a strict ratchet (implementation reading of "loosen only").** The owner may set visibility to any level in `[floor, session]`; "can't tighten" = can't go below the floor. This permits an owner to correct an accidental over-share back down to the floor. *Alternative (strict monotonic loosen-only, over-share irreversible) is a one-line flip — flag at plan-review if the stricter reading was intended.* | Claude — reading of user rule |
+| 1 | **Ownership.** A *canvas* has one **owner** (durable — not tied to current session membership). The owner may write while the session is live. Who else may **read** is governed by visibility (Decision 4). | User |
+| 2 | **Persisted + outlives the session** (read-only archive after end — Decision 8). Persisted via Hocuspocus `onLoadDocument`/`onStoreDocument` like attempt/session docs. | User |
+| 3 | **Binding: `y-excalidraw`** with a Phase-1b vetting gate (maintenance, license, React 19, honors a read-only/view mode). **Fallback:** thin custom onChange↔Y.Map binding per `src/lib/yjs/use-yjs-tiptap.ts`. Server read-only enforcement is ours regardless. | User |
+| 4 | **Visibility = 3 ordered levels + session floor.** Levels tight→loose: **`private`** (owner only) < **`host`** (owner + teacher) < **`session`** (all members). Host sets one **session floor** = the minimum any canvas may have; **default `private`**. A canvas's visibility is any level **≥ floor**. Ordering is **native pgEnum declaration order** (`private`,`host`,`session`) — `visibility < 'host'` works in SQL (per reviewer correction; no separate rank helper). | User |
+| 5 | **Multiple canvases per owner**, with a **per-session cap** (Decision 10). | User |
+| 6 | **Host override: floor only, for MVP.** No per-canvas host moderation yet — the floor is the supervision lever. | User |
+| 7 | **Loosen-only — strict, no tightening (user's literal rule; reverses R1's interim reading).** An owner may only *raise* a canvas's visibility (`private`→`host`→`session`); tightening is rejected (400). This is deliberate: it makes visibility monotonic, so a minted read token never grants more than the canvas's *current* level and **there is no stale-token revocation problem**. Trade-off accepted: an accidental over-share is not undoable by the owner in MVP (a future host-moderation follow-up can address it). | User (2026-08-06) |
+| 8 | **After the session ends: read-only archive.** No writes by anyone (incl. owner) once `status=ended`. Readable by the **owner** and by **whoever the canvas's final visibility allowed** — `host` → the session's teacher; `session` → users who were session participants. Canvas auth therefore **special-cases ended sessions** rather than reusing the live-membership gate (which returns `ended → no_access` for everyone). | User (2026-08-06) |
+| 9 | **"Session member" = the plan-090 guard, reused, not re-rolled.** Read eligibility routes through the existing `CanAccessSession` / participant+class-authority logic (`store/sessions.go`), NOT a fresh membership query — a hand-rolled check is how plan 090's cross-org leak would reappear. | Reviewers (all 3) |
+| 10 | **Per-session canvas cap** (e.g. 50) enforced at create — bounds the persisted-doc / storage-growth surface. Exact number set in Phase 1a; overridable at review. | Reviewer (opus C5) |
 
-## Architecture (grounded in existing code)
+## Architecture (grounded; revised per R1)
 
-**Realtime auth is the crux and reuses an existing pattern.** Hocuspocus `onAuthenticate` (`server/hocuspocus.ts:98`) rejects any connection whose JWT `scope !== documentName`. The Go mint endpoint `POST /api/realtime/token` (`realtime_token.go`, `MintToken`) resolves the doc-name scope in a switch that today handles `attempt:{id}` and rejects unknown scopes (`realtime_token.go:342`). There is already a **read-only** precedent: `attempt:` docs and a teacher-watch JWT carry `ctx.readOnly` (`hocuspocus.ts:123-128`).
+A canvas is `documentName = canvas:{canvasId}`. Permission is enforced **server-side at mint** (`realtime_token.go` scope resolver, which today handles `attempt:` and rejects unknown scopes).
 
-So a canvas is `documentName = canvas:{canvasId}`, and permission is enforced **server-side at mint**, using the canvas's effective visibility (already `≥` the session floor by construction):
+**The read-only boundary must be built (R1 blocker 1).** Today `RealtimeClaims` carries only `sub`/`role`/`scope`, and `hocuspocus.ts` hardcodes `ctx.readOnly=false`; Hocuspocus enforces writes via the connection's `readOnly`, not a context field. So:
+- Add a **`readOnly bool` claim** to `RealtimeClaims` in **both** `platform/internal/auth/realtime_jwt.go` and `server/realtime-jwt.ts`.
+- `MintToken` sets `readOnly` per the decision below.
+- `hocuspocus.ts onAuthenticate` reads `claims.readOnly` and sets the **connection's `readOnly`** (Hocuspocus's write-enforcing field), not just context. Phase 2 adds a test that a `readOnly` connection's document update is rejected server-side. Existing `attempt:` behavior is preserved (owner-only, `readOnly=false`).
 
-- Requester is the **owner** → write JWT (`readOnly=false`).
-- Requester is the session's **host/teacher** AND visibility ∈ {`host`, `session`} → read-only JWT.
-- Requester is any **session member** AND visibility = `session` → read-only JWT.
-- Otherwise → **403** at mint (no token, no room access). A `private` canvas mints only for its owner.
+**Mint matrix — live session** (`status != ended`):
+- Requester is the **owner** → write (`readOnly=false`).
+- Requester is the **host** (`sessions.teacher_id`) AND visibility ∈ {`host`,`session`} → read (`readOnly=true`).
+- Requester is an eligible **session member** (Decision 9) AND visibility = `session` → read.
+- Else → **403**. A `private` canvas mints only for its owner.
 
-Because a canvas's stored visibility is always kept `≥ floor`, "floor = `host`" automatically makes every canvas host-readable without any per-request special-casing.
+**Mint matrix — ended session** (Decision 8): identical *read* rules, but **everyone is `readOnly=true`, including the owner** (archive). Membership for `session` visibility is evaluated against `session_participants` (who *were* in the session).
 
-`onAuthenticate` carries `readOnly` into context for `canvas:` docs exactly like `attempt:`; a read-only connection must reject document updates (verify Hocuspocus enforces `connection.readOnly`, else drop writes in `onChange`/`beforeHandleMessage`). Client also renders Excalidraw with `viewModeEnabled` for viewers — UX only; **the server token is the security boundary.**
+**Floor invariant is race-safe (R1 blocker 2).** `visibility ≥ floor` cannot be a Postgres cross-table CHECK, so both **create** and **set-session-floor** take a `SELECT … FOR UPDATE` on the `sessions` row; create computes `visibility = GREATEST(requested, floor)` under that lock. This serializes create against a concurrent floor-raise so no canvas lands below the floor.
 
 ## Phases
 
-### Phase 1 — Backend: schema, canvas store + API, token mint *(Codex)*
-- Migration + `schema.ts`:
-  - a session-visibility enum `canvas_visibility` = (`private`, `host`, `session`) with a defined tight→loose ordering (encode order explicitly — enum text isn't ordered; use a rank helper or an ordered domain).
-  - `sessions.canvas_floor` (enum, default `private`) — the session-level minimum.
-  - `session_canvases` (`id`, `session_id` FK, `owner_id` FK, `title`, `visibility` enum, `created_at`, `updated_at`), org/tenant scoping consistent with `sessions`. On insert, `visibility` defaults to the session's current floor.
-- `store/canvases.go`: create (visibility = floor), get, list-visible-to-user (own + those whose visibility grants the caller read given host/member status), set-visibility (validates target `≥ floor`), set-session-floor (host-only; **bumps every canvas with visibility < new floor up to the floor in the same txn**), ownership checks.
-- `handlers/canvases.go`:
-  - `POST /api/sessions/{id}/canvases` — any session member; becomes owner; canvas starts at floor.
-  - `GET /api/sessions/{id}/canvases` — returns the canvases the caller may read (own, plus host/session-visible per the caller's role).
-  - `PATCH /api/sessions/{id}/canvases/{canvasId}` — owner-only; `visibility` (must be `≥ floor`; reject `< floor` with 400), `title`.
-  - `PATCH /api/sessions/{id}/settings` (or existing session-settings route) — host-only `canvas_floor`; triggers the bump.
-- `realtime_token.go`: add `canvas:{canvasId}` to the scope resolver — write for owner; read-only for host when visibility ∈ {host, session}; read-only for a session member when visibility = session; else 403.
-- **y-excalidraw vetting gate** (blocks Phase 3): record findings in this plan.
-- Go tests: floor default; owner loosen within `[floor, session]`; reject tighten-below-floor (400); raising floor bumps canvases; visibility-gated list per role; cross-user + cross-org isolation; mint write/host-read/member-read/403 matrix.
+### Phase 1a — Backend: schema + store *(Codex)*
+- Migration + `schema.ts`: `canvas_visibility` pgEnum `(private, host, session)` (declaration order = tight→loose); `sessions.canvas_floor canvas_visibility NOT NULL DEFAULT 'private'` (**backfills existing rows** to `private`); `session_canvases` (`id`, `session_id` FK, `owner_id` FK, `title`, `visibility canvas_visibility NOT NULL`, `created_at`, `updated_at`), org/tenant scoping like `sessions`.
+- `store/canvases.go`: create (locks session row; `visibility = GREATEST(requested, floor)`; enforces per-session cap), get, `list-visible-to-user` (a single query with owner/host/member branches, scoped to the path `session_id`, reusing the Decision-9 helpers), set-visibility (**loosen-only**: reject target ≤ current or < floor → error), set-session-floor (host-only; locks session row; bumps canvases with `visibility < floor` up to floor in the same txn).
+- `store/canvases_test.go`: floor default + backfill; `GREATEST` at create; **concurrent create-vs-raise leaves nothing below floor**; loosen accepted, tighten rejected; raise-floor bumps; list-by-role; per-session cap; cross-org isolation.
 
-### Phase 2 — Realtime: Hocuspocus canvas docs + read-only enforcement + persistence *(Codex / inline)*
-- `server/hocuspocus.ts`: handle `canvas:` in `onAuthenticate` (carry `readOnly` from claims), `onLoadDocument`/`onStoreDocument` (persist canvas Yjs doc like attempts/session docs).
-- **Enforce read-only server-side**: confirm a `readOnly` connection cannot mutate the doc; add a guard if Hocuspocus doesn't reject writes natively.
-- Tests: read-only connection's writes are rejected; owner writes persist and restore; non-member cannot connect.
+### Phase 1b — Backend: handlers + token mint + JWT claim *(Codex)*
+- `auth/realtime_jwt.go` + `server/realtime-jwt.ts`: add `readOnly` claim (both must stay byte-compatible — same field name/JSON tag).
+- `handlers/canvases.go`: `POST /api/sessions/{id}/canvases` (member; owner; starts at floor; cap-checked); `GET …/canvases` (visible-to-caller); `PATCH …/canvases/{cid}` (owner-only; loosen-only visibility, title); `DELETE …/canvases/{cid}` (owner-only; lifecycle — R1 opus N3); host-only `PATCH …/settings` for `canvas_floor`.
+- `realtime_token.go`: add `canvas:{cid}` to the scope resolver implementing the live/ended mint matrix; sets the `readOnly` claim.
+- `main.go`: wire `CanvasStore` + handler.
+- `canvases_integration_test.go` + `realtime_token_test.go`: the mint matrix (below), incl. ended-session archive.
+- **y-excalidraw vetting gate** (blocks Phase 3) — record findings here.
+
+### Phase 2 — Realtime: read-only enforcement + persistence *(Codex / inline)* — load-bearing
+- `hocuspocus.ts`: handle `canvas:` in `onAuthenticate` — read `claims.readOnly`, set the **connection `readOnly`** (write-enforcing), carry context. `onLoadDocument`/`onStoreDocument` persist the canvas Yjs doc (debounced snapshot, like attempts — not per-stroke Postgres writes).
+- **Tests (the security core):** a `readOnly` connection's update is **rejected server-side** (not merely hidden client-side); owner writes persist + restore on reconnect; a non-eligible user cannot connect; an ended-session owner connection is read-only.
 
 ### Phase 3 — Frontend: Excalidraw surface + binding *(Sonnet)*
-- `@excalidraw/excalidraw` + `y-excalidraw` (or fallback binding). `src/lib/whiteboard/use-whiteboard.ts` wires a canvas Yjs doc (via `useYjsProvider` + a realtime token minted for `canvas:{id}`) to Excalidraw.
-- `src/components/session/whiteboard/`: canvas list (own + shared), create-canvas, owner share toggle, board surface. Viewers → `viewModeEnabled`.
-- Add a "Whiteboard" surface/tab to `teacher-dashboard.tsx` and `student-session.tsx` (thin entry points reusing the shared component).
-- Frontend tests: list renders own+shared; owner sees edit UI, viewer sees view-mode; share toggle PATCHes; create flow.
+- `@excalidraw/excalidraw` + `y-excalidraw` (or fallback). `src/lib/whiteboard/use-whiteboard.ts` binds a `canvas:{id}` Yjs doc (via `useYjsProvider` + a minted canvas token) to Excalidraw; **dynamic-import** the board (bundle size).
+- `src/components/session/whiteboard/`: canvas list (visible-to-me), create, owner visibility control (**loosen-only UI — only shows levels ≥ current**), board surface. Non-writers → `viewModeEnabled` (UX; the token is the real boundary).
+- Add a "Whiteboard" surface to `teacher-dashboard.tsx` + `student-session.tsx` (thin entry points).
+- Frontend tests: list by role; owner edit vs viewer view-mode; loosen control; create; ended-session read-only.
 
-### Phase 4 — Integration tests (NAMED — required; touches API + realtime + persistence) *(Opus)*
-- **Scenarios:** owner creates a canvas (starts at floor `private`) → draws (persists) → loosens to `session` → a second session member sees it read-only → the viewer's write attempt is rejected server-side → a non-member/other-org user is denied at mint. Host raises floor `private`→`host` → a still-`private`-intended canvas is bumped and now mints read-only for the host. Owner attempt to set visibility below floor → 400. Reconnect restores content.
-- **Fixtures:** host + two session members + one outsider (+ one other-org user); a session from the existing session test harness.
-- **Live vs fast:** mint/permission/persistence/floor assertions are Go integration (fast, DB-backed); Excalidraw render + view-mode is a component test; one Playwright spec covers create→loosen→view end-to-end (**not run against a live stack** — needs the booted stack + pinned `E2E_BASE_URL`).
-- **Acceptance criteria (exact test names must exist + pass):** `TestMintToken_Canvas_OwnerWrite`, `TestMintToken_Canvas_HostReadWhenHostVisible`, `TestMintToken_Canvas_MemberReadWhenSessionVisible`, `TestMintToken_Canvas_PrivateDeniesNonOwner`, `TestMintToken_Canvas_NonMemberDenied`, `TestCanvasStore_SetVisibility_RejectsBelowFloor`, `TestCanvasStore_RaiseFloor_BumpsCanvases`, `TestCanvasStore_ListVisible_ByRole`, `TestCanvases_CrossOrgIsolation`, plus the read-only-write-rejected realtime test.
+### Phase 4 — Integration tests (NAMED — required: API + realtime auth + persistence) *(Opus)*
+- **Fixtures:** host + two members + one non-member + one other-org user; a session from the existing harness; an ended-session fixture.
+- **Acceptance (exact names must exist + pass):** `TestMintToken_Canvas_OwnerWrite`, `TestMintToken_Canvas_HostReadWhenHostVisible`, `TestMintToken_Canvas_HostDeniedWhenPrivate`, `TestMintToken_Canvas_MemberReadWhenSessionVisible`, `TestMintToken_Canvas_MemberDeniedWhenHostVisible`, `TestMintToken_Canvas_NonMemberDenied`, `TestMintToken_Canvas_OtherSessionMemberDenied`, `TestMintToken_Canvas_EndedSessionArchiveReadOnly`, `TestCanvasStore_SetVisibility_RejectsTightenAndBelowFloor`, `TestCanvasStore_ConcurrentCreateVsRaiseFloor_NoneBelowFloor`, `TestCanvasStore_RaiseFloor_BumpsCanvases`, `TestCanvasStore_ListVisible_ByRole`, `TestCanvasStore_PerSessionCap`, `TestCanvases_CrossOrgIsolation`, plus the Phase-2 read-only-write-rejected realtime test.
+- **Live vs fast:** all the above are Go integration / realtime (fast, DB-backed). One Playwright spec covers create→loosen→view (**not run against a live stack** — needs the booted stack + pinned `E2E_BASE_URL`, per `docs/testing.md`).
 
 ### Phase 5 — Docs + verify
-- `docs/api.md` (canvas endpoints + `canvas:` realtime scope + permission table); `docs/architecture/decisions.md` (new §: whiteboard ownership/sharing + realtime auth reuse); `README.md` feature bullet.
+- `docs/api.md` (canvas endpoints + `canvas:` scope + the live/ended permission matrix); `docs/architecture/decisions.md` (new §: whiteboard visibility floor + realtime read-only claim); `README.md` bullet.
 - `bash scripts/ci-local.sh` green (attestation); `pre-merge-guard.sh`.
 
 ## Risks
 
 | Risk | Mitigation |
 |------|------------|
-| **Realtime auth is a hard safeguard** — a permissive mint leaks a private/other-org canvas. | Enforce at mint (server), not client `viewModeEnabled`. Cross-org + non-member denial are required tests. Plan-review is 4-way and MUST scrutinize `realtime_token.go` + `hocuspocus.ts`. |
-| `y-excalidraw` unmaintained / no read-only / React 19 incompat. | Phase-1 vetting gate with a thin-custom-binding fallback (Decision 3). Do not proceed to Phase 3 until vetting passes. |
-| Read-only not enforced by Hocuspocus natively → a "viewer" writes to the shared doc. | Phase 2 explicitly verifies and, if needed, adds a server-side write guard; test asserts rejection. |
-| Excalidraw bundle size on the session route. | Dynamic-import the board; load only when the whiteboard surface opens. |
-| Persistence format churns Postgres per stroke. | Persist via Hocuspocus debounced `onStoreDocument` (snapshot), matching existing attempt/session doc persistence — not per-update writes. |
+| **Realtime auth is a hard safeguard** — a permissive mint leaks a private/cross-org canvas. | Enforce at mint (server), reuse the plan-090 membership guard (Decision 9), test the full owner/host/member/non-member/cross-org matrix + ended-session archive. 4-way review must scrutinize `realtime_token.go` + `hocuspocus.ts`. |
+| **Read-only not actually enforced** (the whole boundary). | Phase 2 sets the connection's `readOnly` and tests that a viewer's write is rejected *server-side*. `viewModeEnabled` is UX only. |
+| Floor invariant race (create vs raise). | `SELECT … FOR UPDATE` on the session row in both; `GREATEST(requested, floor)`. Concurrency test required. |
+| Owner over-shares by accident (loosen-only, Decision 7). | Accepted for MVP; a host-moderation follow-up can add tighten/override. UI shows a confirm on loosening to `session`. |
+| `y-excalidraw` unmaintained / no read-only / React 19. | Phase-1b vetting gate + thin-custom fallback. Phase 3 blocked until it passes. |
+| Persistence churns Postgres per stroke. | Debounced Hocuspocus snapshot, matching attempt/session doc persistence. |
+| Excalidraw bundle on the session route. | Dynamic-import; load only when the whiteboard opens. |
 
 ## Out of scope
-- Per-recipient / group sharing (visibility is the 3-level floor model, not a recipient list), per-canvas host override / moderation (Decision 6 — floor only for MVP), export/import, templates, image/file embeds beyond Excalidraw defaults, presenter laser-pointer, and canvas-level comments. Each a follow-up if wanted.
-- Retrofitting whiteboards onto class-bound vs class-less distinctions beyond what session membership already implies.
+- Per-recipient/group sharing; **tightening / un-share** and per-canvas host moderation (Decisions 6, 7 — follow-up); export/import; templates; image/file embeds beyond Excalidraw defaults; laser-pointer; canvas comments; post-end *editing* (archive is read-only, Decision 8).
 
 ## Plan Review
 
-### Round 1 — 4-way (2026-08-06). **Codex + independent Opus + GLM all CHANGES REQUESTED.** Autopilot halted for user decisions.
+### Round 1 — 4-way (2026-08-06): **Codex + independent Opus + GLM all CHANGES REQUESTED.** Autopilot halted for user decisions. Full findings + convergent blockers recorded in commit `159e622`. Resolutions folded into this revision:
+- BLOCKER (no read-only claim) → scope widened to both JWT files + `main.go`; `readOnly` claim + connection-`readOnly` enforcement specified (Architecture, Phase 1b, Phase 2).
+- BLOCKER (create races floor-bump) → `FOR UPDATE` + `GREATEST` locking (Architecture, Phase 1a) + concurrency test.
+- BLOCKER (outlives-session contradiction) → Decision 8 (read-only archive; owner + final-visibility parties).
+- BLOCKER/CONCERN (stale token on tighten) → Decision 7 strict loosen-only dissolves it (no tightening ⇒ nothing to revoke).
+- CONCERN (session-member) → Decision 9 (reuse plan-090 guard).
+- Mechanical: native pgEnum ordering (Decision 4); `NOT NULL DEFAULT`+backfill (Phase 1a); split Phase 1 → 1a/1b + Phase 2 read-only enforcement first-class; test matrix expanded (Phase 4); canvas cap (Decision 10); DELETE endpoint (Phase 1b); owner-durability (Decision 1).
 
-Convergent blockers (found by ≥2 reviewers):
-
-1. `[BLOCKER]` `[codex][opus]` **No read-only mechanism exists.** `RealtimeClaims` (`auth/realtime_jwt.go` + `server/realtime-jwt.ts`) carries only `sub`/`role`/`scope` — no `readOnly`. `hocuspocus.ts` hardcodes `ctx.readOnly=false` and Hocuspocus enforces writes via `connectionConfig.readOnly`, not a context field. The viewer boundary the whole plan rests on isn't there. Fix needs a new `readOnly` claim in **both** JWT files (out of scope) + setting `connectionConfig.readOnly`. → **needs scope widening (user).**
-2. `[BLOCKER]` `[codex][opus]` **Create races the floor bump.** `visibility ≥ floor` is application-only (no cross-table CHECK in PG). A create reading floor=`private` can insert after a floor-raise commits, landing below floor. → mechanical fix: `SELECT … FOR UPDATE` on the session row in create + set-floor, or `GREATEST(requested, floor)` under lock.
-3. `[BLOCKER]` `[opus]` **"Outlives the session" contradicts the auth model.** Every membership path returns `ended → no_access` for *everyone incl. the owner*, so a persisted canvas becomes inaccessible the moment the session ends. → **needs a product decision (user):** who can open a canvas after the session ends?
-4. `[BLOCKER/CONCERN]` `[codex]` **Stale read token after tightening.** Auth is checked at connect + `onLoadDocument`, tokens live ~25 min; a viewer connected before a canvas is tightened keeps getting updates. → **needs a decision (user):** forbid tightening (the strict "loosen-only" reading — reverses Decision 7) vs. accept ≤25-min staleness vs. add eviction.
-5. `[CONCERN]` `[codex][opus][glm]` **"session member" must reuse the plan-090 guard** (`CanAccessSession` / participant check), not a fresh query — a hand-rolled membership check is exactly how 090's cross-org leak would reappear. → mechanical: mandate reuse.
-
-Other findings (mechanical, will fold on revise): file-scope also needs `main.go` (handler + store wiring); use **native pgEnum ordering** (`visibility < 'host'` works by declaration order — my "enums aren't ordered" note was wrong, per Opus N1); migration needs `NOT NULL DEFAULT 'private'` + backfill; split Phase 1 and give read-only *enforcement* first-class treatment (Phase 2 under-specified); add tests for host-denied-private, member-denied-host, cross-session, canvas/path mismatch, concurrent create-vs-raise, stale-token; decide owner-leaves-session; add a per-session canvas cap; add a canvas DELETE/lifecycle endpoint.
-
-**Verdict: CHANGES REQUESTED ×3. Not cleared. Revision pending user decisions on blockers 3, 4, and the scope-widening for blocker 1.**
+### Round 2 — pending re-review of this revision.
 
 ## Code Review
 
