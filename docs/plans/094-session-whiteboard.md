@@ -11,6 +11,7 @@
 `platform/internal/handlers/canvases.go` (new) + `platform/internal/handlers/canvases_integration_test.go` (new) ·
 `platform/internal/handlers/realtime_token.go` + `platform/internal/handlers/realtime_token_test.go` ·
 **`platform/internal/auth/realtime_jwt.go`** (add `readOnly` claim — scope-widened R1) ·
+**`platform/internal/auth/realtime_jwt_test.go`** (JWT compatibility regression) ·
 **`server/realtime-jwt.ts`** (mirror the claim — scope-widened R1) ·
 **`platform/cmd/api/main.go`** (wire `CanvasStore` + handler — scope-widened R1) ·
 `platform/internal/handlers/routes.go` (or where session routes register) ·
@@ -24,7 +25,7 @@
 **`src/app/(portal)/sessions/[id]/whiteboards/page.tsx`** (new, dedicated read-only archive route) ·
 **`src/app/(portal)/teacher/page.tsx`** · **`src/app/(portal)/teacher/sessions/page.tsx`** · **`src/app/(portal)/teacher/classes/[id]/page.tsx`** · **`src/app/(portal)/student/classes/[id]/page.tsx`** (link ended-session history rows to the archive) ·
 **`tests/unit/teacher-session-row.test.tsx`** · **`tests/unit/ended-sessions-non-link.test.ts`** · **`tests/unit/sessions-room-page.test.tsx`** (update ended-session expectations) · **`tests/unit/whiteboard-archive.test.tsx`** (new archive interaction regression) ·
-`package.json` (add `@excalidraw/excalidraw`, `y-excalidraw`) ·
+**`tests/unit/excalidraw-yjs.test.ts`** (custom-binding regression) · `package.json` + **`bun.lock`** (add `@excalidraw/excalidraw`; no `y-excalidraw`) ·
 `docs/api.md` · `docs/architecture/decisions.md` · `README.md` · this plan file.
 
 Scope-widening (R1 blocker 1 / concern C1) authorized by the user 2026-08-06: the read-only viewer boundary cannot be built without a `readOnly` claim in both JWT files, and `CanvasStore` must be wired in `main.go`.
@@ -34,6 +35,8 @@ Scope-widening (archive-route decision) authorized by the user 2026-08-07: ended
 Scope-widening (archive-entry review fix) authorized by the user 2026-08-08: add every existing teacher/student ended-session history entry point so former readers have a durable archive link rather than depending on a live SSE redirect.
 
 Scope-widening (archive test review fix) authorized by the user 2026-08-08: add the existing ended-session regression tests and one focused archive test, so the new archive contract is enforced rather than contradicted by stale no-link assertions.
+
+Scope-widening (scope-audit review fix) authorized by the user 2026-08-08: add the already changed lockfile, Go JWT regression, and custom-binding test so every branch artifact is governed by the plan.
 
 ## Problem / goal
 
@@ -192,6 +195,8 @@ A canvas is `documentName = canvas:{canvasId}`. Permission is enforced **server-
 ### Archive-route addendum — Round 3 (2026-08-08): **CHANGES REQUESTED (Codex contract).** The revised behavior and assertions were sufficient, but the existing tests that must change were outside File scope. The user authorized the explicitly named test files above; fresh confirmation is pending.
 
 ### Archive-route addendum — Round 4 (2026-08-08): **CHANGES REQUESTED (GLM recovery).** GLM's recovered review required the completed public-live-to-archive transition to be explicit and testable. Decision 11 now limits public admission to live sessions, Decision 12 names the total ended-session live-guard denial (including the teacher), and Phase 4 now requires the public viewer denial regression. Fresh confirmation is pending.
+
+### Archive-route addendum — Round 5 (2026-08-08): **CHANGES REQUESTED (Codex quality).** The archive behavior was approved by the contract reviewer, but a full fixed-scope audit found three earlier branch artifacts omitted from File scope. The user authorized their exact paths; fresh confirmation is pending.
 
 ## Code Review
 
