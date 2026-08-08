@@ -104,7 +104,7 @@ A canvas is `documentName = canvas:{canvasId}`. Permission is enforced **server-
 - `src/components/session/whiteboard/`: canvas list (visible-to-me), create, owner visibility control (**loosen-only UI — levels ≤ current are disabled, not hidden; equal is a no-op**), board surface. Non-writers → `viewModeEnabled` (UX; the token is the real boundary).
 - Add a "Whiteboard" surface to `teacher-dashboard.tsx` + `student-session.tsx` (thin entry points).
 - Add the dedicated `/sessions/{id}/whiteboards` archive route and links from both existing ended-session notices and all existing ended-session history rows. The archive page intentionally renders only list + board, always forces `viewModeEnabled`, suppresses local Yjs writes, and never mints a `canvas:` token until a visible item is selected; `student-session.tsx` redirects its `session_ended` event there, and `teacher-dashboard.tsx` redirects a successful end action there. The neutral route sends its otherwise-404 former-participant fallback to the archive rather than reusing the live student-page authorization path.
-- Frontend tests explicitly cover: archive direct access while live is view-only; archive requests only `GET /canvases` (never `teacher-page`, `student-page`, or `join`); no create/visibility/live-dashboard controls render; a list response with no items exposes no metadata and mints no token; teacher-end and student-end redirects target the archive; each ended notice/history row links to it.
+- Frontend tests explicitly cover: archive direct access while live is view-only **and its change callback creates no Yjs transaction/provider update**; the initial archive render calls only `GET /canvases` (never `teacher-page`, `student-page`, or `join`), an empty list mints no token, and selecting one returned item makes exactly one realtime mint for `canvas:{id}`; no create/visibility/live-dashboard controls render; teacher end redirects only after a 2xx response (a non-2xx remains on the live dashboard), student-end redirects target the archive; each ended notice/history row links to it.
 - Frontend tests: list by role; owner edit vs viewer view-mode; loosen control; create; ended-session read-only.
 
 ### Phase 4 — Integration tests (NAMED — required: API + realtime auth + persistence) *(Opus)*
@@ -182,6 +182,8 @@ A canvas is `documentName = canvas:{canvasId}`. Permission is enforced **server-
 - Successful teacher end and student `session_ended` redirect to the archive; neutral former-participant fallback redirects there instead of calling live-session access again.
 - User authorized scope expansion for every existing teacher/student ended-session history row, each linking to the archive.
 - Route-level test obligations now name direct-live view-only behavior, no live page API calls, no empty-list metadata/token leak, redirects, and all archive links.
+
+### Archive-route addendum — Round 2 (2026-08-08): **CHANGES REQUESTED (Codex quality).** The scope and navigation fixes were accepted for re-review, but the quality pass required three precise test/behavior additions: bind the archive write prohibition to the custom binding's actual `onChange` path (not only Excalidraw view mode), distinguish initial list fetch/no-token from selected-board token mint, and gate the teacher's archive redirect on a successful end response. These are folded into the Phase-3 frontend test contract above; the fresh contract verdict is pending.
 
 ## Code Review
 
