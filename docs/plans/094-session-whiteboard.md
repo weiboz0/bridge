@@ -1,7 +1,7 @@
 # Plan 094 — Excalidraw whiteboards in live sessions
 
 **Branch:** `feat/094-session-whiteboard`
-**Status:** Revision 5 — folds plan-review round 4 (Codex changes requested; Claude reviewers temporarily skipped by user direction). Awaiting Codex confirmation.
+**Status:** Plan review passed at Revision 5 under the user's temporary no-Claude-reviewer direction. Ready for Phase 1a.
 
 ## File scope
 
@@ -164,7 +164,7 @@ A canvas is `documentName = canvas:{canvasId}`. Permission is enforced **server-
 - Transition-time relay defense was architecture prose only: no implementable phase path prevented a pre-end writable connection from relaying after end. **Resolution in Revision 5:** replace the racy force-close/fallback sketch with Hocuspocus 3.4.4's exact `beforeHandleMessage` boundary. The existing internal Go recheck now returns current `readOnly`; a mutation-bearing canvas frame flips the connection before `MessageReceiver` can apply/broadcast it, failing closed on errors. Phase 2 and its observer/no-relay test spell out the producer/consumer path.
 - Ended-session list-visible rules lacked named handler coverage. **Resolution in Revision 5:** add `TestCanvases_ListEndedArchive_ByRole` with visibility thresholds and owner/teacher/present/left/invitee/outsider cases.
 
-### Round 5 — pending Codex confirmation of Revision 5 under the user's temporary no-Claude-reviewer direction.
+### Round 5 — Codex confirmation (2026-08-07): **APPROVE.** Codex verified both Round-4 blockers are resolved and checked the installed Hocuspocus 3.4.4 implementation: `beforeHandleMessage` is awaited before `MessageReceiver.apply`, `Connection.readOnly` is mutable, and sync step-2/update frames are rejected when read-only. The named ended-session GET/list test covers owner, teacher, present/left participants, invitee, outsider, and visibility thresholds. Static plan review only; no tests were run. With GLM's standing Round-3 approval and the user's temporary direction to skip both Claude reviewers until Sunday 16:00, the plan-review gate passes for this run.
 
 ## Code Review
 
