@@ -172,4 +172,12 @@ _Pending._
 
 ## Post-Execution Report
 
-_Pending._
+_Plan-wide report pending later phases._
+
+### Phase 1a — schema and store (2026-08-07)
+
+- Added the ordered `canvas_visibility` enum, the backfilled non-null `sessions.canvas_floor`, and the `session_canvases` persistence row (including its Yjs state) in `0028_session_canvases.sql`.
+- Added the schema declarations and `CanvasStore` create/get/list/update-floor/delete operations, including session-row locking for the floor invariant and archive-specific visibility checks.
+- `bash scripts/check-migration-uniqueness.sh` passed.
+- Focused Go tests compile and the pure migration-backfill and floor-cap guards pass.
+  Database-backed store cases are **UNVERIFIED**: `TEST_DATABASE_URL` was absent, so no migration or test was run against any database.

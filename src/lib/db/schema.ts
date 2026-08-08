@@ -69,6 +69,15 @@ export const sessionVisibilityEnum = pgEnum("session_visibility", [
   "public",
 ]);
 
+// Declaration order is a persisted authorization invariant: SQL comparisons
+// enforce private < host < participants < session.
+export const canvasVisibilityEnum = pgEnum("canvas_visibility", [
+  "private",
+  "host",
+  "participants",
+  "session",
+]);
+
 // schedule_status mirrors the `schedule_status` ENUM created in
 // drizzle/0023_create_scheduled_sessions.sql. Live values:
 // planned | in_progress | completed | cancelled.
@@ -246,6 +255,7 @@ export const sessions = pgTable(
     ),
     status: sessionStatusEnum("status").notNull().default("live"),
     visibility: sessionVisibilityEnum("visibility").notNull().default("unlisted"),
+    canvasFloor: canvasVisibilityEnum("canvas_floor").notNull().default("private"),
     settings: jsonb("settings").default({}),
     startedAt: timestamp("started_at").defaultNow().notNull(),
     endedAt: timestamp("ended_at"),
@@ -316,6 +326,29 @@ export const sessionParticipants = pgTable(
     ),
     index("session_participants_session_idx").on(table.sessionId),
     index("session_participants_session_status_idx").on(table.sessionId, table.status),
+  ]
+);
+
+export const sessionCanvases = pgTable(
+  "session_canvases",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    sessionId: uuid("session_id")
+      .notNull()
+      .references(() => sessions.id, { onDelete: "cascade" }),
+    ownerId: uuid("owner_id")
+      .notNull()
+      .references(() => users.id),
+    title: varchar("title", { length: 255 }).notNull(),
+    visibility: canvasVisibilityEnum("visibility").notNull(),
+    yjsState: text("yjs_state"),
+    plainText: text("plain_text").notNull().default(""),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("session_canvases_session_idx").on(table.sessionId),
+    index("session_canvases_session_owner_idx").on(table.sessionId, table.ownerId),
   ]
 );
 
