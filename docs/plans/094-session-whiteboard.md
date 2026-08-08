@@ -1,7 +1,7 @@
 # Plan 094 — Excalidraw whiteboards in live sessions
 
 **Branch:** `feat/094-session-whiteboard`
-**Status:** Plan review passed at Revision 5 under the user's temporary no-Claude-reviewer direction. Ready for Phase 1a.
+**Status:** Plan review passed at Revision 5 under the user's temporary no-Claude-reviewer direction. Phases 1a, 1b, and 2 are complete; Phase 3 is in progress.
 
 ## File scope
 
@@ -221,3 +221,9 @@ _Plan-wide report pending later phases._
 - The regression supplies a valid random UUID with no `session_canvases` row and requires the exported `loadCanvasYjsState` helper to reject rather than treating absence as a blank Yjs state.
 - Commit `a8ac3ca` had already landed the missing-row fail-closed production fix before the test's first execution, so no behavior-level RED against `c328609` could be reproduced without rolling back shared production.
 - The first assertion expected an unnecessarily specific error string and failed only because the existing fix reports `Canvas does not exist`; the final regression asserts the required rejection behavior without coupling to message wording.
+
+### Phase 2 — implementation review gate (2026-08-07)
+
+- Independent contract and quality/security reviewers both approved after the registered-hook tests and database-cleanup guard were added.
+- The final mutation regression dispatches the exact hook object passed to `new Server`, then proves an ended-session update neither changes the Yjs document nor reaches an observer.
+- The final persistence regressions dispatch the registered load and store hooks, reject a valid missing canvas row, restore the pre-end snapshot, and leave it unchanged after an ended-session store attempt.
