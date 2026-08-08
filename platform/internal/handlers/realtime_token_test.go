@@ -212,6 +212,78 @@ func TestInternalAuth_CanvasReturnsCurrentReadOnly(t *testing.T) {
 	require.True(t, response.ReadOnly)
 }
 
+func TestCanvasDocumentIDValidation_MintAndInternalAuth(t *testing.T) {
+	fx := newCanvasHandlerFixture(t)
+	h := newRealtimeHandlerForCanvasFixture(fx)
+	for _, tc := range []struct {
+		name, id string
+		want     int
+	}{
+		{"malformed", "not-a-uuid", http.StatusBadRequest},
+		{"missing", "11111111-1111-4111-8111-111111111111", http.StatusNotFound},
+	} {
+		t.Run(tc.name+" mint", func(t *testing.T) {
+			code, _ := callMintToken(t, h, "canvas:"+tc.id, fx.claims(fx.student))
+			require.Equal(t, tc.want, code)
+		})
+		t.Run(tc.name+" internal auth", func(t *testing.T) {
+			code, _ := callInternalAuth(t, h, rtSecret, "canvas:"+tc.id, fx.student.ID)
+			require.Equal(t, tc.want, code)
+		})
+	}
+}
+
+func TestInternalAuth_CanvasBranchesAndExistingScopeReadOnly(t *testing.T) {
+	fx := newCanvasHandlerFixture(t)
+	present := fx.addUser(t, "present-internal")
+	invitee := fx.addUser(t, "invitee-internal")
+	_, err := fx.h.Sessions.JoinSession(context.Background(), fx.session.ID, present.ID)
+	require.NoError(t, err)
+	_, err = fx.h.Sessions.AddParticipant(context.Background(), fx.session.ID, invitee.ID, fx.teacher.ID)
+	require.NoError(t, err)
+	participants, err := fx.h.Canvases.CreateCanvas(context.Background(), store.CreateCanvasInput{SessionID: fx.session.ID, OwnerID: fx.student.ID, Title: "Participants", Visibility: "participants"})
+	require.NoError(t, err)
+	sessionCanvas, err := fx.h.Canvases.CreateCanvas(context.Background(), store.CreateCanvasInput{SessionID: fx.session.ID, OwnerID: fx.student.ID, Title: "Session", Visibility: "session"})
+	require.NoError(t, err)
+	require.NoError(t, func() error {
+		_, err := fx.db.ExecContext(context.Background(), "UPDATE sessions SET visibility = 'public' WHERE id = $1", fx.session.ID)
+		return err
+	}())
+	h := newRealtimeHandlerForCanvasFixture(fx)
+
+	code, response := callInternalAuth(t, h, rtSecret, "session:"+fx.session.ID+":user:"+fx.student.ID, fx.student.ID)
+	require.Equal(t, http.StatusOK, code)
+	require.True(t, response.Allowed)
+	require.False(t, response.ReadOnly)
+	for _, tc := range []struct {
+		name string
+		doc  string
+		user *store.RegisteredUser
+		want bool
+	}{
+		{"present participant", "canvas:" + participants.ID, present, true},
+		{"invitee denied", "canvas:" + participants.ID, invitee, false},
+		{"public session outsider", "canvas:" + sessionCanvas.ID, fx.outsider, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			code, response := callInternalAuth(t, h, rtSecret, tc.doc, tc.user.ID)
+			require.Equal(t, http.StatusOK, code)
+			require.Equal(t, tc.want, response.Allowed)
+			if tc.want {
+				require.True(t, response.ReadOnly)
+			}
+		})
+	}
+	other, err := fx.h.Sessions.CreateSession(context.Background(), store.CreateSessionInput{TeacherID: fx.teacher.ID, Title: "Other internal"})
+	require.NoError(t, err)
+	t.Cleanup(func() { _, _ = fx.db.ExecContext(context.Background(), "DELETE FROM sessions WHERE id = $1", other.ID) })
+	otherCanvas, err := fx.h.Canvases.CreateCanvas(context.Background(), store.CreateCanvasInput{SessionID: other.ID, OwnerID: fx.teacher.ID, Title: "Other", Visibility: "participants"})
+	require.NoError(t, err)
+	code, response = callInternalAuth(t, h, rtSecret, "canvas:"+otherCanvas.ID, fx.student.ID)
+	require.Equal(t, http.StatusOK, code)
+	require.False(t, response.Allowed)
+}
+
 func TestRealtimeHealth_MissingSecretIsDegraded(t *testing.T) {
 	h := &RealtimeHandler{
 		HocuspocusTokenSecret:       "",

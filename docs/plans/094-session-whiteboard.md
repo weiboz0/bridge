@@ -189,3 +189,11 @@ _Plan-wide report pending later phases._
 - Canvas mutations re-check `sessions.status` while holding the same session-row transaction lock as their store write, so post-end requests return 409 without a handler-to-store TOCTOU window.
 - Focused Go auth, store, handler, mint-matrix, internal-auth, and class-bound/cross-session isolation tests passed only against the explicitly pinned `bridge_test` database; no migration ran in this phase.
 - **y-excalidraw vetting gate: FAIL.** npm latest is 2.0.12 (2024-12-10), the upstream README still lists tests as TODO, and its development matrix is React 18.3.1 while Bridge uses React 19.2.4. Its MIT license passes and Excalidraw itself supports host-controlled `viewModeEnabled`, but there is no maintained React-19/read-only evidence for the binding. Phase 3 must use the plan-authorized thin custom `onChange` ↔ Yjs binding; no package was installed.
+
+### Phase 1b — review-fix evidence (2026-08-07)
+
+- Preserved rolling JWT compatibility: an absent token `readOnly` claim normalizes to false, a present non-boolean claim is rejected, and non-canvas internal-auth 200 responses may omit `readOnly` while canvas responses may not.
+- Internal auth now validates both `allowed` and current canvas `readOnly` response types before accepting a 200 body, failing closed on malformed data.
+- Replaced the separate parameterized session router mount with direct canvas route registrations, so it cannot shadow `/api/sessions/public` or existing `{id}` session routes; a combined-router test covers public listing, canvas creation, and session end.
+- Added stable title validation errors, UUID validation before the canvas document query, expanded internal-auth branch coverage, and bounded fixture connection/cleanup contexts.
+- Focused Go suites and TypeScript type-check passed against the explicitly pinned `bridge_test` database with `DATABASE_URL` unset. Bun is unavailable in this execution environment, so the scoped Bun test file could not be executed here.

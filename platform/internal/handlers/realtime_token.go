@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 
 	"github.com/weiboz0/bridge/platform/internal/auth"
 	"github.com/weiboz0/bridge/platform/internal/store"
@@ -319,6 +320,9 @@ func (h *RealtimeHandler) authorizeDocumentResult(ctx context.Context, claims *a
 func (h *RealtimeHandler) authorizeCanvasDoc(ctx context.Context, claims *auth.Claims, canvasID string) (documentAuthorization, *authDecision) {
 	if h.Canvases == nil || h.Sessions == nil {
 		return documentAuthorization{}, &authDecision{Status: http.StatusInternalServerError, Message: "Canvas store unavailable"}
+	}
+	if _, err := uuid.Parse(canvasID); err != nil {
+		return documentAuthorization{}, &authDecision{Status: http.StatusBadRequest, Message: "canvas doc-name must be canvas:{uuid}"}
 	}
 	canvas, err := h.Canvases.GetCanvasByID(ctx, canvasID)
 	if err != nil {

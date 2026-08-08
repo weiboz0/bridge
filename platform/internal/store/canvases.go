@@ -19,6 +19,7 @@ const (
 
 var (
 	ErrCanvasCapReached        = errors.New("session canvas cap reached")
+	ErrCanvasTitleRequired     = errors.New("canvas title is required")
 	ErrCanvasTitleTooLong      = errors.New("canvas title exceeds 255 characters")
 	ErrCanvasVisibilityTighten = errors.New("canvas visibility may only be loosened")
 	ErrCanvasBelowFloor        = errors.New("canvas visibility is below the session floor")
@@ -116,7 +117,7 @@ func validCanvasVisibility(visibility string) bool {
 func (s *CanvasStore) CreateCanvas(ctx context.Context, input CreateCanvasInput) (*Canvas, error) {
 	title := strings.TrimSpace(input.Title)
 	if title == "" {
-		return nil, errors.New("canvas title is required")
+		return nil, ErrCanvasTitleRequired
 	}
 	if utf8.RuneCountInString(title) > MaxCanvasTitleRunes {
 		return nil, ErrCanvasTitleTooLong
@@ -206,7 +207,7 @@ func (s *CanvasStore) UpdateCanvas(ctx context.Context, sessionID, canvasID, own
 	if title != nil {
 		normalizedTitle = strings.TrimSpace(*title)
 		if normalizedTitle == "" {
-			return nil, errors.New("canvas title is required")
+			return nil, ErrCanvasTitleRequired
 		}
 		if utf8.RuneCountInString(normalizedTitle) > MaxCanvasTitleRunes {
 			return nil, ErrCanvasTitleTooLong

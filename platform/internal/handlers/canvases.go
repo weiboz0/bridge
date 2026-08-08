@@ -19,17 +19,11 @@ type CanvasHandler struct {
 }
 
 func (h *CanvasHandler) Routes(r chi.Router) {
-	r.Route("/api/sessions/{id}", func(r chi.Router) {
-		r.Use(ValidateUUIDParam("id"))
-		r.Get("/canvases", h.ListCanvases)
-		r.Post("/canvases", h.CreateCanvas)
-		r.Patch("/settings", h.PatchCanvasSettings)
-		r.Route("/canvases/{canvasID}", func(r chi.Router) {
-			r.Use(ValidateUUIDParam("canvasID"))
-			r.Patch("/", h.UpdateCanvas)
-			r.Delete("/", h.DeleteCanvas)
-		})
-	})
+	r.With(ValidateUUIDParam("id")).Get("/api/sessions/{id}/canvases", h.ListCanvases)
+	r.With(ValidateUUIDParam("id")).Post("/api/sessions/{id}/canvases", h.CreateCanvas)
+	r.With(ValidateUUIDParam("id")).Patch("/api/sessions/{id}/settings", h.PatchCanvasSettings)
+	r.With(ValidateUUIDParam("id"), ValidateUUIDParam("canvasID")).Patch("/api/sessions/{id}/canvases/{canvasID}", h.UpdateCanvas)
+	r.With(ValidateUUIDParam("id"), ValidateUUIDParam("canvasID")).Delete("/api/sessions/{id}/canvases/{canvasID}", h.DeleteCanvas)
 }
 
 func (h *CanvasHandler) sessionForMutation(w http.ResponseWriter, r *http.Request) (*store.LiveSession, bool) {
@@ -237,7 +231,7 @@ func (h *CanvasHandler) writeCanvasMutationError(w http.ResponseWriter, err erro
 		writeError(w, http.StatusConflict, "Session has ended")
 	case errors.Is(err, store.ErrCanvasCapReached):
 		writeError(w, http.StatusConflict, "Session canvas cap reached")
-	case errors.Is(err, store.ErrCanvasVisibilityTighten), errors.Is(err, store.ErrCanvasBelowFloor), errors.Is(err, store.ErrCanvasFloorTooLoose), errors.Is(err, store.ErrCanvasTitleTooLong):
+	case errors.Is(err, store.ErrCanvasVisibilityTighten), errors.Is(err, store.ErrCanvasBelowFloor), errors.Is(err, store.ErrCanvasFloorTooLoose), errors.Is(err, store.ErrCanvasTitleRequired), errors.Is(err, store.ErrCanvasTitleTooLong):
 		writeError(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, store.ErrCanvasFloorUnauthorized):
 		writeError(w, http.StatusForbidden, "Not authorized")

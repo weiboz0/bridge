@@ -11,6 +11,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
@@ -18,10 +19,12 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/weiboz0/bridge/platform/internal/auth"
+	"github.com/weiboz0/bridge/platform/internal/events"
 	"github.com/weiboz0/bridge/platform/internal/store"
 )
 
 const canvasHandlerTestDatabaseURL = "postgresql://work@127.0.0.1:5432/bridge_test"
+const canvasHandlerDBTimeout = 5 * time.Second
 
 type canvasHandlerFixture struct {
 	db       *sql.DB
@@ -35,6 +38,8 @@ type canvasHandlerFixture struct {
 
 func newCanvasHandlerFixture(t *testing.T) *canvasHandlerFixture {
 	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), canvasHandlerDBTimeout)
+	defer cancel()
 	url := os.Getenv("TEST_DATABASE_URL")
 	if url == "" {
 		url = canvasHandlerTestDatabaseURL
@@ -45,26 +50,33 @@ func newCanvasHandlerFixture(t *testing.T) *canvasHandlerFixture {
 	db, err := sql.Open("pgx", url)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
+	require.NoError(t, db.PingContext(ctx))
 	var actual string
-	require.NoError(t, db.QueryRowContext(context.Background(), "SELECT current_database()").Scan(&actual))
+	require.NoError(t, db.QueryRowContext(ctx, "SELECT current_database()").Scan(&actual))
 	require.True(t, strings.HasSuffix(actual, "_test"), "connected to non-test database %q", actual)
 
 	users := store.NewUserStore(db)
 	mkUser := func(label string) *store.RegisteredUser {
-		u, err := users.RegisterUser(context.Background(), store.RegisterInput{Name: label, Email: fmt.Sprintf("%s-%s@example.com", t.Name(), label), Password: "testpassword123"})
+		u, err := users.RegisterUser(ctx, store.RegisterInput{Name: label, Email: fmt.Sprintf("%s-%s@example.com", t.Name(), label), Password: "testpassword123"})
 		require.NoError(t, err)
 		t.Cleanup(func() {
-			_, _ = db.ExecContext(context.Background(), "DELETE FROM session_participants WHERE user_id = $1", u.ID)
-			_, _ = db.ExecContext(context.Background(), "DELETE FROM users WHERE id = $1", u.ID)
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), canvasHandlerDBTimeout)
+			defer cleanupCancel()
+			_, _ = db.ExecContext(cleanupCtx, "DELETE FROM session_participants WHERE user_id = $1", u.ID)
+			_, _ = db.ExecContext(cleanupCtx, "DELETE FROM users WHERE id = $1", u.ID)
 		})
 		return u
 	}
 	teacher, student, outsider := mkUser("teacher"), mkUser("student"), mkUser("outsider")
 	sessions := store.NewSessionStore(db)
-	session, err := sessions.CreateSession(context.Background(), store.CreateSessionInput{TeacherID: teacher.ID, Title: "Canvas session"})
+	session, err := sessions.CreateSession(ctx, store.CreateSessionInput{TeacherID: teacher.ID, Title: "Canvas session"})
 	require.NoError(t, err)
-	t.Cleanup(func() { _, _ = db.ExecContext(context.Background(), "DELETE FROM sessions WHERE id = $1", session.ID) })
-	_, err = sessions.JoinSession(context.Background(), session.ID, student.ID)
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), canvasHandlerDBTimeout)
+		defer cleanupCancel()
+		_, _ = db.ExecContext(cleanupCtx, "DELETE FROM sessions WHERE id = $1", session.ID)
+	})
+	_, err = sessions.JoinSession(ctx, session.ID, student.ID)
 	require.NoError(t, err)
 
 	h := &CanvasHandler{Sessions: sessions, Canvases: store.NewCanvasStore(db)}
@@ -88,11 +100,15 @@ func newRealtimeHandlerForCanvasFixture(fx *canvasHandlerFixture) *RealtimeHandl
 
 func (fx *canvasHandlerFixture) addUser(t *testing.T, label string) *store.RegisteredUser {
 	t.Helper()
-	u, err := store.NewUserStore(fx.db).RegisterUser(context.Background(), store.RegisterInput{Name: label, Email: fmt.Sprintf("%s-%s@example.com", t.Name(), label), Password: "testpassword123"})
+	ctx, cancel := context.WithTimeout(context.Background(), canvasHandlerDBTimeout)
+	defer cancel()
+	u, err := store.NewUserStore(fx.db).RegisterUser(ctx, store.RegisterInput{Name: label, Email: fmt.Sprintf("%s-%s@example.com", t.Name(), label), Password: "testpassword123"})
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		_, _ = fx.db.ExecContext(context.Background(), "DELETE FROM session_participants WHERE user_id = $1", u.ID)
-		_, _ = fx.db.ExecContext(context.Background(), "DELETE FROM users WHERE id = $1", u.ID)
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), canvasHandlerDBTimeout)
+		defer cleanupCancel()
+		_, _ = fx.db.ExecContext(cleanupCtx, "DELETE FROM session_participants WHERE user_id = $1", u.ID)
+		_, _ = fx.db.ExecContext(cleanupCtx, "DELETE FROM users WHERE id = $1", u.ID)
 	})
 	return u
 }
@@ -122,6 +138,32 @@ func TestCanvasHandler_CreateCanvas_MemberOwnsCanvas(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &canvas))
 	require.Equal(t, fx.student.ID, canvas.OwnerID)
 	require.Equal(t, "private", canvas.Visibility)
+}
+
+func TestCanvasRoutes_ComposeWithSessionRoutes(t *testing.T) {
+	fx := newCanvasHandlerFixture(t)
+	r := chi.NewRouter()
+	(&SessionHandler{Sessions: fx.h.Sessions, Broadcaster: events.NewBroadcaster()}).Routes(r)
+	fx.h.Routes(r)
+	request := func(method, path string, body any) *httptest.ResponseRecorder {
+		var reader *bytes.Reader
+		if body == nil {
+			reader = bytes.NewReader(nil)
+		} else {
+			encoded, err := json.Marshal(body)
+			require.NoError(t, err)
+			reader = bytes.NewReader(encoded)
+		}
+		req := httptest.NewRequest(method, path, reader).WithContext(auth.ContextWithClaims(context.Background(), fx.claims(fx.teacher)))
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		return w
+	}
+	require.Equal(t, http.StatusOK, request(http.MethodGet, "/api/sessions/public", nil).Code)
+	canvas := request(http.MethodPost, "/api/sessions/"+fx.session.ID+"/canvases", map[string]string{"title": "Board", "visibility": "private"})
+	require.Equal(t, http.StatusCreated, canvas.Code, canvas.Body.String())
+	end := request(http.MethodPost, "/api/sessions/"+fx.session.ID+"/end", nil)
+	require.Equal(t, http.StatusOK, end.Code, end.Body.String())
 }
 
 func TestCanvasHandler_MutationAuthAndEndedArchive(t *testing.T) {
@@ -178,13 +220,17 @@ func TestCanvasHandler_DeleteOwnerOnly(t *testing.T) {
 
 func TestCanvasHandler_ValidationErrorsAreBadRequest(t *testing.T) {
 	fx := newCanvasHandlerFixture(t)
-	for _, body := range []map[string]string{{"title": "", "visibility": "private"}, {"title": "Board", "visibility": "unknown"}} {
+	for _, body := range []map[string]string{{"title": "", "visibility": "private"}, {"title": " \t", "visibility": "private"}, {"title": "Board", "visibility": "unknown"}} {
 		w := fx.request(t, http.MethodPost, "/api/sessions/"+fx.session.ID+"/canvases", body, fx.claims(fx.student))
 		require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
 	}
 	canvas, err := fx.h.Canvases.CreateCanvas(context.Background(), store.CreateCanvasInput{SessionID: fx.session.ID, OwnerID: fx.student.ID, Title: "Board", Visibility: "private"})
 	require.NoError(t, err)
 	w := fx.request(t, http.MethodPatch, "/api/sessions/"+fx.session.ID+"/canvases/"+canvas.ID, map[string]string{"visibility": "unknown"}, fx.claims(fx.student))
+	require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+	w = fx.request(t, http.MethodPatch, "/api/sessions/"+fx.session.ID+"/canvases/"+canvas.ID, map[string]string{"title": " \t"}, fx.claims(fx.student))
+	require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+	w = fx.request(t, http.MethodPatch, "/api/sessions/"+fx.session.ID+"/canvases/"+canvas.ID, map[string]string{"title": strings.Repeat("x", store.MaxCanvasTitleRunes+1)}, fx.claims(fx.student))
 	require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
 	w = fx.request(t, http.MethodPatch, "/api/sessions/"+fx.session.ID+"/settings", map[string]string{"canvasFloor": "session"}, fx.claims(fx.teacher))
 	require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())

@@ -90,8 +90,10 @@ export function verifyRealtimeJwt(token: string, secret: string): RealtimeClaims
   if (!claims.scope || typeof claims.scope !== "string") {
     throw new JwtVerifyError("missing scope");
   }
-  if (typeof claims.readOnly !== "boolean") {
-    throw new JwtVerifyError("missing readOnly");
+  if (claims.readOnly === undefined) {
+    claims.readOnly = false;
+  } else if (typeof claims.readOnly !== "boolean") {
+    throw new JwtVerifyError("invalid readOnly");
   }
   return claims as RealtimeClaims;
 }
@@ -118,7 +120,16 @@ export async function rechckDocumentAccess(args: {
   });
   if (res.status === 200) {
     const body = (await res.json()) as { allowed?: boolean; reason?: string; readOnly?: boolean };
-    return { allowed: !!body.allowed, reason: body.reason, readOnly: !!body.readOnly };
+    if (typeof body.allowed !== "boolean") {
+      throw new JwtVerifyError("internal recheck returned invalid allowed");
+    }
+    if (body.readOnly === undefined && !documentName.startsWith("canvas:")) {
+      return { allowed: body.allowed, reason: body.reason, readOnly: false };
+    }
+    if (typeof body.readOnly !== "boolean") {
+      throw new JwtVerifyError("internal recheck returned invalid readOnly");
+    }
+    return { allowed: body.allowed, reason: body.reason, readOnly: body.readOnly };
   }
   // Anything other than 200 means the recheck couldn't render an
   // authorization decision (4xx malformed input, 404 missing
