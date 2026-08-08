@@ -38,6 +38,30 @@ function pinnedCanvasTestDatabaseUrl(): string {
   return databaseUrl;
 }
 
+type CanvasHooks = {
+  beforeHandleMessage(input: {
+    documentName: string;
+    connection: { readOnly: boolean };
+    update: Uint8Array;
+    context: { userId: string };
+  }): Promise<void>;
+  onLoadDocument(input: {
+    document: Y.Doc;
+    documentName: string;
+    context: { userId: string };
+  }): Promise<Y.Doc>;
+  onStoreDocument(input: {
+    document: Y.Doc;
+    documentName: string;
+  }): Promise<void>;
+};
+
+function registeredCanvasHooks(runtime: Record<string, unknown>): CanvasHooks {
+  const hooks = runtime.hocuspocusHooks;
+  expect(hooks).toBeDefined();
+  return hooks as CanvasHooks;
+}
+
 describe("hocuspocus canvas hook test seam", () => {
   test("importing the server module does not validate configuration or bind a port", () => {
     const databaseUrl = process.env.DATABASE_URL ?? "";
@@ -282,6 +306,47 @@ describe("hocuspocus canvas hook test seam", () => {
     expect(relayedUpdates).toBe(0);
   });
 
+  test("the registered beforeHandleMessage hook blocks a post-end mutation before observer relay", async () => {
+    const runtime = await import("./hocuspocus") as Record<string, unknown>;
+    const hooks = registeredCanvasHooks(runtime);
+    const documentName = "canvas:22222222-2222-4222-8222-222222222222";
+    const source = new Y.Doc();
+    source.getMap("elements").set("late", { type: "diamond" });
+    const frame = new OutgoingMessage(documentName)
+      .createSyncMessage()
+      .writeUpdate(Y.encodeStateAsUpdate(source))
+      .toUint8Array();
+    const target = new Document(documentName);
+    let relayedUpdates = 0;
+    target.onUpdate(() => { relayedUpdates += 1; });
+    const connection = {
+      readOnly: false,
+      send: () => undefined,
+      callbacks: { beforeSync: () => undefined },
+    };
+    let rechecks = 0;
+    globalThis.fetch = async () => {
+      rechecks += 1;
+      return new Response(JSON.stringify({ allowed: true, readOnly: true }));
+    };
+
+    await hooks.beforeHandleMessage({
+      documentName,
+      connection,
+      update: frame,
+      context: { userId: "owner" },
+    });
+    const incoming = new IncomingMessage(frame);
+    incoming.readVarString();
+    incoming.writeVarString(documentName);
+    new MessageReceiver(incoming).apply(target, connection as never);
+
+    expect(rechecks).toBe(1);
+    expect(connection.readOnly).toBe(true);
+    expect(target.getMap("elements").size).toBe(0);
+    expect(relayedUpdates).toBe(0);
+  });
+
   test("surfaces a canvas persistence load query failure instead of returning blank state", async () => {
     const databaseUrl = pinnedCanvasTestDatabaseUrl();
     const db = postgres(databaseUrl, { max: 1 });
@@ -300,7 +365,7 @@ describe("hocuspocus canvas hook test seam", () => {
     }
   });
 
-  test("rejects a valid canvas ID whose persisted Yjs state is missing", async () => {
+  test("the registered load hook rejects a valid canvas ID whose persisted Yjs state is missing", async () => {
     const databaseUrl = pinnedCanvasTestDatabaseUrl();
     const db = postgres(databaseUrl, { max: 1 });
     try {
@@ -308,11 +373,14 @@ describe("hocuspocus canvas hook test seam", () => {
       expect(currentDatabase.endsWith("_test")).toBe(true);
 
       const runtime = await import("./hocuspocus") as Record<string, unknown>;
-      const load = runtime.loadCanvasYjsState;
-      expect(typeof load).toBe("function");
-      if (typeof load !== "function") return;
+      const hooks = registeredCanvasHooks(runtime);
+      globalThis.fetch = async () => new Response(JSON.stringify({ allowed: true, readOnly: false }));
 
-      await expect(load(randomUUID())).rejects.toThrow();
+      await expect(hooks.onLoadDocument({
+        document: new Y.Doc(),
+        documentName: `canvas:${randomUUID()}`,
+        context: { userId: "owner" },
+      })).rejects.toThrow(/Canvas does not exist/);
     } finally {
       await db.end();
     }
@@ -324,9 +392,11 @@ describe("hocuspocus canvas hook test seam", () => {
     const userId = randomUUID();
     const sessionId = randomUUID();
     const canvasId = randomUUID();
+    let databaseVerified = false;
     try {
       const [{ currentDatabase }] = await db<{ currentDatabase: string }[]>`SELECT current_database() AS "currentDatabase"`;
       expect(currentDatabase.endsWith("_test")).toBe(true);
+      databaseVerified = true;
       await db`INSERT INTO users (id, name, email) VALUES (${userId}::uuid, 'Canvas persistence', ${`canvas-${canvasId}@example.test`})`;
       await db`INSERT INTO sessions (id, teacher_id, title) VALUES (${sessionId}::uuid, ${userId}::uuid, 'Canvas persistence')`;
       await db`INSERT INTO session_canvases (id, session_id, owner_id, title, visibility) VALUES (${canvasId}::uuid, ${sessionId}::uuid, ${userId}::uuid, 'Canvas', 'private')`;
@@ -334,6 +404,7 @@ describe("hocuspocus canvas hook test seam", () => {
       const runtime = await import("./hocuspocus") as Record<string, unknown>;
       const store = runtime.storeCanvasYjsState;
       const load = runtime.loadCanvasYjsState;
+      const hooks = registeredCanvasHooks(runtime);
       expect(typeof store).toBe("function");
       expect(typeof load).toBe("function");
       if (typeof store !== "function" || typeof load !== "function") return;
@@ -342,10 +413,13 @@ describe("hocuspocus canvas hook test seam", () => {
       beforeEnd.getMap("elements").set("owner-element", { type: "rectangle", owner: "owner" });
       const firstState = Buffer.from(Y.encodeStateAsUpdate(beforeEnd)).toString("base64");
       expect(await store(canvasId, firstState)).toBe(true);
-      const loadedState = await load(canvasId);
-      expect(loadedState).toBe(firstState);
       const restored = new Y.Doc();
-      Y.applyUpdate(restored, Buffer.from(loadedState ?? "", "base64"));
+      globalThis.fetch = async () => new Response(JSON.stringify({ allowed: true, readOnly: false }));
+      await hooks.onLoadDocument({
+        document: restored,
+        documentName: `canvas:${canvasId}`,
+        context: { userId },
+      });
       expect(restored.getMap("elements").toJSON()).toEqual({
         "owner-element": { type: "rectangle", owner: "owner" },
       });
@@ -353,12 +427,14 @@ describe("hocuspocus canvas hook test seam", () => {
       await db`UPDATE sessions SET status = 'ended', ended_at = now() WHERE id = ${sessionId}::uuid`;
       beforeEnd.getMap("elements").set("late", { type: "diamond" });
       const lateState = Buffer.from(Y.encodeStateAsUpdate(beforeEnd)).toString("base64");
-      expect(await store(canvasId, lateState)).toBe(false);
+      await hooks.onStoreDocument({ document: beforeEnd, documentName: `canvas:${canvasId}` });
       expect(await load(canvasId)).toBe(firstState);
     } finally {
-      await db`DELETE FROM session_canvases WHERE id = ${canvasId}::uuid`;
-      await db`DELETE FROM sessions WHERE id = ${sessionId}::uuid`;
-      await db`DELETE FROM users WHERE id = ${userId}::uuid`;
+      if (databaseVerified) {
+        await db`DELETE FROM session_canvases WHERE id = ${canvasId}::uuid`;
+        await db`DELETE FROM sessions WHERE id = ${sessionId}::uuid`;
+        await db`DELETE FROM users WHERE id = ${userId}::uuid`;
+      }
       await db.end();
     }
   });
