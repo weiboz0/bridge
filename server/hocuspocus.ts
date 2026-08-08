@@ -1,6 +1,9 @@
-import { Server } from "@hocuspocus/server";
+import { IncomingMessage, MessageType, Server } from "@hocuspocus/server";
+import { sql } from "drizzle-orm";
+import { messageYjsSyncStep2, messageYjsUpdate } from "y-protocols/sync";
 import * as Y from "yjs";
 import { loadDocumentState, storeDocumentState } from "./documents";
+import { serverDb } from "./db";
 import {
   loadAttemptYjsState,
   storeAttemptYjsState,
@@ -82,20 +85,115 @@ function validateRealtimeAuthEnv(): void {
   console.log(`[hocuspocus] realtime auth mode: JWT only; exposure=${BRIDGE_HOST_EXPOSURE || "localhost (default)"}`);
 }
 
-validateRealtimeAuthEnv();
+if (import.meta.main) {
+  validateRealtimeAuthEnv();
+}
 
 interface AuthContext {
   userId: string;
   role: string;
   attemptId?: string;
+  canvasId?: string;
   readOnly?: boolean;
+}
+
+export function canvasAuthenticationContext({
+  documentName,
+  claims,
+  connectionConfig,
+}: {
+  documentName: string;
+  claims: { sub: string; role: string; readOnly: boolean };
+  connectionConfig: { readOnly: boolean };
+}): AuthContext {
+  if (!documentName.startsWith("canvas:")) {
+    throw new Error("Canvas authentication requires a canvas document");
+  }
+  connectionConfig.readOnly = claims.readOnly;
+  return {
+    userId: claims.sub,
+    role: claims.role,
+    canvasId: documentName.slice("canvas:".length),
+    readOnly: claims.readOnly,
+  };
+}
+
+export function isYjsMutationFrame(update: Uint8Array): boolean {
+  const message = new IncomingMessage(update);
+  message.readVarString();
+  const messageType = message.readVarUint();
+  if (messageType !== MessageType.Sync && messageType !== MessageType.SyncReply) {
+    return false;
+  }
+  const syncType = message.readVarUint();
+  return syncType === messageYjsSyncStep2 || syncType === messageYjsUpdate;
+}
+
+type DocumentRecheck = typeof rechckDocumentAccess;
+
+export async function guardCanvasMutationFrame({
+  documentName,
+  update,
+  connection,
+  userId,
+  recheck = rechckDocumentAccess,
+}: {
+  documentName: string;
+  update: Uint8Array;
+  connection: { readOnly: boolean };
+  userId: string;
+  recheck?: DocumentRecheck;
+}): Promise<void> {
+  if (!documentName.startsWith("canvas:") || connection.readOnly || !isYjsMutationFrame(update)) {
+    return;
+  }
+  if (!userId) {
+    throw new Error("Canvas mutation is missing authenticated user context");
+  }
+  const decision = await recheck({
+    apiBaseUrl: GO_INTERNAL_API_URL,
+    secret: TOKEN_SECRET,
+    documentName,
+    sub: userId,
+  });
+  if (!decision.allowed) {
+    throw new Error(`Access denied (mutation recheck): ${decision.reason ?? "unauthorized"}`);
+  }
+  if (typeof decision.readOnly !== "boolean") {
+    throw new Error("Canvas mutation recheck omitted readOnly");
+  }
+  if (decision.readOnly) {
+    connection.readOnly = true;
+  }
+}
+
+export async function loadCanvasYjsState(canvasId: string): Promise<string | null> {
+  const rows = await serverDb.execute<{ yjs_state: string | null }>(sql`
+    SELECT yjs_state FROM session_canvases WHERE id = ${canvasId}::uuid
+  `);
+  return rows[0]?.yjs_state ?? null;
+}
+
+// The joined status predicate is the durable archive backstop. A debounce
+// that fires after a session ends cannot overwrite the pre-end snapshot.
+export async function storeCanvasYjsState(canvasId: string, yjsState: string): Promise<boolean> {
+  const rows = await serverDb.execute<{ id: string }>(sql`
+    UPDATE session_canvases AS canvas
+    SET yjs_state = ${yjsState}, updated_at = now()
+    FROM sessions
+    WHERE canvas.id = ${canvasId}::uuid
+      AND sessions.id = canvas.session_id
+      AND sessions.status <> 'ended'
+    RETURNING canvas.id
+  `);
+  return rows.length === 1;
 }
 
 const server = new Server({
   port: HOCUSPOCUS_PORT,
   debounce: 30000, // Save to DB every 30 seconds (also saves on disconnect)
 
-  async onAuthenticate({ token, documentName }: { token: string; documentName: string }) {
+  async onAuthenticate({ token, documentName, connectionConfig }) {
     // noop documents don't carry collaboration content — short-circuit
     // before JWT verification so connection probes don't require a token.
     // Codex code-review BLOCKER: must NOT also bypass on missing-token for
@@ -115,6 +213,9 @@ const server = new Server({
     const claims = verifyRealtimeJwt(token, TOKEN_SECRET);
     if (claims.scope !== documentName) {
       throw new Error("JWT scope does not match documentName");
+    }
+    if (documentName.startsWith("canvas:")) {
+      return canvasAuthenticationContext({ documentName, claims, connectionConfig });
     }
     const ctx: AuthContext = {
       userId: claims.sub,
@@ -167,6 +268,8 @@ const server = new Server({
       if (documentName.startsWith("attempt:")) {
         const attemptId = documentName.slice("attempt:".length);
         yjsState = await loadAttemptYjsState(attemptId);
+      } else if (documentName.startsWith("canvas:")) {
+        yjsState = await loadCanvasYjsState(documentName.slice("canvas:".length));
       } else {
         yjsState = await loadDocumentState(documentName);
       }
@@ -177,9 +280,21 @@ const server = new Server({
       }
     } catch (err) {
       console.error(`[hocuspocus] Failed to load state for ${documentName}:`, err);
+      if (documentName.startsWith("canvas:")) {
+        throw err;
+      }
     }
 
     return document;
+  },
+
+  async beforeHandleMessage({ documentName, connection, update, context }) {
+    await guardCanvasMutationFrame({
+      documentName,
+      connection,
+      update,
+      userId: (context as AuthContext | undefined)?.userId ?? "",
+    });
   },
 
   async onStoreDocument({ document, documentName }: { document: Y.Doc; documentName: string }) {
@@ -195,6 +310,12 @@ const server = new Server({
       if (documentName.startsWith("attempt:")) {
         const attemptId = documentName.slice("attempt:".length);
         await storeAttemptYjsState(attemptId, yjsState, plainText);
+      } else if (documentName.startsWith("canvas:")) {
+        const stored = await storeCanvasYjsState(documentName.slice("canvas:".length), yjsState);
+        if (!stored) {
+          console.warn(`[hocuspocus] Dropped canvas snapshot after session ended: ${documentName}`);
+          return;
+        }
       } else {
         await storeDocumentState(documentName, yjsState, plainText);
       }
@@ -213,6 +334,8 @@ const server = new Server({
   },
 });
 
-server.listen().then(() => {
-  console.log(`[hocuspocus] WebSocket server running on ws://127.0.0.1:4000`);
-});
+if (import.meta.main) {
+  server.listen().then(() => {
+    console.log(`[hocuspocus] WebSocket server running on ws://127.0.0.1:${HOCUSPOCUS_PORT}`);
+  });
+}
