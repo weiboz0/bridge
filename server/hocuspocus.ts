@@ -171,7 +171,10 @@ export async function loadCanvasYjsState(canvasId: string): Promise<string | nul
   const rows = await serverDb.execute<{ yjs_state: string | null }>(sql`
     SELECT yjs_state FROM session_canvases WHERE id = ${canvasId}::uuid
   `);
-  return rows[0]?.yjs_state ?? null;
+  if (rows.length !== 1) {
+    throw new Error("Canvas does not exist");
+  }
+  return rows[0].yjs_state;
 }
 
 // The joined status predicate is the durable archive backstop. A debounce
@@ -273,7 +276,7 @@ const server = new Server({
       } else {
         yjsState = await loadDocumentState(documentName);
       }
-      if (yjsState) {
+      if (yjsState !== null) {
         const update = Buffer.from(yjsState, "base64");
         Y.applyUpdate(document, update);
         console.log(`[hocuspocus] Loaded state for: ${documentName}`);
