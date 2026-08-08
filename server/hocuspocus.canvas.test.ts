@@ -300,6 +300,24 @@ describe("hocuspocus canvas hook test seam", () => {
     }
   });
 
+  test("rejects a valid canvas ID whose persisted Yjs state is missing", async () => {
+    const databaseUrl = pinnedCanvasTestDatabaseUrl();
+    const db = postgres(databaseUrl, { max: 1 });
+    try {
+      const [{ currentDatabase }] = await db<{ currentDatabase: string }[]>`SELECT current_database() AS "currentDatabase"`;
+      expect(currentDatabase.endsWith("_test")).toBe(true);
+
+      const runtime = await import("./hocuspocus") as Record<string, unknown>;
+      const load = runtime.loadCanvasYjsState;
+      expect(typeof load).toBe("function");
+      if (typeof load !== "function") return;
+
+      await expect(load(randomUUID())).rejects.toThrow();
+    } finally {
+      await db.end();
+    }
+  });
+
   test("persists a live owner Yjs update, restores its map content, and refuses a late ended-session write", async () => {
     const databaseUrl = pinnedCanvasTestDatabaseUrl();
     const db = postgres(databaseUrl, { max: 1 });

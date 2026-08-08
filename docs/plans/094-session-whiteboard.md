@@ -215,3 +215,9 @@ _Plan-wide report pending later phases._
 
 - The first scoped portability run with `TEST_DATABASE_URL` unset failed exactly two database tests because their helper required that variable, while `scripts/ci-local.sh` supplies only `DATABASE_URL`.
 - The helper now accepts CI/service-container connection URLs, requiring only that `DATABASE_URL` parses to a `_test` database name; the independent `current_database()` assertion remains before any write.
+
+### Phase 2 — missing-canvas persistence regression (2026-08-07)
+
+- The regression supplies a valid random UUID with no `session_canvases` row and requires the exported `loadCanvasYjsState` helper to reject rather than treating absence as a blank Yjs state.
+- Commit `a8ac3ca` had already landed the missing-row fail-closed production fix before the test's first execution, so no behavior-level RED against `c328609` could be reproduced without rolling back shared production.
+- The first assertion expected an unnecessarily specific error string and failed only because the existing fix reports `Canvas does not exist`; the final regression asserts the required rejection behavior without coupling to message wording.
