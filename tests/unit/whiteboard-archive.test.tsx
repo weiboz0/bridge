@@ -23,7 +23,7 @@ class TestEventSource {
   readonly listeners = new Map<string, SessionEventListener>();
   readonly close = vi.fn();
 
-  constructor(_url: string) {
+  constructor() {
     TestEventSource.instances.push(this);
   }
 
@@ -145,7 +145,6 @@ describe("WhiteboardArchive — plan 094 phase 3", () => {
     return render(
       <TeacherDashboard
         sessionId={SESSION_ID}
-        classId={null}
         editorMode="python"
         courseTopics={[]}
       />,

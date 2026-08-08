@@ -426,7 +426,6 @@ describe("hocuspocus canvas hook test seam", () => {
 
       await db`UPDATE sessions SET status = 'ended', ended_at = now() WHERE id = ${sessionId}::uuid`;
       beforeEnd.getMap("elements").set("late", { type: "diamond" });
-      const lateState = Buffer.from(Y.encodeStateAsUpdate(beforeEnd)).toString("base64");
       await hooks.onStoreDocument({ document: beforeEnd, documentName: `canvas:${canvasId}` });
       expect(await load(canvasId)).toBe(firstState);
     } finally {
