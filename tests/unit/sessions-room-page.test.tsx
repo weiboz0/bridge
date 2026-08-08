@@ -21,9 +21,18 @@ class NotFoundError extends Error {
     this.name = "NotFoundError";
   }
 }
+class RedirectError extends Error {
+  constructor(destination: string) {
+    super(`NEXT_REDIRECT:${destination}`);
+    this.name = "RedirectError";
+  }
+}
 vi.mock("next/navigation", () => ({
   notFound: vi.fn(() => {
     throw new NotFoundError();
+  }),
+  redirect: vi.fn((destination: string) => {
+    throw new RedirectError(destination);
   }),
 }));
 
@@ -66,10 +75,11 @@ vi.mock("@/components/session/student/student-session", () => ({
 import SessionRoomPage from "@/app/(portal)/sessions/[id]/page";
 import { api } from "@/lib/api-client";
 import { ApiError } from "@/lib/api-error";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 
 const mockedApi = vi.mocked(api);
 const mockedNotFound = vi.mocked(notFound);
+const mockedRedirect = vi.mocked(redirect);
 
 const SESSION_ID = "11111111-1111-4111-8111-111111111111";
 
@@ -81,6 +91,7 @@ async function renderRoom() {
 beforeEach(() => {
   mockedApi.mockReset();
   mockedNotFound.mockClear();
+  mockedRedirect.mockClear();
 });
 
 describe("SessionRoomPage — plan 090 phase 5", () => {
@@ -164,6 +175,26 @@ describe("SessionRoomPage — plan 090 phase 5", () => {
 
     await expect(renderRoom()).rejects.toThrow("NEXT_NOT_FOUND");
     expect(mockedNotFound).toHaveBeenCalledTimes(1);
+  });
+
+  it("redirects an ended former participant to the archive without joining the live room", async () => {
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === `/api/sessions/${SESSION_ID}/teacher-page`) {
+        throw new ApiError(403, "Not a teacher");
+      }
+      if (path === `/api/sessions/${SESSION_ID}/student-page`) {
+        throw new ApiError(404, "Session ended");
+      }
+      throw new Error(`Unexpected api() call: ${path}`);
+    });
+
+    await expect(renderRoom()).rejects.toThrow(`NEXT_REDIRECT:/sessions/${SESSION_ID}/whiteboards`);
+    expect(mockedRedirect).toHaveBeenCalledWith(`/sessions/${SESSION_ID}/whiteboards`);
+    expect(
+      mockedApi.mock.calls.some(
+        ([path]) => path === `/api/sessions/${SESSION_ID}/join`,
+      ),
+    ).toBe(false);
   });
 
   it("renders the 'Session ended' notice instead of TeacherDashboard for a non-live session", async () => {

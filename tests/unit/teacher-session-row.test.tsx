@@ -29,9 +29,12 @@ describe("SessionRow (plan 043 phase 2.1)", () => {
     expect(screen.getByText("live")).toBeInTheDocument();
   });
 
-  it("ended session renders as plain text (no link to live workspace)", () => {
+  it("ended session links only to its durable whiteboard archive", () => {
     render(<SessionRow session={endedSession} />);
-    expect(screen.queryByRole("link")).not.toBeInTheDocument();
+    expect(screen.getByRole("link")).toHaveAttribute(
+      "href",
+      "/sessions/ended-1/whiteboards",
+    );
     expect(screen.getByText("Period 1 (yesterday)")).toBeInTheDocument();
     expect(screen.getByText("ended")).toBeInTheDocument();
   });
