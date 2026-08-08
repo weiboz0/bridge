@@ -180,4 +180,4 @@ _Plan-wide report pending later phases._
 - Added the schema declarations and `CanvasStore` create/get/list/update-floor/delete operations, including session-row locking for the floor invariant and archive-specific visibility checks.
 - `bash scripts/check-migration-uniqueness.sh` passed.
 - Applied `0028_session_canvases.sql` to the explicitly pinned throwaway `bridge_test` database.
-- Focused Go store tests passed against that database, including resolved-database URL guard attacks, the isolated-schema migration/backfill check, PostgreSQL-observed deterministic floor-race checks, archive roles, cap, and class-bound cross-org isolation.
+- Focused Go store tests passed against that database, including resolved-database URL guard attacks, isolated migration defaults/backfill (including generated canvas IDs), PostgreSQL-observed deterministic floor-race checks with cleanup-safe failure paths, archive roles, cap, and class-bound cross-org isolation.

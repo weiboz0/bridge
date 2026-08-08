@@ -7,14 +7,19 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 )
 
-const MaxSessionCanvases = 50
+const (
+	MaxSessionCanvases  = 50
+	MaxCanvasTitleRunes = 255
+)
 
 var (
 	ErrCanvasCapReached        = errors.New("session canvas cap reached")
+	ErrCanvasTitleTooLong      = errors.New("canvas title exceeds 255 characters")
 	ErrCanvasVisibilityTighten = errors.New("canvas visibility may only be loosened")
 	ErrCanvasBelowFloor        = errors.New("canvas visibility is below the session floor")
 	ErrCanvasFloorTooLoose     = errors.New("session canvas floor may not be session")
@@ -109,8 +114,12 @@ func validCanvasVisibility(visibility string) bool {
 
 // CreateCanvas serializes against floor changes with the owning session row.
 func (s *CanvasStore) CreateCanvas(ctx context.Context, input CreateCanvasInput) (*Canvas, error) {
-	if strings.TrimSpace(input.Title) == "" {
+	title := strings.TrimSpace(input.Title)
+	if title == "" {
 		return nil, errors.New("canvas title is required")
+	}
+	if utf8.RuneCountInString(title) > MaxCanvasTitleRunes {
+		return nil, ErrCanvasTitleTooLong
 	}
 	if !validCanvasVisibility(input.Visibility) {
 		return nil, fmt.Errorf("unsupported canvas visibility %q", input.Visibility)
@@ -150,7 +159,7 @@ func (s *CanvasStore) CreateCanvas(ctx context.Context, input CreateCanvasInput)
 		`INSERT INTO session_canvases (id, session_id, owner_id, title, visibility, created_at, updated_at)
 		 VALUES ($1, $2, $3, $4, GREATEST($5::canvas_visibility, $6::canvas_visibility), now(), now())
 		 RETURNING `+canvasColumns,
-		uuid.New().String(), input.SessionID, input.OwnerID, strings.TrimSpace(input.Title), input.Visibility, floor,
+		uuid.New().String(), input.SessionID, input.OwnerID, title, input.Visibility, floor,
 	))
 	if err != nil {
 		return nil, err

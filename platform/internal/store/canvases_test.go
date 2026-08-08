@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -15,7 +17,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const defaultCanvasTestDatabaseURL = "postgresql://work@127.0.0.1:5432/bridge_test"
+const (
+	defaultCanvasTestDatabaseURL = "postgresql://work@127.0.0.1:5432/bridge_test"
+	canvasTestDBTimeout          = 5 * time.Second
+)
 
 func canvasTestDatabaseURL(candidate string) (string, error) {
 	if candidate == "" {
@@ -44,16 +49,17 @@ func canvasTestDB(t *testing.T) *sql.DB {
 	require.NoError(t, err)
 	db, err := sql.Open("pgx", databaseURL)
 	require.NoError(t, err)
-	require.NoError(t, db.PingContext(context.Background()))
-	var connectedDatabase string
-	require.NoError(t, db.QueryRowContext(context.Background(), `SELECT current_database()`).Scan(&connectedDatabase))
-	require.NoError(t, validateCanvasTestDatabaseName(connectedDatabase))
 	t.Cleanup(func() { _ = db.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), canvasTestDBTimeout)
+	defer cancel()
+	require.NoError(t, db.PingContext(ctx))
+	var connectedDatabase string
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT current_database()`).Scan(&connectedDatabase))
+	require.NoError(t, validateCanvasTestDatabaseName(connectedDatabase))
 	return db
 }
 
-func waitForCanvasSessionLock(t *testing.T, observer *sql.DB, waiterPID, holderPID int) {
-	t.Helper()
+func waitForCanvasSessionLock(ctx context.Context, observer *sql.DB, waiterPID, holderPID int) error {
 	timeout := time.NewTimer(3 * time.Second)
 	defer timeout.Stop()
 	ticker := time.NewTicker(10 * time.Millisecond)
@@ -61,18 +67,40 @@ func waitForCanvasSessionLock(t *testing.T, observer *sql.DB, waiterPID, holderP
 
 	for {
 		var blocked bool
-		err := observer.QueryRowContext(context.Background(),
+		err := observer.QueryRowContext(ctx,
 			`SELECT $2 = ANY(pg_blocking_pids($1))`, waiterPID, holderPID,
 		).Scan(&blocked)
-		require.NoError(t, err)
+		if err != nil {
+			return err
+		}
 		if blocked {
-			return
+			return nil
 		}
 		select {
 		case <-timeout.C:
-			t.Fatalf("backend %d did not report blocking on session-lock holder %d", waiterPID, holderPID)
+			return fmt.Errorf("backend %d did not report blocking on session-lock holder %d", waiterPID, holderPID)
+		case <-ctx.Done():
+			return ctx.Err()
 		case <-ticker.C:
 		}
+	}
+}
+
+func receiveCanvasPID(ctx context.Context, pid <-chan int, name string) (int, error) {
+	select {
+	case value := <-pid:
+		return value, nil
+	case <-ctx.Done():
+		return 0, fmt.Errorf("wait for %s backend PID: %w", name, ctx.Err())
+	}
+}
+
+func receiveCanvasOperation(ctx context.Context, result <-chan error, name string) error {
+	select {
+	case err := <-result:
+		return err
+	case <-ctx.Done():
+		return fmt.Errorf("wait for %s operation: %w", name, ctx.Err())
 	}
 }
 
@@ -129,6 +157,28 @@ func TestCanvasStore_DefaultFloor(t *testing.T) {
 	assert.Equal(t, "private", floor)
 }
 
+func TestCanvasStore_CreateValidatesTitleCharacterLimit(t *testing.T) {
+	db := canvasTestDB(t)
+	ctx := context.Background()
+	canvases := NewCanvasStore(db)
+	sessions := NewSessionStore(db)
+	_, teacherID := setupSessionTest(t, db, t.Name())
+	session, err := sessions.CreateSession(ctx, CreateSessionInput{TeacherID: teacherID, Title: "Canvas title limit"})
+	require.NoError(t, err)
+	t.Cleanup(func() { _, _ = db.ExecContext(ctx, "DELETE FROM sessions WHERE id = $1", session.ID) })
+
+	_, err = canvases.CreateCanvas(ctx, CreateCanvasInput{
+		SessionID: session.ID, OwnerID: teacherID, Title: strings.Repeat("x", 256), Visibility: "private",
+	})
+	assert.ErrorIs(t, err, ErrCanvasTitleTooLong)
+
+	canvas, err := canvases.CreateCanvas(ctx, CreateCanvasInput{
+		SessionID: session.ID, OwnerID: teacherID, Title: strings.Repeat("é", 255), Visibility: "private",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 255, utf8.RuneCountInString(canvas.Title))
+}
+
 func TestCanvasStore_MigrationBackfillsCanvasFloor(t *testing.T) {
 	db := canvasTestDB(t)
 	ctx := context.Background()
@@ -160,7 +210,7 @@ func TestCanvasStore_MigrationBackfillsCanvasFloor(t *testing.T) {
 	_, err = conn.ExecContext(ctx, string(migration))
 	require.NoError(t, err)
 
-	var floor, defaultValue, enumOrder string
+	var floor, defaultValue, enumOrder, canvasIDDefault string
 	var nullable bool
 	require.NoError(t, conn.QueryRowContext(ctx,
 		`SELECT canvas_floor FROM sessions WHERE id = $1`, sessionID,
@@ -176,10 +226,23 @@ func TestCanvasStore_MigrationBackfillsCanvasFloor(t *testing.T) {
 		JOIN pg_type t ON t.oid = e.enumtypid
 		WHERE t.typname = 'canvas_visibility' AND t.typnamespace = current_schema()::regnamespace`,
 	).Scan(&enumOrder))
+	require.NoError(t, conn.QueryRowContext(ctx, `
+		SELECT column_default
+		FROM information_schema.columns
+		WHERE table_schema = current_schema() AND table_name = 'session_canvases' AND column_name = 'id'`,
+	).Scan(&canvasIDDefault))
+	var generatedCanvasID string
+	require.NoError(t, conn.QueryRowContext(ctx, `
+		INSERT INTO session_canvases (session_id, owner_id, title, visibility)
+		VALUES ($1, $2, 'migration default', 'private')
+		RETURNING id`, sessionID, userID,
+	).Scan(&generatedCanvasID))
 	assert.Equal(t, "private", floor)
 	assert.Contains(t, defaultValue, "private")
 	assert.False(t, nullable)
 	assert.Equal(t, "private,host,participants,session", enumOrder)
+	assert.Contains(t, canvasIDDefault, "gen_random_uuid")
+	assert.NotEmpty(t, generatedCanvasID)
 }
 
 func TestCanvasStore_CreateGreatestWithSessionFloor(t *testing.T) {
@@ -391,47 +454,68 @@ func TestCanvasStore_ConcurrentCreateVsRaiseFloor_NoneBelowFloor(t *testing.T) {
 	createStore := NewCanvasStore(db)
 	floorStore := NewCanvasStore(db)
 	observer := canvasTestDB(t)
+	operationCtx, cancelOperations := context.WithTimeout(ctx, canvasTestDBTimeout)
+	t.Cleanup(cancelOperations)
 	holderPID := make(chan int)
 	createRead := make(chan struct{})
 	releaseCreate := make(chan struct{})
+	var releaseCreateOnce sync.Once
+	releaseCreateLock := func() { releaseCreateOnce.Do(func() { close(releaseCreate) }) }
+	t.Cleanup(releaseCreateLock)
 	floorPID := make(chan int)
 	createStore.testHooks = &canvasStoreTestHooks{
 		beforeSessionLock: func(operation canvasStoreOperation, pid int) {
 			if operation == canvasStoreOperationCreate {
-				holderPID <- pid
+				select {
+				case holderPID <- pid:
+				case <-operationCtx.Done():
+				}
 			}
 		},
 		afterSessionLock: func(operation canvasStoreOperation, _ int) {
 			if operation == canvasStoreOperationCreate {
 				close(createRead)
-				<-releaseCreate
+				select {
+				case <-releaseCreate:
+				case <-operationCtx.Done():
+				}
 			}
 		},
 	}
 	floorStore.testHooks = &canvasStoreTestHooks{beforeSessionLock: func(operation canvasStoreOperation, pid int) {
 		if operation == canvasStoreOperationSetFloor {
-			floorPID <- pid
+			select {
+			case floorPID <- pid:
+			case <-operationCtx.Done():
+			}
 		}
 	}}
 
 	errs := make(chan error, 2)
 	go func() {
-		_, err := createStore.CreateCanvas(ctx, CreateCanvasInput{SessionID: session.ID, OwnerID: teacherID, Title: "Race board", Visibility: "private"})
+		_, err := createStore.CreateCanvas(operationCtx, CreateCanvasInput{SessionID: session.ID, OwnerID: teacherID, Title: "Race board", Visibility: "private"})
 		errs <- err
 	}()
-	holder := <-holderPID
-	<-createRead
+	holder, receiveErr := receiveCanvasPID(operationCtx, holderPID, "create")
+	require.NoError(t, receiveErr)
+	select {
+	case <-createRead:
+	case <-operationCtx.Done():
+		require.NoError(t, operationCtx.Err())
+	}
 	go func() {
-		_, err := floorStore.SetSessionCanvasFloor(ctx, session.ID, teacherID, "participants")
+		_, err := floorStore.SetSessionCanvasFloor(operationCtx, session.ID, teacherID, "participants")
 		errs <- err
 	}()
-	waiter := <-floorPID
-	waitForCanvasSessionLock(t, observer, waiter, holder)
+	waiter, receiveErr := receiveCanvasPID(operationCtx, floorPID, "floor")
+	require.NoError(t, receiveErr)
+	lockErr := waitForCanvasSessionLock(operationCtx, observer, waiter, holder)
 	// Release only after PostgreSQL confirms the floor transaction is blocked
 	// behind create's stale-floor read. Removing create's FOR UPDATE times out.
-	close(releaseCreate)
-	require.NoError(t, <-errs)
-	require.NoError(t, <-errs)
+	releaseCreateLock()
+	require.NoError(t, lockErr)
+	require.NoError(t, receiveCanvasOperation(operationCtx, errs, "create"))
+	require.NoError(t, receiveCanvasOperation(operationCtx, errs, "floor"))
 
 	var belowFloor int
 	require.NoError(t, db.QueryRowContext(ctx, `
@@ -457,47 +541,68 @@ func TestCanvasStore_ConcurrentSetVisibilityVsRaiseFloor_NoneBelowFloor(t *testi
 	visibilityStore := NewCanvasStore(db)
 	floorStore := NewCanvasStore(db)
 	observer := canvasTestDB(t)
+	operationCtx, cancelOperations := context.WithTimeout(ctx, canvasTestDBTimeout)
+	t.Cleanup(cancelOperations)
 	holderPID := make(chan int)
 	visibilityRead := make(chan struct{})
 	releaseVisibility := make(chan struct{})
+	var releaseVisibilityOnce sync.Once
+	releaseVisibilityLock := func() { releaseVisibilityOnce.Do(func() { close(releaseVisibility) }) }
+	t.Cleanup(releaseVisibilityLock)
 	floorPID := make(chan int)
 	visibilityStore.testHooks = &canvasStoreTestHooks{
 		beforeSessionLock: func(operation canvasStoreOperation, pid int) {
 			if operation == canvasStoreOperationSetVisibility {
-				holderPID <- pid
+				select {
+				case holderPID <- pid:
+				case <-operationCtx.Done():
+				}
 			}
 		},
 		afterSessionLock: func(operation canvasStoreOperation, _ int) {
 			if operation == canvasStoreOperationSetVisibility {
 				close(visibilityRead)
-				<-releaseVisibility
+				select {
+				case <-releaseVisibility:
+				case <-operationCtx.Done():
+				}
 			}
 		},
 	}
 	floorStore.testHooks = &canvasStoreTestHooks{beforeSessionLock: func(operation canvasStoreOperation, pid int) {
 		if operation == canvasStoreOperationSetFloor {
-			floorPID <- pid
+			select {
+			case floorPID <- pid:
+			case <-operationCtx.Done():
+			}
 		}
 	}}
 
 	errs := make(chan error, 2)
 	go func() {
-		_, err := visibilityStore.SetCanvasVisibility(ctx, session.ID, canvas.ID, teacherID, "host")
+		_, err := visibilityStore.SetCanvasVisibility(operationCtx, session.ID, canvas.ID, teacherID, "host")
 		errs <- err
 	}()
-	holder := <-holderPID
-	<-visibilityRead
+	holder, receiveErr := receiveCanvasPID(operationCtx, holderPID, "visibility")
+	require.NoError(t, receiveErr)
+	select {
+	case <-visibilityRead:
+	case <-operationCtx.Done():
+		require.NoError(t, operationCtx.Err())
+	}
 	go func() {
-		_, err := floorStore.SetSessionCanvasFloor(ctx, session.ID, teacherID, "participants")
+		_, err := floorStore.SetSessionCanvasFloor(operationCtx, session.ID, teacherID, "participants")
 		errs <- err
 	}()
-	waiter := <-floorPID
-	waitForCanvasSessionLock(t, observer, waiter, holder)
+	waiter, receiveErr := receiveCanvasPID(operationCtx, floorPID, "floor")
+	require.NoError(t, receiveErr)
+	lockErr := waitForCanvasSessionLock(operationCtx, observer, waiter, holder)
 	// Removing SetCanvasVisibility's FOR UPDATE leaves no observed blocker and
 	// fails before the paused stale visibility read can be released.
-	close(releaseVisibility)
-	require.NoError(t, <-errs)
-	require.NoError(t, <-errs)
+	releaseVisibilityLock()
+	require.NoError(t, lockErr)
+	require.NoError(t, receiveCanvasOperation(operationCtx, errs, "visibility"))
+	require.NoError(t, receiveCanvasOperation(operationCtx, errs, "floor"))
 
 	var belowFloor int
 	require.NoError(t, db.QueryRowContext(ctx, `

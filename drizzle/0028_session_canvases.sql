@@ -14,7 +14,7 @@ ALTER TABLE sessions
   ALTER COLUMN canvas_floor SET NOT NULL;
 
 CREATE TABLE session_canvases (
-  id uuid PRIMARY KEY,
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   session_id uuid NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
   owner_id uuid NOT NULL REFERENCES users(id),
   title varchar(255) NOT NULL,
