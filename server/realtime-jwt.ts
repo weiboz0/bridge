@@ -108,7 +108,7 @@ export async function rechckDocumentAccess(args: {
   secret: string;
   documentName: string;
   sub: string;
-}): Promise<{ allowed: boolean; reason?: string; readOnly: boolean }> {
+}): Promise<{ allowed: boolean; reason?: string; readOnly?: boolean }> {
   const { apiBaseUrl, secret, documentName, sub } = args;
   const res = await fetch(`${apiBaseUrl}/api/internal/realtime/auth`, {
     method: "POST",
@@ -124,7 +124,7 @@ export async function rechckDocumentAccess(args: {
       throw new JwtVerifyError("internal recheck returned invalid allowed");
     }
     if (body.readOnly === undefined && !documentName.startsWith("canvas:")) {
-      return { allowed: body.allowed, reason: body.reason, readOnly: false };
+      return { allowed: body.allowed, reason: body.reason };
     }
     if (typeof body.readOnly !== "boolean") {
       throw new JwtVerifyError("internal recheck returned invalid readOnly");

@@ -42,7 +42,7 @@ describe("canvas realtime JWT compatibility", () => {
 
   test("keeps non-canvas internal responses without readOnly compatible", async () => {
     globalThis.fetch = async () => new Response(JSON.stringify({ allowed: true }), { status: 200 });
-    await expect(rechckDocumentAccess({ apiBaseUrl: "http://api.example", secret, documentName: "session:22222222-2222-4222-8222-222222222222:user:11111111-1111-4111-8111-111111111111", sub: "11111111-1111-4111-8111-111111111111" })).resolves.toEqual({ allowed: true, readOnly: false });
+    await expect(rechckDocumentAccess({ apiBaseUrl: "http://api.example", secret, documentName: "session:22222222-2222-4222-8222-222222222222:user:11111111-1111-4111-8111-111111111111", sub: "11111111-1111-4111-8111-111111111111" })).resolves.toEqual({ allowed: true, reason: undefined });
   });
 
   test("fails closed when allowed is not a boolean", async () => {
