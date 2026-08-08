@@ -23,8 +23,6 @@ import { WhiteboardPanel } from "@/components/session/whiteboard/whiteboard-pane
 
 interface TeacherDashboardProps {
   sessionId: string;
-  classId: string | null;
-  returnPath?: string;
   editorMode: "python" | "javascript" | "blockly";
   // Plan 044 phase 2: presentation mode renders the linked
   // teaching_unit per topic.
@@ -116,8 +114,6 @@ function normalizeParticipant(participant: ParticipantResponse): Participant | n
 
 export function TeacherDashboard({
   sessionId,
-  classId,
-  returnPath,
   editorMode,
   courseTopics,
   inviteToken,
@@ -253,7 +249,7 @@ export function TeacherDashboard({
     if (response.ok) {
       router.push(`/sessions/${sessionId}/whiteboards`);
     }
-  }, [sessionId, classId, returnPath, router]);
+  }, [sessionId, router]);
 
   function handleSelectStudent(id: string) {
     setSelectedStudent(id);

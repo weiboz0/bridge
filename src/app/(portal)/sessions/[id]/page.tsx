@@ -94,18 +94,9 @@ export default async function SessionRoomPage({
       );
     }
 
-    // Go's teacher-page hardcodes returnPath to "/teacher" for a class-less
-    // session (see handlers/sessions.go GetTeacherPage) — a portal path this
-    // neutral route's host may not have a role for. Override it to /sessions
-    // so "End Session" doesn't bounce a class-less host through a role gate.
-    // Class-bound returnPath (a class detail page) is left untouched.
-    const returnPath = teacherPayload.classId ? teacherPayload.returnPath : "/sessions";
-
     return (
       <TeacherDashboard
         sessionId={sessionId}
-        classId={teacherPayload.classId}
-        returnPath={returnPath}
         editorMode={(teacherPayload.editorMode as EditorMode) ?? "python"}
         courseTopics={teacherPayload.courseTopics}
         inviteToken={teacherPayload.session.inviteToken ?? null}

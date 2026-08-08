@@ -83,8 +83,6 @@ export default async function TeacherSessionPage({
   return (
     <TeacherDashboard
       sessionId={sessionId}
-      classId={payload.classId}
-      returnPath={payload.returnPath}
       editorMode={(payload.editorMode as EditorMode) ?? "python"}
       courseTopics={payload.courseTopics}
       inviteToken={payload.session.inviteToken ?? null}
