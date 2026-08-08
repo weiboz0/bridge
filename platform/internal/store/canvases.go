@@ -56,16 +56,31 @@ const (
 // canvasStoreTestHooks is nil in production. It lets the store tests hold an
 // operation immediately after its session-row lock has supplied current state.
 type canvasStoreTestHooks struct {
-	afterSessionLock func(canvasStoreOperation)
+	beforeSessionLock func(canvasStoreOperation, int)
+	afterSessionLock  func(canvasStoreOperation, int)
 }
 
 func NewCanvasStore(db *sql.DB) *CanvasStore {
 	return &CanvasStore{db: db, sessions: NewSessionStore(db)}
 }
 
-func (s *CanvasStore) afterSessionLock(operation canvasStoreOperation) {
+func (s *CanvasStore) beforeSessionLock(ctx context.Context, tx *sql.Tx, operation canvasStoreOperation) (int, error) {
+	if s.testHooks == nil {
+		return 0, nil
+	}
+	var backendPID int
+	if err := tx.QueryRowContext(ctx, `SELECT pg_backend_pid()`).Scan(&backendPID); err != nil {
+		return 0, err
+	}
+	if s.testHooks.beforeSessionLock != nil {
+		s.testHooks.beforeSessionLock(operation, backendPID)
+	}
+	return backendPID, nil
+}
+
+func (s *CanvasStore) afterSessionLock(operation canvasStoreOperation, backendPID int) {
 	if s.testHooks != nil && s.testHooks.afterSessionLock != nil {
-		s.testHooks.afterSessionLock(operation)
+		s.testHooks.afterSessionLock(operation, backendPID)
 	}
 }
 
@@ -106,6 +121,10 @@ func (s *CanvasStore) CreateCanvas(ctx context.Context, input CreateCanvasInput)
 		return nil, err
 	}
 	defer tx.Rollback()
+	backendPID, err := s.beforeSessionLock(ctx, tx, canvasStoreOperationCreate)
+	if err != nil {
+		return nil, err
+	}
 
 	var floor string
 	if err := tx.QueryRowContext(ctx,
@@ -115,7 +134,7 @@ func (s *CanvasStore) CreateCanvas(ctx context.Context, input CreateCanvasInput)
 	} else if err != nil {
 		return nil, err
 	}
-	s.afterSessionLock(canvasStoreOperationCreate)
+	s.afterSessionLock(canvasStoreOperationCreate, backendPID)
 
 	var count int
 	if err := tx.QueryRowContext(ctx,
@@ -162,6 +181,10 @@ func (s *CanvasStore) SetCanvasVisibility(ctx context.Context, sessionID, canvas
 		return nil, err
 	}
 	defer tx.Rollback()
+	backendPID, err := s.beforeSessionLock(ctx, tx, canvasStoreOperationSetVisibility)
+	if err != nil {
+		return nil, err
+	}
 
 	var floor string
 	if err := tx.QueryRowContext(ctx,
@@ -171,7 +194,7 @@ func (s *CanvasStore) SetCanvasVisibility(ctx context.Context, sessionID, canvas
 	} else if err != nil {
 		return nil, err
 	}
-	s.afterSessionLock(canvasStoreOperationSetVisibility)
+	s.afterSessionLock(canvasStoreOperationSetVisibility, backendPID)
 
 	var current string
 	if err := tx.QueryRowContext(ctx,
@@ -229,6 +252,10 @@ func (s *CanvasStore) SetSessionCanvasFloor(ctx context.Context, sessionID, host
 		return "", err
 	}
 	defer tx.Rollback()
+	backendPID, err := s.beforeSessionLock(ctx, tx, canvasStoreOperationSetFloor)
+	if err != nil {
+		return "", err
+	}
 
 	var teacherID, current string
 	if err := tx.QueryRowContext(ctx,
@@ -238,7 +265,7 @@ func (s *CanvasStore) SetSessionCanvasFloor(ctx context.Context, sessionID, host
 	} else if err != nil {
 		return "", err
 	}
-	s.afterSessionLock(canvasStoreOperationSetFloor)
+	s.afterSessionLock(canvasStoreOperationSetFloor, backendPID)
 	if teacherID != hostID {
 		return "", ErrCanvasFloorUnauthorized
 	}

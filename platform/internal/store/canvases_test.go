@@ -4,12 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"net/url"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -20,21 +21,21 @@ func canvasTestDatabaseURL(candidate string) (string, error) {
 	if candidate == "" {
 		candidate = defaultCanvasTestDatabaseURL
 	}
-	parsed, err := url.Parse(candidate)
+	config, err := pgx.ParseConfig(candidate)
 	if err != nil {
 		return "", fmt.Errorf("parse canvas test database URL: %w", err)
 	}
-	if parsed.Scheme != "postgres" && parsed.Scheme != "postgresql" {
-		return "", fmt.Errorf("canvas test database URL must use postgres: %q", parsed.Scheme)
-	}
-	database, err := url.PathUnescape(strings.TrimPrefix(parsed.EscapedPath(), "/"))
-	if err != nil {
-		return "", fmt.Errorf("decode canvas test database name: %w", err)
-	}
-	if database == "" || (!strings.HasSuffix(database, "_test") && database != "bridge_test") {
-		return "", fmt.Errorf("refusing non-test canvas database %q", database)
+	if err := validateCanvasTestDatabaseName(config.Database); err != nil {
+		return "", err
 	}
 	return candidate, nil
+}
+
+func validateCanvasTestDatabaseName(database string) error {
+	if database == "" || (!strings.HasSuffix(database, "_test") && database != "bridge_test") {
+		return fmt.Errorf("refusing non-test canvas database %q", database)
+	}
+	return nil
 }
 
 func canvasTestDB(t *testing.T) *sql.DB {
@@ -44,8 +45,35 @@ func canvasTestDB(t *testing.T) *sql.DB {
 	db, err := sql.Open("pgx", databaseURL)
 	require.NoError(t, err)
 	require.NoError(t, db.PingContext(context.Background()))
+	var connectedDatabase string
+	require.NoError(t, db.QueryRowContext(context.Background(), `SELECT current_database()`).Scan(&connectedDatabase))
+	require.NoError(t, validateCanvasTestDatabaseName(connectedDatabase))
 	t.Cleanup(func() { _ = db.Close() })
 	return db
+}
+
+func waitForCanvasSessionLock(t *testing.T, observer *sql.DB, waiterPID, holderPID int) {
+	t.Helper()
+	timeout := time.NewTimer(3 * time.Second)
+	defer timeout.Stop()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		var blocked bool
+		err := observer.QueryRowContext(context.Background(),
+			`SELECT $2 = ANY(pg_blocking_pids($1))`, waiterPID, holderPID,
+		).Scan(&blocked)
+		require.NoError(t, err)
+		if blocked {
+			return
+		}
+		select {
+		case <-timeout.C:
+			t.Fatalf("backend %d did not report blocking on session-lock holder %d", waiterPID, holderPID)
+		case <-ticker.C:
+		}
+	}
 }
 
 func TestCanvasTestDatabaseURLRejectsUnsafeDatabase(t *testing.T) {
@@ -59,6 +87,18 @@ func TestCanvasTestDatabaseURLRejectsUnsafeDatabase(t *testing.T) {
 	url, err = canvasTestDatabaseURL("")
 	require.NoError(t, err)
 	assert.Equal(t, defaultCanvasTestDatabaseURL, url)
+}
+
+func TestCanvasTestDatabaseURLRejectsDatabaseOverrides(t *testing.T) {
+	for _, candidate := range []string{
+		"postgresql://work@127.0.0.1:5432/bridge_test?dbname=bridge",
+		"postgresql://work@127.0.0.1:5432/bridge_test?database=bridge",
+	} {
+		t.Run(candidate, func(t *testing.T) {
+			_, err := canvasTestDatabaseURL(candidate)
+			assert.Error(t, err)
+		})
+	}
 }
 
 func TestCanvasStore_DefaultFloor(t *testing.T) {
@@ -350,18 +390,27 @@ func TestCanvasStore_ConcurrentCreateVsRaiseFloor_NoneBelowFloor(t *testing.T) {
 
 	createStore := NewCanvasStore(db)
 	floorStore := NewCanvasStore(db)
+	observer := canvasTestDB(t)
+	holderPID := make(chan int)
 	createRead := make(chan struct{})
 	releaseCreate := make(chan struct{})
-	floorRead := make(chan struct{})
-	createStore.testHooks = &canvasStoreTestHooks{afterSessionLock: func(operation canvasStoreOperation) {
-		if operation == canvasStoreOperationCreate {
-			close(createRead)
-			<-releaseCreate
-		}
-	}}
-	floorStore.testHooks = &canvasStoreTestHooks{afterSessionLock: func(operation canvasStoreOperation) {
+	floorPID := make(chan int)
+	createStore.testHooks = &canvasStoreTestHooks{
+		beforeSessionLock: func(operation canvasStoreOperation, pid int) {
+			if operation == canvasStoreOperationCreate {
+				holderPID <- pid
+			}
+		},
+		afterSessionLock: func(operation canvasStoreOperation, _ int) {
+			if operation == canvasStoreOperationCreate {
+				close(createRead)
+				<-releaseCreate
+			}
+		},
+	}
+	floorStore.testHooks = &canvasStoreTestHooks{beforeSessionLock: func(operation canvasStoreOperation, pid int) {
 		if operation == canvasStoreOperationSetFloor {
-			close(floorRead)
+			floorPID <- pid
 		}
 	}}
 
@@ -370,18 +419,19 @@ func TestCanvasStore_ConcurrentCreateVsRaiseFloor_NoneBelowFloor(t *testing.T) {
 		_, err := createStore.CreateCanvas(ctx, CreateCanvasInput{SessionID: session.ID, OwnerID: teacherID, Title: "Race board", Visibility: "private"})
 		errs <- err
 	}()
+	holder := <-holderPID
 	<-createRead
 	go func() {
 		_, err := floorStore.SetSessionCanvasFloor(ctx, session.ID, teacherID, "participants")
 		errs <- err
 	}()
-	// The create transaction has already read its floor. Releasing it now lets
-	// the floor transaction obtain the same lock only after create commits.
-	// Without the session-row lock, floor could commit before this stale create.
+	waiter := <-floorPID
+	waitForCanvasSessionLock(t, observer, waiter, holder)
+	// Release only after PostgreSQL confirms the floor transaction is blocked
+	// behind create's stale-floor read. Removing create's FOR UPDATE times out.
 	close(releaseCreate)
 	require.NoError(t, <-errs)
 	require.NoError(t, <-errs)
-	<-floorRead
 
 	var belowFloor int
 	require.NoError(t, db.QueryRowContext(ctx, `
@@ -406,18 +456,27 @@ func TestCanvasStore_ConcurrentSetVisibilityVsRaiseFloor_NoneBelowFloor(t *testi
 
 	visibilityStore := NewCanvasStore(db)
 	floorStore := NewCanvasStore(db)
+	observer := canvasTestDB(t)
+	holderPID := make(chan int)
 	visibilityRead := make(chan struct{})
 	releaseVisibility := make(chan struct{})
-	floorRead := make(chan struct{})
-	visibilityStore.testHooks = &canvasStoreTestHooks{afterSessionLock: func(operation canvasStoreOperation) {
-		if operation == canvasStoreOperationSetVisibility {
-			close(visibilityRead)
-			<-releaseVisibility
-		}
-	}}
-	floorStore.testHooks = &canvasStoreTestHooks{afterSessionLock: func(operation canvasStoreOperation) {
+	floorPID := make(chan int)
+	visibilityStore.testHooks = &canvasStoreTestHooks{
+		beforeSessionLock: func(operation canvasStoreOperation, pid int) {
+			if operation == canvasStoreOperationSetVisibility {
+				holderPID <- pid
+			}
+		},
+		afterSessionLock: func(operation canvasStoreOperation, _ int) {
+			if operation == canvasStoreOperationSetVisibility {
+				close(visibilityRead)
+				<-releaseVisibility
+			}
+		},
+	}
+	floorStore.testHooks = &canvasStoreTestHooks{beforeSessionLock: func(operation canvasStoreOperation, pid int) {
 		if operation == canvasStoreOperationSetFloor {
-			close(floorRead)
+			floorPID <- pid
 		}
 	}}
 
@@ -426,15 +485,19 @@ func TestCanvasStore_ConcurrentSetVisibilityVsRaiseFloor_NoneBelowFloor(t *testi
 		_, err := visibilityStore.SetCanvasVisibility(ctx, session.ID, canvas.ID, teacherID, "host")
 		errs <- err
 	}()
+	holder := <-holderPID
 	<-visibilityRead
 	go func() {
 		_, err := floorStore.SetSessionCanvasFloor(ctx, session.ID, teacherID, "participants")
 		errs <- err
 	}()
+	waiter := <-floorPID
+	waitForCanvasSessionLock(t, observer, waiter, holder)
+	// Removing SetCanvasVisibility's FOR UPDATE leaves no observed blocker and
+	// fails before the paused stale visibility read can be released.
 	close(releaseVisibility)
 	require.NoError(t, <-errs)
 	require.NoError(t, <-errs)
-	<-floorRead
 
 	var belowFloor int
 	require.NoError(t, db.QueryRowContext(ctx, `
