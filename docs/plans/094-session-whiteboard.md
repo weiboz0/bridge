@@ -200,3 +200,13 @@ _Plan-wide report pending later phases._
 - Follow-up compatibility fix: non-canvas 200 responses that omit `readOnly` retain the legacy `{allowed, reason}` object shape; canvas responses remain strict. The scoped Bun compatibility test and the established `tests/unit/realtime-jwt.test.ts` Vitest regression test both passed via the pinned Bun runtime.
 - The authoritative `bun run test` command now runs Vitest and the scoped Hocuspocus canvas compatibility suite, so the fail-closed `readOnly` contract is included in the normal local/CI test step.
 - The script uses `bunx --bun vitest run` because the bare Vitest binary selected the incompatible system Node runtime here. With provider keys explicitly empty and both database variables pinned to `bridge_test`, the scoped Bun suite and TypeScript type-check passed. A full Vitest attempt emitted only `tests/integration/python-101-import.test.ts (0 test)` before terminating without a normal suite summary, so that wider Vitest result remains unverified in this environment.
+
+### Phase 2 — Hocuspocus canvas persistence and mutation-guard tests (2026-08-07)
+
+- `PATH=/home/chris/.bun/bin:$PATH DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test TEST_DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test bun test server/hocuspocus.canvas.test.ts` passed 16 tests with 55 assertions.
+- The persistence test writes an owner-style Yjs map update to a live canvas, reloads its base64 snapshot, applies it to a fresh `Y.Doc`, and proves the map content survives before separately proving a post-end write is rejected.
+- The guard tests reject a malformed raw frame and a mutation without authenticated user context before any access recheck can allow them.
+- The exported `loadCanvasYjsState` seam rejects an invalid database query instead of silently returning blank state.
+- Every database-touching test requires both database variables to equal the pinned `bridge_test` URL, verifies the URL suffix and `current_database()` before writes, performs no migration, and deletes only its generated canvas, session, and user rows.
+- A RED run against absent Phase 2 behavior was not possible in this delegated test pass because commit `f72d8ab` already contained the Phase 2 implementation before these tests were added; hiding or changing the shared production work would have violated this task's scope.
+- `PATH=/home/chris/.bun/bin:$PATH bunx --bun tsc --noEmit` passed.
