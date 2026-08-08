@@ -23,6 +23,7 @@
 **`src/app/(portal)/teacher/sessions/[sessionId]/page.tsx`** (link its ended-session notice to the archive) ·
 **`src/app/(portal)/sessions/[id]/whiteboards/page.tsx`** (new, dedicated read-only archive route) ·
 **`src/app/(portal)/teacher/page.tsx`** · **`src/app/(portal)/teacher/sessions/page.tsx`** · **`src/app/(portal)/teacher/classes/[id]/page.tsx`** · **`src/app/(portal)/student/classes/[id]/page.tsx`** (link ended-session history rows to the archive) ·
+**`tests/unit/teacher-session-row.test.tsx`** · **`tests/unit/ended-sessions-non-link.test.ts`** · **`tests/unit/sessions-room-page.test.tsx`** (update ended-session expectations) · **`tests/unit/whiteboard-archive.test.tsx`** (new archive interaction regression) ·
 `package.json` (add `@excalidraw/excalidraw`, `y-excalidraw`) ·
 `docs/api.md` · `docs/architecture/decisions.md` · `README.md` · this plan file.
 
@@ -31,6 +32,8 @@ Scope-widening (R1 blocker 1 / concern C1) authorized by the user 2026-08-06: th
 Scope-widening (archive-route decision) authorized by the user 2026-08-07: ended-session whiteboards must be reachable without re-enabling the live dashboards, so add the two existing ended-session route files and one dedicated archive page.
 
 Scope-widening (archive-entry review fix) authorized by the user 2026-08-08: add every existing teacher/student ended-session history entry point so former readers have a durable archive link rather than depending on a live SSE redirect.
+
+Scope-widening (archive test review fix) authorized by the user 2026-08-08: add the existing ended-session regression tests and one focused archive test, so the new archive contract is enforced rather than contradicted by stale no-link assertions.
 
 ## Problem / goal
 
@@ -184,6 +187,8 @@ A canvas is `documentName = canvas:{canvasId}`. Permission is enforced **server-
 - Route-level test obligations now name direct-live view-only behavior, no live page API calls, no empty-list metadata/token leak, redirects, and all archive links.
 
 ### Archive-route addendum — Round 2 (2026-08-08): **CHANGES REQUESTED (Codex quality).** The scope and navigation fixes were accepted for re-review, but the quality pass required three precise test/behavior additions: bind the archive write prohibition to the custom binding's actual `onChange` path (not only Excalidraw view mode), distinguish initial list fetch/no-token from selected-board token mint, and gate the teacher's archive redirect on a successful end response. These are folded into the Phase-3 frontend test contract above; the fresh contract verdict is pending.
+
+### Archive-route addendum — Round 3 (2026-08-08): **CHANGES REQUESTED (Codex contract).** The revised behavior and assertions were sufficient, but the existing tests that must change were outside File scope. The user authorized the explicitly named test files above; fresh confirmation is pending.
 
 ## Code Review
 
