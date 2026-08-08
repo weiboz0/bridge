@@ -198,6 +198,8 @@ A canvas is `documentName = canvas:{canvasId}`. Permission is enforced **server-
 
 ### Archive-route addendum — Round 5 (2026-08-08): **CHANGES REQUESTED (Codex quality).** The archive behavior was approved by the contract reviewer, but a full fixed-scope audit found three earlier branch artifacts omitted from File scope. The user authorized their exact paths; fresh confirmation is pending.
 
+### Archive-route addendum — Round 6 (2026-08-08): **APPROVE.** The scope confirmation approved all previously omitted branch artifacts. A fresh Codex contract pass approved forced archive no-write behavior, token sequencing, success-only end redirect, and public-live versus archive semantics. GLM 5.2 approved the resolved teacher total-denial rationale and the named public-viewer denial tests. The user continues to skip Claude reviewers until Sunday 16:00, so no Claude slot was dispatched. The archive addendum gate is therefore clear.
+
 ## Code Review
 
 _Pending._
