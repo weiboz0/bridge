@@ -1,7 +1,7 @@
 # Plan 094 — Excalidraw whiteboards in live sessions
 
 **Branch:** `feat/094-session-whiteboard`
-**Status:** Plan review passed at Revision 5 under the user's temporary no-Claude-reviewer direction. Phases 1a, 1b, and 2 are complete; Phase 3 is in progress.
+**Status:** Plan review passed at Revision 5 under the user's temporary no-Claude-reviewer direction. Phases 1a, 1b, 2, 3, and 4 are complete; Phase 5 verification and the code-review gate are in progress.
 
 ## File scope
 

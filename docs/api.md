@@ -66,6 +66,29 @@ Any authenticated user — not only teachers — may host an orphan (`classId: n
 - **Role-neutral surface:** `/sessions` (browse), `/sessions/{id}` (room — host or participant, resolved by which of `teacher-page`/`student-page` the caller is authorized for), served by `PortalShell portalRole={null}`, which admits any authenticated user (see `authenticated` on `/api/me/portal-access`).
 - **Abuse — deferred, not solved.** Auth, the concurrent cap, and host-only controls are the in-scope mitigations. Reporting, bans, per-window rate limits, and content moderation are explicitly out of scope for Plan 090 and tracked there as follow-ups.
 
+### Whiteboard canvases — Plan 094
+
+Whiteboards are durable Yjs documents scoped as `canvas:{canvasId}`.
+The canvas metadata endpoints require authentication and a session UUID.
+
+- **`GET /api/sessions/{id}/canvases`** returns `{ "items": Canvas[] }` containing only canvases visible to the caller.
+- **`POST /api/sessions/{id}/canvases`** creates an owner canvas while the session is live.
+  The body requires `title` and `visibility` (`private`, `host`, `participants`, or `session`); the session floor may raise the requested visibility.
+- **`PATCH /api/sessions/{id}/canvases/{canvasId}`** changes an owner canvas title and/or loosens its visibility.
+  Equal or tighter visibility is rejected.
+- **`DELETE /api/sessions/{id}/canvases/{canvasId}`** deletes an owner canvas and its persisted document while live.
+- **`PATCH /api/sessions/{id}/settings`** lets the session host set `{ "canvasFloor": "private" | "host" | "participants" }`.
+  Raising a floor raises affected canvases in the same transaction; `session` is not a permitted floor.
+
+All canvas mutations return `409` after the session ends.
+Canvas documents are read through the existing realtime-token mint endpoint using the `canvas:{canvasId}` scope; a token's `readOnly` claim is enforced by Hocuspocus, not merely by the browser UI.
+
+Live access follows the visibility ladder: owner at `private`; teacher at `host` and wider; a `present` participant at `participants` and wider; and any caller allowed into the live session at `session`.
+For a public class-less session, that last live level intentionally includes any authenticated caller.
+After end, access becomes a read-only archive: owner; teacher for `host` and wider; `present` or `left` former participant for `participants` and `session`.
+Invited-only users and public non-participants do not retain archive access.
+The role-neutral archive page is `/sessions/{id}/whiteboards`; it first lists visible metadata and only mints a document token after a visible canvas is selected.
+
 ### `POST /api/sessions`
 
 Create a live session.

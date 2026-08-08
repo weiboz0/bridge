@@ -96,6 +96,23 @@ The documented defaults (3003 / 8002) are **not** what the primary dev machine r
 occupy those ports there. Never assume; read `.env`.
 This is why E2E requires a pinned `E2E_BASE_URL` (`docs/testing.md`).
 
+## §10 — Session whiteboards are persisted, visibility-floored realtime documents
+
+Each whiteboard has a durable owner and a `canvas:{uuid}` Yjs document.
+Canvas visibility is ordered `private < host < participants < session`; PostgreSQL enum ordering is part of the persistence contract.
+The enum is append-only: adding a level between existing levels would change `<` comparisons, so a new level belongs at an end or the comparison must move to explicit ranks.
+
+The session host controls a minimum floor up to `participants`; owners may only loosen, never tighten, a canvas visibility.
+All floor and visibility writes lock the session row so no concurrent mutation can persist a canvas below its floor.
+
+Live `session` visibility follows the live session's access rule, including authenticated outsiders for public class-less sessions.
+After end, no public admission remains: the archive permits the owner, the teacher at `host` or wider, and `present`/`left` former participants at `participants` or wider.
+All archive tokens are read-only.
+The Hocuspocus connection receives that signed `readOnly` claim and rechecks mutation-bearing canvas frames before Yjs applies or relays them, so a token minted before the end transition cannot write afterward.
+
+The neutral `/sessions/{id}/whiteboards` archive is deliberately client-read-only even while the session remains live: it suppresses local binding writes and mutation controls, while the Go mint and Hocuspocus checks remain authoritative.
+The accepted MVP limitations are that an owner cannot tighten an accidental share, a departed live viewer can retain a read token until its short TTL, and the host has no per-canvas takedown control.
+
 ---
 
 ## Adding an entry
