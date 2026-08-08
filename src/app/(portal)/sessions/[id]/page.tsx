@@ -1,4 +1,4 @@
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
 import { api } from "@/lib/api-client";
 import { ApiError } from "@/lib/api-error";
@@ -78,10 +78,13 @@ export default async function SessionRoomPage({
               <CardTitle>Session ended</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3 text-sm">
-              <p className="text-muted-foreground">
-                This session is no longer live. A read-only review surface for
-                ended sessions is coming in a future update.
+            <p className="text-muted-foreground">
+                This session is no longer live. Its whiteboards remain available
+                in the read-only archive.
               </p>
+              <Link href={`/sessions/${sessionId}/whiteboards`} className="text-primary underline">
+                View whiteboard archive
+              </Link>
               <Link href="/sessions" className="text-primary underline">
                 Back to sessions
               </Link>
@@ -115,7 +118,12 @@ export default async function SessionRoomPage({
   try {
     studentPayload = await api<StudentPagePayload>(`/api/sessions/${sessionId}/student-page`);
   } catch (err) {
-    if (err instanceof ApiError && (err.status === 404 || err.status === 403)) {
+    if (err instanceof ApiError && err.status === 404) {
+      // student-page deliberately rejects ended sessions, including former
+      // participants. The archive endpoint performs its own archive auth.
+      redirect(`/sessions/${sessionId}/whiteboards`);
+    }
+    if (err instanceof ApiError && err.status === 403) {
       notFound();
     }
     throw err;

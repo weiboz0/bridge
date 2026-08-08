@@ -177,12 +177,7 @@ export default async function TeacherClassDetailPage({
         <div>
           <h2 className="text-lg font-semibold mb-3">Past Sessions ({pastSessions.length})</h2>
           <div className="space-y-2">
-            {/*
-              Plan 048 phase 6: ended sessions render as non-clickable rows.
-              Pre-048 they linked to a "Session ended" placeholder dashboard
-              that has no review content. Until a read-only review surface
-              ships, no link is better than a link to nothing useful.
-            */}
+            {/* Ended sessions link only to the whiteboard archive, never the live dashboard. */}
             {pastSessions.map((s) => {
               const isLive = s.status === "live";
               const meta = (
@@ -210,15 +205,16 @@ export default async function TeacherClassDetailPage({
                 );
               }
               return (
-                <div
+                <Link
                   key={s.id}
-                  className="flex items-center justify-between py-3 px-4 border rounded-lg"
+                  href={`/sessions/${s.id}/whiteboards`}
+                  className="flex items-center justify-between py-3 px-4 border rounded-lg transition-colors hover:bg-muted/50"
                 >
                   {meta}
                   <span className="rounded-full bg-zinc-100 px-2.5 py-1 text-xs font-medium text-zinc-600">
                     Ended
                   </span>
-                </div>
+                </Link>
               );
             })}
           </div>

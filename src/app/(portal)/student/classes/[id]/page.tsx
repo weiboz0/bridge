@@ -67,6 +67,7 @@ export default async function StudentClassDetailPage({
   ]);
 
   const activeSession = sessions.find((s) => s.status === "live");
+  const endedSessions = sessions.filter((s) => s.status === "ended");
 
   const problemsByTopic = new Map<string, ProblemItem[]>();
   await Promise.all(
@@ -116,6 +117,27 @@ export default async function StudentClassDetailPage({
         <Card>
           <CardContent className="py-6 text-center text-muted-foreground">
             <p>No live session right now. Your teacher will start one soon.</p>
+          </CardContent>
+        </Card>
+      )}
+
+      {endedSessions.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-lg">Whiteboard archives</CardTitle>
+            <CardDescription>Session boards are available read-only after a session ends.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {endedSessions.map((session) => (
+              <Link
+                key={session.id}
+                href={`/sessions/${session.id}/whiteboards`}
+                className="flex items-center justify-between rounded-md border px-3 py-2 text-sm hover:bg-muted/50"
+              >
+                <span>Session from {new Date(session.startedAt).toLocaleDateString()}</span>
+                <span className="text-muted-foreground">View archive →</span>
+              </Link>
+            ))}
           </CardContent>
         </Card>
       )}

@@ -12,6 +12,7 @@ import { AiChatPanel } from "@/components/ai/ai-chat-panel";
 import { RaiseHandButton } from "@/components/help-queue/raise-hand-button";
 import { CodeEditor } from "@/components/editor/code-editor";
 import { Button } from "@/components/ui/button";
+import { WhiteboardPanel } from "@/components/session/whiteboard/whiteboard-panel";
 
 interface SessionTopic {
   topicId: string;
@@ -47,6 +48,7 @@ export function StudentSession({
   const [showAi, setShowAi] = useState(false);
   const [sidePanelMinimized, setSidePanelMinimized] = useState(false);
   const [broadcastActive, setBroadcastActive] = useState(false);
+  const [showWhiteboard, setShowWhiteboard] = useState(false);
 
   const userId = session?.user?.id || "";
   const documentName = userId ? `session:${sessionId}:user:${userId}` : "noop";
@@ -94,7 +96,7 @@ export function StudentSession({
     eventSource.addEventListener("broadcast_started", () => setBroadcastActive(true));
     eventSource.addEventListener("broadcast_ended", () => setBroadcastActive(false));
     eventSource.addEventListener("session_ended", () => {
-      window.location.href = returnPath ?? (classId ? `/student/classes/${classId}` : "/student");
+      window.location.href = `/sessions/${sessionId}/whiteboards`;
     });
     return () => eventSource.close();
   }, [sessionId, classId, returnPath, userId]);
@@ -172,6 +174,9 @@ export function StudentSession({
               <Button variant="ghost" size="sm" onClick={toggle}>
                 {isStacked ? "Side-by-side" : "Stacked"}
               </Button>
+              <Button variant={showWhiteboard ? "secondary" : "ghost"} size="sm" onClick={() => setShowWhiteboard((current) => !current)}>
+                Whiteboard
+              </Button>
               <RaiseHandButton sessionId={sessionId} />
               {aiEnabled && (
                 <Button variant="ghost" size="sm" onClick={() => setShowAi(!showAi)}>
@@ -181,12 +186,16 @@ export function StudentSession({
             </div>
           </div>
           <div className="h-[calc(100%-44px)]">
-            <EditorSwitcher
-              editorMode={editorMode}
-              initialCode={starterCode}
-              yText={yText}
-              provider={provider}
-            />
+            {showWhiteboard ? (
+              <WhiteboardPanel sessionId={sessionId} />
+            ) : (
+              <EditorSwitcher
+                editorMode={editorMode}
+                initialCode={starterCode}
+                yText={yText}
+                provider={provider}
+              />
+            )}
           </div>
         </div>
       </div>

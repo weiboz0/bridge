@@ -19,6 +19,7 @@ import { AnnotationList } from "@/components/annotations/annotation-list";
 import { EditorSwitcher } from "@/components/editor/editor-switcher";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { WhiteboardPanel } from "@/components/session/whiteboard/whiteboard-panel";
 
 interface TeacherDashboardProps {
   sessionId: string;
@@ -133,6 +134,7 @@ export function TeacherDashboard({
   const [participantLookup, setParticipantLookup] = useState("");
   const [participantLookupError, setParticipantLookupError] = useState<string | null>(null);
   const [isAddingParticipant, setIsAddingParticipant] = useState(false);
+  const [showWhiteboard, setShowWhiteboard] = useState(false);
 
   const userId = session?.user?.id || "";
 
@@ -247,8 +249,10 @@ export function TeacherDashboard({
   }
 
   const endSession = useCallback(async () => {
-    await fetch(`/api/sessions/${sessionId}/end`, { method: "POST" });
-    router.push(returnPath ?? (classId ? `/teacher/classes/${classId}` : "/teacher"));
+    const response = await fetch(`/api/sessions/${sessionId}/end`, { method: "POST" });
+    if (response.ok) {
+      router.push(`/sessions/${sessionId}/whiteboards`);
+    }
   }, [sessionId, classId, returnPath, router]);
 
   function handleSelectStudent(id: string) {
@@ -296,6 +300,9 @@ export function TeacherDashboard({
   }
 
   function renderMainArea() {
+    if (showWhiteboard) {
+      return <WhiteboardPanel sessionId={sessionId} />;
+    }
     switch (mode) {
       case "presentation": {
         // Plan 044 phase 2: render linked Unit per topic (1:1). Per Codex
@@ -465,7 +472,15 @@ export function TeacherDashboard({
 
         <div className="flex min-h-0 flex-1 flex-col">
           <div className="min-h-0 flex-1">{renderMainArea()}</div>
-          <ModeToolbar activeMode={mode} onModeChange={setMode} />
+          <div className="flex items-center justify-between border-t px-2 py-1">
+            <ModeToolbar activeMode={mode} onModeChange={(nextMode) => {
+              setShowWhiteboard(false);
+              setMode(nextMode);
+            }} />
+            <Button variant={showWhiteboard ? "secondary" : "ghost"} size="sm" onClick={() => setShowWhiteboard((current) => !current)}>
+              Whiteboard
+            </Button>
+          </div>
         </div>
 
         {layout.rightVisible && (

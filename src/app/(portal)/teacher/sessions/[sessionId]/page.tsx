@@ -65,9 +65,12 @@ export default async function TeacherSessionPage({
           </CardHeader>
           <CardContent className="space-y-3 text-sm">
             <p className="text-muted-foreground">
-              This session is no longer live. A read-only review surface for
-              ended sessions is coming in a future update.
+              This session is no longer live. Its whiteboards remain available
+              in the read-only archive.
             </p>
+            <Link href={`/sessions/${sessionId}/whiteboards`} className="text-primary underline">
+              View whiteboard archive
+            </Link>
             <Link href="/teacher/sessions" className="text-primary underline">
               Back to sessions
             </Link>
