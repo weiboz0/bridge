@@ -22,12 +22,15 @@
 **`src/app/(portal)/sessions/[id]/page.tsx`** (link its ended-session notice to the archive) ·
 **`src/app/(portal)/teacher/sessions/[sessionId]/page.tsx`** (link its ended-session notice to the archive) ·
 **`src/app/(portal)/sessions/[id]/whiteboards/page.tsx`** (new, dedicated read-only archive route) ·
+**`src/app/(portal)/teacher/page.tsx`** · **`src/app/(portal)/teacher/sessions/page.tsx`** · **`src/app/(portal)/teacher/classes/[id]/page.tsx`** · **`src/app/(portal)/student/classes/[id]/page.tsx`** (link ended-session history rows to the archive) ·
 `package.json` (add `@excalidraw/excalidraw`, `y-excalidraw`) ·
 `docs/api.md` · `docs/architecture/decisions.md` · `README.md` · this plan file.
 
 Scope-widening (R1 blocker 1 / concern C1) authorized by the user 2026-08-06: the read-only viewer boundary cannot be built without a `readOnly` claim in both JWT files, and `CanvasStore` must be wired in `main.go`.
 
 Scope-widening (archive-route decision) authorized by the user 2026-08-07: ended-session whiteboards must be reachable without re-enabling the live dashboards, so add the two existing ended-session route files and one dedicated archive page.
+
+Scope-widening (archive-entry review fix) authorized by the user 2026-08-08: add every existing teacher/student ended-session history entry point so former readers have a durable archive link rather than depending on a live SSE redirect.
 
 ## Problem / goal
 
@@ -48,7 +51,7 @@ A live session is a shared code editor today. Add Excalidraw whiteboards, synced
 | 9 | **Membership checks by level, reusing existing helpers, not re-rolled.** `host` → `sessions.teacher_id`. `participants` → a `present` `session_participants` row (the strict join check — *not* the public-open-join clause). `session` → `CanAccessSession` (the plan-090 guard, which for a public class-less session admits any authenticated user — this is intentional per Decision 11, not a leak). A hand-rolled membership query is how 090's cross-org leak would reappear — reuse the named helpers. | Reviewers (all 3) + user |
 | 10 | **Per-session canvas cap** (e.g. 50) enforced at create under the session-row lock — bounds persisted-doc growth. | Reviewer (opus C5) |
 | 11 | **`session` visibility is intentionally "as public as the session."** In a public, class-less session (any authenticated user can join), a `session`-visibility canvas is readable by any authenticated user — the board is exactly as public as the room it's in. An owner who wants join-only sharing picks **`participants`** instead. This makes the plan-090 public surface a *conscious owner choice per canvas*, not an accidental cross-org leak. Documented in `docs/api.md` + `decisions.md`. | User (R2 trust-model fork) |
-| 12 | **Archive UI is a dedicated neutral route.** `/sessions/{id}/whiteboards` renders only the read-only whiteboard archive rather than reviving either live teacher or student dashboard. It does not pre-authorize through the ordinary session page APIs, because archive access intentionally includes former participants whom the live-session access guard rejects; the existing canvas list and minted `canvas:{id}` token remain the metadata and document authorization boundaries. | User (2026-08-07) |
+| 12 | **Archive UI is a dedicated neutral route.** `/sessions/{id}/whiteboards` renders only the read-only whiteboard archive rather than reviving either live teacher or student dashboard. It never writes a scene or offers mutation controls, even if opened while a session is still live. It does not pre-authorize through the ordinary session page APIs, because archive access intentionally includes former participants whom the live-session access guard rejects; the existing canvas list and minted `canvas:{id}` token remain the metadata and document authorization boundaries. The neutral live-session route redirects its otherwise-404 former-participant path to this archive, which returns a generic empty state for callers with no visible canvases and never attempts a document token mint until an item is selected. | User (2026-08-07); tightened after archive-route review 2026-08-08 |
 
 ## Architecture (grounded; revised per R1)
 
@@ -100,7 +103,8 @@ A canvas is `documentName = canvas:{canvasId}`. Permission is enforced **server-
 - `@excalidraw/excalidraw` + `y-excalidraw` (or fallback). `src/lib/whiteboard/use-whiteboard.ts` binds a `canvas:{id}` Yjs doc (via `useYjsProvider` + a minted canvas token) to Excalidraw; **dynamic-import** the board (bundle size).
 - `src/components/session/whiteboard/`: canvas list (visible-to-me), create, owner visibility control (**loosen-only UI — levels ≤ current are disabled, not hidden; equal is a no-op**), board surface. Non-writers → `viewModeEnabled` (UX; the token is the real boundary).
 - Add a "Whiteboard" surface to `teacher-dashboard.tsx` + `student-session.tsx` (thin entry points).
-- Add the dedicated `/sessions/{id}/whiteboards` archive route and links from both existing ended-session notices. The archive page intentionally renders only list + board, never create or visibility controls; `student-session.tsx` redirects its `session_ended` event there.
+- Add the dedicated `/sessions/{id}/whiteboards` archive route and links from both existing ended-session notices and all existing ended-session history rows. The archive page intentionally renders only list + board, always forces `viewModeEnabled`, suppresses local Yjs writes, and never mints a `canvas:` token until a visible item is selected; `student-session.tsx` redirects its `session_ended` event there, and `teacher-dashboard.tsx` redirects a successful end action there. The neutral route sends its otherwise-404 former-participant fallback to the archive rather than reusing the live student-page authorization path.
+- Frontend tests explicitly cover: archive direct access while live is view-only; archive requests only `GET /canvases` (never `teacher-page`, `student-page`, or `join`); no create/visibility/live-dashboard controls render; a list response with no items exposes no metadata and mints no token; teacher-end and student-end redirects target the archive; each ended notice/history row links to it.
 - Frontend tests: list by role; owner edit vs viewer view-mode; loosen control; create; ended-session read-only.
 
 ### Phase 4 — Integration tests (NAMED — required: API + realtime auth + persistence) *(Opus)*
@@ -172,6 +176,12 @@ A canvas is `documentName = canvas:{canvasId}`. Permission is enforced **server-
 - Ended-session list-visible rules lacked named handler coverage. **Resolution in Revision 5:** add `TestCanvases_ListEndedArchive_ByRole` with visibility thresholds and owner/teacher/present/left/invitee/outsider cases.
 
 ### Round 5 — Codex confirmation (2026-08-07): **APPROVE.** Codex verified both Round-4 blockers are resolved and checked the installed Hocuspocus 3.4.4 implementation: `beforeHandleMessage` is awaited before `MessageReceiver.apply`, `Connection.readOnly` is mutable, and sync step-2/update frames are rejected when read-only. The named ended-session GET/list test covers owner, teacher, present/left participants, invitee, outsider, and visibility thresholds. Static plan review only; no tests were run. With GLM's standing Round-3 approval and the user's temporary direction to skip both Claude reviewers until Sunday 16:00, the plan-review gate passes for this run.
+
+### Archive-route addendum — Round 1 (2026-08-08): **CHANGES REQUESTED ×2; GLM result UNVERIFIED.** The user selected the dedicated archive route and authorized its first scope expansion. Independent Codex reviewers found that the route needed to force read-only behavior when opened while live, and that former participants and hosts needed durable entry links beyond the current-session SSE redirect. The GLM OpenCode job completed after its output limit was confirmed at 128k, but emitted no recoverable review text; it is recorded as unverified rather than inferred. Resolutions folded into the addendum:
+- Archive always sets Excalidraw view mode and suppresses local Yjs writes, regardless of current session status.
+- Successful teacher end and student `session_ended` redirect to the archive; neutral former-participant fallback redirects there instead of calling live-session access again.
+- User authorized scope expansion for every existing teacher/student ended-session history row, each linking to the archive.
+- Route-level test obligations now name direct-live view-only behavior, no live page API calls, no empty-list metadata/token leak, redirects, and all archive links.
 
 ## Code Review
 
