@@ -19,10 +19,15 @@
 `src/lib/whiteboard/**` (new — the binding + hook) ·
 `src/components/session/whiteboard/**` (new — canvas list, board surface, visibility control) ·
 `src/components/session/teacher/teacher-dashboard.tsx` · `src/components/session/student/student-session.tsx` (add the whiteboard surface) ·
+**`src/app/(portal)/sessions/[id]/page.tsx`** (link its ended-session notice to the archive) ·
+**`src/app/(portal)/teacher/sessions/[sessionId]/page.tsx`** (link its ended-session notice to the archive) ·
+**`src/app/(portal)/sessions/[id]/whiteboards/page.tsx`** (new, dedicated read-only archive route) ·
 `package.json` (add `@excalidraw/excalidraw`, `y-excalidraw`) ·
 `docs/api.md` · `docs/architecture/decisions.md` · `README.md` · this plan file.
 
 Scope-widening (R1 blocker 1 / concern C1) authorized by the user 2026-08-06: the read-only viewer boundary cannot be built without a `readOnly` claim in both JWT files, and `CanvasStore` must be wired in `main.go`.
+
+Scope-widening (archive-route decision) authorized by the user 2026-08-07: ended-session whiteboards must be reachable without re-enabling the live dashboards, so add the two existing ended-session route files and one dedicated archive page.
 
 ## Problem / goal
 
@@ -43,6 +48,7 @@ A live session is a shared code editor today. Add Excalidraw whiteboards, synced
 | 9 | **Membership checks by level, reusing existing helpers, not re-rolled.** `host` → `sessions.teacher_id`. `participants` → a `present` `session_participants` row (the strict join check — *not* the public-open-join clause). `session` → `CanAccessSession` (the plan-090 guard, which for a public class-less session admits any authenticated user — this is intentional per Decision 11, not a leak). A hand-rolled membership query is how 090's cross-org leak would reappear — reuse the named helpers. | Reviewers (all 3) + user |
 | 10 | **Per-session canvas cap** (e.g. 50) enforced at create under the session-row lock — bounds persisted-doc growth. | Reviewer (opus C5) |
 | 11 | **`session` visibility is intentionally "as public as the session."** In a public, class-less session (any authenticated user can join), a `session`-visibility canvas is readable by any authenticated user — the board is exactly as public as the room it's in. An owner who wants join-only sharing picks **`participants`** instead. This makes the plan-090 public surface a *conscious owner choice per canvas*, not an accidental cross-org leak. Documented in `docs/api.md` + `decisions.md`. | User (R2 trust-model fork) |
+| 12 | **Archive UI is a dedicated neutral route.** `/sessions/{id}/whiteboards` renders only the read-only whiteboard archive rather than reviving either live teacher or student dashboard. It does not pre-authorize through the ordinary session page APIs, because archive access intentionally includes former participants whom the live-session access guard rejects; the existing canvas list and minted `canvas:{id}` token remain the metadata and document authorization boundaries. | User (2026-08-07) |
 
 ## Architecture (grounded; revised per R1)
 
@@ -94,6 +100,7 @@ A canvas is `documentName = canvas:{canvasId}`. Permission is enforced **server-
 - `@excalidraw/excalidraw` + `y-excalidraw` (or fallback). `src/lib/whiteboard/use-whiteboard.ts` binds a `canvas:{id}` Yjs doc (via `useYjsProvider` + a minted canvas token) to Excalidraw; **dynamic-import** the board (bundle size).
 - `src/components/session/whiteboard/`: canvas list (visible-to-me), create, owner visibility control (**loosen-only UI — levels ≤ current are disabled, not hidden; equal is a no-op**), board surface. Non-writers → `viewModeEnabled` (UX; the token is the real boundary).
 - Add a "Whiteboard" surface to `teacher-dashboard.tsx` + `student-session.tsx` (thin entry points).
+- Add the dedicated `/sessions/{id}/whiteboards` archive route and links from both existing ended-session notices. The archive page intentionally renders only list + board, never create or visibility controls; `student-session.tsx` redirects its `session_ended` event there.
 - Frontend tests: list by role; owner edit vs viewer view-mode; loosen control; create; ended-session read-only.
 
 ### Phase 4 — Integration tests (NAMED — required: API + realtime auth + persistence) *(Opus)*
