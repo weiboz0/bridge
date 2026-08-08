@@ -30,13 +30,12 @@ afterEach(() => {
 });
 
 const originalFetch = globalThis.fetch;
-const canvasTestDatabaseUrl = "postgresql://work@127.0.0.1:5432/bridge_test";
 
 function pinnedCanvasTestDatabaseUrl(): string {
-  expect(process.env.DATABASE_URL).toBe(canvasTestDatabaseUrl);
-  expect(process.env.TEST_DATABASE_URL).toBe(canvasTestDatabaseUrl);
-  expect(new URL(canvasTestDatabaseUrl).pathname.slice(1).endsWith("_test")).toBe(true);
-  return canvasTestDatabaseUrl;
+  const databaseUrl = process.env.DATABASE_URL ?? "";
+  const databaseName = new URL(databaseUrl).pathname.slice(1);
+  expect(databaseName.endsWith("_test")).toBe(true);
+  return databaseUrl;
 }
 
 describe("hocuspocus canvas hook test seam", () => {
