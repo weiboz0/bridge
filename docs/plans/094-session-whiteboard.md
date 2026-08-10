@@ -14,21 +14,23 @@ The Phase-6 local-gate addendum has provisional scope only while its plan-review
 **PROVISIONAL PHASE-6 SCOPE — no implementation until the local-gate addendum review approves:**
 **`platform/internal/handlers/user_fixture_test.go`** (new test-only fast user fixture) ·
 **`platform/internal/handlers/access_org_test.go`** · **`platform/internal/handlers/admin_live_admin_test.go`** · **`platform/internal/handlers/admin_parent_links_test.go`** · **`platform/internal/handlers/admin_test.go`** ·
-**`platform/internal/handlers/annotations_integration_test.go`** · **`platform/internal/handlers/books_integration_test.go`** · **`platform/internal/handlers/canvases_integration_test.go`** · **`platform/internal/handlers/chapters_integration_test.go`** ·
+**`platform/internal/handlers/annotations_integration_test.go`** · **`platform/internal/handlers/books_integration_test.go`** · **`platform/internal/handlers/chapters_integration_test.go`** ·
 **`platform/internal/handlers/internal_sessions_test.go`** · **`platform/internal/handlers/me_test.go`** · **`platform/internal/handlers/org_list_integration_test.go`** · **`platform/internal/handlers/org_parent_links_test.go`** ·
 **`platform/internal/handlers/org_self_action_guard_test.go`** · **`platform/internal/handlers/parent_test.go`** · **`platform/internal/handlers/problems_integration_test.go`** (also owns the shared `integrationDB`) ·
-**`platform/internal/handlers/realtime_token_test.go`** · **`platform/internal/handlers/schedule_test.go`** · **`platform/internal/handlers/sessions_integration_test.go`** · **`platform/internal/handlers/sessions_page_integration_test.go`** ·
-**`platform/internal/handlers/teacher_parent_links_test.go`** · **`platform/internal/handlers/topics_link_chapter_test.go`** · **`platform/internal/handlers/topics_strict_decode_test.go`** (the exact 22 existing handler-test files with direct `RegisterUser` sites) ·
+**`platform/internal/handlers/schedule_test.go`** · **`platform/internal/handlers/sessions_integration_test.go`** · **`platform/internal/handlers/sessions_page_integration_test.go`** ·
+**`platform/internal/handlers/teacher_parent_links_test.go`** · **`platform/internal/handlers/topics_link_chapter_test.go`** · **`platform/internal/handlers/topics_strict_decode_test.go`** (the remaining 20 direct-call-site files; `canvases_integration_test.go` and `realtime_token_test.go` are already listed immediately above) ·
 **`platform/internal/auth/realtime_jwt.go`** (add `readOnly` claim — scope-widened R1) ·
 **`platform/internal/auth/realtime_jwt_test.go`** (JWT compatibility regression) ·
 **`platform/internal/db/migrations.go`** (latest schema probe + sentinels — scope-widened verification fix) ·
 **`platform/internal/db/schema_probe.go`** + **`platform/internal/db/schema_probe_test.go`** + **`platform/internal/db/schema_probe_parity_test.go`** + **`platform/internal/db/schema_probe_integration_test.go`** (multi-object probe + tests — scope-widened verification fix) ·
+**`platform/internal/store/orgs_test.go`** (shared store test-DB guard) · **`platform/tests/contract/cleanup_test.go`** (remove non-test fallback and guard cleanup) ·
 **`server/realtime-jwt.ts`** (mirror the claim — scope-widened R1) ·
 **`platform/cmd/api/main.go`** (wire `CanvasStore` + handler — scope-widened R1) ·
 `platform/internal/handlers/routes.go` (or where session routes register) ·
 `server/hocuspocus.ts` + `server/hocuspocus.canvas.test.ts` (new — read-only + ended-write realtime tests) ·
 `next.config.ts` (only if `/api/sessions/{id}/canvases` isn't already covered by `/api/sessions/:path*`) ·
 `src/lib/whiteboard/**` (new — the binding + hook) ·
+**`src/lib/whiteboard/vitest.config.ts`** (mirror Bun/Vitest Zod boundary) ·
 `src/components/session/whiteboard/**` (new — canvas list, board surface, visibility control) ·
 `src/components/session/teacher/teacher-dashboard.tsx` · `src/components/session/student/student-session.tsx` (add the whiteboard surface) ·
 **`src/app/(portal)/sessions/[id]/page.tsx`** (link its ended-session notice to the archive) ·
@@ -40,6 +42,7 @@ The Phase-6 local-gate addendum has provisional scope only while its plan-review
 **`tests/unit/excalidraw-yjs.test.ts`** (custom-binding regression) · `package.json` + **`bun.lock`** (add `@excalidraw/excalidraw`; no `y-excalidraw`) ·
 **`vitest.config.ts`** (Bun/Vitest Zod interop — scope-widened local-gate fix) ·
 **`scripts/check-test-database-url.mjs`** (new) · **`scripts/ci-local.sh`** · **`scripts/tests/test-guards.sh`** (parsed/pinned local-gate database guard — provisional Round-10 governance scope) ·
+**`AGENTS.md`** (classify the new validator as governance) ·
 `docs/api.md` · `docs/architecture/decisions.md` · **`docs/testing.md`** · `README.md` · **`.claude/skills/br-system-review/SKILL.md`** (operator probe guidance) · this plan file.
 
 Scope-widening (R1 blocker 1 / concern C1) authorized by the user 2026-08-06: the read-only viewer boundary cannot be built without a `readOnly` claim in both JWT files, and `CanvasStore` must be wired in `main.go`.
@@ -151,6 +154,7 @@ A canvas is `documentName = canvas:{canvasId}`. Permission is enforced **server-
 - Add `platform/internal/handlers/user_fixture_test.go` with one transaction-safe `insertFixtureUser` helper.
   Its exact signature is `insertFixtureUser(t *testing.T, db *sql.DB, input store.RegisterInput) *store.RegisteredUser`; it calls `t.Helper()` and uses `require`/`t.Fatal` for setup failures, so callers cannot ignore a rejected input.
   It inserts `users` plus the required email `auth_providers` row using one precomputed, valid **cost-4** bcrypt hash for `testpassword123`, rejects any other fixture password, accepts only nil/`teacher`/`student` `IntendedRole` values, returns `store.RegisteredUser`, and leaves cleanup ownership with each existing fixture.
+  It begins one SQL transaction internally, rolls back on any failed user/provider statement, and commits only after both dependent rows exist.
   Production `UserStore.RegisterUser`, its cost-10 bcrypt behavior, auth-handler registration tests, and `platform/internal/store/users_test.go` remain unchanged as the real password-hashing coverage.
 - Audit the current `RegisterUser` producer before replacement: it writes exactly the `users` row and one `auth_providers(provider='email', provider_user_id=user.ID)` row, with no normalization, membership, profile, or audit side effects.
   Add `TestInsertFixtureUser_MatchesRegisterUserPersistenceContract` to compare one real registration with one fixture registration across the observable user/provider shape while allowing their password hashes and generated IDs to differ.
@@ -159,6 +163,7 @@ A canvas is `documentName = canvas:{canvasId}`. Permission is enforced **server-
   Repository inspection confirmed every one currently supplies `testpassword123`; any future password-variation or real-registration behavior test must continue using `UserStore.RegisterUser` rather than this helper.
   Repository inspection also found no handler test that asserts password-hash byte uniqueness; the deliberately shared test-only salt/hash is not production salt coverage.
   Preserve unique emails and each fixture's dependency-ordered cleanup.
+  Duplicate-email, normalization, and real registration rejection behavior stays in the dedicated `UserStore.RegisterUser` and auth-handler tests; these 31 audited sites are happy-path fixture construction only.
 - Harden the shared handler `integrationDB` before those direct inserts: parse `DATABASE_URL`, require its URL database name to end `_test`, open it, and independently require `SELECT current_database()` to end `_test` before any mutation.
   Use `url.Parse`, decode `strings.TrimPrefix(parsed.EscapedPath(), "/")`, and validate that decoded path value rather than the raw URL string.
   An absent URL may skip as today, but an unparseable URL, empty database path, query error, or non-test parsed/live database name must fail closed with `t.Fatal` or `require`; no migration runs.
@@ -173,14 +178,26 @@ A canvas is `documentName = canvas:{canvasId}`. Permission is enforced **server-
   This is the durable test-runner compatibility boundary for the repository's locked Bun 1.3.12, Vitest 4.1.4, and Zod 4.3.6 combination: it keeps Zod inside Vite's transform pipeline without changing or downgrading application imports.
   Add `resolve.dedupe: ["zod"]`, an inline config comment, and `tests/unit/zod-vitest-interop.test.ts` proving the named `z` export works and a thrown validation error retains `ZodError` identity; also run the complete root Vitest suite so already-green consumers remain covered.
   Repository inspection finds no current `ZodError`/`ZodType`/`z.instanceof` identity consumer, while dedupe prevents dependencies from resolving a second physical root copy.
+  Mirror the same `noExternal` and dedupe boundary in `src/lib/whiteboard/vitest.config.ts`, because it is a standalone configuration and the normal `bun run test` contract covers both Vitest processes.
 - Replace `ci-local.sh`'s whole-string `_test` regex with the new `scripts/check-test-database-url.mjs` validator.
-  Resolve one gate URL from `TEST_DATABASE_URL`, then `DATABASE_URL`, then the existing `bridge_test` fallback; parse it with `new URL`, require `postgres:` or `postgresql:`, URL-decode the non-empty pathname database name, and require that decoded name to end `_test` without printing credentials.
-  The normal validator path then connects read-only with one connection, requires `SELECT current_database()` to end `_test`, fails closed on connection/query errors, and closes before any gate mutation; a parse-only mode exists solely for executable invalid-URL self-tests.
-  Pass that validated URL explicitly as both `DATABASE_URL` and `TEST_DATABASE_URL` to the Vitest and Go steps, so query-string decoys and ambient production URLs cannot reach mutating tests.
+  Preserve and strengthen the existing ambient guard first: if `DATABASE_URL` is set, validate its decoded pathname and live `current_database()` even when a safe `TEST_DATABASE_URL` is also set, so a hostile ambient value cannot flow to any later step.
+  Then resolve one gate URL from `TEST_DATABASE_URL`, `DATABASE_URL`, or the existing `bridge_test` fallback and validate it independently.
+  The Node 18-compatible validator uses the existing `postgres` client with `max: 1`, a five-second connect timeout, and URL-provided SSL behavior; it parses with `new URL`, requires `postgres:` or `postgresql:`, URL-decodes the non-empty pathname database name, connects read-only, requires `SELECT current_database()` to end `_test`, fails closed without retry on connection/query errors, closes before any gate mutation, and never prints the URL or credentials.
+  A parse-only mode exists solely for executable invalid-URL self-tests and is never used by the gate path.
+  The shell owns a non-empty `GATE_DATABASE_URL` variable throughout and passes it to the validator through a dedicated environment variable; the validator returns only an exit status and prints no URL to stdout, so an empty-output capture cannot disable integration tests.
+  Pass the validated gate URL explicitly as both `DATABASE_URL` and `TEST_DATABASE_URL` to the Vitest, Go, and E2E runner steps, so query-string decoys and ambient production URLs cannot reach mutating tests.
+  This duplicates the application-test check in `tests/helpers.ts` intentionally: the gate must reject before invoking a test runner, while the helper remains defense in depth for direct Vitest commands.
 - Extend `scripts/tests/test-guards.sh` with executable validator cases for a valid `_test` path, percent-decoded `_test` path, empty path, wrong scheme, non-test path, and a production path whose query ends in `_test`; also enforce that the Go step pins both database variables.
+  Include a test-path URL carrying `?dbname=production` and prove parse-only accepts only the safe pathname while documenting that the mandatory live gate check remains authoritative for routing/mapping overrides.
   Update `docs/testing.md` to name the decoded-path validation and shared pinned URL.
+  Add `scripts/check-test-database-url.mjs` to `AGENTS.md`'s governance-doc safeguard beside `scripts/ci-local.sh`, so future plans cannot weaken the new load-bearing validator without declaring it at gate time.
+- Inventory and intentionally activate the existing Go integration tiers under the validated URL: `internal/db/db_test.go` is read-only; `internal/db/schema_probe_*_test.go` performs existing cleanup-safe schema DDL against `_test` only; the handler and store packages mutate fixture rows and clean them; and `tests/contract/cleanup_test.go` deletes only contract-pattern fixtures.
+  This phase runs no migration, but the schema-probe integration DDL is expected test behavior rather than a skipped tier.
+- Apply the same decoded-path plus live `current_database()` fail-closed guard to the shared store `testDB` in `platform/internal/store/orgs_test.go` before its 19 consumer files can mutate.
+  Remove the non-test `bridge` fallback from `platform/tests/contract/cleanup_test.go`; when no validated URL is present its cleanup skips without connecting, and when present it verifies the live `_test` name before deletes.
+- Add a guard assertion that handler tests contain no direct `RegisterUser` call outside the named parity/real-registration fixture test, so a copied cost-10 setup path cannot silently reintroduce the timeout.
 - RED evidence is the exact gate failure: the isolated handler package times out inside `bcrypt.GenerateFromPassword` after 120 seconds; the root Vitest run reports `z.string` or `z.object` on an undefined named export; and the teacher room test receives an empty obsolete prop.
-  GREEN commands are the pinned `go test ./internal/handlers -count=1 -timeout 120s` with the reported package duration at or below 60 seconds, `go test ./internal/store -count=1`, full pinned `go test ./... -count=1 -timeout 120s`, the focused Vitest files, the complete root Vitest suite, and `bash scripts/ci-local.sh --fast` with Bun pinned in `PATH` and provider keys empty.
+  GREEN commands are the pinned `go test ./internal/handlers -count=1 -timeout 120s` with the reported package duration at or below 60 seconds, `go test ./internal/store -count=1`, full pinned `go test ./... -count=1 -timeout 120s` whose handler-package duration also remains at or below 60 seconds under package contention, both Vitest configurations, the Hocuspocus suite, and `bash scripts/ci-local.sh --fast` with Bun pinned in `PATH` and provider keys empty.
   The fast gate is phase-local evidence only; Phase 5's full `bash scripts/ci-local.sh` plus attestation remains the merge gate, still requires a user-pinned `E2E_BASE_URL`, and must run last so a later fast attestation cannot be mistaken for merge evidence.
 
 ## Risks
@@ -282,15 +299,31 @@ GLM's database-guard blocker remained open for confirmation rather than author r
 The dispatch concern is rejected under the user's direct instruction, “for tests coding, let's use gpt terra,” which overrides the repository default for this run.
 
 ### Local-gate addendum — Round 10 (2026-08-10): **CHANGES REQUESTED (independent Claude and GLM).**
-`[OPEN → FIXED IN REVISION]` The independent confirmation disproved the Round-9 response: `ci-local.sh` checks the whole URL string, so a production pathname with a query value ending `_test` passes, and the Go step inherits that unsafe value.
+`[FIXED]` The independent confirmation disproved the Round-9 response: `ci-local.sh` checks the whole URL string, so a production pathname with a query value ending `_test` passes, and the Go step inherits that unsafe value.
 The user-authorized provisional scope now explicitly includes `scripts/ci-local.sh`, its new decoded-path validator, executable guard tests, and `docs/testing.md`; implementation remains blocked until the governance revision passes this plan gate.
-`[FIXED IN REVISION]` The validator checks the decoded non-empty pathname and allowed PostgreSQL schemes, and the gate passes the one validated URL as both database variables to Vitest and Go.
-`[FIXED IN REVISION]` Zod resolution adds root deduplication, an identity regression, and the complete root suite; repository inspection found no current cross-package Zod class-identity consumer.
-`[FIXED IN REVISION]` The fixture bypass now records why a production cost knob is rejected, audits and parity-tests the current producer contract, restricts helper inputs, and treats call-site multiplication only as an estimate while requiring measured runtime headroom.
-`[FIXED IN REVISION]` The handler URL guard now names exact URL/path decoding and fail-closed query-error behavior; review findings remain explicit until reviewer confirmation.
-`[FIXED IN REVISION]` The gate validator now performs its own live `current_database()` check before any mutation and pins the validated URL into both test runtimes, closing the query-string-decoy and proxy/misrouting path across all packages.
-`[FIXED IN REVISION]` The provisional marker is adjacent to the added File-scope entries; the fixture signature fails through `testing.T`, all unchanged shared-helper consumers run in the package suite, and the existing teacher redirect regression is named exactly.
+`[FIXED]` The validator checks the decoded non-empty pathname and allowed PostgreSQL schemes, and the gate passes the one validated URL as both database variables to Vitest and Go.
+`[FIXED]` Zod resolution adds root deduplication, an identity regression, and the complete root suite; repository inspection found no current cross-package Zod class-identity consumer.
+`[FIXED]` The fixture bypass now records why a production cost knob is rejected, audits and parity-tests the current producer contract, restricts helper inputs, and treats call-site multiplication only as an estimate while requiring measured runtime headroom.
+`[FIXED]` The handler URL guard now names exact URL/path decoding and fail-closed query-error behavior; review findings remain explicit until reviewer confirmation.
+`[FIXED]` The gate validator now performs its own live `current_database()` check before any mutation and pins the validated URL into both test runtimes, closing the query-string-decoy and proxy/misrouting path across all packages.
+`[FIXED]` The provisional marker is adjacent to the added File-scope entries; the fixture signature fails through `testing.T`, all unchanged shared-helper consumers run in the package suite, and the existing teacher redirect regression is named exactly.
 Fresh confirmation is pending from the flagging reviewers.
+
+### Local-gate addendum — Round 11 (2026-08-10): **CHANGES REQUESTED (Claude self-review; independent Claude and GLM pending).**
+`[FIXED]` The first revised resolver would have ignored an unsafe ambient `DATABASE_URL` whenever `TEST_DATABASE_URL` was set.
+The new contract retains an independent fail-closed decoded-path plus live-database check for any ambient URL, validates the resolved gate URL separately, and pins both variables into Vitest, Go, and E2E.
+`[FIXED]` The validator now names its existing `postgres` client, one-connection/five-second behavior, credential-safe diagnostics, and gate-only live-check requirement; self-tests include both query-suffix and `dbname` decoys.
+`[FIXED]` The root and source-local Vitest configurations are distinguished explicitly, the two duplicate File-scope paths are removed, and the review ledger uses canonical status tags.
+Fresh confirmation is pending from all external reviewers because the governance revision is material.
+
+### Local-gate addendum — Round 12 (2026-08-10): **CHANGES REQUESTED (independent Claude; GLM pending).**
+`[FIXED]` Pinning the gate URL intentionally activates previously skipped Go integration tiers; the plan now inventories their read/write behavior, preserves the schema-probe DDL's existing `_test` guard, and adds live guards to the shared store opener plus the contract cleanup before any mutation.
+`[FIXED]` The validated URL never crosses process stdout: Bash owns and asserts the non-empty variable, while the validator receives it through the environment and returns status only.
+`[FIXED]` Both independent Vitest configurations receive the Zod boundary and both run in GREEN evidence.
+`[FIXED]` The fixture helper now explicitly wraps its two inserts in a transaction, dedicated producer tests retain duplicate/normalization behavior, and a guard prevents new handler setup from copying direct cost-10 registration.
+`[FIXED]` Full-run handler duration, not only isolated duration, must retain at least 60 seconds of timeout headroom.
+`[FIXED]` The new validator is declared as governance in `AGENTS.md`, and no new package is required because the repository already depends on the Node-compatible `postgres` client.
+Fresh confirmation is pending from the complete roster.
 
 ## Code Review
 
