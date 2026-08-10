@@ -495,24 +495,45 @@ The canonical rule is mirrored in `AGENTS.md`, `docs/reviewers.md`, `docs/develo
 ### Round 2 — 2026-08-10 — commit `d572d25`
 
 - `[OPEN]` `[sol][fable]` An end request could outlive its 15-second lease and still commit a pre-expiry successful archive result after writes resumed.
-  The end transaction now uses the database clock and may report success only for a matching unexpired lease; a matching expired operation still ends status-first but records an incomplete server archive.
-- `[OPEN]` `[fable]` Go, Node, and PostgreSQL clocks could disagree about lease expiry.
-  PostgreSQL `clock_timestamp()` is now the wall-clock authority, and Node derives only a monotonic remaining duration from a fresh database validation.
-- `[OPEN]` `[fable]` Final-flush liveness and lease validation could be a check-before-write race.
-  The live, token, and unexpired predicates now execute in the snapshot write statement or its locking transaction.
+  → Response in `aaf2f44` and `260ca47`: the successful end uses an atomic token-and-unexpired `UPDATE`, mutation authorization takes a shared row lock, and every expired-lease path records an incomplete server archive.
+- `[FIXED]` `[fable]` Go, Node, and PostgreSQL clocks could disagree about lease expiry.
+  → Response in `aaf2f44`: PostgreSQL `clock_timestamp()` is the wall-clock authority, and Node derives only a monotonic remaining duration from a fresh database validation.
+- `[FIXED]` `[fable]` Final-flush liveness and lease validation could be a check-before-write race.
+  → Response in `aaf2f44`: the live, token, and unexpired predicates execute in the snapshot write statement or its locking transaction.
 - `[OPEN]` `[fable]` The durable per-mutation lease check was underspecified and could be weakened by caching.
-  Every mutation-bearing frame retains the existing uncached Go recheck, whose database decision evaluates the lease on every call.
-- `[OPEN]` `[fable]` Older null archive state had no defined public representation.
-  Null now omits the optional boolean and warning and produces no completeness claim in the archive.
+  → Response in `aaf2f44` and `260ca47`: every mutation-bearing frame retains the uncached, shared-row-lock Go recheck, and the test contract now proves two consecutive frames observe an intervening durable lease.
+- `[FIXED]` `[fable]` Older null archive state had no defined public representation.
+  → Response in `aaf2f44`: null omits the optional boolean and warning and produces no completeness claim in the archive.
 - `[OPEN]` `[fable]` A non-loopback internal listener could send its bearer and freeze token over plaintext.
-  Non-loopback control traffic now requires HTTPS certificate and hostname verification.
-- `[OPEN]` `[sol]` The internal URL default incorrectly reused the public websocket port.
-  A distinct `HOCUSPOCUS_CONTROL_PORT` defaults to 4001 and drives the loopback internal URL.
-- `[OPEN]` `[sol]` Durable archive status had no ended-session-readable producer-to-consumer API.
-  The dedicated canvas-settings GET contract now defines its response, represented-teacher authorization, null behavior, 403, 404, and integration matrix.
-- `[OPEN]` `[sol]` The no-microtask invariant contradicted Hocuspocus 3.4.4's promise continuation.
-  The actual invariant permits the installed microtask and forbids an interleaving macrotask before apply and relay.
-- `[OPEN]` `[sol]` Design approvals were not bound to a commit and could survive an unreviewed material edit.
-  Both reviewers now approve an exact commit and must be re-dispatched after every substantive revision.
+  → Response in `aaf2f44` and `260ca47`: non-loopback traffic requires verified HTTPS, the Go client rejects non-loopback HTTP at startup, and the configuration test matrix enforces both sides.
+- `[FIXED]` `[sol]` The internal URL default incorrectly reused the public websocket port.
+  → Response in `aaf2f44`: a distinct `HOCUSPOCUS_CONTROL_PORT` defaults to 4001 and drives the loopback internal URL.
+- `[FIXED]` `[sol]` Durable archive status had no ended-session-readable producer-to-consumer API.
+  → Response in `aaf2f44`: the canvas-settings GET contract defines its response, represented-teacher authorization, null behavior, 403, 404, and integration matrix.
+- `[FIXED]` `[sol]` The no-microtask invariant contradicted Hocuspocus 3.4.4's promise continuation.
+  → Response in `aaf2f44`: the actual invariant permits the installed microtask and forbids an interleaving macrotask before apply and relay.
+- `[FIXED]` `[sol]` Design approvals were not bound to a commit and could survive an unreviewed material edit.
+  → Response in `aaf2f44`: both reviewers approve an exact commit and must be re-dispatched after every substantive revision.
 
 **Round 2 verdicts:** `[sol]` CHANGES REQUESTED; `[fable]` CHANGES REQUESTED.
+
+### Round 3 — 2026-08-10 — commit `aaf2f44`
+
+- `[OPEN]` `[fable]` The end transaction could check expiry before its write and admit a post-expiry mutation before committing a successful result.
+  → Response in `260ca47`: success is a single conditional `UPDATE`, and mutation authorization takes a shared row lock that blocks behind the update and observes the committed ended status.
+- `[OPEN]` `[fable]` A stale request encountering a different expired lease token had no defined state transition.
+  → Response in `260ca47`: status may still end, but the stale request must record an incomplete archive and cannot reuse either operation's freeze result.
+- `[OPEN]` `[sol]` A temporary freeze could irreversibly set an established writer's connection to read-only.
+  → Response in `260ca47`: temporary freeze rejects or closes with retryable `session_freezing`; only permanent viewer or ended decisions set read-only, and reconnect restores writing after cleanup or expiry.
+- `[OPEN]` `[sol][fable]` The control transport rules lacked client-side non-loopback HTTP rejection and an executable configuration matrix.
+  → Response in `260ca47`: Go fails startup on non-loopback HTTP, Node fails on invalid secret, TLS, or bind configuration, and the named test matrix covers listener isolation and verified HTTPS.
+- `[OPEN]` `[sol]` The uncached mutation rule lacked a same-connection proof.
+  → Response in `260ca47`: two consecutive frames must perform distinct rechecks and observe a durable lease acquired between them with an empty local map.
+- `[OPEN]` `[fable]` A newly valid token had no rule when an older in-memory token's monotonic timer remained active.
+  → Response in `260ca47`: a freshly database-validated token replaces the stale in-memory entry because PostgreSQL is authoritative.
+- `[OPEN]` `[fable]` The review ledger attributed resolution text to the older reviewed commit.
+  → Response in this ledger revision: every response names the later commit that contains it, while headings retain the exact reviewed SHA.
+- `[OPEN]` `[fable]` The old settings route, normative freeze-result write, control-port bind failure, and browser-warning consumption order were underspecified.
+  → Response in `260ca47`: the old route is removed with same-phase client migration, matched unexpired end must persist the result, bind failure aborts startup, and durable confirmation precedes one-shot consumption.
+
+**Round 3 verdicts:** `[sol]` CHANGES REQUESTED; `[fable]` CHANGES REQUESTED.
