@@ -119,6 +119,10 @@ expect 1 "query-suffix test-name decoy is rejected" \
   parse_test_url "postgresql://guard:guard@127.0.0.1:5432/bridge?dbname=bridge_test"
 expect 0 "safe test pathname ignores production query override in parser mode" \
   parse_test_url "postgresql://guard:guard@127.0.0.1:5432/bridge_test?dbname=production"
+expect 1 "comma-separated database hosts are rejected" \
+  parse_test_url "postgresql://guard:guard@primary,replica:5432/bridge_test"
+expect 1 "target session attributes are rejected" \
+  parse_test_url "postgresql://guard:guard@127.0.0.1:5432/bridge_test?target_session_attrs=read-write"
 
 # ── 13. database gate wiring is explicit and complete ───────────────────────
 if rg -q 'check-test-database-url\.mjs' "$REPO_ROOT/scripts/ci-local.sh"; then
@@ -176,12 +180,27 @@ else
 fi
 
 if rg -Fq 'const query = sql`SELECT current_database()`;' "$VALIDATOR" \
+  && rg -Fq 'const TIMEOUT_MS = 5_000;' "$VALIDATOR" \
   && rg -q 'deadline = setTimeout' "$VALIDATOR" \
+  && rg -Fq '}, TIMEOUT_MS);' "$VALIDATOR" \
   && rg -Fq 'sql.end({ timeout: 0 })' "$VALIDATOR" \
-  && ! rg -Fq 'sql.end({ timeout: 5 })' "$VALIDATOR"; then
+  && ! rg -Fq 'sql.end({ timeout: 5 })' "$VALIDATOR" \
+  && [[ "$(rg -c '5_000' "$VALIDATOR")" == "1" ]]; then
   ok "validator destroys the active query at its five-second deadline"
 else
   bad "validator destroys the active query at its five-second deadline"
+fi
+
+ambient_clear_line="$(rg -n -F 'delete process.env.PGTARGETSESSIONATTRS;' "$VALIDATOR" | cut -d: -f1 || true)"
+client_create_line="$(rg -n -F 'const sql = postgres(value, {' "$VALIDATOR" | cut -d: -f1 || true)"
+if [[ -n "$ambient_clear_line" && -n "$client_create_line" \
+  && "$ambient_clear_line" -lt "$client_create_line" \
+  && $(rg -c 'sql`' "$VALIDATOR") == "1" \
+  && $(rg -c 'target_session_attrs' "$VALIDATOR") -ge "1" \
+  && $(rg -Fc 'includes(",")' "$VALIDATOR") -ge "1" ]]; then
+  ok "validator rejects routing controls and clears ambient session routing"
+else
+  bad "validator rejects routing controls and clears ambient session routing"
 fi
 
 governance_block="$(sed -n '/\*\*Governance docs\*\*/,/The hook and the gate script/p' "$REPO_ROOT/AGENTS.md")"

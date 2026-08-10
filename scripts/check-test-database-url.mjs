@@ -5,6 +5,10 @@ import postgres from "postgres";
 const INPUT_ENV = "CHECK_TEST_DATABASE_URL";
 const TIMEOUT_MS = 5_000;
 
+// This dedicated CLI performs exactly one direct probe, never Postgres.js's
+// target-session routing checks inherited from its ambient environment.
+delete process.env.PGTARGETSESSIONATTRS;
+
 function parseTestDatabaseURL(value) {
   if (!value) {
     throw new Error("missing URL");
@@ -19,6 +23,14 @@ function parseTestDatabaseURL(value) {
 
   if (parsed.protocol !== "postgres:" && parsed.protocol !== "postgresql:") {
     throw new Error("non-Postgres URL");
+  }
+
+  if (parsed.hostname.includes(",")) {
+    throw new Error("multiple database hosts");
+  }
+
+  if ([...parsed.searchParams.keys()].some((key) => key.toLowerCase() === "target_session_attrs")) {
+    throw new Error("target session attributes are not allowed");
   }
 
   let pathname;
