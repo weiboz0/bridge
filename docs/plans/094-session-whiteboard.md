@@ -1,7 +1,8 @@
 # Plan 094 — Excalidraw whiteboards in live sessions
 
 **Branch:** `feat/094-session-whiteboard`
-**Status:** Plan review passed at Revision 5 under the user's temporary no-Claude-reviewer direction. Phases 1a, 1b, 2, 3, and 4 are complete; Phase 5 verification and the code-review gate are in progress.
+**Status:** Phases 1a, 1b, 2, 3, 4, and the Phase-5 schema probe are complete.
+The Phase-6 local-gate addendum is awaiting plan review; plan-wide verification and the code-review gate follow it.
 
 ## File scope
 
@@ -10,6 +11,7 @@
 `platform/internal/store/canvases.go` (new) + `platform/internal/store/canvases_test.go` (new) ·
 `platform/internal/handlers/canvases.go` (new) + `platform/internal/handlers/canvases_integration_test.go` (new) ·
 `platform/internal/handlers/realtime_token.go` + `platform/internal/handlers/realtime_token_test.go` ·
+**`platform/internal/handlers/user_fixture_test.go` (new) + existing `platform/internal/handlers/**/*_test.go` call sites named in Phase 6** (test-only fast user fixtures — scope-widened local-gate fix) ·
 **`platform/internal/auth/realtime_jwt.go`** (add `readOnly` claim — scope-widened R1) ·
 **`platform/internal/auth/realtime_jwt_test.go`** (JWT compatibility regression) ·
 **`platform/internal/db/migrations.go`** (latest schema probe + sentinels — scope-widened verification fix) ·
@@ -28,6 +30,7 @@
 **`src/app/(portal)/teacher/page.tsx`** · **`src/app/(portal)/teacher/sessions/page.tsx`** · **`src/app/(portal)/teacher/classes/[id]/page.tsx`** · **`src/app/(portal)/student/classes/[id]/page.tsx`** (link ended-session history rows to the archive) ·
 **`tests/unit/teacher-session-row.test.tsx`** · **`tests/unit/ended-sessions-non-link.test.ts`** · **`tests/unit/sessions-room-page.test.tsx`** (update ended-session expectations) · **`tests/unit/whiteboard-archive.test.tsx`** (new archive interaction regression) ·
 **`tests/unit/excalidraw-yjs.test.ts`** (custom-binding regression) · `package.json` + **`bun.lock`** (add `@excalidraw/excalidraw`; no `y-excalidraw`) ·
+**`vitest.config.ts`** (Bun/Vitest Zod interop — scope-widened local-gate fix) ·
 `docs/api.md` · `docs/architecture/decisions.md` · `README.md` · **`.claude/skills/br-system-review/SKILL.md`** (operator probe guidance) · this plan file.
 
 Scope-widening (R1 blocker 1 / concern C1) authorized by the user 2026-08-06: the read-only viewer boundary cannot be built without a `readOnly` claim in both JWT files, and `CanvasStore` must be wired in `main.go`.
@@ -43,6 +46,9 @@ Scope-widening (scope-audit review fix) authorized by the user 2026-08-08: add t
 Scope-widening (schema-probe verification fix) authorized by the user 2026-08-09 via “resume”: add `platform/internal/db/migrations.go`, because migration `0028_session_canvases.sql` became the latest schema-bearing migration and the enforced bidirectional parity test requires its table, columns, constraints, and indexes to replace the prior `books` sentinels.
 
 Scope-widening (complete multi-object probe) authorized by the user 2026-08-09: add the probe implementation, its unit/parity/integration tests, and the tracked operator-review skill. Review found that retargeting only `migrations.go` would leave three `books`-specific integration tests stale and would ignore `0028`'s new enum plus `sessions.canvas_floor` alteration.
+
+Scope-widening (local-gate unblock) authorized by the user's standing repository-wide authorization on 2026-08-10: add the handler test fixtures and root Vitest configuration named in Phase 6.
+The authoritative gate proved that `internal/handlers` cannot complete its fixed 120-second timeout while ordinary fixtures perform at least 603 cost-10 bcrypt hashes, and Bun 1.3.12's Vitest fork runner resolves Zod's externalized ESM namespace without its named `z` export.
 
 ## Problem / goal
 
@@ -130,6 +136,22 @@ A canvas is `documentName = canvas:{canvasId}`. Permission is enforced **server-
 - Advance the boot-time schema probe from `books`/0026 to migration 0028's full end state (Decision 13), and update the tracked system-review command/copy. Tests first define parity for the primary table, `sessions.canvas_floor`, exact enum values, and both indexes; preserve the generic constraint-check regression with an injected sentinel.
 - Run `DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test go test ./internal/db/ -count=1` from `platform/` before the plan-wide Go suite. The test database already has 0028; this phase runs no migration.
 - `bash scripts/ci-local.sh` green (attestation); `pre-merge-guard.sh`.
+
+### Phase 6 — Local-gate test infrastructure *(Terra; tests only)*
+- Add `platform/internal/handlers/user_fixture_test.go` with one transaction-safe `insertFixtureUser` helper.
+  It inserts `users` plus the required email `auth_providers` row using one precomputed, valid bcrypt hash for `testpassword123`, rejects any other fixture password, preserves `IntendedRole`, returns `store.RegisteredUser`, and leaves cleanup ownership with each existing fixture.
+  Production `UserStore.RegisterUser`, its cost-10 bcrypt behavior, auth-handler registration tests, and `platform/internal/store/users_test.go` remain unchanged as the real password-hashing coverage.
+- Replace the 31 ordinary handler-test `RegisterUser` call sites in `access_org_test.go`, `admin_live_admin_test.go`, `admin_parent_links_test.go`, `admin_test.go`, `annotations_integration_test.go`, `books_integration_test.go`, `canvases_integration_test.go`, `chapters_integration_test.go`, `internal_sessions_test.go`, `me_test.go`, `org_list_integration_test.go`, `org_parent_links_test.go`, `org_self_action_guard_test.go`, `parent_test.go`, `realtime_token_test.go`, `schedule_test.go`, `sessions_integration_test.go`, `sessions_page_integration_test.go`, `teacher_parent_links_test.go`, `topics_link_chapter_test.go`, and `topics_strict_decode_test.go`.
+  Preserve unique emails and each fixture's dependency-ordered cleanup.
+- Harden the shared handler `integrationDB` before those direct inserts: parse `DATABASE_URL`, require its URL database name to end `_test`, open it, and independently require `SELECT current_database()` to end `_test` before any mutation.
+  No migration runs.
+- Add focused helper tests proving the stored hash accepts `testpassword123`, `IntendedRole` round-trips, the email auth-provider row exists, and a different password fails before any insert.
+- Update only the stale teacher branch of `tests/unit/sessions-room-page.test.tsx` because `TeacherDashboard` no longer accepts `classId` or `returnPath`.
+  Retain the student class-less `/sessions` override assertion; the teacher's successful end-to-archive behavior remains covered through the real dashboard test.
+- Add `ssr.noExternal: ["zod"]` to the root `vitest.config.ts`.
+  This keeps Zod inside Vite's transform pipeline under Bun 1.3.12 and preserves all application imports; a focused regression must collect and pass the previously failing Python-101, signup-intent, courses, and admin-org suites without changing or downgrading Zod.
+- RED evidence is the exact gate failure: the isolated handler package times out inside `bcrypt.GenerateFromPassword` after 120 seconds; the root Vitest run reports `z.string` or `z.object` on an undefined named export; and the teacher room test receives an empty obsolete prop.
+  GREEN commands are the pinned `go test ./internal/handlers -count=1 -timeout 120s`, `go test ./internal/store -count=1`, full pinned `go test ./... -count=1 -timeout 120s`, the focused Vitest files, and `bash scripts/ci-local.sh --fast` with Bun pinned in `PATH` and provider keys empty.
 
 ## Risks
 
