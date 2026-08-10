@@ -39,7 +39,6 @@ func newChapterFixture(t *testing.T, suffix string) *chapterFixture {
 	ctx := context.Background()
 
 	orgs := store.NewOrgStore(db)
-	users := store.NewUserStore(db)
 
 	h := &ChapterHandler{
 		Units:   store.NewChapterStore(db),
@@ -63,12 +62,11 @@ func newChapterFixture(t *testing.T, suffix string) *chapterFixture {
 		return org
 	}
 	mkUser := func(label string) *store.RegisteredUser {
-		u, err := users.RegisterUser(ctx, store.RegisterInput{
+		u := insertFixtureUser(t, db, store.RegisterInput{
 			Name:     "UnitUser " + label,
 			Email:    "unit-" + label + "@example.com",
 			Password: "testpassword123",
 		})
-		require.NoError(t, err)
 		t.Cleanup(func() {
 			db.ExecContext(ctx, "DELETE FROM chapter_overlays WHERE child_chapter_id IN (SELECT id FROM chapters WHERE created_by = $1 OR scope_id = $1)", u.ID)
 			db.ExecContext(ctx, "DELETE FROM chapter_overlays WHERE parent_chapter_id IN (SELECT id FROM chapters WHERE created_by = $1 OR scope_id = $1)", u.ID)

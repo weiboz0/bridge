@@ -764,11 +764,9 @@ func TestMintToken_SessionDoc_ParentOfDifferentChild_403(t *testing.T) {
 
 	// Outsider is a parent of someone — but NOT of fx.student.
 	parent := fx.outsider
-	users := store.NewUserStore(fx.db)
-	otherChild, err := users.RegisterUser(ctx, store.RegisterInput{
+	otherChild := insertFixtureUser(t, fx.db, store.RegisterInput{
 		Name: "Other Child", Email: "other-child-" + fx.sessionID[:8] + "@example.com", Password: "testpassword123",
 	})
-	require.NoError(t, err)
 	t.Cleanup(func() {
 		fx.db.ExecContext(ctx, "DELETE FROM parent_links WHERE child_user_id = $1", otherChild.ID)
 		fx.db.ExecContext(ctx, "DELETE FROM auth_providers WHERE user_id = $1", otherChild.ID)
@@ -776,7 +774,7 @@ func TestMintToken_SessionDoc_ParentOfDifferentChild_403(t *testing.T) {
 	})
 
 	links := store.NewParentLinkStore(fx.db)
-	_, err = links.CreateLink(ctx, parent.ID, otherChild.ID, fx.admin.ID)
+	_, err := links.CreateLink(ctx, parent.ID, otherChild.ID, fx.admin.ID)
 	require.NoError(t, err)
 	_, err = fx.h.Sessions.JoinSession(ctx, fx.sessionID, fx.student.ID)
 	require.NoError(t, err)

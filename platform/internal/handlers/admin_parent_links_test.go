@@ -45,14 +45,13 @@ func newAdminParentLinksFixture(t *testing.T, suffix string) *adminParentLinksFi
 	}
 
 	mkUser := func(label string, isAdmin bool) *store.RegisteredUser {
-		u, err := users.RegisterUser(ctx, store.RegisterInput{
+		u := insertFixtureUser(t, db, store.RegisterInput{
 			Name:     "AdminLink " + label,
 			Email:    "alink-" + label + "-" + uuid.NewString()[:8] + "@example.com",
 			Password: "testpassword123",
 		})
-		require.NoError(t, err)
 		if isAdmin {
-			_, err = db.ExecContext(ctx, "UPDATE users SET is_platform_admin = true WHERE id = $1", u.ID)
+			_, err := db.ExecContext(ctx, "UPDATE users SET is_platform_admin = true WHERE id = $1", u.ID)
 			require.NoError(t, err)
 		}
 		t.Cleanup(func() {

@@ -8,8 +8,11 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
+	"strings"
 	"testing"
+	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/assert"
@@ -24,13 +27,35 @@ import (
 
 func integrationDB(t *testing.T) *sql.DB {
 	t.Helper()
-	url := os.Getenv("DATABASE_URL")
-	if url == "" {
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
 		t.Skip("DATABASE_URL not set -- skipping integration test")
 	}
-	db, err := sql.Open("pgx", url)
-	require.NoError(t, err)
+	parsed, err := url.Parse(databaseURL)
+	if err != nil {
+		t.Fatalf("DATABASE_URL must be a valid test database URL: %v", err)
+	}
+	if parsed.RawQuery != "" || parsed.Fragment != "" {
+		t.Fatal("DATABASE_URL must not contain a query or fragment")
+	}
+	databaseName := strings.TrimPrefix(parsed.Path, "/")
+	if (parsed.Scheme != "postgres" && parsed.Scheme != "postgresql") || databaseName == "" || strings.Contains(databaseName, "/") || !strings.HasSuffix(databaseName, "_test") {
+		t.Fatal("DATABASE_URL must name a PostgreSQL database ending in _test")
+	}
+	db, err := sql.Open("pgx", databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() { db.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var liveDatabaseName string
+	if err := db.QueryRowContext(ctx, "SELECT current_database()").Scan(&liveDatabaseName); err != nil {
+		t.Fatalf("validate live test database: %v", err)
+	}
+	if !strings.HasSuffix(liveDatabaseName, "_test") {
+		t.Fatalf("live database %q is not a test database", liveDatabaseName)
+	}
 	return db
 }
 
@@ -65,7 +90,6 @@ func newProblemFixture(t *testing.T, suffix string) *problemFixture {
 	ctx := context.Background()
 
 	orgs := store.NewOrgStore(db)
-	users := store.NewUserStore(db)
 	courses := store.NewCourseStore(db)
 	topics := store.NewTopicStore(db)
 	classes := store.NewClassStore(db)
@@ -97,12 +121,11 @@ func newProblemFixture(t *testing.T, suffix string) *problemFixture {
 		return org
 	}
 	mkUser := func(label string) *store.RegisteredUser {
-		u, err := users.RegisterUser(ctx, store.RegisterInput{
+		u := insertFixtureUser(t, db, store.RegisterInput{
 			Name:     "User " + label,
 			Email:    label + "@example.com",
 			Password: "testpassword123",
 		})
-		require.NoError(t, err)
 		t.Cleanup(func() {
 			db.ExecContext(ctx, "DELETE FROM attempts WHERE user_id = $1 OR problem_id IN (SELECT id FROM problems WHERE created_by = $1)", u.ID)
 			db.ExecContext(ctx, "DELETE FROM test_cases WHERE problem_id IN (SELECT id FROM problems WHERE created_by = $1) OR owner_id = $1", u.ID)

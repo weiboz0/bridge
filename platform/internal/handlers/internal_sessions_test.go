@@ -133,12 +133,11 @@ func TestInternalSessions_HappyPath_NonAdmin(t *testing.T) {
 	users := store.NewUserStore(db)
 	ctx := context.Background()
 
-	user, err := users.RegisterUser(ctx, store.RegisterInput{
+	user := insertFixtureUser(t, db, store.RegisterInput{
 		Name:     "Mint Target",
 		Email:    "mint-target@example.test",
 		Password: "testpassword123",
 	})
-	require.NoError(t, err)
 	t.Cleanup(func() {
 		db.ExecContext(ctx, "DELETE FROM auth_providers WHERE user_id = $1", user.ID)
 		db.ExecContext(ctx, "DELETE FROM users WHERE id = $1", user.ID)
@@ -174,18 +173,17 @@ func TestInternalSessions_HappyPath_AdminFlagPropagates(t *testing.T) {
 	users := store.NewUserStore(db)
 	ctx := context.Background()
 
-	user, err := users.RegisterUser(ctx, store.RegisterInput{
+	user := insertFixtureUser(t, db, store.RegisterInput{
 		Name:     "Mint Admin",
 		Email:    "mint-admin@example.test",
 		Password: "testpassword123",
 	})
-	require.NoError(t, err)
 	t.Cleanup(func() {
 		db.ExecContext(ctx, "DELETE FROM auth_providers WHERE user_id = $1", user.ID)
 		db.ExecContext(ctx, "DELETE FROM users WHERE id = $1", user.ID)
 	})
 
-	_, err = db.ExecContext(ctx, "UPDATE users SET is_platform_admin = true WHERE id = $1", user.ID)
+	_, err := db.ExecContext(ctx, "UPDATE users SET is_platform_admin = true WHERE id = $1", user.ID)
 	require.NoError(t, err)
 
 	h := &InternalSessionsHandler{
@@ -216,12 +214,11 @@ func TestInternalSessions_FallsBackToDBNameWhenBodyNameEmpty(t *testing.T) {
 	users := store.NewUserStore(db)
 	ctx := context.Background()
 
-	user, err := users.RegisterUser(ctx, store.RegisterInput{
+	user := insertFixtureUser(t, db, store.RegisterInput{
 		Name:     "DB Name",
 		Email:    "mint-fallback-name@example.test",
 		Password: "testpassword123",
 	})
-	require.NoError(t, err)
 	t.Cleanup(func() {
 		db.ExecContext(ctx, "DELETE FROM auth_providers WHERE user_id = $1", user.ID)
 		db.ExecContext(ctx, "DELETE FROM users WHERE id = $1", user.ID)

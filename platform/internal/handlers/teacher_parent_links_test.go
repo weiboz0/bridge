@@ -40,7 +40,6 @@ func newTeacherParentLinksFixture(t *testing.T, suffix string) *teacherParentLin
 	t.Helper()
 	db := integrationDB(t)
 	ctx := context.Background()
-	users := store.NewUserStore(db)
 	orgs := store.NewOrgStore(db)
 	courses := store.NewCourseStore(db)
 	classes := store.NewClassStore(db)
@@ -55,12 +54,11 @@ func newTeacherParentLinksFixture(t *testing.T, suffix string) *teacherParentLin
 	tag := func(s string) string { return "tpl-" + suffix + "-" + s + "-" + uuid.NewString()[:8] }
 
 	mkUser := func(label string) *store.RegisteredUser {
-		u, err := users.RegisterUser(ctx, store.RegisterInput{
+		u := insertFixtureUser(t, db, store.RegisterInput{
 			Name:     "TPL " + label,
 			Email:    tag(label) + "@example.com",
 			Password: "testpassword123",
 		})
-		require.NoError(t, err)
 		t.Cleanup(func() {
 			db.ExecContext(ctx, "DELETE FROM parent_links WHERE parent_user_id = $1 OR child_user_id = $1 OR created_by = $1", u.ID)
 			db.ExecContext(ctx, "DELETE FROM class_memberships WHERE user_id = $1", u.ID)
@@ -292,25 +290,24 @@ func TestTeacherParentLinks_Outsider_Denied(t *testing.T) {
 func TestTeacherParentLinks_ObserverAndGuest_Denied(t *testing.T) {
 	fx := newTeacherParentLinksFixture(t, t.Name())
 	ctx := context.Background()
-	classes := store.NewClassStore(integrationDB(t))
-	users := store.NewUserStore(integrationDB(t))
+	db := integrationDB(t)
+	classes := store.NewClassStore(db)
 
 	for _, role := range []string{"observer", "guest"} {
 		role := role // capture
 		t.Run(role, func(t *testing.T) {
-			u, err := users.RegisterUser(ctx, store.RegisterInput{
+			u := insertFixtureUser(t, db, store.RegisterInput{
 				Name:     "TPL " + role,
 				Email:    "tpl-" + role + "-" + uuid.NewString()[:8] + "@example.com",
 				Password: "testpassword123",
 			})
-			require.NoError(t, err)
 			t.Cleanup(func() {
 				db := integrationDB(t)
 				db.ExecContext(ctx, "DELETE FROM class_memberships WHERE user_id = $1", u.ID)
 				db.ExecContext(ctx, "DELETE FROM auth_providers WHERE user_id = $1", u.ID)
 				db.ExecContext(ctx, "DELETE FROM users WHERE id = $1", u.ID)
 			})
-			_, err = classes.AddClassMember(ctx, store.AddClassMemberInput{
+			_, err := classes.AddClassMember(ctx, store.AddClassMemberInput{
 				ClassID: fx.classID, UserID: u.ID, Role: role,
 			})
 			require.NoError(t, err)

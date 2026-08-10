@@ -30,17 +30,15 @@ func makeOrgUser(t *testing.T, role, status string) (*store.OrgStore, *store.Reg
 	db := integrationDB(t)
 	ctx := context.Background()
 
-	users := store.NewUserStore(db)
 	orgs := store.NewOrgStore(db)
 
 	suffix := uuid.NewString()[:8]
 
-	u, err := users.RegisterUser(ctx, store.RegisterInput{
+	u := insertFixtureUser(t, db, store.RegisterInput{
 		Name:     "TestUser " + suffix,
 		Email:    "orgtest-" + suffix + "@example.com",
 		Password: "testpassword123",
 	})
-	require.NoError(t, err)
 	t.Cleanup(func() {
 		db.ExecContext(ctx, "DELETE FROM org_memberships WHERE user_id = $1", u.ID)
 		db.ExecContext(ctx, "DELETE FROM auth_providers WHERE user_id = $1", u.ID)

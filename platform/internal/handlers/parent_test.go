@@ -64,18 +64,16 @@ func newParentReportsFixture(t *testing.T, suffix string) *parentReportsFixture 
 	t.Helper()
 	db := integrationDB(t)
 	ctx := context.Background()
-	users := store.NewUserStore(db)
 	links := store.NewParentLinkStore(db)
 	reports := store.NewReportStore(db)
 	h := &ParentHandler{Reports: reports, ParentLinks: links}
 
 	mkUser := func(label string) *store.RegisteredUser {
-		u, err := users.RegisterUser(ctx, store.RegisterInput{
+		u := insertFixtureUser(t, db, store.RegisterInput{
 			Name:     "PReport " + label,
 			Email:    "preport-" + label + "-" + uuid.NewString()[:8] + "@example.com",
 			Password: "testpassword123",
 		})
-		require.NoError(t, err)
 		t.Cleanup(func() {
 			db.ExecContext(ctx, "DELETE FROM parent_reports WHERE student_id = $1 OR generated_by = $1", u.ID)
 			db.ExecContext(ctx, "DELETE FROM parent_links WHERE parent_user_id = $1 OR child_user_id = $1 OR created_by = $1", u.ID)

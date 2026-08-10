@@ -59,12 +59,11 @@ func newOrgParentLinksFixture(t *testing.T, suffix string) *orgParentLinksFixtur
 	tag := func(s string) string { return "opl-" + suffix + "-" + s + "-" + uuid.NewString()[:8] }
 
 	mkUser := func(label string) *store.RegisteredUser {
-		u, err := users.RegisterUser(ctx, store.RegisterInput{
+		u := insertFixtureUser(t, db, store.RegisterInput{
 			Name:     "OPL " + label,
 			Email:    tag(label) + "@example.com",
 			Password: "testpassword123",
 		})
-		require.NoError(t, err)
 		t.Cleanup(func() {
 			db.ExecContext(ctx, "DELETE FROM parent_links WHERE parent_user_id = $1 OR child_user_id = $1 OR created_by = $1", u.ID)
 			db.ExecContext(ctx, "DELETE FROM class_memberships WHERE user_id = $1", u.ID)

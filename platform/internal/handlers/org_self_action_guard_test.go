@@ -33,12 +33,11 @@ func newSelfActionFixture(t *testing.T, suffix string) (*OrgHandler, *store.Regi
 	orgs := store.NewOrgStore(db)
 
 	// Test admin user.
-	admin, err := users.RegisterUser(ctx, store.RegisterInput{
+	admin := insertFixtureUser(t, db, store.RegisterInput{
 		Name:     "SAG Admin " + suffix,
 		Email:    "sag-admin-" + suffix + "-" + uuid.NewString()[:8] + "@example.com",
 		Password: "testpassword123",
 	})
-	require.NoError(t, err)
 	t.Cleanup(func() {
 		db.ExecContext(ctx, "DELETE FROM org_memberships WHERE user_id = $1", admin.ID)
 		db.ExecContext(ctx, "DELETE FROM auth_providers WHERE user_id = $1", admin.ID)

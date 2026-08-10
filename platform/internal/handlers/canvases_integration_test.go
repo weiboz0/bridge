@@ -55,10 +55,8 @@ func newCanvasHandlerFixture(t *testing.T) *canvasHandlerFixture {
 	require.NoError(t, db.QueryRowContext(ctx, "SELECT current_database()").Scan(&actual))
 	require.True(t, strings.HasSuffix(actual, "_test"), "connected to non-test database %q", actual)
 
-	users := store.NewUserStore(db)
 	mkUser := func(label string) *store.RegisteredUser {
-		u, err := users.RegisterUser(ctx, store.RegisterInput{Name: label, Email: fmt.Sprintf("%s-%s@example.com", t.Name(), label), Password: "testpassword123"})
-		require.NoError(t, err)
+		u := insertFixtureUser(t, db, store.RegisterInput{Name: label, Email: fmt.Sprintf("%s-%s@example.com", t.Name(), label), Password: "testpassword123"})
 		t.Cleanup(func() {
 			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), canvasHandlerDBTimeout)
 			defer cleanupCancel()
@@ -100,10 +98,7 @@ func newRealtimeHandlerForCanvasFixture(fx *canvasHandlerFixture) *RealtimeHandl
 
 func (fx *canvasHandlerFixture) addUser(t *testing.T, label string) *store.RegisteredUser {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), canvasHandlerDBTimeout)
-	defer cancel()
-	u, err := store.NewUserStore(fx.db).RegisterUser(ctx, store.RegisterInput{Name: label, Email: fmt.Sprintf("%s-%s@example.com", t.Name(), label), Password: "testpassword123"})
-	require.NoError(t, err)
+	u := insertFixtureUser(t, fx.db, store.RegisterInput{Name: label, Email: fmt.Sprintf("%s-%s@example.com", t.Name(), label), Password: "testpassword123"})
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), canvasHandlerDBTimeout)
 		defer cleanupCancel()
