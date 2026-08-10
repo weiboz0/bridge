@@ -2,7 +2,7 @@
 
 **Branch:** `feat/094-session-whiteboard`
 **Status:** Phases 1a through 6 are complete.
-Plan-wide verification and the code-review gate follow Phase 6.
+Plan-wide code review Round 1 requested changes; its open findings require a reviewed scope/trust-model decision before implementation.
 
 ## File scope
 
@@ -364,7 +364,48 @@ All accepted nits are incorporated in this revision, every Tier-A reviewer has n
   Commit `74adf8f` `[FIXED]` the finding by importing and executing the real signup-intent route, checking the root-produced error through the supported `zod/v4` entry point, and adding the same boundary to the standalone whiteboard suite.
   The original reviewer and an independent quality arbiter then approved; the repository has no production dependency that exposes a second physical Zod error producer, so an artificial nested-package fixture is not part of the application contract.
 
-_Plan-wide code review pending._
+### Plan-wide Review 1 (2026-08-10)
+
+- **Reviewers:** Claude self-review (Opus), Codex (`gpt-5.6-sol`, high), independent Claude (Opus), GLM 5.2.
+- **Verdicts:** `[claude-self]` CHANGES REQUESTED; `[codex]` CHANGES REQUESTED; `[opus]` CHANGES REQUESTED; `[glm]` APPROVE with concerns.
+
+**Must Fix**
+
+1. `[OPEN]` `[codex]` The ended-session mutation recheck is not atomic with the status transition (`server/hocuspocus.ts:134-168`, `platform/internal/store/sessions.go:461-464`).
+   A frame can observe `live`, the end transaction can commit, and the frame can then apply and relay; the later storage guard drops it, so connected peers see state absent from the archive.
+2. `[OPEN]` `[codex]` Established read-only canvas connections are not closed at JWT expiry (`server/hocuspocus.ts:202-238`, `server/realtime-jwt.ts:12-18`).
+   A departed/revoked viewer can keep receiving updates indefinitely rather than for the accepted approximately 25-minute token window.
+3. `[OPEN]` `[claude-self][opus][glm]` Remote Excalidraw scenes echo back into Yjs (`src/components/session/whiteboard/excalidraw-board.tsx:21-39`, `src/lib/whiteboard/excalidraw-yjs.ts:26-47`, `src/lib/whiteboard/use-whiteboard.ts:51-61`).
+   `updateScene` triggers `onChange`, and the writer unconditionally stores the same serialized scene, so two writable tabs can ping-pong updates without user input.
+4. `[OPEN]` `[codex]` The settled host floor has no frontend control (`src/components/session/whiteboard/whiteboard-panel.tsx:72-104,147-162`).
+   No live surface reads or calls `PATCH /api/sessions/{id}/settings`, so teachers cannot use the supervision mechanism without a manual API call.
+5. `[OPEN]` `[codex][claude-self][opus][glm]` The Phase-4 acceptance contract is incomplete (`docs/plans/094-session-whiteboard.md:143-146`).
+   The exact named mint/ended-mutation tests were folded into differently named table tests, the live-panel create/visibility/owner-viewer tests are absent, and no Playwright create-to-loosen-to-view spec exists.
+
+**Should Fix**
+
+6. `[OPEN]` `[claude-self][opus]` Every Excalidraw `onChange` writes a full-scene Yjs frame and every writable canvas frame performs an uncached HTTP recheck plus several database queries (`excalidraw-board.tsx:34-39`, `hocuspocus.ts:134-168`, `realtime_token.go:320-371`).
+   Active drawing can saturate the API/database and make the fail-closed guard disconnect clients under its own load.
+7. `[OPEN]` `[claude-self][opus]` The binding shares the entire Excalidraw `appState` (`src/lib/whiteboard/excalidraw-yjs.ts:33-36`, `src/components/session/whiteboard/excalidraw-board.tsx:23-26`).
+   Writer viewport, zoom, selection, tool, and view-mode state can overwrite each viewer's local UI state.
+8. `[OPEN]` `[claude-self][opus]` Any authenticated outsider admitted to a public class-less session can create private canvases until the per-session cap is exhausted (`platform/internal/handlers/canvases.go:70-79`, `platform/internal/store/canvases.go:152-160`).
+   Decision 11 settled broad live reads, but did not settle outsider-owned writes or denial of service against the class.
+9. `[OPEN]` `[codex]` The board discards Excalidraw `files` while image-reference elements remain enabled (`src/components/session/whiteboard/excalidraw-board.tsx:31-39`, `src/lib/whiteboard/excalidraw-yjs.ts:26-38`).
+   A pasted image can appear locally but disappear for peers and after archive reload.
+10. `[OPEN]` `[claude-self]` `onLoadDocument` ignores the current canvas `readOnly` response (`server/hocuspocus.ts:256-266`).
+    A stale writable claim connecting after end is advertised writable until its first mutation is reclassified; the current decision should update the connection configuration immediately.
+11. `[OPEN]` `[glm]` Canvas authorization has no platform-admin/impersonation bypass (`platform/internal/handlers/realtime_token.go:320-371`), unlike other realtime document types.
+    Private student-canvas oversight versus least-privilege denial is a trust-model decision, not a mechanical assumption.
+
+**Nice to Have**
+
+12. `[OPEN]` `[claude-self]` The irreversible `participants`/`session` visibility choices lack the plan's confirmation (`whiteboard-panel.tsx:90-104`), and a failed teacher end request gives no visible error (`teacher-dashboard.tsx:247-252`).
+13. `[OPEN]` `[claude-self][opus]` The neutral room redirects every student-page 404, including a nonexistent session, to the generic archive (`src/app/(portal)/sessions/[id]/page.tsx:110-119`).
+14. `[OPEN]` `[claude-self]` `docs/testing.md:38-42` still recommends `bun run --env-file=/dev/null test` although the Phase-6 contract replaced that claim with five explicit empty provider keys; `student-session.tsx:102` also retains stale effect dependencies.
+15. `[OPEN]` `[claude-self][opus][glm]` Minor cleanup remains around the dead canvas `plain_text` column/write path, the generic `/settings` route name, duplicate session lookup on list, the owner foreign-key delete policy, and the broadened blank-attempt load log.
+
+The review converged strongly on the binding and missing-contract findings.
+The atomic end transition, public-session create policy, admin visibility, and newly required end-session/E2E files cross the frozen scope or trust model, so the hard safeguard pauses implementation until those decisions and scope additions are explicit.
 
 ## Post-Execution Report
 
