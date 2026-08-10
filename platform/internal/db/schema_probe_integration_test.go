@@ -134,4 +134,6 @@ func TestCheckEnums_ExactOrderReturnsTypedDiagnostic(t *testing.T) {
 	assert.Equal(t, fixtureEnum, mismatch.Enum)
 	assert.Equal(t, []string{"second", "first"}, mismatch.Expected)
 	assert.Equal(t, []string{"first", "second"}, mismatch.Actual)
+	assert.Contains(t, mismatch.Error(), "inspect and reconcile")
+	assert.Contains(t, mismatch.Error(), "approved database-change workflow")
 }

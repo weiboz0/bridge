@@ -238,7 +238,7 @@ type ErrSchemaEnumMismatch struct {
 
 func (e *ErrSchemaEnumMismatch) Error() string {
 	return fmt.Sprintf(
-		"schema enum mismatch: enum %q has labels %v; expected %v in this order. Apply the missing enum DDL from the latest drizzle/*.sql manually, then restart.",
+		"schema enum mismatch: enum %q has labels %v; expected %v in this order. Do not apply enum DDL blindly: inspect and reconcile the enum definition against the latest drizzle/*.sql through the approved database-change workflow, then restart.",
 		e.Enum, e.Actual, e.Expected,
 	)
 }

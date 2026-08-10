@@ -130,13 +130,34 @@ refuse to start.
 psql postgresql://work@127.0.0.1:5432/bridge -c 'select 1' 2>&1
 psql postgresql://work@127.0.0.1:5432/bridge_test -c 'select 1' 2>&1
 
-# Schema probe — current contract is session_canvases plus sessions.canvas_floor
-# and the ordered canvas_visibility enum from drizzle/0028_session_canvases.sql.
+# Schema probe — current contract from drizzle/0028_session_canvases.sql:
+# public.session_canvases; all nine named canvas columns; both named indexes
+# on that table; public.sessions.canvas_floor; and ordered public.canvas_visibility.
 psql postgresql://work@127.0.0.1:5432/bridge -tAc \
   "SELECT to_regclass('public.session_canvases') IS NOT NULL
-     AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='sessions' AND column_name='canvas_floor')
-     AND ARRAY(SELECT enumlabel FROM pg_enum e JOIN pg_type t ON t.oid=e.enumtypid WHERE t.typname='canvas_visibility' ORDER BY enumsortorder)
-         = ARRAY['private','host','participants','session']" 2>&1
+     AND (SELECT count(DISTINCT column_name)
+            FROM information_schema.columns
+           WHERE table_schema='public'
+             AND table_name='session_canvases'
+             AND column_name = ANY (ARRAY['id','session_id','owner_id','title','visibility','yjs_state','plain_text','created_at','updated_at'])) = 9
+     AND (SELECT count(DISTINCT indexname)
+            FROM pg_indexes
+           WHERE schemaname='public'
+             AND tablename='session_canvases'
+             AND indexname = ANY (ARRAY['session_canvases_session_idx','session_canvases_session_owner_idx'])) = 2
+     AND EXISTS (SELECT 1
+                   FROM information_schema.columns
+                  WHERE table_schema='public'
+                    AND table_name='sessions'
+                    AND column_name='canvas_floor')
+     AND ARRAY(SELECT e.enumlabel
+                 FROM pg_type t
+                 JOIN pg_namespace n ON n.oid=t.typnamespace
+                 JOIN pg_enum e ON e.enumtypid=t.oid
+                WHERE n.nspname='public'
+                  AND t.typname='canvas_visibility'
+                ORDER BY e.enumsortorder)
+         = ARRAY['private','host','participants','session']::text[]" 2>&1
 
 # Count of Drizzle migration files on disk (latest prefix)
 ls /home/chris/workshop/bridge/drizzle/*.sql 2>/dev/null | \
@@ -145,9 +166,9 @@ ls /home/chris/workshop/bridge/drizzle/*.sql 2>/dev/null | \
 
 Tag rules:
 - Postgres `bridge` unreachable → `[BLOCKER]` if platform is running (misconfigured or DB down), `[INFO]` if nothing is running.
-- `session_canvases`, `sessions.canvas_floor`, or ordered `canvas_visibility` missing from `bridge` DB → `[BLOCKER]` "Schema probe would fail — migration 0028 is partially or wholly unapplied. Do not blindly rerun it: inspect `drizzle/0028_session_canvases.sql` and apply only the missing DDL through the approved database-change workflow."
+- `session_canvases`, any of its nine named columns, either named canvas index, `sessions.canvas_floor`, or ordered `canvas_visibility` missing/mismatched in `bridge` DB → `[BLOCKER]` "Schema probe would fail — migration 0028 is partially or wholly unapplied. Do not blindly rerun it: inspect and reconcile `drizzle/0028_session_canvases.sql` through the approved database-change workflow."
 - `bridge_test` unreachable → `[WARNING]` "Test DB unreachable — Go integration tests and Vitest API tests will fail."
-- Both reachable, schema sentinel present → `[OK]`.
+- Both reachable, complete schema contract present → `[OK]`.
 
 For any blocker, remind: "Bridge's platform refuses to start if the schema probe
 fails at boot (`ExpectedSchemaProbe = 'session_canvases'`, `ExpectedSchemaSentinels` in
