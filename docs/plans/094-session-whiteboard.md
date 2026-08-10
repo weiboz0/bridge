@@ -12,6 +12,7 @@
 `platform/internal/handlers/realtime_token.go` + `platform/internal/handlers/realtime_token_test.go` ·
 **`platform/internal/auth/realtime_jwt.go`** (add `readOnly` claim — scope-widened R1) ·
 **`platform/internal/auth/realtime_jwt_test.go`** (JWT compatibility regression) ·
+**`platform/internal/db/migrations.go`** (latest schema probe + sentinels — scope-widened verification fix) ·
 **`server/realtime-jwt.ts`** (mirror the claim — scope-widened R1) ·
 **`platform/cmd/api/main.go`** (wire `CanvasStore` + handler — scope-widened R1) ·
 `platform/internal/handlers/routes.go` (or where session routes register) ·
@@ -37,6 +38,8 @@ Scope-widening (archive-entry review fix) authorized by the user 2026-08-08: add
 Scope-widening (archive test review fix) authorized by the user 2026-08-08: add the existing ended-session regression tests and one focused archive test, so the new archive contract is enforced rather than contradicted by stale no-link assertions.
 
 Scope-widening (scope-audit review fix) authorized by the user 2026-08-08: add the already changed lockfile, Go JWT regression, and custom-binding test so every branch artifact is governed by the plan.
+
+Scope-widening (schema-probe verification fix) authorized by the user 2026-08-09 via “resume”: add `platform/internal/db/migrations.go`, because migration `0028_session_canvases.sql` became the latest schema-bearing migration and the enforced bidirectional parity test requires its table, columns, constraints, and indexes to replace the prior `books` sentinels.
 
 ## Problem / goal
 
