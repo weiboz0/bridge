@@ -1,8 +1,8 @@
 # Plan 094 — Excalidraw whiteboards in live sessions
 
 **Branch:** `feat/094-session-whiteboard`
-**Status:** Phases 1a, 1b, 2, 3, 4, and the Phase-5 schema probe are complete.
-The Phase-6 local-gate addendum is approved for implementation; plan-wide verification and the code-review gate follow it.
+**Status:** Phases 1a through 6 are complete.
+Plan-wide verification and the code-review gate follow Phase 6.
 
 ## File scope
 
@@ -355,7 +355,16 @@ All accepted nits are incorporated in this revision, every Tier-A reviewer has n
 
 ## Code Review
 
-_Pending._
+### Phase 6 task reviews (2026-08-10)
+
+- The database-validator/governance task reached spec and quality consensus after the validator canonicalized encoded test suffixes, rejected fragments and routing controls, bounded and destroyed its one-shot socket, and kept the executable guard contract aligned with `AGENTS.md` and `ci-local.sh`.
+- The handler-fixture task reached spec and quality consensus after replacing all 31 ordinary cost-10 setup registrations, adding producer-parity and fail-closed URL-routing regressions, and preserving the dedicated real-registration tests.
+- The store/contract task reached spec and quality consensus after validating effective pgx routing, preserving only same-host/same-port TLS fallback behavior, enforcing validator AST parity, and propagating cleanup errors.
+- The Vitest task first received `[OPEN]` quality feedback that its error-identity assertion imported both producer and class from the same module and did not exercise the source-local runner.
+  Commit `74adf8f` `[FIXED]` the finding by importing and executing the real signup-intent route, checking the root-produced error through the supported `zod/v4` entry point, and adding the same boundary to the standalone whiteboard suite.
+  The original reviewer and an independent quality arbiter then approved; the repository has no production dependency that exposes a second physical Zod error producer, so an artificial nested-package fixture is not part of the application contract.
+
+_Plan-wide code review pending._
 
 ## Post-Execution Report
 
@@ -430,3 +439,18 @@ _Plan-wide report pending later phases._
 - The parser extracts `CREATE TYPE ... AS ENUM` and `ALTER TABLE ... ADD COLUMN` alongside table/index declarations, and parity checks both directions for stale or missing table/enum sentinels.  Generic named-constraint coverage remains via a synthetic test-table sentinel.
 - Integration tests now fail closed unless both the parsed `DATABASE_URL` path and `SELECT current_database()` end in `_test`; synthetic DDL remains limited to `bridge_test` and cleans up immediately.  No migration or service ran.
 - `DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test go test ./internal/db/ -count=1` and `go test ./... -count=1 -timeout 120s` passed.  `go vet ./internal/db`, `gofmt`, and `git diff --check` passed.
+
+### Phase 6 — local-gate test infrastructure (2026-08-10)
+
+- Replaced the 31 ordinary handler-test `RegisterUser` setup calls with the transaction-safe cost-4 `insertFixtureUser` helper while retaining real cost-10 registration coverage in the producer/auth tests.
+  The fixture validates password and intended-role inputs before insertion, writes the user and email-provider rows atomically, and has persistence, rejection-without-write, and producer-parity regressions.
+- Hardened the handler, store, and contract test database openers against parsed and effective routing overrides, non-test database names, cross-host fallbacks, and cleanup-error loss.
+  Same-host/same-port PostgreSQL TLS fallback remains supported, and the duplicated store/contract validators are AST parity-enforced.
+- Added the Node-18-compatible one-shot database validator and wired `ci-local.sh` to validate the ambient and selected URLs, pin both database variables into every mutating test runner, and keep all five live-provider keys explicitly empty.
+  The guard self-test now exercises 58 database, billing-isolation, governance, and fixture-census cases.
+- Added the Bun/Vitest Zod transform boundary to both Vitest configurations and a regression that imports the real signup-intent route, proves `z.object` module initialization and a 400 validation path, and preserves root-to-`zod/v4` error compatibility.
+  The standalone whiteboard suite directly exercises the same Zod boundary.
+- TDD RED evidence included the handler package exceeding 120 seconds in bcrypt setup, unsafe URL-routing forms being accepted by the earlier guards, Bun/Vitest failing at the app schema with `z.object` undefined when the Zod boundary was removed, and the stale teacher room assertion expecting a removed prop.
+- `PATH=/home/chris/.bun/bin:$PATH DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test TEST_DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test bash scripts/ci-local.sh --fast` passed on commit `74adf8f` with all five provider keys empty.
+  Evidence: root Vitest 112 files passed and 2 skipped, 875 tests passed and 11 skipped; standalone whiteboard Vitest 3/3; Hocuspocus 18/18; guard self-tests 58/58; all Go packages passed, including handlers in 33.691 seconds, store in 30.742 seconds, and contract in 0.023 seconds.
+  E2E was intentionally skipped by `--fast`, so this attestation is phase evidence only and is not acceptable for merge.
