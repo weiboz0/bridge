@@ -3,6 +3,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import * as Y from "yjs";
+import { z } from "zod";
+import { ZodError } from "zod/v4";
 
 const state = vi.hoisted(() => ({
   yDoc: null as unknown,
@@ -75,5 +77,9 @@ describe("useWhiteboard", () => {
       scene,
       expect.any(Symbol),
     );
+  });
+
+  it("keeps Zod root validation errors compatible with zod/v4", () => {
+    expect(() => z.string().parse(42)).toThrow(ZodError);
   });
 });
