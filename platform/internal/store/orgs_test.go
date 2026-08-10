@@ -30,6 +30,21 @@ func TestValidateTestDatabaseURL(t *testing.T) {
 			want: "bridge_test",
 		},
 		{
+			name: "accepts bare test database with default SSL negotiation",
+			url:  "postgresql://work@127.0.0.1:5432/bridge_test",
+			want: "bridge_test",
+		},
+		{
+			name: "accepts same host preferred SSL fallback",
+			url:  "postgresql://work@127.0.0.1:5432/bridge_test?sslmode=prefer",
+			want: "bridge_test",
+		},
+		{
+			name: "accepts same host allowed SSL fallback",
+			url:  "postgresql://work@127.0.0.1:5432/bridge_test?sslmode=allow",
+			want: "bridge_test",
+		},
+		{
 			name: "accepts percent decoded test database",
 			url:  "postgresql://work@127.0.0.1:5432/bridge%5Ftest?sslmode=disable",
 			want: "bridge_test",
@@ -169,8 +184,13 @@ func validateTestDatabaseURL(rawURL string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("database URL pgx configuration is invalid: %w", err)
 	}
-	if config.Host == "" || len(config.Fallbacks) != 0 {
+	if config.Host == "" {
 		return "", fmt.Errorf("database URL must resolve to one host")
+	}
+	for _, fallback := range config.Fallbacks {
+		if fallback.Host != config.Host || fallback.Port != config.Port {
+			return "", fmt.Errorf("database URL must resolve to one host")
+		}
 	}
 	if config.Database == "" || !strings.HasSuffix(config.Database, "_test") {
 		return "", fmt.Errorf("database URL database must end in _test")
