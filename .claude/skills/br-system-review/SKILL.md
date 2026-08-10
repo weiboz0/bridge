@@ -150,7 +150,7 @@ psql postgresql://work@127.0.0.1:5432/bridge -tAc \
                   WHERE table_schema='public'
                     AND table_name='sessions'
                     AND column_name='canvas_floor')
-     AND ARRAY(SELECT e.enumlabel
+     AND ARRAY(SELECT e.enumlabel::text
                  FROM pg_type t
                  JOIN pg_namespace n ON n.oid=t.typnamespace
                  JOIN pg_enum e ON e.enumtypid=t.oid
