@@ -588,3 +588,24 @@ The canonical rule is mirrored in `AGENTS.md`, `docs/reviewers.md`, `docs/develo
   → Response in `260ca47`: the old route is removed with same-phase client migration, matched unexpired end must persist the result, bind failure aborts startup, and durable confirmation precedes one-shot consumption.
 
 **Round 3 verdicts:** `[sol]` CHANGES REQUESTED; `[fable]` CHANGES REQUESTED.
+
+### Round 4 — 2026-08-10 — commit `7b2e644`
+
+- `[OPEN]` `[sol]` A degraded end could commit after an authorization transaction released its lock but before the allowed frame applied and relayed.
+  → Response in `18e9216`: the design no longer claims impossible cross-process apply-and-relay atomicity when Hocuspocus cannot retain a fence; it defines the confirmed guarantee separately and proves that a degraded transient frame cannot persist, continue, or survive reconnect while the teacher receives the incomplete warning.
+- `[OPEN]` `[fable]` The ledger self-certified findings as fixed even though the exact response commit had not been approved.
+  → Response in `18e9216`: every finding is restored to `[OPEN]`, responses never change status, and only exact-commit reviewer approval permits a mechanical ledger-only transition to `[FIXED]`.
+- `[OPEN]` `[fable]` An older asynchronous database-validation response could overwrite a newer in-memory freeze token.
+  → Response in `18e9216`: the map stores database expiry and accepts a different token only when its database expiry is later than the current entry.
+- `[OPEN]` `[fable]` Foreign expired and already-ended lease cleanup states were undefined.
+  → Response in `18e9216`: any consumed expired lease is cleared, an already-ended completion never rewrites the archive result, and matching or expired residue may be cleaned safely.
+- `[OPEN]` `[fable]` A row-level shared lock on every mutation risked multixact churn and lacked a universal lock order.
+  → Response in `18e9216`: mutation and end use transaction-scoped shared/exclusive session advisory locks, always acquired before database access, and the busy-session test covers deadlock and latency.
+- `[OPEN]` `[fable]` Plain-HTTP loopback and redirect behavior was ambiguous.
+  → Response in `18e9216`: only IP-literal `127.0.0.0/8` and `::1` are accepted for HTTP, DNS names are rejected, and redirects are disabled.
+- `[OPEN]` `[fable]` The reconnect horizon could expire before the 15-second freeze lease.
+  → Response in `18e9216`: reconnect continues for at least 20 seconds with no individual delay above two seconds, and the crash test requires recovery without reload.
+- `[OPEN]` `[fable]` Durable/browser warning disagreement, permanent viewer promotion, and stale old-route clients were underspecified.
+  → Response in `18e9216`: a 200 durable result is authoritative, failed requests retain browser state, promotion requires reconnect, and stale-route 404 is surfaced as an error.
+
+**Round 4 verdicts:** `[sol]` CHANGES REQUESTED; `[fable]` CHANGES REQUESTED.
