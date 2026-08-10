@@ -20,6 +20,49 @@ const fixtureUserPassword = "testpassword123"
 
 const fixtureUserPasswordHash = "$2b$04$zw3jz9jL6DE8zreLSsCR8OneBJLuYm1DgVvctVGcO7ioeysEyCsGa"
 
+func TestValidateIntegrationDatabaseURL_Routing(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		url  string
+		want bool
+	}{
+		{
+			name: "literal authority multi-host",
+			url:  "postgresql://work@primary,replica:5432/bridge_test",
+		},
+		{
+			name: "encoded authority multi-host",
+			url:  "postgresql://work@primary%2Creplica:5432/bridge_test",
+		},
+		{
+			name: "literal query host multi-host",
+			url:  "postgresql://work@127.0.0.1:5432/bridge_test?host=primary,replica",
+		},
+		{
+			name: "encoded query host multi-host",
+			url:  "postgresql://work@127.0.0.1:5432/bridge_test?host=primary%2Creplica",
+		},
+		{
+			name: "multiple query host values",
+			url:  "postgresql://work@127.0.0.1:5432/bridge_test?host=primary&host=replica",
+		},
+		{
+			name: "valid option query",
+			url:  "postgresql://work@127.0.0.1:5432/bridge_test?application_name=bridge_handler_test&sslmode=disable",
+			want: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateIntegrationDatabaseURL(tc.url)
+			if tc.want {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+		})
+	}
+}
+
 func insertFixtureUser(t *testing.T, db *sql.DB, input store.RegisterInput) *store.RegisteredUser {
 	t.Helper()
 	if err := validateFixtureUserInput(input); err != nil {

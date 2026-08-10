@@ -31,22 +31,8 @@ func integrationDB(t *testing.T) *sql.DB {
 	if databaseURL == "" {
 		t.Skip("DATABASE_URL not set -- skipping integration test")
 	}
-	parsed, err := url.Parse(databaseURL)
-	if err != nil {
-		t.Fatalf("DATABASE_URL must be a valid test database URL: %v", err)
-	}
-	if strings.Contains(databaseURL, "#") || parsed.Fragment != "" {
-		t.Fatal("DATABASE_URL must not contain a fragment")
-	}
-	escapedPath := parsed.EscapedPath()
-	decodedPath, err := url.PathUnescape(escapedPath)
-	if err != nil {
-		t.Fatalf("DATABASE_URL must have a valid escaped database pathname: %v", err)
-	}
-	databaseName := strings.TrimPrefix(decodedPath, "/")
-	hostname := parsed.Hostname()
-	if (parsed.Scheme != "postgres" && parsed.Scheme != "postgresql") || hostname == "" || strings.Contains(hostname, ",") || databaseName == "" || strings.Contains(databaseName, "/") || !strings.HasSuffix(databaseName, "_test") {
-		t.Fatal("DATABASE_URL must name a PostgreSQL database ending in _test")
+	if err := validateIntegrationDatabaseURL(databaseURL); err != nil {
+		t.Fatal(err)
 	}
 	db, err := sql.Open("pgx", databaseURL)
 	if err != nil {
@@ -63,6 +49,40 @@ func integrationDB(t *testing.T) *sql.DB {
 		t.Fatalf("live database %q is not a test database", liveDatabaseName)
 	}
 	return db
+}
+
+func validateIntegrationDatabaseURL(databaseURL string) error {
+	parsed, err := url.Parse(databaseURL)
+	if err != nil {
+		return fmt.Errorf("DATABASE_URL must be a valid test database URL: %w", err)
+	}
+	if strings.Contains(databaseURL, "#") || parsed.Fragment != "" {
+		return fmt.Errorf("DATABASE_URL must not contain a fragment")
+	}
+	escapedPath := parsed.EscapedPath()
+	decodedPath, err := url.PathUnescape(escapedPath)
+	if err != nil {
+		return fmt.Errorf("DATABASE_URL must have a valid escaped database pathname: %w", err)
+	}
+	databaseName := strings.TrimPrefix(decodedPath, "/")
+	hostname := parsed.Hostname()
+	if (parsed.Scheme != "postgres" && parsed.Scheme != "postgresql") || hostname == "" || strings.Contains(hostname, ",") || databaseName == "" || strings.Contains(databaseName, "/") || !strings.HasSuffix(databaseName, "_test") {
+		return fmt.Errorf("DATABASE_URL must name a PostgreSQL database ending in _test")
+	}
+	query, err := url.ParseQuery(parsed.RawQuery)
+	if err != nil {
+		return fmt.Errorf("DATABASE_URL must have a valid query: %w", err)
+	}
+	var queryHosts []string
+	for key, values := range query {
+		if strings.EqualFold(key, "host") {
+			queryHosts = append(queryHosts, values...)
+		}
+	}
+	if len(queryHosts) > 1 || (len(queryHosts) == 1 && strings.Contains(queryHosts[0], ",")) {
+		return fmt.Errorf("DATABASE_URL must not route through multiple query hosts")
+	}
+	return nil
 }
 
 // problemFixture is the world an integration test runs against: two orgs, a
