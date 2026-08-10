@@ -42,7 +42,7 @@ The Phase-6 local-gate addendum has provisional scope only while its plan-review
 **`tests/unit/excalidraw-yjs.test.ts`** (custom-binding regression) · `package.json` + **`bun.lock`** (add `@excalidraw/excalidraw`; no `y-excalidraw`) ·
 **`vitest.config.ts`** (Bun/Vitest Zod interop — scope-widened local-gate fix) ·
 **`scripts/check-test-database-url.mjs`** (new) · **`scripts/ci-local.sh`** · **`scripts/tests/test-guards.sh`** (parsed/pinned local-gate database guard — provisional Round-10 governance scope) ·
-**`AGENTS.md`** (classify the new validator as governance) ·
+**`AGENTS.md`** (classify the validator and its executable guard proof as governance; correct the LLM-isolation contract) ·
 `docs/api.md` · `docs/architecture/decisions.md` · **`docs/testing.md`** · `README.md` · **`.claude/skills/br-system-review/SKILL.md`** (operator probe guidance) · this plan file.
 
 Scope-widening (R1 blocker 1 / concern C1) authorized by the user 2026-08-06: the read-only viewer boundary cannot be built without a `readOnly` claim in both JWT files, and `CanvasStore` must be wired in `main.go`.
@@ -183,7 +183,7 @@ A canvas is `documentName = canvas:{canvasId}`. Permission is enforced **server-
 - Replace `ci-local.sh`'s whole-string `_test` regex with the new `scripts/check-test-database-url.mjs` validator.
   Preserve and strengthen the existing ambient guard first: if `DATABASE_URL` is set, validate its decoded pathname and live `current_database()` even when a safe `TEST_DATABASE_URL` is also set, so a hostile ambient value cannot flow to any later step.
   Then resolve one gate URL from `TEST_DATABASE_URL`, `DATABASE_URL`, or the existing `bridge_test` fallback and validate it independently.
-  The Node 18-compatible validator uses the existing `postgres` client with `max: 1`, a five-second connect timeout, and URL-provided SSL behavior; it parses with `new URL`, requires `postgres:` or `postgresql:`, URL-decodes the non-empty pathname database name, opens one connection, requires `SELECT current_database()` to end `_test`, fails closed without retry on connection/query errors, closes before any gate mutation, and never prints the URL or credentials.
+  The Node 18-compatible validator uses the existing `postgres` client with `max: 1`, a five-second connect timeout, a five-second query timeout around its sole `SELECT current_database()` probe, and URL-provided SSL behavior; it parses with `new URL`, requires `postgres:` or `postgresql:`, URL-decodes the non-empty pathname database name, opens one connection, requires the live database name to end `_test`, fails closed without retry on connection/query errors, closes before any gate mutation, and never prints the URL or credentials.
   `ci-local.sh` invokes it with the system `node` executable, and implementation starts with a Node 18 import smoke test for the existing `postgres` dependency.
   “Read-only” here means the validator executes only `SELECT current_database()` and performs no DML or DDL; the client is not relied on to enforce a read-only session mode.
   A parse-only mode exists solely for executable invalid-URL self-tests and is never used by the gate path.
@@ -193,7 +193,7 @@ A canvas is `documentName = canvas:{canvasId}`. Permission is enforced **server-
   This duplicates the application-test check in `tests/helpers.ts` intentionally: the gate must reject before invoking a test runner, while the helper remains defense in depth for direct Vitest commands.
 - Extend `scripts/tests/test-guards.sh` with executable validator cases for a valid `_test` path, percent-decoded `_test` path, empty path, wrong scheme, non-test path, and a production path whose query ends in `_test`; also enforce that the Go step pins both database variables.
   Include a test-path URL carrying `?dbname=production` and prove parse-only accepts only the safe pathname while documenting that the mandatory live gate check remains authoritative for routing/mapping overrides.
-  Update `docs/testing.md` to name the decoded-path validation and shared pinned URL.
+  Update `docs/testing.md` to name the decoded-path validation and shared pinned URL, and correct its identical stale LLM-isolation claim so it documents the five explicit empty provider-key exports rather than the unused `bun run --env-file=/dev/null` mechanism.
   The same guard file owns an allowlist scan that rejects direct handler-test `RegisterUser` calls outside `user_fixture_test.go`, and static assertions that the Vitest step preserves all five empty provider keys while Go pins both database variables.
   Add both `scripts/check-test-database-url.mjs` and `scripts/tests/test-guards.sh` to `AGENTS.md`'s governance-doc safeguard beside `scripts/ci-local.sh`, so future plans cannot weaken the validator or its load-bearing proofs without declaring them at gate time.
   Correct `AGENTS.md`'s stale LLM-isolation sentence to describe the five explicit empty key exports actually used by the gate.
