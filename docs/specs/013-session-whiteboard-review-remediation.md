@@ -1,6 +1,6 @@
 # Session whiteboard review remediation
 
-**Status:** Proposed
+**Status:** Blocked at Design Review Round 5 with unresolved findings.
 
 **Related plan:** `docs/plans/094-session-whiteboard.md`
 
@@ -609,3 +609,17 @@ The canonical rule is mirrored in `AGENTS.md`, `docs/reviewers.md`, `docs/develo
   → Response in `18e9216`: a 200 durable result is authoritative, failed requests retain browser state, promotion requires reconnect, and stale-route 404 is surfaced as an error.
 
 **Round 4 verdicts:** `[sol]` CHANGES REQUESTED; `[fable]` CHANGES REQUESTED.
+
+### Round 5 — 2026-08-10 — commit `5e8b4ab`
+
+- `[OPEN]` `[sol][fable]` A database validation started before cleanup can return after token-matched unfreeze removed an empty map entry and reinstall the stale freeze barrier.
+  The later-expiry comparison has no state to compare when the map is empty, so the accepted design still needs per-session freeze/unfreeze serialization or a bounded tombstone or generation retained after removal.
+- `[OPEN]` `[fable]` The acceptance criterion still states unconditional post-freeze apply-and-relay atomicity even though the body intentionally limits that guarantee to confirmed paths.
+- `[OPEN]` `[fable]` The reconnect horizon must reset on every retryable freeze rejection to survive consecutive end attempts.
+- `[OPEN]` `[fable]` Advisory-lock participation needs to cover lease acquisition and replacement explicitly, use a reserved two-part application keyspace, and define equal-expiry token ordering without timestamp truncation ambiguity.
+- `[OPEN]` `[fable]` Already-ended residual-lease cleanup must be deterministic, stale-route errors must tolerate an unparseable non-2xx body, and loopback checks must use canonical parsed addresses while rejecting IPv4-mapped IPv6 forms.
+
+**Round 5 verdicts:** `[sol]` CHANGES REQUESTED; `[fable]` CHANGES REQUESTED.
+
+**Gate result:** BLOCKED.
+The five-round maximum is exhausted with unresolved `[OPEN]` findings, so the hard safeguard requires user direction before any further design revision, Plan 094 re-plan, governance-file edit, or implementation.
