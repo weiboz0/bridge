@@ -26,6 +26,10 @@ function parseTestDatabaseURL(value) {
     throw new Error("non-Postgres URL");
   }
 
+  if (parsed.hash) {
+    throw new Error("URL fragments are not allowed");
+  }
+
   let hostname;
   try {
     hostname = decodeURIComponent(parsed.hostname);

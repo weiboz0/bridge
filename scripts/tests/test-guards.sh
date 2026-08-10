@@ -113,6 +113,10 @@ expect 0 "lowercase percent-decoded test database path is accepted" \
   parse_test_url "postgresql://guard:guard@127.0.0.1:5432/bridge%5ftest"
 expect 1 "unsupported percent-encoded database pathname is rejected" \
   parse_test_url "postgresql://guard:guard@127.0.0.1:5432/bridge%5F%74est"
+expect 1 "encoded test database pathname with a fragment is rejected" \
+  parse_test_url "postgresql://guard:guard@127.0.0.1:5432/bridge%5Ftest#fragment"
+expect 1 "literal test database pathname with a fragment is rejected" \
+  parse_test_url "postgresql://guard:guard@127.0.0.1:5432/bridge_test#fragment"
 expect 1 "empty database path is rejected" \
   parse_test_url "postgresql://guard:guard@127.0.0.1:5432/"
 expect 1 "non-Postgres scheme is rejected" \
@@ -129,6 +133,26 @@ expect 1 "encoded comma-separated database hosts are rejected" \
   parse_test_url "postgresql://guard:guard@safe%2Cforeign:5432/bridge_test"
 expect 1 "target session attributes are rejected" \
   parse_test_url "postgresql://guard:guard@127.0.0.1:5432/bridge_test?target_session_attrs=read-write"
+
+# Extract only the canonicalizer function.  It must not run ci-local or invoke
+# the validator, and it must communicate exclusively through its output variable.
+CANONICALIZER="$FIXTURES/canonicalize-test-database-url.sh"
+sed -n '/^canonicalize_test_database_url() {/,/^}$/p' "$REPO_ROOT/scripts/ci-local.sh" > "$CANONICALIZER"
+canonicalize_and_expect() {
+  local input="$1" expected="$2" capture="$FIXTURES/canonicalizer.stdout"
+  : > "$capture"
+  bash -c 'source "$1"; canonicalize_test_database_url "$2" canonicalized; [[ -n "$canonicalized" && "$canonicalized" == "$3" ]]' \
+    _ "$CANONICALIZER" "$input" "$expected" > "$capture"
+  [[ ! -s "$capture" ]]
+}
+expect 0 "Bash canonicalizer normalizes uppercase encoded suffix without stdout" \
+  canonicalize_and_expect \
+  "postgresql://guard:guard@127.0.0.1:5432/bridge%5Ftest?application_name=guard" \
+  "postgresql://guard:guard@127.0.0.1:5432/bridge_test?application_name=guard"
+expect 0 "Bash canonicalizer normalizes lowercase encoded suffix without stdout" \
+  canonicalize_and_expect \
+  "postgresql://guard:guard@127.0.0.1:5432/bridge%5ftest?application_name=guard" \
+  "postgresql://guard:guard@127.0.0.1:5432/bridge_test?application_name=guard"
 
 # ── 13. database gate wiring is explicit and complete ───────────────────────
 if rg -q 'check-test-database-url\.mjs' "$REPO_ROOT/scripts/ci-local.sh"; then
@@ -224,10 +248,12 @@ fi
 if rg -Fq 'hostname = decodeURIComponent(parsed.hostname);' "$VALIDATOR" \
   && rg -Fq 'hostname.includes(",")' "$VALIDATOR" \
   && rg -Fq 'rawPathname.includes("%") && !encodedPathname' "$VALIDATOR" \
-  && rg -Fq 'parsed.pathname = `/${databaseName}`;' "$VALIDATOR"; then
-  ok "validator rejects encoded host routing and canonicalizes the only encoded path form"
+  && rg -Fq 'parsed.pathname = `/${databaseName}`;' "$VALIDATOR" \
+  && rg -Fq 'if (parsed.hash) {' "$VALIDATOR" \
+  && rg -Fq 'await validateLiveDatabase(parsed.toString());' "$VALIDATOR"; then
+  ok "validator rejects fragments and encoded routing while canonicalizing its live URL"
 else
-  bad "validator rejects encoded host routing and canonicalizes the only encoded path form"
+  bad "validator rejects fragments and encoded routing while canonicalizing its live URL"
 fi
 
 if rg -Fq 'import net from "node:net";' "$VALIDATOR" \
