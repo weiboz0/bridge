@@ -165,6 +165,56 @@ for key in ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY DASHSCOPE_API_KEY OPE
   fi
 done
 
+# ── 14. validator and governance hardening cannot silently regress ──────────
+if rg -q 'max: 1,' "$VALIDATOR" \
+  && rg -q 'connect_timeout: 5,' "$VALIDATOR" \
+  && rg -q 'fetch_types: false,' "$VALIDATOR" \
+  && rg -q 'prepare: false,' "$VALIDATOR"; then
+  ok "validator limits connections and disables implicit type/prepared queries"
+else
+  bad "validator limits connections and disables implicit type/prepared queries"
+fi
+
+if rg -Fq 'const query = sql`SELECT current_database()`;' "$VALIDATOR" \
+  && rg -q 'deadline = setTimeout' "$VALIDATOR" \
+  && rg -Fq 'sql.end({ timeout: 0 })' "$VALIDATOR" \
+  && ! rg -Fq 'sql.end({ timeout: 5 })' "$VALIDATOR"; then
+  ok "validator destroys the active query at its five-second deadline"
+else
+  bad "validator destroys the active query at its five-second deadline"
+fi
+
+governance_block="$(sed -n '/\*\*Governance docs\*\*/,/The hook and the gate script/p' "$REPO_ROOT/AGENTS.md")"
+if [[ "$governance_block" == *'scripts/check-test-database-url.mjs'* \
+  && "$governance_block" == *'scripts/tests/test-guards.sh'* \
+  && "$governance_block" == *'scripts/ci-local.sh'* ]]; then
+  ok "AGENTS governance safeguard names every test gate artifact"
+else
+  bad "AGENTS governance safeguard names every test gate artifact"
+fi
+
+llm_block="$(sed -n '/\*\*LLM-touching tests bill real money\.\*\*/,/## Documentation/p' "$REPO_ROOT/AGENTS.md")"
+if [[ "$llm_block" == *'ANTHROPIC_API_KEY='* \
+  && "$llm_block" == *'OPENAI_API_KEY='* \
+  && "$llm_block" == *'GEMINI_API_KEY='* \
+  && "$llm_block" == *'DASHSCOPE_API_KEY='* \
+  && "$llm_block" == *'OPENROUTER_API_KEY='* ]]; then
+  ok "AGENTS documents five explicit empty provider-key exports"
+else
+  bad "AGENTS documents five explicit empty provider-key exports"
+fi
+
+ci_header="$(sed -n '1,16p' "$REPO_ROOT/scripts/ci-local.sh")"
+if [[ "$ci_header" == *'ANTHROPIC_API_KEY='* \
+  && "$ci_header" == *'OPENAI_API_KEY='* \
+  && "$ci_header" == *'GEMINI_API_KEY='* \
+  && "$ci_header" == *'DASHSCOPE_API_KEY='* \
+  && "$ci_header" == *'OPENROUTER_API_KEY='* ]]; then
+  ok "ci-local header documents five explicit empty provider-key exports"
+else
+  bad "ci-local header documents five explicit empty provider-key exports"
+fi
+
 # Task 2 creates the fixture and moves direct calls into it.  Once that file
 # exists this guard automatically becomes strict: every other handler test must
 # use the fixture rather than calling RegisterUser directly.

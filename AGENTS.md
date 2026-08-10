@@ -96,7 +96,8 @@ Always pause and surface to the user, regardless of operating mode.
   and a failing `pre-merge-guard.sh` or `ci-local.sh`.
 
 - **Governance docs** — `AGENTS.md`, the `CLAUDE.md` pointer,
-  `docs/{coding-agent,development-workflow,reviewers}.md`, `.githooks/`, and `scripts/ci-local.sh`,
+  `docs/{coding-agent,development-workflow,reviewers}.md`, `.githooks/`,
+  `scripts/check-test-database-url.mjs`, `scripts/tests/test-guards.sh`, and `scripts/ci-local.sh`,
   unless declared in the plan's `## File scope` at gate time.
   The hook and the gate script are governance: weakening either removes the only pre-merge check Bridge has.
 
@@ -169,7 +170,8 @@ Full tier descriptions, commands, and gating env vars: `docs/testing.md`.
   `tests/llm/*.test.ts` call live provider endpoints and are gated only by the presence of an API key —
   and bun auto-loads `.env`, which carries real keys.
   Never run the full suite against live providers casually;
-  `scripts/ci-local.sh` isolates itself with `bun run --env-file=/dev/null test`.
+  `scripts/ci-local.sh` explicitly exports `ANTHROPIC_API_KEY=`, `OPENAI_API_KEY=`,
+  `GEMINI_API_KEY=`, `DASHSCOPE_API_KEY=`, and `OPENROUTER_API_KEY=` for Vitest.
 
 ## Documentation
 

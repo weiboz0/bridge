@@ -7,8 +7,9 @@
 #
 #   1. It never bills API calls. tests/llm/*.test.ts hit real provider endpoints and
 #      are gated only by the presence of an API key — and bun AUTO-LOADS .env, which
-#      carries real keys. `unset ANTHROPIC_API_KEY` does not work; the key is re-read
-#      from .env. Only --env-file=/dev/null actually suppresses them.
+#      carries real keys. Vitest explicitly exports ANTHROPIC_API_KEY=,
+#      OPENAI_API_KEY=, GEMINI_API_KEY=, DASHSCOPE_API_KEY=, and OPENROUTER_API_KEY=
+#      so those empty values make every live-provider skip condition fire.
 #
 #   2. It never touches a real database or a foreign service. Migrations read
 #      DATABASE_URL with no test-only path, and Playwright's baseURL defaults to a

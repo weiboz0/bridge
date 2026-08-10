@@ -40,28 +40,31 @@ function parseTestDatabaseURL(value) {
   return databaseName;
 }
 
-function withinFiveSeconds(promise) {
-  let timer;
-  const timeout = new Promise((_, reject) => {
-    timer = setTimeout(() => reject(new Error("timed out")), TIMEOUT_MS);
-  });
-  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
-}
-
 async function validateLiveDatabase(value) {
   const sql = postgres(value, {
     max: 1,
     connect_timeout: 5,
+    fetch_types: false,
+    prepare: false,
   });
 
+  let deadline;
   try {
-    const rows = await withinFiveSeconds(sql`SELECT current_database()`);
+    const query = sql`SELECT current_database()`;
+    const timeout = new Promise((_, reject) => {
+      deadline = setTimeout(() => {
+        void sql.end({ timeout: 0 }).catch(() => undefined);
+        reject(new Error("timed out"));
+      }, TIMEOUT_MS);
+    });
+    const rows = await Promise.race([query, timeout]);
     const databaseName = rows[0]?.current_database;
     if (typeof databaseName !== "string" || !databaseName.endsWith("_test")) {
       throw new Error("connected database is not a test database");
     }
   } finally {
-    await withinFiveSeconds(sql.end({ timeout: 5 })).catch(() => undefined);
+    clearTimeout(deadline);
+    await sql.end({ timeout: 0 }).catch(() => undefined);
   }
 }
 
