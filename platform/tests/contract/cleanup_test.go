@@ -1,17 +1,24 @@
 package contract
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/format"
+	"go/parser"
+	"go/token"
 	"log"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -35,7 +42,7 @@ func TestResolveContractCleanupURL(t *testing.T) {
 		},
 		{
 			name:        "accepts percent decoded test database",
-			url:         "postgresql://work@127.0.0.1:5432/bridge%5Ftest",
+			url:         "postgresql://work@127.0.0.1:5432/bridge%5Ftest?sslmode=disable",
 			wantCleanup: true,
 		},
 		{
@@ -74,6 +81,38 @@ func TestResolveContractCleanupURL(t *testing.T) {
 			name: "rejects encoded hostaddr multi host routing",
 			url:  "postgresql://work@127.0.0.1:5432/bridge_test?hostaddr=127.0.0.1%2C127.0.0.2",
 		},
+		{
+			name: "rejects single host override",
+			url:  "postgresql://work@127.0.0.1:5432/bridge_test?host=other",
+		},
+		{
+			name: "rejects case insensitive host override",
+			url:  "postgresql://work@127.0.0.1:5432/bridge_test?HOST=other",
+		},
+		{
+			name: "rejects port override",
+			url:  "postgresql://work@127.0.0.1:5432/bridge_test?port=5433",
+		},
+		{
+			name: "rejects dbname override",
+			url:  "postgresql://work@127.0.0.1:5432/bridge_test?dbname=bridge",
+		},
+		{
+			name: "rejects database override",
+			url:  "postgresql://work@127.0.0.1:5432/bridge_test?database=bridge",
+		},
+		{
+			name: "rejects service routing",
+			url:  "postgresql://work@127.0.0.1:5432/bridge_test?service=unsafe",
+		},
+		{
+			name: "rejects target session routing",
+			url:  "postgresql://work@127.0.0.1:5432/bridge_test?target_session_attrs=read-write",
+		},
+		{
+			name: "rejects load balance routing",
+			url:  "postgresql://work@127.0.0.1:5432/bridge_test?load_balance_hosts=enable",
+		},
 	}
 
 	for _, tt := range tests {
@@ -96,6 +135,30 @@ func TestResolveContractCleanupURL(t *testing.T) {
 			assert.False(t, cleanup)
 		})
 	}
+}
+
+func TestValidateTestDatabaseURLParity(t *testing.T) {
+	storeValidator := formattedValidatorDeclaration(t, filepath.Join("..", "..", "internal", "store", "orgs_test.go"))
+	contractValidator := formattedValidatorDeclaration(t, "cleanup_test.go")
+	assert.Equal(t, storeValidator, contractValidator)
+}
+
+func formattedValidatorDeclaration(t *testing.T, path string) string {
+	t.Helper()
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, path, nil, 0)
+	require.NoError(t, err)
+	for _, declaration := range file.Decls {
+		function, ok := declaration.(*ast.FuncDecl)
+		if !ok || function.Name.Name != "validateTestDatabaseURL" {
+			continue
+		}
+		var formatted bytes.Buffer
+		require.NoError(t, format.Node(&formatted, fset, function))
+		return formatted.String()
+	}
+	t.Fatalf("validateTestDatabaseURL not found in %s", path)
+	return ""
 }
 
 func TestCleanupExitCode(t *testing.T) {
@@ -125,13 +188,13 @@ func resolveContractCleanupURL(dbURL string) (string, bool, error) {
 	if dbURL == "" {
 		return "", false, nil
 	}
-	if _, err := validateContractCleanupDatabaseURL(dbURL); err != nil {
+	if _, err := validateTestDatabaseURL(dbURL); err != nil {
 		return "", false, err
 	}
 	return dbURL, true, nil
 }
 
-func cleanupContractTestData(dbURL string) error {
+func cleanupContractTestData(dbURL string) (cleanupErr error) {
 	validatedURL, shouldCleanup, err := resolveContractCleanupURL(dbURL)
 	if err != nil || !shouldCleanup {
 		return err
@@ -141,7 +204,11 @@ func cleanupContractTestData(dbURL string) error {
 	if err != nil {
 		return fmt.Errorf("failed to open verified test database: %w", err)
 	}
-	defer db.Close()
+	defer func() {
+		if err := db.Close(); err != nil {
+			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("close verified test database: %w", err))
+		}
+	}()
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 
@@ -170,7 +237,6 @@ func cleanupContractTestData(dbURL string) error {
 		`DELETE FROM users WHERE email LIKE 'contract-%@example.com'`,
 	}
 
-	var cleanupErr error
 	for _, q := range queries {
 		deleteCtx, deleteCancel := context.WithTimeout(context.Background(), contractCleanupTimeout)
 		_, err := db.ExecContext(deleteCtx, q)
@@ -182,7 +248,7 @@ func cleanupContractTestData(dbURL string) error {
 	return cleanupErr
 }
 
-func validateContractCleanupDatabaseURL(rawURL string) (string, error) {
+func validateTestDatabaseURL(rawURL string) (string, error) {
 	if rawURL == "" {
 		return "", fmt.Errorf("database URL is empty")
 	}
@@ -200,10 +266,10 @@ func validateContractCleanupDatabaseURL(rawURL string) (string, error) {
 	if parsed.Host == "" || strings.Contains(parsed.Host, ",") || strings.Contains(parsed.Hostname(), ",") {
 		return "", fmt.Errorf("database URL must name one host")
 	}
-	for _, key := range []string{"host", "hostaddr"} {
-		values := parsed.Query()[key]
-		if len(values) > 1 || (len(values) == 1 && strings.Contains(values[0], ",")) {
-			return "", fmt.Errorf("database URL must not use multi-host %s routing", key)
+	for key := range parsed.Query() {
+		switch strings.ToLower(key) {
+		case "host", "hostaddr", "port", "dbname", "database", "service", "servicefile", "target_session_attrs", "load_balance_hosts":
+			return "", fmt.Errorf("database URL must not override connection routing")
 		}
 	}
 
@@ -215,8 +281,15 @@ func validateContractCleanupDatabaseURL(rawURL string) (string, error) {
 	if databaseName == "" || strings.Contains(databaseName, "/") {
 		return "", fmt.Errorf("database URL must name one database")
 	}
-	if !strings.HasSuffix(databaseName, "_test") {
+	config, err := pgx.ParseConfig(rawURL)
+	if err != nil {
+		return "", fmt.Errorf("database URL pgx configuration is invalid: %w", err)
+	}
+	if config.Host == "" || len(config.Fallbacks) != 0 {
+		return "", fmt.Errorf("database URL must resolve to one host")
+	}
+	if config.Database == "" || !strings.HasSuffix(config.Database, "_test") {
 		return "", fmt.Errorf("database URL database must end in _test")
 	}
-	return databaseName, nil
+	return config.Database, nil
 }
