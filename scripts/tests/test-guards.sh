@@ -203,6 +203,18 @@ else
   bad "validator rejects routing controls and clears ambient session routing"
 fi
 
+if rg -Fq 'import net from "node:net";' "$VALIDATOR" \
+  && rg -Fq 'socket: createOneShotSocket(),' "$VALIDATOR" \
+  && rg -Fq 'if (attempted)' "$VALIDATOR" \
+  && rg -Fq 'throw new Error("test database probe permits one connection attempt")' "$VALIDATOR" \
+  && rg -Fq 'host: options.host[0],' "$VALIDATOR" \
+  && rg -Fq 'port: options.port[0],' "$VALIDATOR" \
+  && rg -Fq 'socket.once("connect", () => resolve(socket));' "$VALIDATOR"; then
+  ok "validator uses one connected one-shot socket without replacing SSL handling"
+else
+  bad "validator uses one connected one-shot socket without replacing SSL handling"
+fi
+
 governance_block="$(sed -n '/\*\*Governance docs\*\*/,/The hook and the gate script/p' "$REPO_ROOT/AGENTS.md")"
 if [[ "$governance_block" == *'scripts/check-test-database-url.mjs'* \
   && "$governance_block" == *'scripts/tests/test-guards.sh'* \

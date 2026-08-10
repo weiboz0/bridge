@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 // Validates the dedicated database URL input without ever echoing it.
+import net from "node:net";
 import postgres from "postgres";
 
 const INPUT_ENV = "CHECK_TEST_DATABASE_URL";
@@ -52,12 +53,33 @@ function parseTestDatabaseURL(value) {
   return databaseName;
 }
 
+function createOneShotSocket() {
+  let attempted = false;
+
+  return (options) => {
+    if (attempted) {
+      throw new Error("test database probe permits one connection attempt");
+    }
+    attempted = true;
+
+    const socket = net.createConnection({
+      host: options.host[0],
+      port: options.port[0],
+    });
+    return new Promise((resolve, reject) => {
+      socket.once("connect", () => resolve(socket));
+      socket.once("error", reject);
+    });
+  };
+}
+
 async function validateLiveDatabase(value) {
   const sql = postgres(value, {
     max: 1,
     connect_timeout: 5,
     fetch_types: false,
     prepare: false,
+    socket: createOneShotSocket(),
   });
 
   let deadline;
