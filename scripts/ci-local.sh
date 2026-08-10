@@ -40,19 +40,62 @@ step() {
   fi
 }
 
+canonicalize_test_database_url() {
+  local input="$1" output_var="$2" before_query query_suffix scheme rest authority pathname base_length
+  if [[ "$input" == *\?* ]]; then
+    before_query="${input%%\?*}"
+    query_suffix="?${input#*\?}"
+  else
+    before_query="$input"
+    query_suffix=""
+  fi
+
+  if [[ "$before_query" != *://* ]]; then
+    printf -v "$output_var" '%s' "$input"
+    return
+  fi
+
+  scheme="${before_query%%://*}"
+  rest="${before_query#*://}"
+  if [[ "$rest" != */* ]]; then
+    printf -v "$output_var" '%s' "$input"
+    return
+  fi
+
+  authority="${rest%%/*}"
+  pathname="/${rest#*/}"
+  case "$pathname" in
+    *%5Ftest|*%5ftest)
+      base_length=$(( ${#pathname} - 7 ))
+      pathname="${pathname:0:base_length}_test"
+      ;;
+  esac
+  printf -v "$output_var" '%s' "$scheme://$authority$pathname$query_suffix"
+}
+
 # ── Safety preconditions ─────────────────────────────────────────────────────
 
 # Validate an inherited URL before it can become the selected gate URL.  The
 # validator parses the pathname and then probes the live database name without
 # printing credentials or the URL; it is the only database validation authority.
 if [[ -n "${DATABASE_URL:-}" ]]; then
-  if ! env CHECK_TEST_DATABASE_URL="$DATABASE_URL" node scripts/check-test-database-url.mjs; then
+  canonicalize_test_database_url "$DATABASE_URL" AMBIENT_DATABASE_URL
+  if [[ -z "$AMBIENT_DATABASE_URL" ]]; then
+    echo "REFUSING TO RUN: inherited DATABASE_URL canonicalization produced an empty value." >&2
+    exit 2
+  fi
+  if ! env CHECK_TEST_DATABASE_URL="$AMBIENT_DATABASE_URL" node scripts/check-test-database-url.mjs; then
     echo "REFUSING TO RUN: inherited DATABASE_URL did not validate as a live test database." >&2
     exit 2
   fi
 fi
 
 GATE_DATABASE_URL="${TEST_DATABASE_URL:-${DATABASE_URL:-postgresql://work@127.0.0.1:5432/bridge_test}}"
+canonicalize_test_database_url "$GATE_DATABASE_URL" GATE_DATABASE_URL
+if [[ -z "$GATE_DATABASE_URL" ]]; then
+  echo "REFUSING TO RUN: resolved gate database URL canonicalization produced an empty value." >&2
+  exit 2
+fi
 if ! env CHECK_TEST_DATABASE_URL="$GATE_DATABASE_URL" node scripts/check-test-database-url.mjs; then
   echo "REFUSING TO RUN: resolved gate database URL did not validate as a live test database." >&2
   exit 2

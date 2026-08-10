@@ -72,9 +72,11 @@ falling back to the default. Never put E2E in an automated gate without it.
 `scripts/ci-local.sh` first validates any inherited `DATABASE_URL` independently.
 It then resolves one nonempty `GATE_DATABASE_URL` from `TEST_DATABASE_URL`, `DATABASE_URL`, or the
 `bridge_test` fallback and validates it again.
-The Node 18 validator parses only PostgreSQL URLs, percent-decodes a nonempty pathname database name,
-and requires `_test`; its live probe makes one bounded `SELECT current_database()` call and requires the
-connected database name to end in `_test` too.
+The Node 18 validator parses only PostgreSQL URLs and requires `_test`.
+Its one supported encoded database-name form is a trailing `%5Ftest` or `%5ftest`, which it canonicalizes
+to `_test` before live validation and runner pinning.
+Its live probe makes one bounded `SELECT current_database()` call and requires the connected database name
+to end in `_test` too.
 The gate pins that validated URL as both `DATABASE_URL` and `TEST_DATABASE_URL` for Vitest, Go, and E2E.
 Parser-only mode exists exclusively for `scripts/tests/test-guards.sh` selftests and never gates a run.
 

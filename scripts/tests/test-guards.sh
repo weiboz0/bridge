@@ -109,6 +109,10 @@ expect 0 "test database path is accepted" \
   parse_test_url "postgresql://guard:guard@127.0.0.1:5432/bridge_test"
 expect 0 "percent-decoded test database path is accepted" \
   parse_test_url "postgresql://guard:guard@127.0.0.1:5432/bridge%5Ftest"
+expect 0 "lowercase percent-decoded test database path is accepted" \
+  parse_test_url "postgresql://guard:guard@127.0.0.1:5432/bridge%5ftest"
+expect 1 "unsupported percent-encoded database pathname is rejected" \
+  parse_test_url "postgresql://guard:guard@127.0.0.1:5432/bridge%5F%74est"
 expect 1 "empty database path is rejected" \
   parse_test_url "postgresql://guard:guard@127.0.0.1:5432/"
 expect 1 "non-Postgres scheme is rejected" \
@@ -121,6 +125,8 @@ expect 0 "safe test pathname ignores production query override in parser mode" \
   parse_test_url "postgresql://guard:guard@127.0.0.1:5432/bridge_test?dbname=production"
 expect 1 "comma-separated database hosts are rejected" \
   parse_test_url "postgresql://guard:guard@primary,replica:5432/bridge_test"
+expect 1 "encoded comma-separated database hosts are rejected" \
+  parse_test_url "postgresql://guard:guard@safe%2Cforeign:5432/bridge_test"
 expect 1 "target session attributes are rejected" \
   parse_test_url "postgresql://guard:guard@127.0.0.1:5432/bridge_test?target_session_attrs=read-write"
 
@@ -131,11 +137,23 @@ else
   bad "ci-local invokes the test database URL validator"
 fi
 
-if rg -q 'CHECK_TEST_DATABASE_URL="\$DATABASE_URL"' "$REPO_ROOT/scripts/ci-local.sh" \
-  && rg -q 'GATE_DATABASE_URL=' "$REPO_ROOT/scripts/ci-local.sh"; then
-  ok "ci-local validates ambient and resolved database URLs separately"
+if rg -Fq 'canonicalize_test_database_url "$DATABASE_URL" AMBIENT_DATABASE_URL' "$REPO_ROOT/scripts/ci-local.sh" \
+  && rg -Fq 'CHECK_TEST_DATABASE_URL="$AMBIENT_DATABASE_URL"' "$REPO_ROOT/scripts/ci-local.sh" \
+  && rg -Fq 'canonicalize_test_database_url "$GATE_DATABASE_URL" GATE_DATABASE_URL' "$REPO_ROOT/scripts/ci-local.sh"; then
+  ok "ci-local canonicalizes ambient and resolved database URLs before validation"
 else
-  bad "ci-local validates ambient and resolved database URLs separately"
+  bad "ci-local canonicalizes ambient and resolved database URLs before validation"
+fi
+
+gate_canonical_line="$(rg -n -F 'canonicalize_test_database_url "$GATE_DATABASE_URL" GATE_DATABASE_URL' "$REPO_ROOT/scripts/ci-local.sh" | cut -d: -f1 || true)"
+gate_validate_line="$(rg -n -F 'CHECK_TEST_DATABASE_URL="$GATE_DATABASE_URL"' "$REPO_ROOT/scripts/ci-local.sh" | cut -d: -f1 || true)"
+vitest_line="$(rg -n -F 'step "vitest" env' "$REPO_ROOT/scripts/ci-local.sh" | cut -d: -f1 || true)"
+if [[ -n "$gate_canonical_line" && -n "$gate_validate_line" && -n "$vitest_line" \
+  && "$gate_canonical_line" -lt "$gate_validate_line" \
+  && "$gate_canonical_line" -lt "$vitest_line" ]]; then
+  ok "ci-local canonicalizes the gate URL before validation and runner pinning"
+else
+  bad "ci-local canonicalizes the gate URL before validation and runner pinning"
 fi
 
 runner_pins_database_urls() {
@@ -201,6 +219,15 @@ if [[ -n "$ambient_clear_line" && -n "$client_create_line" \
   ok "validator rejects routing controls and clears ambient session routing"
 else
   bad "validator rejects routing controls and clears ambient session routing"
+fi
+
+if rg -Fq 'hostname = decodeURIComponent(parsed.hostname);' "$VALIDATOR" \
+  && rg -Fq 'hostname.includes(",")' "$VALIDATOR" \
+  && rg -Fq 'rawPathname.includes("%") && !encodedPathname' "$VALIDATOR" \
+  && rg -Fq 'parsed.pathname = `/${databaseName}`;' "$VALIDATOR"; then
+  ok "validator rejects encoded host routing and canonicalizes the only encoded path form"
+else
+  bad "validator rejects encoded host routing and canonicalizes the only encoded path form"
 fi
 
 if rg -Fq 'import net from "node:net";' "$VALIDATOR" \

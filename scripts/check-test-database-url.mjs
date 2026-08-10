@@ -26,7 +26,14 @@ function parseTestDatabaseURL(value) {
     throw new Error("non-Postgres URL");
   }
 
-  if (parsed.hostname.includes(",")) {
+  let hostname;
+  try {
+    hostname = decodeURIComponent(parsed.hostname);
+  } catch {
+    throw new Error("invalid hostname encoding");
+  }
+
+  if (hostname.includes(",")) {
     throw new Error("multiple database hosts");
   }
 
@@ -34,12 +41,12 @@ function parseTestDatabaseURL(value) {
     throw new Error("target session attributes are not allowed");
   }
 
-  let pathname;
-  try {
-    pathname = decodeURIComponent(parsed.pathname);
-  } catch {
-    throw new Error("invalid pathname encoding");
+  const rawPathname = parsed.pathname;
+  const encodedPathname = rawPathname.match(/^\/([^/%]*)%5[Ff]test$/);
+  if (rawPathname.includes("%") && !encodedPathname) {
+    throw new Error("unsupported pathname encoding");
   }
+  const pathname = encodedPathname ? `/${encodedPathname[1]}_test` : rawPathname;
 
   if (!pathname.startsWith("/") || pathname.length === 1) {
     throw new Error("missing database name");
@@ -50,7 +57,8 @@ function parseTestDatabaseURL(value) {
     throw new Error("non-test database name");
   }
 
-  return databaseName;
+  parsed.pathname = `/${databaseName}`;
+  return parsed;
 }
 
 function createOneShotSocketController() {
@@ -124,7 +132,7 @@ async function validateLiveDatabase(value) {
 
 async function main() {
   const value = process.env[INPUT_ENV];
-  parseTestDatabaseURL(value);
+  const parsed = parseTestDatabaseURL(value);
 
   if (process.argv[2] === "--parse-only") {
     if (process.argv.length !== 3) {
@@ -138,7 +146,7 @@ async function main() {
     throw new Error("unexpected arguments");
   }
 
-  await validateLiveDatabase(value);
+  await validateLiveDatabase(parsed.toString());
   console.log("test database URL validation: accepted");
 }
 
