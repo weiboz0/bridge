@@ -117,6 +117,10 @@ expect 1 "encoded test database pathname with a fragment is rejected" \
   parse_test_url "postgresql://guard:guard@127.0.0.1:5432/bridge%5Ftest#fragment"
 expect 1 "literal test database pathname with a fragment is rejected" \
   parse_test_url "postgresql://guard:guard@127.0.0.1:5432/bridge_test#fragment"
+expect 1 "encoded test database pathname with an empty fragment is rejected" \
+  parse_test_url "postgresql://guard:guard@127.0.0.1:5432/bridge%5Ftest#"
+expect 1 "literal test database pathname with an empty fragment is rejected" \
+  parse_test_url "postgresql://guard:guard@127.0.0.1:5432/bridge_test#"
 expect 1 "empty database path is rejected" \
   parse_test_url "postgresql://guard:guard@127.0.0.1:5432/"
 expect 1 "non-Postgres scheme is rejected" \
@@ -249,7 +253,7 @@ if rg -Fq 'hostname = decodeURIComponent(parsed.hostname);' "$VALIDATOR" \
   && rg -Fq 'hostname.includes(",")' "$VALIDATOR" \
   && rg -Fq 'rawPathname.includes("%") && !encodedPathname' "$VALIDATOR" \
   && rg -Fq 'parsed.pathname = `/${databaseName}`;' "$VALIDATOR" \
-  && rg -Fq 'if (parsed.hash) {' "$VALIDATOR" \
+  && rg -Fq 'if (value.includes("#")) {' "$VALIDATOR" \
   && rg -Fq 'await validateLiveDatabase(parsed.toString());' "$VALIDATOR"; then
   ok "validator rejects fragments and encoded routing while canonicalizing its live URL"
 else

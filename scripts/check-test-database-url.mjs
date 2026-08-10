@@ -26,7 +26,7 @@ function parseTestDatabaseURL(value) {
     throw new Error("non-Postgres URL");
   }
 
-  if (parsed.hash) {
+  if (value.includes("#")) {
     throw new Error("URL fragments are not allowed");
   }
 
