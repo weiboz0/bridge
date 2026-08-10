@@ -93,7 +93,7 @@ An active lease makes a concurrent end request return the stable `session_end_in
 
 An expired lease may be replaced by a new end request.
 
-Canvas authentication and every mutation recheck treat an unexpired freeze lease as non-writable, so a Hocuspocus restart cannot reopen writes between freeze and database end.
+Canvas authentication and every mutation recheck reject an unexpired freeze lease, so a Hocuspocus restart cannot reopen writes between freeze and database end.
 
 PostgreSQL `clock_timestamp()` is the sole wall-clock authority for acquiring, comparing, replacing, and completing durable leases.
 
@@ -101,13 +101,19 @@ The initial lease duration is 15 seconds from the database clock, which bounds a
 
 The implementation must use a named constant and a controlled-clock test rather than scattering the duration.
 
-The end transaction locks the session row and evaluates token ownership and expiry against `clock_timestamp()` in that transaction.
+The successful end is one `UPDATE` whose `WHERE` clause requires the session to be live, the token to match, and `canvas_freeze_until > clock_timestamp()`.
 
-When the token matches and the lease is still unexpired, the transaction may persist the Hocuspocus freeze result.
+The success decision and the write are therefore one database statement, never a prior check inside the transaction.
+
+Mutation authorization reads the session row under a shared row lock, so it blocks behind an executing successful end update and observes `ended` after that update commits.
+
+When the token matches and the lease is still unexpired, the successful update must persist the recorded Hocuspocus freeze result.
 
 When the token matches but the lease has expired, the transaction still ends the session because session status wins, but it must persist `whiteboard_server_archive_complete = false`.
 
 When a different token owns an unexpired lease, the stale request returns `session_end_in_progress` and cannot end or unfreeze the session.
+
+When a different token is present but expired, the stale request may still end the session because status wins, but it must persist `whiteboard_server_archive_complete = false` and must not reuse either operation's freeze result.
 
 Completing the database end or aborting the operation clears the lease only when its token matches.
 
@@ -120,6 +126,8 @@ Hocuspocus derives an in-memory monotonic duration from the remaining lease time
 It does not compare a Go- or Node-generated wall-clock timestamp to the database expiry.
 
 Expired in-memory entries stop blocking mutations and are removed lazily or by a bounded timer.
+
+When a newly validated database lease has a different token from an older in-memory entry, the database-authoritative token replaces that entry even if the older monotonic timer has not elapsed.
 
 Bridge currently supports one Hocuspocus process for realtime documents.
 
@@ -157,6 +165,10 @@ The internal listener defaults to `127.0.0.1` and requires an explicit private-n
 Any non-loopback control listener requires HTTPS with normal certificate and hostname verification.
 
 Plain HTTP is permitted only for a loopback listener.
+
+The Go client validates `HOCUSPOCUS_INTERNAL_URL` at startup and refuses a plain-HTTP URL whose parsed hostname is not loopback.
+
+The Hocuspocus process fails startup if the control listener cannot bind, if its secret is missing or invalid, or if non-loopback TLS configuration is missing or invalid.
 
 The operations use a distinct `HOCUSPOCUS_CONTROL_SECRET`, not the realtime JWT signing secret.
 
@@ -198,7 +210,7 @@ A Hocuspocus restart may lose the in-memory map, but the durable unexpired lease
 
 The canvas mutation guard checks the operation-owned freeze map before the authorization request and again after the authorization request returns.
 
-Every mutation-bearing Yjs frame performs the existing uncached Go authorization request.
+Every mutation-bearing Yjs frame performs the existing uncached Go authorization request in a short transaction that takes a shared lock on the session row.
 
 That request evaluates the active durable lease in PostgreSQL using `clock_timestamp()` on every call; the in-memory map is an immediate local barrier for the freeze handler, not an authorization cache.
 
@@ -254,7 +266,9 @@ The database end transition persists `whiteboard_server_archive_complete` on the
 
 The teacher dashboard may store the warning code in `sessionStorage` immediately before navigating to `/sessions/{sessionId}/whiteboards` for prompt display.
 
-The archive page consumes and removes that value once, then confirms the durable status through `GET /api/sessions/{sessionId}/canvas-settings` before rendering the approved warning message.
+The archive page first confirms the durable status through `GET /api/sessions/{sessionId}/canvas-settings`, then consumes and removes the one-shot browser value before rendering the approved warning message.
+
+A transient settings request failure does not consume the browser value.
 
 The warning is not placed in the URL.
 
@@ -270,7 +284,15 @@ Expiry delays beyond Node's maximum timer duration are chained or clamped and re
 
 The close applies to writable and read-only canvas connections.
 
-A per-connection hook performs the current internal authorization check and applies its read-only decision before that connection is admitted to the document.
+A per-connection hook performs the current internal authorization check before that connection is admitted to the document.
+
+Permanent viewer or ended-session authorization applies `connectionConfig.readOnly = true`.
+
+An active temporary freeze does not mutate `connectionConfig.readOnly` because that flag is irreversible for the lifetime of the connection under Hocuspocus 3.4.4.
+
+Instead, the server rejects or closes a frozen writer with the retryable `session_freezing` outcome.
+
+The client reconnects with bounded backoff, and a failed or crashed end restores write access after token-matched cleanup or lease expiry without requiring a Hocuspocus restart.
 
 The design must not rely on `onLoadDocument` for this decision because Hocuspocus does not call it for every connection to an already loaded document.
 
@@ -289,6 +311,8 @@ It returns 404 for a missing session and 403 for every other represented user, i
 `PATCH /api/sessions/{sessionId}/canvas-settings` remains teacher-only, live-only, and returns `{ "canvasFloor": "<level>" }`.
 
 Both methods use the dedicated route rather than the former generic `/settings` name.
+
+The former `PATCH /api/sessions/{sessionId}/settings` route is removed rather than aliased, and the live teacher panel migrates in the same phase so no supported client targets it.
 
 The creation authorization check and session-row lock occur within the same transaction used to enforce the per-session cap.
 
@@ -338,6 +362,8 @@ No migration is run against a non-test database.
 - A crashed end request stops blocking mutations after the controlled 15-second lease expiry.
 - A request that resumes after its lease expires still ends the session but must persist and return `whiteboardServerArchiveComplete: false`.
 - A stale request cannot end or clear a session owned by a different unexpired lease token.
+- A stale request encountering a different expired token may end status-first but must persist `whiteboardServerArchiveComplete: false` and must not reuse either freeze result.
+- The atomic successful end update and shared-lock mutation authorization prevent a post-expiry frame from being admitted between the success predicate and commit.
 - Lease acquisition, replacement, mutation authorization, final flush, and end completion use database `clock_timestamp()` semantics under controlled tests.
 - Teacher end authorization and cross-user isolation remain covered.
 - Canvas creation covers teacher, present participant, invited participant, left participant, public outsider, platform admin, impersonator, ended session, and cap races.
@@ -349,16 +375,20 @@ No migration is run against a non-test database.
 - Freeze authenticates the bearer secret and validates strict input.
 - A mutation racing a successful freeze proves that the last accepted scene is persisted before connections close.
 - A mutation awaiting authorization when freeze begins is rejected before Yjs apply and relay.
+- Two successive frames on one connection perform two Go rechecks, and a durable lease acquired between them is observed even when the local freeze map is empty.
 - The installed promise microtask from the second freeze check through Yjs apply cannot be interleaved by the freeze HTTP macrotask.
 - A final flush waits for an already in-flight ordinary store and remains the last committed snapshot through the shared save mutex.
 - A final flush whose conditional live/token/unexpired predicate no longer matches writes nothing and reports failure.
 - A final-flush failure returns failure and keeps the session frozen until unfreeze.
 - Unfreeze is token-scoped and idempotent, and stale unfreeze cannot clear a newer freeze.
 - A different active unfreeze token returns `409 freeze_token_mismatch`.
+- A newly database-validated token replaces a different stale in-memory entry whose monotonic timer has not elapsed.
 - The maximum 50 loaded canvases complete the batched or parallelized final-flush path inside the two-second Go deadline under the approved representative test latency.
 - Canvas connections close at JWT expiry under a controlled clock.
-- A stale writable token joining an already loaded ended or frozen canvas is downgraded by the per-connection authorization hook.
+- A stale writable token joining an already loaded ended canvas is downgraded, while one joining a temporarily frozen canvas receives the retryable freeze outcome.
+- A temporary freeze never permanently downgrades a writer, and the writer can write after cleanup or expiry by reconnecting through the retryable outcome.
 - Missing or malformed internal authorization remains fail-closed.
+- Configuration tests prove distinct default control and websocket ports, absence of control routes on the public listener, loopback-only plaintext, non-loopback HTTP client rejection, certificate and hostname verification, missing or invalid control-secret failure, non-loopback TLS failure, and fail-fast control-port bind errors.
 
 ### Frontend and binding tests
 
