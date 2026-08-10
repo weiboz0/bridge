@@ -37,7 +37,7 @@ The Go API ends the session even when Hocuspocus is unavailable, times out, reje
 
 A successful database transition is returned as a successful end-session response in all of those cases.
 
-The response states whether every Yjs update accepted by the realtime server was confirmed in the archive.
+The response states whether the final snapshot present in the responding Hocuspocus process was confirmed in the archive under an active freeze fence.
 
 The teacher sees `Session ended, but the latest whiteboard changes may not have been archived.` when completion was not confirmed.
 
@@ -105,7 +105,15 @@ The successful end is one `UPDATE` whose `WHERE` clause requires the session to 
 
 The success decision and the write are therefore one database statement, never a prior check inside the transaction.
 
-Mutation authorization reads the session row under a shared row lock, so it blocks behind an executing successful end update and observes `ended` after that update commits.
+Mutation authorization takes a transaction-scoped shared PostgreSQL advisory lock for the session before reading status and lease state.
+
+Every end transition takes the matching exclusive advisory lock before its session update and holds it through commit.
+
+The lock key is a stable hash of the session UUID; a collision may serialize unrelated sessions but cannot weaken authorization.
+
+The universal acquisition order is session advisory lock first, then any session row or related data access, and mutation authorization locks no second entity.
+
+This avoids hot-row multixact churn while making an authorization query block behind an executing end and observe `ended` after commit.
 
 When the token matches and the lease is still unexpired, the successful update must persist the recorded Hocuspocus freeze result.
 
@@ -115,9 +123,13 @@ When a different token owns an unexpired lease, the stale request returns `sessi
 
 When a different token is present but expired, the stale request may still end the session because status wins, but it must persist `whiteboard_server_archive_complete = false` and must not reuse either operation's freeze result.
 
-Completing the database end or aborting the operation clears the lease only when its token matches.
+Aborting a still-live operation clears the lease only when its token matches.
 
-Hocuspocus mirrors active operations in an in-memory map keyed by session ID with token and expiry, never a boolean set.
+An end that consumes any expired lease clears that expired token even when it differs from the request token.
+
+An already-ended completion is idempotent: it returns the stored archive result, never rewrites it, and may clear a matching or expired residual lease as housekeeping.
+
+Hocuspocus mirrors active operations in an in-memory map keyed by session ID with token, database expiry, and monotonic expiry, never a boolean set.
 
 An unfreeze for one token cannot clear a newer or concurrent token.
 
@@ -127,7 +139,9 @@ It does not compare a Go- or Node-generated wall-clock timestamp to the database
 
 Expired in-memory entries stop blocking mutations and are removed lazily or by a bounded timer.
 
-When a newly validated database lease has a different token from an older in-memory entry, the database-authoritative token replaces that entry even if the older monotonic timer has not elapsed.
+When a newly validated database lease has a different token from an older in-memory entry, it replaces the entry only when its database expiry is later than the stored database expiry.
+
+A late validation response with an older expiry cannot reinstate an evicted token.
 
 Bridge currently supports one Hocuspocus process for realtime documents.
 
@@ -166,7 +180,11 @@ Any non-loopback control listener requires HTTPS with normal certificate and hos
 
 Plain HTTP is permitted only for a loopback listener.
 
-The Go client validates `HOCUSPOCUS_INTERNAL_URL` at startup and refuses a plain-HTTP URL whose parsed hostname is not loopback.
+The Go client validates `HOCUSPOCUS_INTERNAL_URL` at startup and permits plain HTTP only for an IP-literal host in `127.0.0.0/8` or the exact IPv6 loopback `::1`.
+
+DNS names, including `localhost`, are not accepted as proof of loopback for plain HTTP.
+
+The control client never follows redirects.
 
 The Hocuspocus process fails startup if the control listener cannot bind, if its secret is missing or invalid, or if non-loopback TLS configuration is missing or invalid.
 
@@ -210,7 +228,7 @@ A Hocuspocus restart may lose the in-memory map, but the durable unexpired lease
 
 The canvas mutation guard checks the operation-owned freeze map before the authorization request and again after the authorization request returns.
 
-Every mutation-bearing Yjs frame performs the existing uncached Go authorization request in a short transaction that takes a shared lock on the session row.
+Every mutation-bearing Yjs frame performs the existing uncached Go authorization request in a short transaction that takes the session's shared advisory lock.
 
 That request evaluates the active durable lease in PostgreSQL using `clock_timestamp()` on every call; the in-memory map is an immediate local barrier for the freeze handler, not an authorization cache.
 
@@ -224,7 +242,7 @@ No timer, I/O callback, `setImmediate`, or other macrotask yield is permitted be
 
 The subsequent flush therefore captures every mutation accepted before the freeze boundary.
 
-No mutation accepted after the freeze boundary may apply, relay, or persist.
+On a confirmed freeze path, no mutation accepted after the freeze boundary may apply, relay, or persist.
 
 Mutation authorization remains uncached so a committed session end takes precedence over realtime availability and throughput.
 
@@ -246,6 +264,22 @@ That state is correct when the database end succeeds because the session is ende
 
 If the database end subsequently fails, token-matched cleanup restores collaboration immediately when available and the lease expiry bounds the failure when cleanup is unavailable.
 
+### Confirmed and degraded guarantees
+
+A confirmed path requires a successful Hocuspocus freeze and final flush followed by the matching, unexpired, advisory-lock-protected end update.
+
+That path guarantees that no post-fence mutation applies or relays and that the final snapshot present in the responding Hocuspocus process was stored.
+
+A degraded path is any Hocuspocus failure, timeout, lease expiry, stale-token fallback, or loss of the realtime process fence.
+
+The degraded path still commits `status = 'ended'` and persists `whiteboard_server_archive_complete = false` because session lifecycle outranks realtime availability.
+
+An already-authorized frame whose authorization transaction completed before the degraded end acquires its exclusive advisory lock may apply and relay transiently after the database commit.
+
+That unavoidable cross-process race is not represented as archived: the ended-session storage guard rejects it, subsequent mutation checks and reconnects observe `ended`, and the teacher receives the incomplete-server-archive warning.
+
+The implementation and documentation must not claim apply-and-relay atomicity for a degraded path.
+
 ### Public end-session response
 
 The response preserves the existing top-level session fields so current consumers do not need a structural migration.
@@ -256,9 +290,9 @@ For an older ended session whose stored value is null, the field and warning are
 
 When the value is false, it also adds `warning: "whiteboard_server_archive_incomplete"`.
 
-The field and warning refer only to updates accepted by the realtime server before the freeze boundary.
+The field and warning refer only to the final snapshot present in the responding Hocuspocus process at the confirmed freeze boundary.
 
-They do not claim that unsent browser state, including a scene still inside the 100-millisecond client coalescing window, was archived.
+They do not claim that unsent browser state, including a scene still inside the 100-millisecond client coalescing window, or state lost in an earlier process failure was archived.
 
 The warning code is stable and contains no internal failure detail.
 
@@ -268,7 +302,9 @@ The teacher dashboard may store the warning code in `sessionStorage` immediately
 
 The archive page first confirms the durable status through `GET /api/sessions/{sessionId}/canvas-settings`, then consumes and removes the one-shot browser value before rendering the approved warning message.
 
-A transient settings request failure does not consume the browser value.
+A 200 settings response is authoritative: false displays the durable warning, while true or omitted null state clears a stale browser warning without displaying it.
+
+A network error or non-200 settings response does not consume the browser value.
 
 The warning is not placed in the URL.
 
@@ -292,11 +328,15 @@ An active temporary freeze does not mutate `connectionConfig.readOnly` because t
 
 Instead, the server rejects or closes a frozen writer with the retryable `session_freezing` outcome.
 
-The client reconnects with bounded backoff, and a failed or crashed end restores write access after token-matched cleanup or lease expiry without requiring a Hocuspocus restart.
+The client reconnects with a maximum individual delay of two seconds and continues for at least 20 seconds, exceeding the 15-second lease duration.
+
+A failed or crashed end therefore restores write access after token-matched cleanup or lease expiry without a manual reload or Hocuspocus restart.
 
 The design must not rely on `onLoadDocument` for this decision because Hocuspocus does not call it for every connection to an already loaded document.
 
 A stale writable claim connecting after the session ends is therefore read-only immediately, rather than only after its first mutation.
+
+A user promoted from permanent viewer to writer must reconnect before gaining write access because permanent connection read-only is intentionally not reversible.
 
 The existing pre-apply mutation recheck and storage guard remain defense in depth.
 
@@ -313,6 +353,8 @@ It returns 404 for a missing session and 403 for every other represented user, i
 Both methods use the dedicated route rather than the former generic `/settings` name.
 
 The former `PATCH /api/sessions/{sessionId}/settings` route is removed rather than aliased, and the live teacher panel migrates in the same phase so no supported client targets it.
+
+A stale pre-deploy tab receives and surfaces the old route's 404 as a settings error rather than silently claiming the floor changed.
 
 The creation authorization check and session-row lock occur within the same transaction used to enforce the per-session cap.
 
@@ -363,7 +405,9 @@ No migration is run against a non-test database.
 - A request that resumes after its lease expires still ends the session but must persist and return `whiteboardServerArchiveComplete: false`.
 - A stale request cannot end or clear a session owned by a different unexpired lease token.
 - A stale request encountering a different expired token may end status-first but must persist `whiteboardServerArchiveComplete: false` and must not reuse either freeze result.
-- The atomic successful end update and shared-lock mutation authorization prevent a post-expiry frame from being admitted between the success predicate and commit.
+- The atomic successful end update and shared advisory-lock mutation authorization prevent a post-expiry frame from being admitted between the success predicate and commit on a confirmed path.
+- A degraded-path test pauses after authorization releases its lock, commits the incomplete end, resumes the frame, and proves any transient apply cannot persist and the next mutation and reconnect are denied.
+- Session advisory locks are always acquired before database reads or row locks, and a busy-session test proves end completion under concurrent mutation authorization without deadlock or exceeding the approved bound.
 - Lease acquisition, replacement, mutation authorization, final flush, and end completion use database `clock_timestamp()` semantics under controlled tests.
 - Teacher end authorization and cross-user isolation remain covered.
 - Canvas creation covers teacher, present participant, invited participant, left participant, public outsider, platform admin, impersonator, ended session, and cap races.
@@ -382,13 +426,13 @@ No migration is run against a non-test database.
 - A final-flush failure returns failure and keeps the session frozen until unfreeze.
 - Unfreeze is token-scoped and idempotent, and stale unfreeze cannot clear a newer freeze.
 - A different active unfreeze token returns `409 freeze_token_mismatch`.
-- A newly database-validated token replaces a different stale in-memory entry whose monotonic timer has not elapsed.
+- A newly database-validated token with a later database expiry replaces a stale in-memory entry, while an older late validation response cannot overwrite the newer token.
 - The maximum 50 loaded canvases complete the batched or parallelized final-flush path inside the two-second Go deadline under the approved representative test latency.
 - Canvas connections close at JWT expiry under a controlled clock.
 - A stale writable token joining an already loaded ended canvas is downgraded, while one joining a temporarily frozen canvas receives the retryable freeze outcome.
-- A temporary freeze never permanently downgrades a writer, and the writer can write after cleanup or expiry by reconnecting through the retryable outcome.
+- A temporary freeze never permanently downgrades a writer, and the writer can write after cleanup or expiry without reload through a reconnect horizon longer than the lease.
 - Missing or malformed internal authorization remains fail-closed.
-- Configuration tests prove distinct default control and websocket ports, absence of control routes on the public listener, loopback-only plaintext, non-loopback HTTP client rejection, certificate and hostname verification, missing or invalid control-secret failure, non-loopback TLS failure, and fail-fast control-port bind errors.
+- Configuration tests prove distinct default control and websocket ports, absence of control routes on the public listener, IP-literal loopback-only plaintext for IPv4 and IPv6, DNS-name and non-loopback HTTP rejection, redirect refusal, certificate and hostname verification, missing or invalid control-secret failure, non-loopback TLS failure, and fail-fast control-port bind errors.
 
 ### Frontend and binding tests
 
@@ -404,6 +448,7 @@ No migration is run against a non-test database.
 - Owner and viewer controls differ correctly.
 - Teacher end failure remains in place with an error.
 - Incomplete server-archive status survives the redirect, remains durably discoverable, and displays exactly once per archive visit.
+- A 200 durable status overrides and consumes browser state, while network and non-200 responses retain it.
 - Missing sessions remain 404 instead of redirecting to the archive.
 
 ### Playwright contract
@@ -429,7 +474,7 @@ The student-session effect dependencies, dead `plain_text` references, and other
 ## Acceptance criteria
 
 - A teacher can end a session within the database request path even when Hocuspocus is unavailable.
-- A teacher is warned when complete archival of server-accepted whiteboard state is not confirmed.
+- A teacher is warned when storage of the fenced Hocuspocus final snapshot is not confirmed.
 - A successful freeze persists every server-accepted loaded-canvas mutation before closing its connections.
 - No canvas mutation accepted after the freeze boundary applies or relays.
 - Established canvas connections terminate when their JWT expires.
@@ -450,6 +495,12 @@ Both reviewers receive a read-only prompt and review the committed spec against 
 Both must return `APPROVE` or `APPROVE WITH NITS` with no open blockers for the gate to pass.
 
 Review verdicts, findings, responses, and resolutions are recorded in the spec's `## Design Review` section with `[sol]` and `[fable]` source tags and the exact reviewed commit SHA.
+
+A finding remains `[OPEN]` while a response is pending reviewer confirmation; an author response never self-certifies `[FIXED]`.
+
+Only approval of the exact substantive commit permits the orchestrator to mechanically change its answered findings to `[FIXED]` and append the verdict ledger.
+
+That ledger-only status update is non-substantive and does not invalidate the approvals it records.
 
 Both reviewers are re-dispatched after every substantive revision in an active design gate.
 
@@ -473,21 +524,21 @@ The canonical rule is mirrored in `AGENTS.md`, `docs/reviewers.md`, `docs/develo
 
 ### Round 1 — 2026-08-10 — commit `b589dd7`
 
-- `[FIXED]` `[sol][fable]` A global boolean freeze can be cleared by an overlapping end attempt, can reappear after a delayed request, and can strand a live session when best-effort unfreeze fails.
+- `[OPEN]` `[sol][fable]` A global boolean freeze can be cleared by an overlapping end attempt, can reappear after a delayed request, and can strand a live session when best-effort unfreeze fails.
   The revision replaces it with a token-owned PostgreSQL lease, matching in-memory operation records, conditional cleanup, single-flight conflict behavior, and a 15-second expiry.
-- `[FIXED]` `[fable]` A Hocuspocus restart after successful freeze but before database end can admit new writes while Go still reports archive success.
+- `[OPEN]` `[fable]` A Hocuspocus restart after successful freeze but before database end can admit new writes while Go still reports archive success.
   The durable lease is now checked by connection authorization and every mutation recheck, so process restart cannot erase the freeze boundary.
-- `[FIXED]` `[sol]` A final flush can be overwritten by an older ordinary store completing later.
+- `[OPEN]` `[sol]` A final flush can be overwritten by an older ordinary store completing later.
   The final path now shares the document save mutex and holds it through the database write.
-- `[FIXED]` `[sol][fable]` The prior archive-complete field overstated what could be known while clients coalesce unsent scenes.
+- `[OPEN]` `[sol][fable]` The prior archive-complete field overstated what could be known while clients coalesce unsent scenes.
   The contract is narrowed and renamed to `whiteboardServerArchiveComplete`, which covers only Yjs updates accepted by the server.
-- `[FIXED]` `[sol]` `onLoadDocument` does not run for every connection to an already loaded document.
+- `[OPEN]` `[sol]` `onLoadDocument` does not run for every connection to an already loaded document.
   Current read-only authorization now occurs in a per-connection hook.
-- `[FIXED]` `[fable]` Archive incompleteness was transient browser state.
+- `[OPEN]` `[fable]` Archive incompleteness was transient browser state.
   The result is now persisted atomically on the session row and exposed to the teacher archive.
-- `[FIXED]` `[fable]` The control API reused the signing secret and had no separate listener requirement.
+- `[OPEN]` `[fable]` The control API reused the signing secret and had no separate listener requirement.
   The revision specifies a distinct control secret, constant-time comparison, and an internal-only listener.
-- `[FIXED]` `[fable]` The no-yield ordering assumption, fixed deadline load, timer overflow, multi-process assumption, and migration-shipping check were underspecified.
+- `[OPEN]` `[fable]` The no-yield ordering assumption, fixed deadline load, timer overflow, multi-process assumption, and migration-shipping check were underspecified.
   The revision makes the no-yield and single-process invariants explicit, adds timer and migration checks, and retains the teacher-selected two-second bound with maximum-cap test evidence required before approval.
 
 **Round 1 verdicts:** `[sol]` CHANGES REQUESTED; `[fable]` CHANGES REQUESTED.
@@ -496,23 +547,23 @@ The canonical rule is mirrored in `AGENTS.md`, `docs/reviewers.md`, `docs/develo
 
 - `[OPEN]` `[sol][fable]` An end request could outlive its 15-second lease and still commit a pre-expiry successful archive result after writes resumed.
   → Response in `aaf2f44` and `260ca47`: the successful end uses an atomic token-and-unexpired `UPDATE`, mutation authorization takes a shared row lock, and every expired-lease path records an incomplete server archive.
-- `[FIXED]` `[fable]` Go, Node, and PostgreSQL clocks could disagree about lease expiry.
+- `[OPEN]` `[fable]` Go, Node, and PostgreSQL clocks could disagree about lease expiry.
   → Response in `aaf2f44`: PostgreSQL `clock_timestamp()` is the wall-clock authority, and Node derives only a monotonic remaining duration from a fresh database validation.
-- `[FIXED]` `[fable]` Final-flush liveness and lease validation could be a check-before-write race.
+- `[OPEN]` `[fable]` Final-flush liveness and lease validation could be a check-before-write race.
   → Response in `aaf2f44`: the live, token, and unexpired predicates execute in the snapshot write statement or its locking transaction.
 - `[OPEN]` `[fable]` The durable per-mutation lease check was underspecified and could be weakened by caching.
   → Response in `aaf2f44` and `260ca47`: every mutation-bearing frame retains the uncached, shared-row-lock Go recheck, and the test contract now proves two consecutive frames observe an intervening durable lease.
-- `[FIXED]` `[fable]` Older null archive state had no defined public representation.
+- `[OPEN]` `[fable]` Older null archive state had no defined public representation.
   → Response in `aaf2f44`: null omits the optional boolean and warning and produces no completeness claim in the archive.
 - `[OPEN]` `[fable]` A non-loopback internal listener could send its bearer and freeze token over plaintext.
   → Response in `aaf2f44` and `260ca47`: non-loopback traffic requires verified HTTPS, the Go client rejects non-loopback HTTP at startup, and the configuration test matrix enforces both sides.
-- `[FIXED]` `[sol]` The internal URL default incorrectly reused the public websocket port.
+- `[OPEN]` `[sol]` The internal URL default incorrectly reused the public websocket port.
   → Response in `aaf2f44`: a distinct `HOCUSPOCUS_CONTROL_PORT` defaults to 4001 and drives the loopback internal URL.
-- `[FIXED]` `[sol]` Durable archive status had no ended-session-readable producer-to-consumer API.
+- `[OPEN]` `[sol]` Durable archive status had no ended-session-readable producer-to-consumer API.
   → Response in `aaf2f44`: the canvas-settings GET contract defines its response, represented-teacher authorization, null behavior, 403, 404, and integration matrix.
-- `[FIXED]` `[sol]` The no-microtask invariant contradicted Hocuspocus 3.4.4's promise continuation.
+- `[OPEN]` `[sol]` The no-microtask invariant contradicted Hocuspocus 3.4.4's promise continuation.
   → Response in `aaf2f44`: the actual invariant permits the installed microtask and forbids an interleaving macrotask before apply and relay.
-- `[FIXED]` `[sol]` Design approvals were not bound to a commit and could survive an unreviewed material edit.
+- `[OPEN]` `[sol]` Design approvals were not bound to a commit and could survive an unreviewed material edit.
   → Response in `aaf2f44`: both reviewers approve an exact commit and must be re-dispatched after every substantive revision.
 
 **Round 2 verdicts:** `[sol]` CHANGES REQUESTED; `[fable]` CHANGES REQUESTED.
