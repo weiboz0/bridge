@@ -13,6 +13,7 @@
 **`platform/internal/auth/realtime_jwt.go`** (add `readOnly` claim — scope-widened R1) ·
 **`platform/internal/auth/realtime_jwt_test.go`** (JWT compatibility regression) ·
 **`platform/internal/db/migrations.go`** (latest schema probe + sentinels — scope-widened verification fix) ·
+**`platform/internal/db/schema_probe.go`** + **`platform/internal/db/schema_probe_test.go`** + **`platform/internal/db/schema_probe_parity_test.go`** + **`platform/internal/db/schema_probe_integration_test.go`** (multi-object probe + tests — scope-widened verification fix) ·
 **`server/realtime-jwt.ts`** (mirror the claim — scope-widened R1) ·
 **`platform/cmd/api/main.go`** (wire `CanvasStore` + handler — scope-widened R1) ·
 `platform/internal/handlers/routes.go` (or where session routes register) ·
@@ -27,7 +28,7 @@
 **`src/app/(portal)/teacher/page.tsx`** · **`src/app/(portal)/teacher/sessions/page.tsx`** · **`src/app/(portal)/teacher/classes/[id]/page.tsx`** · **`src/app/(portal)/student/classes/[id]/page.tsx`** (link ended-session history rows to the archive) ·
 **`tests/unit/teacher-session-row.test.tsx`** · **`tests/unit/ended-sessions-non-link.test.ts`** · **`tests/unit/sessions-room-page.test.tsx`** (update ended-session expectations) · **`tests/unit/whiteboard-archive.test.tsx`** (new archive interaction regression) ·
 **`tests/unit/excalidraw-yjs.test.ts`** (custom-binding regression) · `package.json` + **`bun.lock`** (add `@excalidraw/excalidraw`; no `y-excalidraw`) ·
-`docs/api.md` · `docs/architecture/decisions.md` · `README.md` · this plan file.
+`docs/api.md` · `docs/architecture/decisions.md` · `README.md` · **`.claude/skills/br-system-review/SKILL.md`** (operator probe guidance) · this plan file.
 
 Scope-widening (R1 blocker 1 / concern C1) authorized by the user 2026-08-06: the read-only viewer boundary cannot be built without a `readOnly` claim in both JWT files, and `CanvasStore` must be wired in `main.go`.
 
@@ -40,6 +41,8 @@ Scope-widening (archive test review fix) authorized by the user 2026-08-08: add 
 Scope-widening (scope-audit review fix) authorized by the user 2026-08-08: add the already changed lockfile, Go JWT regression, and custom-binding test so every branch artifact is governed by the plan.
 
 Scope-widening (schema-probe verification fix) authorized by the user 2026-08-09 via “resume”: add `platform/internal/db/migrations.go`, because migration `0028_session_canvases.sql` became the latest schema-bearing migration and the enforced bidirectional parity test requires its table, columns, constraints, and indexes to replace the prior `books` sentinels.
+
+Scope-widening (complete multi-object probe) authorized by the user 2026-08-09: add the probe implementation, its unit/parity/integration tests, and the tracked operator-review skill. Review found that retargeting only `migrations.go` would leave three `books`-specific integration tests stale and would ignore `0028`'s new enum plus `sessions.canvas_floor` alteration.
 
 ## Problem / goal
 
@@ -61,6 +64,7 @@ A live session is a shared code editor today. Add Excalidraw whiteboards, synced
 | 10 | **Per-session canvas cap** (e.g. 50) enforced at create under the session-row lock — bounds persisted-doc growth. | Reviewer (opus C5) |
 | 11 | **`session` visibility is intentionally "as public as the session" while live.** In a public, class-less live session (any authenticated user can join), a `session`-visibility canvas is readable by any authenticated user — the board is exactly as public as the room. On end, public admission ends too: `session` and `participants` collapse to the Decision-8 former-participant archive rule (`present`/`left` only). An owner who wants join-only sharing picks **`participants`** instead. This makes the plan-090 public surface a *conscious owner choice per canvas*, not an accidental cross-org leak. Documented in `docs/api.md` + `decisions.md`. | User (R2 trust-model fork); clarified after GLM archive review 2026-08-08 |
 | 12 | **Archive UI is a dedicated neutral route.** `/sessions/{id}/whiteboards` renders only the read-only whiteboard archive rather than reviving either live teacher or student dashboard. It never writes a scene or offers mutation controls, even if opened while a session is still live. It does not pre-authorize through the ordinary session page APIs, because `CanAccessSession` deliberately total-rejects every ended session — including the teacher and former participants — while the canvas list and minted `canvas:{id}` token have explicit archive branches for owner, teacher, and former participant visibility. Those two endpoints remain the metadata and document authorization boundaries. The neutral live-session route redirects its otherwise-404 former-participant path to this archive, which returns a generic empty state for callers with no visible canvases and never attempts a document token mint until an item is selected. | User (2026-08-07); tightened after archive-route review 2026-08-08 |
+| 13 | **Migration 0028 advances the startup schema probe as a multi-object end-state contract.** `session_canvases` becomes the primary probe table. Its nine declared columns and two indexes are sentinels; its named-constraint list is empty. The probe also verifies the altered-table column `sessions.canvas_floor` and exact ordered values of the new `canvas_visibility` enum. Parity tests extract these declarations from the latest migration. Generic named-constraint checking remains covered with an injected test sentinel even though 0028 declares no named constraint. | Verification review + user (2026-08-09) |
 
 ## Architecture (grounded; revised per R1)
 
@@ -123,6 +127,8 @@ A canvas is `documentName = canvas:{canvasId}`. Permission is enforced **server-
 
 ### Phase 5 — Docs + verify
 - `docs/api.md` (canvas endpoints + `canvas:` scope + the live/ended permission matrix + Decision 11's public-board semantics); `docs/architecture/decisions.md` (new §: whiteboard visibility floor + realtime read-only claim + the accepted MVP risks + a **note that `canvas_visibility` is append-only in Postgres, so inserting a level between existing ones later would break the `<` ordering** — a new level must go at an end or the compare must migrate to explicit ranks); `README.md` bullet.
+- Advance the boot-time schema probe from `books`/0026 to migration 0028's full end state (Decision 13), and update the tracked system-review command/copy. Tests first define parity for the primary table, `sessions.canvas_floor`, exact enum values, and both indexes; preserve the generic constraint-check regression with an injected sentinel.
+- Run `DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test go test ./internal/db/ -count=1` from `platform/` before the plan-wide Go suite. The test database already has 0028; this phase runs no migration.
 - `bash scripts/ci-local.sh` green (attestation); `pre-merge-guard.sh`.
 
 ## Risks
@@ -202,6 +208,13 @@ A canvas is `documentName = canvas:{canvasId}`. Permission is enforced **server-
 ### Archive-route addendum — Round 5 (2026-08-08): **CHANGES REQUESTED (Codex quality).** The archive behavior was approved by the contract reviewer, but a full fixed-scope audit found three earlier branch artifacts omitted from File scope. The user authorized their exact paths; fresh confirmation is pending.
 
 ### Archive-route addendum — Round 6 (2026-08-08): **APPROVE.** The scope confirmation approved all previously omitted branch artifacts. A fresh Codex contract pass approved forced archive no-write behavior, token sequencing, success-only end redirect, and public-live versus archive semantics. GLM 5.2 approved the resolved teacher total-denial rationale and the named public-viewer denial tests. The user continues to skip Claude reviewers until Sunday 16:00, so no Claude slot was dispatched. The archive addendum gate is therefore clear.
+
+### Schema-probe verification addendum — Round 7 (2026-08-09): **CHANGES REQUESTED (Claude ×2, GLM, Codex).**
+The user authorized `migrations.go` after the plan-wide Go suite proved that migration 0028 had not advanced the latest schema probe.
+All reviewers confirmed that bump was necessary, but the independent passes found it insufficient: `schema_probe_integration_test.go` still destructively asserted `books` sentinels; 0028 has no named constraint; its `canvas_visibility` enum and cross-table `sessions.canvas_floor` alteration were not representable; and Phase 5 did not name a pinned-DB probe run.
+The user authorized the complete scope expansion.
+Decision 13 and Phase 5 now define a multi-object end-state probe, exact enum/altered-column parity, preserved generic constraint coverage, retargeted integration tests, and updated operator guidance.
+Fresh confirmation is pending.
 
 ## Code Review
 
