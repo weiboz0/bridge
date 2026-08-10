@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
+	"os/exec"
 	"testing"
 	"time"
 
@@ -103,17 +105,40 @@ func TestInsertFixtureUser_PersistsHashRoleAndProvider(t *testing.T) {
 
 func TestInsertFixtureUser_RejectsUnsupportedInputWithoutWrite(t *testing.T) {
 	db := integrationDB(t)
-	before := fixtureUserRowCount(t, db)
-	unsupportedRole := "parent"
-
-	for _, input := range []store.RegisterInput{
-		{Name: "Wrong password", Email: "wrong-password-" + uuid.NewString() + "@example.com", Password: "not-the-fixture-password"},
-		{Name: "Wrong role", Email: "wrong-role-" + uuid.NewString() + "@example.com", Password: fixtureUserPassword, IntendedRole: &unsupportedRole},
-	} {
-		require.Error(t, validateFixtureUserInput(input))
+	if mode := os.Getenv("BRIDGE_FIXTURE_REJECTION_MODE"); mode != "" {
+		input := store.RegisterInput{
+			Name:     "Unsupported fixture user",
+			Email:    os.Getenv("BRIDGE_FIXTURE_REJECTION_EMAIL"),
+			Password: fixtureUserPassword,
+		}
+		switch mode {
+		case "wrong-password":
+			input.Password = "not-the-fixture-password"
+		case "wrong-role":
+			role := "parent"
+			input.IntendedRole = &role
+		default:
+			t.Fatalf("unknown fixture rejection mode %q", mode)
+		}
+		insertFixtureUser(t, db, input)
+		t.Fatal("insertFixtureUser unexpectedly returned")
 	}
 
-	require.Equal(t, before, fixtureUserRowCount(t, db))
+	for _, mode := range []string{"wrong-password", "wrong-role"} {
+		email := "fixture-reject-" + mode + "-" + uuid.NewString() + "@example.com"
+		cmd := exec.Command(os.Args[0], "-test.run=^TestInsertFixtureUser_RejectsUnsupportedInputWithoutWrite$", "-test.count=1")
+		cmd.Env = append(os.Environ(),
+			"BRIDGE_FIXTURE_REJECTION_MODE="+mode,
+			"BRIDGE_FIXTURE_REJECTION_EMAIL="+email,
+		)
+		output, err := cmd.CombinedOutput()
+		require.Error(t, err, "mode=%s output=%s", mode, output)
+		require.Contains(t, string(output), "fixture users require", "mode=%s", mode)
+
+		var count int
+		require.NoError(t, db.QueryRowContext(context.Background(), "SELECT count(*) FROM users WHERE email = $1", email).Scan(&count))
+		require.Zero(t, count, "mode=%s", mode)
+	}
 }
 
 func TestInsertFixtureUser_MatchesRegisterUserPersistenceContract(t *testing.T) {
@@ -129,12 +154,10 @@ func TestInsertFixtureUser_MatchesRegisterUserPersistenceContract(t *testing.T) 
 	realInput.Email = "real-contract-" + uuid.NewString() + "@example.com"
 
 	fixtureUser := insertFixtureUser(t, db, fixtureInput)
+	t.Cleanup(func() { cleanupFixtureUser(t, db, fixtureUser.ID) })
 	realUser, err := store.NewUserStore(db).RegisterUser(context.Background(), realInput)
 	require.NoError(t, err)
-	t.Cleanup(func() {
-		cleanupFixtureUser(t, db, realUser.ID)
-		cleanupFixtureUser(t, db, fixtureUser.ID)
-	})
+	t.Cleanup(func() { cleanupFixtureUser(t, db, realUser.ID) })
 
 	fixtureShape := readFixtureUserShape(t, db, fixtureUser.ID)
 	realShape := readFixtureUserShape(t, db, realUser.ID)
@@ -169,13 +192,6 @@ func readFixtureUserShape(t *testing.T, db *sql.DB, userID string) fixtureUserSh
 		WHERE u.id = $1`, userID,
 	).Scan(&shape.name, &shape.email, &shape.passwordHash, &shape.intendedRole, &shape.provider, &shape.providerUserID))
 	return shape
-}
-
-func fixtureUserRowCount(t *testing.T, db *sql.DB) int {
-	t.Helper()
-	var count int
-	require.NoError(t, db.QueryRowContext(context.Background(), "SELECT count(*) FROM users").Scan(&count))
-	return count
 }
 
 func cleanupFixtureUser(t *testing.T, db *sql.DB, userID string) {

@@ -35,11 +35,17 @@ func integrationDB(t *testing.T) *sql.DB {
 	if err != nil {
 		t.Fatalf("DATABASE_URL must be a valid test database URL: %v", err)
 	}
-	if parsed.RawQuery != "" || parsed.Fragment != "" {
-		t.Fatal("DATABASE_URL must not contain a query or fragment")
+	if strings.Contains(databaseURL, "#") || parsed.Fragment != "" {
+		t.Fatal("DATABASE_URL must not contain a fragment")
 	}
-	databaseName := strings.TrimPrefix(parsed.Path, "/")
-	if (parsed.Scheme != "postgres" && parsed.Scheme != "postgresql") || databaseName == "" || strings.Contains(databaseName, "/") || !strings.HasSuffix(databaseName, "_test") {
+	escapedPath := parsed.EscapedPath()
+	decodedPath, err := url.PathUnescape(escapedPath)
+	if err != nil {
+		t.Fatalf("DATABASE_URL must have a valid escaped database pathname: %v", err)
+	}
+	databaseName := strings.TrimPrefix(decodedPath, "/")
+	hostname := parsed.Hostname()
+	if (parsed.Scheme != "postgres" && parsed.Scheme != "postgresql") || hostname == "" || strings.Contains(hostname, ",") || databaseName == "" || strings.Contains(databaseName, "/") || !strings.HasSuffix(databaseName, "_test") {
 		t.Fatal("DATABASE_URL must name a PostgreSQL database ending in _test")
 	}
 	db, err := sql.Open("pgx", databaseURL)
