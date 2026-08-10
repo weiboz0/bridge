@@ -204,15 +204,23 @@ else
 fi
 
 if rg -Fq 'import net from "node:net";' "$VALIDATOR" \
-  && rg -Fq 'socket: createOneShotSocket(),' "$VALIDATOR" \
+  && rg -Fq 'socket: socketController.createSocket,' "$VALIDATOR" \
   && rg -Fq 'if (attempted)' "$VALIDATOR" \
   && rg -Fq 'throw new Error("test database probe permits one connection attempt")' "$VALIDATOR" \
+  && rg -Fq 'let rawSocket;' "$VALIDATOR" \
+  && rg -Fq 'rawSocket = net.createConnection({' "$VALIDATOR" \
   && rg -Fq 'host: options.host[0],' "$VALIDATOR" \
   && rg -Fq 'port: options.port[0],' "$VALIDATOR" \
-  && rg -Fq 'socket.once("connect", () => resolve(socket));' "$VALIDATOR"; then
-  ok "validator uses one connected one-shot socket without replacing SSL handling"
+  && rg -Fq 'rawSocket.host = options.host[0];' "$VALIDATOR" \
+  && rg -Fq 'rawSocket.port = options.port[0];' "$VALIDATOR" \
+  && rg -Fq 'rawSocket.once("close", () => {' "$VALIDATOR" \
+  && rg -Fq 'reject(new Error("socket closed before connect"));' "$VALIDATOR" \
+  && rg -Fq 'destroy() {' "$VALIDATOR" \
+  && rg -Fq 'rawSocket?.destroy();' "$VALIDATOR" \
+  && [[ "$(rg -Fc 'socketController.destroy();' "$VALIDATOR")" == "2" ]]; then
+  ok "validator destroys its one-shot raw socket and preserves SSL host metadata"
 else
-  bad "validator uses one connected one-shot socket without replacing SSL handling"
+  bad "validator destroys its one-shot raw socket and preserves SSL host metadata"
 fi
 
 governance_block="$(sed -n '/\*\*Governance docs\*\*/,/The hook and the gate script/p' "$REPO_ROOT/AGENTS.md")"

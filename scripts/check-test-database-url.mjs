@@ -53,33 +53,51 @@ function parseTestDatabaseURL(value) {
   return databaseName;
 }
 
-function createOneShotSocket() {
+function createOneShotSocketController() {
   let attempted = false;
+  let rawSocket;
 
-  return (options) => {
-    if (attempted) {
-      throw new Error("test database probe permits one connection attempt");
-    }
-    attempted = true;
+  return {
+    createSocket(options) {
+      if (attempted) {
+        throw new Error("test database probe permits one connection attempt");
+      }
+      attempted = true;
 
-    const socket = net.createConnection({
-      host: options.host[0],
-      port: options.port[0],
-    });
-    return new Promise((resolve, reject) => {
-      socket.once("connect", () => resolve(socket));
-      socket.once("error", reject);
-    });
+      rawSocket = net.createConnection({
+        host: options.host[0],
+        port: options.port[0],
+      });
+      return new Promise((resolve, reject) => {
+        let connected = false;
+        rawSocket.once("connect", () => {
+          connected = true;
+          rawSocket.host = options.host[0];
+          rawSocket.port = options.port[0];
+          resolve(rawSocket);
+        });
+        rawSocket.once("error", reject);
+        rawSocket.once("close", () => {
+          if (!connected) {
+            reject(new Error("socket closed before connect"));
+          }
+        });
+      });
+    },
+    destroy() {
+      rawSocket?.destroy();
+    },
   };
 }
 
 async function validateLiveDatabase(value) {
+  const socketController = createOneShotSocketController();
   const sql = postgres(value, {
     max: 1,
     connect_timeout: 5,
     fetch_types: false,
     prepare: false,
-    socket: createOneShotSocket(),
+    socket: socketController.createSocket,
   });
 
   let deadline;
@@ -87,6 +105,7 @@ async function validateLiveDatabase(value) {
     const query = sql`SELECT current_database()`;
     const timeout = new Promise((_, reject) => {
       deadline = setTimeout(() => {
+        socketController.destroy();
         void sql.end({ timeout: 0 }).catch(() => undefined);
         reject(new Error("timed out"));
       }, TIMEOUT_MS);
@@ -98,6 +117,7 @@ async function validateLiveDatabase(value) {
     }
   } finally {
     clearTimeout(deadline);
+    socketController.destroy();
     await sql.end({ timeout: 0 }).catch(() => undefined);
   }
 }
