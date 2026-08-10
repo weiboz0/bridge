@@ -5,6 +5,9 @@ const repositoryRoot = path.resolve(__dirname, "../../..");
 
 /** Runs the source-local hook regression that the root Vitest glob excludes. */
 export default defineConfig({
+  ssr: {
+    noExternal: [/^zod(?:\/.*)?$/],
+  },
   test: {
     globals: true,
     environment: "node",
@@ -16,6 +19,8 @@ export default defineConfig({
     fileParallelism: false,
   },
   resolve: {
+    noExternal: [/[/]node_modules[/]zod(?:[/]|$)/],
+    dedupe: ["zod"],
     alias: {
       "@": path.join(repositoryRoot, "src"),
     },

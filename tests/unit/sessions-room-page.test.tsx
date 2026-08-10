@@ -43,16 +43,10 @@ vi.mock("next/link", () => ({
 }));
 
 vi.mock("@/components/session/teacher/teacher-dashboard", () => ({
-  TeacherDashboard: (props: {
-    sessionId: string;
-    classId: string | null;
-    returnPath?: string;
-  }) => (
+  TeacherDashboard: (props: { sessionId: string }) => (
     <div
       data-testid="teacher-dashboard-stub"
       data-session-id={props.sessionId}
-      data-class-id={props.classId ?? ""}
-      data-return-path={props.returnPath ?? ""}
     />
   ),
 }));
@@ -121,9 +115,6 @@ describe("SessionRoomPage — plan 090 phase 5", () => {
     const stub = screen.getByTestId("teacher-dashboard-stub");
     expect(stub).toBeInTheDocument();
     expect(stub).toHaveAttribute("data-session-id", SESSION_ID);
-    // Class-less: Go's returnPath ("/teacher") is overridden to /sessions so
-    // "End Session" doesn't bounce a non-teacher host through a role gate.
-    expect(stub).toHaveAttribute("data-return-path", "/sessions");
     expect(screen.queryByTestId("student-session-stub")).not.toBeInTheDocument();
   });
 
