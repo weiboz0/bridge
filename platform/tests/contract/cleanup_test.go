@@ -34,6 +34,11 @@ func TestResolveContractCleanupURL(t *testing.T) {
 			wantCleanup: true,
 		},
 		{
+			name:        "accepts percent decoded test database",
+			url:         "postgresql://work@127.0.0.1:5432/bridge%5Ftest",
+			wantCleanup: true,
+		},
+		{
 			name: "rejects non test database",
 			url:  "postgresql://work@127.0.0.1:5432/bridge",
 		},
@@ -52,6 +57,22 @@ func TestResolveContractCleanupURL(t *testing.T) {
 		{
 			name: "rejects query multi host routing",
 			url:  "postgresql://work@127.0.0.1:5432/bridge_test?host=host-one,host-two",
+		},
+		{
+			name: "rejects encoded query multi host routing",
+			url:  "postgresql://work@127.0.0.1:5432/bridge_test?host=host-one%2Chost-two",
+		},
+		{
+			name: "rejects repeated query host routing",
+			url:  "postgresql://work@127.0.0.1:5432/bridge_test?host=host-one&host=host-two",
+		},
+		{
+			name: "rejects hostaddr multi host routing",
+			url:  "postgresql://work@127.0.0.1:5432/bridge_test?hostaddr=127.0.0.1,127.0.0.2",
+		},
+		{
+			name: "rejects encoded hostaddr multi host routing",
+			url:  "postgresql://work@127.0.0.1:5432/bridge_test?hostaddr=127.0.0.1%2C127.0.0.2",
 		},
 	}
 
