@@ -121,18 +121,22 @@ There is no SQLite in production — do NOT report SQLite health as a DB signal.
 
 Bridge does NOT use golang-migrate's `schema_migrations` version table. It uses
 a **schema-probe** model: the platform boots and verifies that the latest
-migration's output (table + columns + named constraints + indexes) is present in
-the live DB. Failure causes the server to refuse to start.
+migration's complete output (tables + columns + named constraints + indexes +
+ordered enum labels) is present in the live DB. Failure causes the server to
+refuse to start.
 
 ```bash
 # Connectivity probe
 psql postgresql://work@127.0.0.1:5432/bridge -c 'select 1' 2>&1
 psql postgresql://work@127.0.0.1:5432/bridge_test -c 'select 1' 2>&1
 
-# Schema probe — check that the sentinel table from the latest migration exists
-# (currently: 'books', from drizzle/0026_books_and_chapters.sql)
+# Schema probe — current contract is session_canvases plus sessions.canvas_floor
+# and the ordered canvas_visibility enum from drizzle/0028_session_canvases.sql.
 psql postgresql://work@127.0.0.1:5432/bridge -tAc \
-  "SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name='books')" 2>&1
+  "SELECT to_regclass('public.session_canvases') IS NOT NULL
+     AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='sessions' AND column_name='canvas_floor')
+     AND ARRAY(SELECT enumlabel FROM pg_enum e JOIN pg_type t ON t.oid=e.enumtypid WHERE t.typname='canvas_visibility' ORDER BY enumsortorder)
+         = ARRAY['private','host','participants','session']" 2>&1
 
 # Count of Drizzle migration files on disk (latest prefix)
 ls /home/chris/workshop/bridge/drizzle/*.sql 2>/dev/null | \
@@ -141,12 +145,12 @@ ls /home/chris/workshop/bridge/drizzle/*.sql 2>/dev/null | \
 
 Tag rules:
 - Postgres `bridge` unreachable → `[BLOCKER]` if platform is running (misconfigured or DB down), `[INFO]` if nothing is running.
-- `books` table missing from `bridge` DB → `[BLOCKER]` "Schema probe would fail — latest migration (0026) not applied. Run: `bunx drizzle-kit migrate` or apply `drizzle/0026_books_and_chapters.sql` manually via psql."
+- `session_canvases`, `sessions.canvas_floor`, or ordered `canvas_visibility` missing from `bridge` DB → `[BLOCKER]` "Schema probe would fail — migration 0028 is partially or wholly unapplied. Do not blindly rerun it: inspect `drizzle/0028_session_canvases.sql` and apply only the missing DDL through the approved database-change workflow."
 - `bridge_test` unreachable → `[WARNING]` "Test DB unreachable — Go integration tests and Vitest API tests will fail."
 - Both reachable, schema sentinel present → `[OK]`.
 
 For any blocker, remind: "Bridge's platform refuses to start if the schema probe
-fails at boot (`ExpectedSchemaProbe = 'books'`, `ExpectedSchemaSentinels` in
+fails at boot (`ExpectedSchemaProbe = 'session_canvases'`, `ExpectedSchemaSentinels` in
 `platform/internal/db/migrations.go`)."
 
 ### 5. Disk usage
@@ -219,10 +223,10 @@ unless `include_ok=false`. Structure:
   → start with: cd platform && air
   → or: cd platform && go run ./cmd/api/
 
-[BLOCKER] db/schema — 'books' table missing from bridge DB
-  → run: bunx drizzle-kit migrate
-  → or: psql postgresql://work@127.0.0.1:5432/bridge -f drizzle/0026_books_and_chapters.sql
-  → note: platform will refuse to start until schema probe passes
+[BLOCKER] db/schema — session_canvases / canvas_floor / canvas_visibility sentinel missing from bridge DB
+  → inspect drizzle/0028_session_canvases.sql and identify the missing DDL
+  → do not blindly rerun the full migration; use the approved database-change workflow
+  → note: platform will refuse to start until the complete schema probe passes
 
 ### WARNINGS (M)
 

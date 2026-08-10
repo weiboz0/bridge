@@ -9,9 +9,10 @@ import (
 
 // CheckSchemaProbe verifies that the schema's end-state matches the
 // latest migration. Plan 068 phase 3 introduced a single-table
-// `to_regclass()` check; Plan 076 extends it with column / constraint
-// / index sentinels. Used as a boot-time gate: any miss → refuse to
-// start rather than serve requests against a stale schema.
+// `to_regclass()` check; Plan 076 added table sentinels and Plan 094
+// made the contract multi-object (tables plus ordered enum labels).
+// Used as a boot-time gate: any miss → refuse to start rather than
+// serve requests against a stale schema.
 //
 // Returns:
 //
@@ -19,6 +20,7 @@ import (
 //   - *ErrSchemaProbeMissing — the probe table is not present.
 //   - *ErrSchemaSentinelMissing — a column/constraint/index from
 //     ExpectedSchemaSentinels is absent on the probe table.
+//   - *ErrSchemaEnumMismatch — an expected enum is absent or its labels differ.
 //   - other errors — connection / DB-level failures (caller should
 //     treat as fatal regardless of probe state).
 //
@@ -36,24 +38,22 @@ func CheckSchemaProbe(ctx context.Context, sqlDB *sql.DB) error {
 		return errors.New("db.CheckSchemaProbe: ExpectedSchemaProbe is empty (build configuration error)")
 	}
 
-	// Step 1: table existence (Plan 068 phase 3 — kept for
-	// backward-compatible error type and the quoting-safe
-	// to_regclass() pattern).
-	qualified := "public." + ExpectedSchemaProbe
-	var result sql.NullString
-	if err := sqlDB.QueryRowContext(ctx, `SELECT to_regclass($1)::text`, qualified).Scan(&result); err != nil {
-		return fmt.Errorf("db.CheckSchemaProbe: query failed: %w", err)
+	if err := checkTableExists(ctx, sqlDB, ExpectedSchemaProbe); err != nil {
+		return err
 	}
-	if !result.Valid {
-		return &ErrSchemaProbeMissing{Table: ExpectedSchemaProbe}
+	if !hasTable(ExpectedSchemaSentinels, ExpectedSchemaProbe) {
+		return fmt.Errorf("db.CheckSchemaProbe: ExpectedSchemaProbe %q is absent from ExpectedSchemaSentinels.Tables", ExpectedSchemaProbe)
+	}
+	for _, table := range ExpectedSchemaSentinels.Tables {
+		if table.Table == "" {
+			return errors.New("db.CheckSchemaProbe: empty table sentinel (build configuration error)")
+		}
+		if err := checkTableExists(ctx, sqlDB, table.Table); err != nil {
+			return err
+		}
 	}
 
-	// Step 2-4: sentinel walks. Skip if the sentinel struct's Table
-	// field is empty (defensive — the parity test asserts it
-	// matches ExpectedSchemaProbe).
-	if ExpectedSchemaSentinels.Table == "" {
-		return nil
-	}
+	// Step 2-5: multi-object sentinel walks.
 	if err := checkColumns(ctx, sqlDB, ExpectedSchemaSentinels); err != nil {
 		return err
 	}
@@ -63,33 +63,59 @@ func CheckSchemaProbe(ctx context.Context, sqlDB *sql.DB) error {
 	if err := checkIndexes(ctx, sqlDB, ExpectedSchemaSentinels); err != nil {
 		return err
 	}
+	if err := checkEnums(ctx, sqlDB, ExpectedSchemaSentinels); err != nil {
+		return err
+	}
+	return nil
+}
+
+func hasTable(s SchemaSentinels, tableName string) bool {
+	for _, table := range s.Tables {
+		if table.Table == tableName {
+			return true
+		}
+	}
+	return false
+}
+
+func checkTableExists(ctx context.Context, sqlDB *sql.DB, tableName string) error {
+	var result sql.NullString
+	if err := sqlDB.QueryRowContext(ctx, `SELECT to_regclass($1)::text`, "public."+tableName).Scan(&result); err != nil {
+		return fmt.Errorf("db.CheckSchemaProbe: table query failed: %w", err)
+	}
+	if !result.Valid {
+		return &ErrSchemaProbeMissing{Table: tableName}
+	}
 	return nil
 }
 
 func checkColumns(ctx context.Context, sqlDB *sql.DB, s SchemaSentinels) error {
-	for _, col := range s.Columns {
-		var found sql.NullString
-		err := sqlDB.QueryRowContext(ctx, `
+	for _, table := range s.Tables {
+		for _, col := range table.Columns {
+			var found sql.NullString
+			err := sqlDB.QueryRowContext(ctx, `
 			SELECT column_name
 			FROM information_schema.columns
 			WHERE table_schema = 'public'
 			  AND table_name = $1
 			  AND column_name = $2
-		`, s.Table, col).Scan(&found)
-		if errors.Is(err, sql.ErrNoRows) {
-			return &ErrSchemaSentinelMissing{Table: s.Table, Kind: "column", Name: col}
-		}
-		if err != nil {
-			return fmt.Errorf("db.CheckSchemaProbe: column query failed for %q: %w", col, err)
+		`, table.Table, col).Scan(&found)
+			if errors.Is(err, sql.ErrNoRows) {
+				return &ErrSchemaSentinelMissing{Table: table.Table, Kind: "column", Name: col}
+			}
+			if err != nil {
+				return fmt.Errorf("db.CheckSchemaProbe: column query failed for %q: %w", col, err)
+			}
 		}
 	}
 	return nil
 }
 
 func checkConstraints(ctx context.Context, sqlDB *sql.DB, s SchemaSentinels) error {
-	for _, name := range s.Constraints {
-		var found sql.NullString
-		err := sqlDB.QueryRowContext(ctx, `
+	for _, table := range s.Tables {
+		for _, name := range table.Constraints {
+			var found sql.NullString
+			err := sqlDB.QueryRowContext(ctx, `
 			SELECT c.conname
 			FROM pg_constraint c
 			JOIN pg_class t ON c.conrelid = t.oid
@@ -97,39 +123,84 @@ func checkConstraints(ctx context.Context, sqlDB *sql.DB, s SchemaSentinels) err
 			WHERE n.nspname = 'public'
 			  AND t.relname = $1
 			  AND c.conname = $2
-		`, s.Table, name).Scan(&found)
-		if errors.Is(err, sql.ErrNoRows) {
-			return &ErrSchemaSentinelMissing{Table: s.Table, Kind: "constraint", Name: name}
-		}
-		if err != nil {
-			return fmt.Errorf("db.CheckSchemaProbe: constraint query failed for %q: %w", name, err)
+		`, table.Table, name).Scan(&found)
+			if errors.Is(err, sql.ErrNoRows) {
+				return &ErrSchemaSentinelMissing{Table: table.Table, Kind: "constraint", Name: name}
+			}
+			if err != nil {
+				return fmt.Errorf("db.CheckSchemaProbe: constraint query failed for %q: %w", name, err)
+			}
 		}
 	}
 	return nil
 }
 
 func checkIndexes(ctx context.Context, sqlDB *sql.DB, s SchemaSentinels) error {
-	for _, name := range s.Indexes {
-		// Plan 088 — relaxed: don't scope by tablename. A single migration
-		// can declare indexes on multiple tables (plan 088 added
-		// `chapters_book_idx` on `chapters` alongside the books-table
-		// indexes); the sentinel set is the union. `pg_indexes.indexname`
-		// is unique per schema, so dropping the tablename filter is safe.
-		var found sql.NullString
-		err := sqlDB.QueryRowContext(ctx, `
+	for _, table := range s.Tables {
+		for _, name := range table.Indexes {
+			var found sql.NullString
+			err := sqlDB.QueryRowContext(ctx, `
 			SELECT indexname
 			FROM pg_indexes
 			WHERE schemaname = 'public'
-			  AND indexname = $1
-		`, name).Scan(&found)
-		if errors.Is(err, sql.ErrNoRows) {
-			return &ErrSchemaSentinelMissing{Table: s.Table, Kind: "index", Name: name}
-		}
-		if err != nil {
-			return fmt.Errorf("db.CheckSchemaProbe: index query failed for %q: %w", name, err)
+			  AND tablename = $1
+			  AND indexname = $2
+		`, table.Table, name).Scan(&found)
+			if errors.Is(err, sql.ErrNoRows) {
+				return &ErrSchemaSentinelMissing{Table: table.Table, Kind: "index", Name: name}
+			}
+			if err != nil {
+				return fmt.Errorf("db.CheckSchemaProbe: index query failed for %q: %w", name, err)
+			}
 		}
 	}
 	return nil
+}
+
+func checkEnums(ctx context.Context, sqlDB *sql.DB, s SchemaSentinels) error {
+	for _, enum := range s.Enums {
+		rows, err := sqlDB.QueryContext(ctx, `
+			SELECT e.enumlabel
+			FROM pg_type t
+			JOIN pg_namespace n ON n.oid = t.typnamespace
+			JOIN pg_enum e ON e.enumtypid = t.oid
+			WHERE n.nspname = 'public' AND t.typname = $1
+			ORDER BY e.enumsortorder
+		`, enum.Name)
+		if err != nil {
+			return fmt.Errorf("db.CheckSchemaProbe: enum query failed for %q: %w", enum.Name, err)
+		}
+		var actual []string
+		for rows.Next() {
+			var label string
+			if err := rows.Scan(&label); err != nil {
+				rows.Close()
+				return fmt.Errorf("db.CheckSchemaProbe: enum scan failed for %q: %w", enum.Name, err)
+			}
+			actual = append(actual, label)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return fmt.Errorf("db.CheckSchemaProbe: enum rows failed for %q: %w", enum.Name, err)
+		}
+		rows.Close()
+		if !sameStrings(enum.Labels, actual) {
+			return &ErrSchemaEnumMismatch{Enum: enum.Name, Expected: enum.Labels, Actual: actual}
+		}
+	}
+	return nil
+}
+
+func sameStrings(expected, actual []string) bool {
+	if len(expected) != len(actual) {
+		return false
+	}
+	for i := range expected {
+		if expected[i] != actual[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // ErrSchemaProbeMissing indicates the expected schema-probe table is
@@ -142,38 +213,51 @@ type ErrSchemaProbeMissing struct {
 
 func (e *ErrSchemaProbeMissing) Error() string {
 	return fmt.Sprintf(
-		"schema probe missing: table %q does not exist. The latest migration has not been applied. Run `psql $DATABASE_URL -f drizzle/<latest>.sql` (Bridge applies 0003+ via psql -f per TODO.md:10) and restart the server.",
+		"schema probe missing: table %q does not exist. The latest schema end state is incomplete. Do not blindly re-run the whole migration; inspect the latest drizzle/*.sql and apply the exact missing DDL through the approved database-change workflow, then restart the server.",
 		e.Table,
 	)
 }
 
 // ErrSchemaSentinelMissing indicates a column / constraint / index
-// from ExpectedSchemaSentinels is absent on the probe table. Re-running
-// the migration file is a NO-OP because `CREATE TABLE IF NOT EXISTS`
-// short-circuits when the table already exists — operator must apply
-// the specific ALTER / CREATE INDEX statement manually. The Error()
-// text directs them to the migration source for the exact DDL.
+// from ExpectedSchemaSentinels is absent. Re-running a whole migration can
+// fail after a partial apply (for example, CREATE TYPE is not idempotent), so
+// the operator must apply the exact missing DDL from the migration source.
 type ErrSchemaSentinelMissing struct {
 	Table string
 	Kind  string // "column" | "constraint" | "index"
 	Name  string
 }
 
+// ErrSchemaEnumMismatch indicates a missing enum or an enum whose labels do
+// not exactly match the migration declaration in PostgreSQL sort order.
+type ErrSchemaEnumMismatch struct {
+	Enum     string
+	Expected []string
+	Actual   []string
+}
+
+func (e *ErrSchemaEnumMismatch) Error() string {
+	return fmt.Sprintf(
+		"schema enum mismatch: enum %q has labels %v; expected %v in this order. Apply the missing enum DDL from the latest drizzle/*.sql manually, then restart.",
+		e.Enum, e.Actual, e.Expected,
+	)
+}
+
 func (e *ErrSchemaSentinelMissing) Error() string {
 	switch e.Kind {
 	case "column":
 		return fmt.Sprintf(
-			"schema sentinel missing: column %q on table %q is absent. Re-running the migration file is a no-op (CREATE TABLE IF NOT EXISTS). Apply `ALTER TABLE %s ADD COLUMN %s ...` manually using the column definition from the latest drizzle/*.sql, then restart.",
+			"schema sentinel missing: column %q on table %q is absent. Do not blindly re-run the whole migration; apply `ALTER TABLE %s ADD COLUMN %s ...` using the exact definition from the latest drizzle/*.sql, then restart.",
 			e.Name, e.Table, e.Table, e.Name,
 		)
 	case "constraint":
 		return fmt.Sprintf(
-			"schema sentinel missing: constraint %q on table %q is absent. Re-running the migration file is a no-op. Apply `ALTER TABLE %s ADD CONSTRAINT %s ...` from the latest drizzle/*.sql, then restart.",
+			"schema sentinel missing: constraint %q on table %q is absent. Do not blindly re-run the whole migration; apply `ALTER TABLE %s ADD CONSTRAINT %s ...` from the latest drizzle/*.sql, then restart.",
 			e.Name, e.Table, e.Table, e.Name,
 		)
 	case "index":
 		return fmt.Sprintf(
-			"schema sentinel missing: index %q on table %q is absent. Re-running the migration file is a no-op. Apply `CREATE INDEX %s ON %s ...` (or `CREATE UNIQUE INDEX ... WHERE ...` for partial-uniques) from the latest drizzle/*.sql, then restart.",
+			"schema sentinel missing: index %q on table %q is absent. Do not blindly re-run the whole migration; apply `CREATE INDEX %s ON %s ...` (or `CREATE UNIQUE INDEX ... WHERE ...` for partial-uniques) from the latest drizzle/*.sql, then restart.",
 			e.Name, e.Table, e.Name, e.Table,
 		)
 	default:
