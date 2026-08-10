@@ -216,6 +216,11 @@ The user authorized the complete scope expansion.
 Decision 13 and Phase 5 now define a multi-object end-state probe, exact enum/altered-column parity, preserved generic constraint coverage, retargeted integration tests, and updated operator guidance.
 Fresh confirmation is pending.
 
+### Schema-probe verification addendum — Round 8 (2026-08-10): **APPROVE (Claude ×2, GLM, Codex).**
+All reviewers confirmed Revision `d2b224c` resolves the Round-7 scope and contract blockers.
+The nine primary-table columns, two indexes, empty named-constraint set, `sessions.canvas_floor`, ordered `canvas_visibility` values, injected generic constraint regression, pinned `bridge_test` command, and operator guidance are now fully specified within File scope.
+No reviewer reported a remaining blocker, so the addendum gate is clear.
+
 ## Code Review
 
 _Pending._
