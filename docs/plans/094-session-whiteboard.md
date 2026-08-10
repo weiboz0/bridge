@@ -11,6 +11,7 @@ The Phase-6 local-gate addendum has provisional scope only while its plan-review
 `platform/internal/store/canvases.go` (new) + `platform/internal/store/canvases_test.go` (new) ·
 `platform/internal/handlers/canvases.go` (new) + `platform/internal/handlers/canvases_integration_test.go` (new) ·
 `platform/internal/handlers/realtime_token.go` + `platform/internal/handlers/realtime_token_test.go` ·
+**PROVISIONAL PHASE-6 SCOPE — no implementation until the local-gate addendum review approves:**
 **`platform/internal/handlers/user_fixture_test.go`** (new test-only fast user fixture) ·
 **`platform/internal/handlers/access_org_test.go`** · **`platform/internal/handlers/admin_live_admin_test.go`** · **`platform/internal/handlers/admin_parent_links_test.go`** · **`platform/internal/handlers/admin_test.go`** ·
 **`platform/internal/handlers/annotations_integration_test.go`** · **`platform/internal/handlers/books_integration_test.go`** · **`platform/internal/handlers/canvases_integration_test.go`** · **`platform/internal/handlers/chapters_integration_test.go`** ·
@@ -38,7 +39,8 @@ The Phase-6 local-gate addendum has provisional scope only while its plan-review
 **`tests/unit/zod-vitest-interop.test.ts`** (new Bun/Vitest named-export and error-identity regression) ·
 **`tests/unit/excalidraw-yjs.test.ts`** (custom-binding regression) · `package.json` + **`bun.lock`** (add `@excalidraw/excalidraw`; no `y-excalidraw`) ·
 **`vitest.config.ts`** (Bun/Vitest Zod interop — scope-widened local-gate fix) ·
-`docs/api.md` · `docs/architecture/decisions.md` · `README.md` · **`.claude/skills/br-system-review/SKILL.md`** (operator probe guidance) · this plan file.
+**`scripts/check-test-database-url.mjs`** (new) · **`scripts/ci-local.sh`** · **`scripts/tests/test-guards.sh`** (parsed/pinned local-gate database guard — provisional Round-10 governance scope) ·
+`docs/api.md` · `docs/architecture/decisions.md` · **`docs/testing.md`** · `README.md` · **`.claude/skills/br-system-review/SKILL.md`** (operator probe guidance) · this plan file.
 
 Scope-widening (R1 blocker 1 / concern C1) authorized by the user 2026-08-06: the read-only viewer boundary cannot be built without a `readOnly` claim in both JWT files, and `CanvasStore` must be wired in `main.go`.
 
@@ -55,8 +57,8 @@ Scope-widening (schema-probe verification fix) authorized by the user 2026-08-09
 Scope-widening (complete multi-object probe) authorized by the user 2026-08-09: add the probe implementation, its unit/parity/integration tests, and the tracked operator-review skill. Review found that retargeting only `migrations.go` would leave three `books`-specific integration tests stale and would ignore `0028`'s new enum plus `sessions.canvas_floor` alteration.
 
 Scope-widening (local-gate unblock) uses the user's exact 2026-08-10 authorization: “you are authorized to edit or add any files in this repository, no need to ask for scope question anymore.”
-The provisional additions are the 22 enumerated handler tests, new fixture/interop regressions, and root Vitest configuration named above; their gate must still pass before implementation.
-The authoritative gate proved that `internal/handlers` cannot complete its fixed 120-second timeout while four shared fixtures alone execute at least 1,090 cost-10 bcrypt hashes, and Bun 1.3.12's Vitest fork runner resolves Zod's externalized ESM namespace without its named `z` export.
+The provisional additions are the 22 enumerated handler tests, new fixture/interop regressions, root Vitest configuration, and parsed/pinned local-gate database guard named above; their gate must still pass before implementation.
+The authoritative gate proved that `internal/handlers` cannot complete its fixed 120-second timeout while ordinary fixtures repeatedly perform cost-10 bcrypt work, and Bun 1.3.12's Vitest fork runner resolves Zod's externalized ESM namespace without its named `z` export.
 
 ## Problem / goal
 
@@ -147,26 +149,39 @@ A canvas is `documentName = canvas:{canvasId}`. Permission is enforced **server-
 
 ### Phase 6 — Local-gate test infrastructure *(Terra; tests only)*
 - Add `platform/internal/handlers/user_fixture_test.go` with one transaction-safe `insertFixtureUser` helper.
+  Its exact signature is `insertFixtureUser(t *testing.T, db *sql.DB, input store.RegisterInput) *store.RegisteredUser`; it calls `t.Helper()` and uses `require`/`t.Fatal` for setup failures, so callers cannot ignore a rejected input.
   It inserts `users` plus the required email `auth_providers` row using one precomputed, valid **cost-4** bcrypt hash for `testpassword123`, rejects any other fixture password, accepts only nil/`teacher`/`student` `IntendedRole` values, returns `store.RegisteredUser`, and leaves cleanup ownership with each existing fixture.
   Production `UserStore.RegisterUser`, its cost-10 bcrypt behavior, auth-handler registration tests, and `platform/internal/store/users_test.go` remain unchanged as the real password-hashing coverage.
 - Audit the current `RegisterUser` producer before replacement: it writes exactly the `users` row and one `auth_providers(provider='email', provider_user_id=user.ID)` row, with no normalization, membership, profile, or audit side effects.
   Add `TestInsertFixtureUser_MatchesRegisterUserPersistenceContract` to compare one real registration with one fixture registration across the observable user/provider shape while allowing their password hashes and generated IDs to differ.
+  Direct inserts are preferred over a production bcrypt-cost option because exposing a low-cost constructor, field, or environment switch in production code would create a credential-hardening footgun; real registration remains covered in its dedicated producer/auth tests and this parity regression.
 - Replace the 31 ordinary handler-test `RegisterUser` call sites in the 22 exact files enumerated in `## File scope`, including `problems_integration_test.go`.
   Repository inspection confirmed every one currently supplies `testpassword123`; any future password-variation or real-registration behavior test must continue using `UserStore.RegisterUser` rather than this helper.
+  Repository inspection also found no handler test that asserts password-hash byte uniqueness; the deliberately shared test-only salt/hash is not production salt coverage.
   Preserve unique emails and each fixture's dependency-ordered cleanup.
 - Harden the shared handler `integrationDB` before those direct inserts: parse `DATABASE_URL`, require its URL database name to end `_test`, open it, and independently require `SELECT current_database()` to end `_test` before any mutation.
+  Use `url.Parse`, decode `strings.TrimPrefix(parsed.EscapedPath(), "/")`, and validate that decoded path value rather than the raw URL string.
   An absent URL may skip as today, but an unparseable URL, empty database path, query error, or non-test parsed/live database name must fail closed with `t.Fatal` or `require`; no migration runs.
+  Audit the unchanged `auth_test.go` and `topics_unlink_test.go` consumers of this shared helper through the complete handler suite; no source edit is expected unless their behavior actually requires one and a reviewed scope revision names it.
 - Add `TestInsertFixtureUser_PersistsHashRoleAndProvider` and `TestInsertFixtureUser_RejectsUnsupportedInputWithoutWrite`.
   They prove the cost-4 hash accepts `testpassword123`, valid `IntendedRole` round-trips, the email auth-provider row exists, and a different password or invalid role fails before any insert.
-- Record the load derivation in evidence: `newSessionFixture` has 115 callers × 3 users, `newProblemFixture` 49 × 5, `newSessionPageFixture` 88 × 5, and `newOrgListFixture` 12 × 5, totaling at least 1,090 eliminated runtime cost-10 hashes before smaller fixtures.
+- Record the RED run as a measured lower bound (`internal/handlers` exceeds 120 seconds) and the GREEN package duration after replacement.
+  Static call-site expansion suggests the four shared fixtures dominate, but is not treated as an exact runtime hash count because table-driven and skipped paths can change executions.
 - Update only the stale teacher branch of `tests/unit/sessions-room-page.test.tsx` because `TeacherDashboard` no longer accepts `classId` or `returnPath`.
-  Retain the student class-less `/sessions` override assertion; the teacher's successful end-to-archive behavior remains covered through the real dashboard test.
-- Add `ssr.noExternal: ["zod"]` to the root `vitest.config.ts`.
+  Retain the student class-less `/sessions` override assertion; `tests/unit/whiteboard-archive.test.tsx` keeps the named “redirects the teacher to the archive only after a successful end response” coverage through the real dashboard.
+- Add `ssr.noExternal: [/^zod(?:\/.*)?$/]` to the root `vitest.config.ts`.
   This is the durable test-runner compatibility boundary for the repository's locked Bun 1.3.12, Vitest 4.1.4, and Zod 4.3.6 combination: it keeps Zod inside Vite's transform pipeline without changing or downgrading application imports.
-  Add an inline config comment and `tests/unit/zod-vitest-interop.test.ts` proving the named `z` export works and a thrown validation error retains `ZodError` identity; also run the complete root Vitest suite so already-green consumers remain covered.
+  Add `resolve.dedupe: ["zod"]`, an inline config comment, and `tests/unit/zod-vitest-interop.test.ts` proving the named `z` export works and a thrown validation error retains `ZodError` identity; also run the complete root Vitest suite so already-green consumers remain covered.
+  Repository inspection finds no current `ZodError`/`ZodType`/`z.instanceof` identity consumer, while dedupe prevents dependencies from resolving a second physical root copy.
+- Replace `ci-local.sh`'s whole-string `_test` regex with the new `scripts/check-test-database-url.mjs` validator.
+  Resolve one gate URL from `TEST_DATABASE_URL`, then `DATABASE_URL`, then the existing `bridge_test` fallback; parse it with `new URL`, require `postgres:` or `postgresql:`, URL-decode the non-empty pathname database name, and require that decoded name to end `_test` without printing credentials.
+  The normal validator path then connects read-only with one connection, requires `SELECT current_database()` to end `_test`, fails closed on connection/query errors, and closes before any gate mutation; a parse-only mode exists solely for executable invalid-URL self-tests.
+  Pass that validated URL explicitly as both `DATABASE_URL` and `TEST_DATABASE_URL` to the Vitest and Go steps, so query-string decoys and ambient production URLs cannot reach mutating tests.
+- Extend `scripts/tests/test-guards.sh` with executable validator cases for a valid `_test` path, percent-decoded `_test` path, empty path, wrong scheme, non-test path, and a production path whose query ends in `_test`; also enforce that the Go step pins both database variables.
+  Update `docs/testing.md` to name the decoded-path validation and shared pinned URL.
 - RED evidence is the exact gate failure: the isolated handler package times out inside `bcrypt.GenerateFromPassword` after 120 seconds; the root Vitest run reports `z.string` or `z.object` on an undefined named export; and the teacher room test receives an empty obsolete prop.
   GREEN commands are the pinned `go test ./internal/handlers -count=1 -timeout 120s` with the reported package duration at or below 60 seconds, `go test ./internal/store -count=1`, full pinned `go test ./... -count=1 -timeout 120s`, the focused Vitest files, the complete root Vitest suite, and `bash scripts/ci-local.sh --fast` with Bun pinned in `PATH` and provider keys empty.
-  The fast gate is phase-local evidence only; Phase 5's full `bash scripts/ci-local.sh` plus attestation remains the merge gate and still requires a user-pinned `E2E_BASE_URL`.
+  The fast gate is phase-local evidence only; Phase 5's full `bash scripts/ci-local.sh` plus attestation remains the merge gate, still requires a user-pinned `E2E_BASE_URL`, and must run last so a later fast attestation cannot be mistaken for merge evidence.
 
 ## Risks
 
@@ -263,8 +278,18 @@ The independent review found that Phase 6 omitted `problems_integration_test.go`
 Fresh repository counts corrected the load model to at least 1,090 cost-10 hashes from the four dominant fixtures, and the plan now enumerates all 22 direct-call-site files plus the two new regressions.
 The cost-4 fixture hash, production-shape parity test, valid input boundary, exact named tests, fail-closed URL/live-database checks, and 60-second handler-package target resolve the fixture correctness and headroom findings.
 The Zod boundary now names the locked toolchain, requires an identity regression and the complete root Vitest suite, and records `--fast` as phase-local rather than merge evidence.
-GLM's sole blocker claimed `ci-local.sh` could mutate store/DB tests under a non-test `DATABASE_URL`; that premise is rejected because the script exits at its top-level safety precondition before any step when the URL is not test-named, while every manual command in this plan pins `bridge_test`.
-The dispatch concern is also rejected under the user's earlier direct instruction that test coding uses Terra, which overrides the repository default for this run.
+GLM's database-guard blocker remained open for confirmation rather than author resolution.
+The dispatch concern is rejected under the user's direct instruction, “for tests coding, let's use gpt terra,” which overrides the repository default for this run.
+
+### Local-gate addendum — Round 10 (2026-08-10): **CHANGES REQUESTED (independent Claude and GLM).**
+`[OPEN → FIXED IN REVISION]` The independent confirmation disproved the Round-9 response: `ci-local.sh` checks the whole URL string, so a production pathname with a query value ending `_test` passes, and the Go step inherits that unsafe value.
+The user-authorized provisional scope now explicitly includes `scripts/ci-local.sh`, its new decoded-path validator, executable guard tests, and `docs/testing.md`; implementation remains blocked until the governance revision passes this plan gate.
+`[FIXED IN REVISION]` The validator checks the decoded non-empty pathname and allowed PostgreSQL schemes, and the gate passes the one validated URL as both database variables to Vitest and Go.
+`[FIXED IN REVISION]` Zod resolution adds root deduplication, an identity regression, and the complete root suite; repository inspection found no current cross-package Zod class-identity consumer.
+`[FIXED IN REVISION]` The fixture bypass now records why a production cost knob is rejected, audits and parity-tests the current producer contract, restricts helper inputs, and treats call-site multiplication only as an estimate while requiring measured runtime headroom.
+`[FIXED IN REVISION]` The handler URL guard now names exact URL/path decoding and fail-closed query-error behavior; review findings remain explicit until reviewer confirmation.
+`[FIXED IN REVISION]` The gate validator now performs its own live `current_database()` check before any mutation and pins the validated URL into both test runtimes, closing the query-string-decoy and proxy/misrouting path across all packages.
+`[FIXED IN REVISION]` The provisional marker is adjacent to the added File-scope entries; the fixture signature fails through `testing.T`, all unchanged shared-helper consumers run in the package suite, and the existing teacher redirect regression is named exactly.
 Fresh confirmation is pending from the flagging reviewers.
 
 ## Code Review
