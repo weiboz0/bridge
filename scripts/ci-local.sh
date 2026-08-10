@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# The authoritative gate. CI runs this same script, so local and remote cannot drift.
+# The authoritative local gate. Any future CI must run this same script, so the
+# two cannot drift.
 #
 # Two safety properties this script exists to guarantee, both of which were found
 # the hard way during plan 091's review:
@@ -40,15 +41,20 @@ step() {
 
 # ── Safety preconditions ─────────────────────────────────────────────────────
 
-# Refuse to run against a non-test database. See AGENTS.md hard safeguards.
+# Validate an inherited URL before it can become the selected gate URL.  The
+# validator parses the pathname and then probes the live database name without
+# printing credentials or the URL; it is the only database validation authority.
 if [[ -n "${DATABASE_URL:-}" ]]; then
-  if [[ ! "$DATABASE_URL" =~ _test(\?|$) && ! "$DATABASE_URL" =~ @(localhost|127\.0\.0\.1|postgres):[0-9]+/bridge_test ]]; then
-    echo "REFUSING TO RUN: DATABASE_URL does not look like a test database." >&2
-    echo "  got: ${DATABASE_URL%%\?*}" >&2
-    echo "  Migrations read DATABASE_URL and Bridge has no down-migrations." >&2
-    echo "  Point it at a *_test database, or unset it if this run needs no DB." >&2
+  if ! env CHECK_TEST_DATABASE_URL="$DATABASE_URL" node scripts/check-test-database-url.mjs; then
+    echo "REFUSING TO RUN: inherited DATABASE_URL did not validate as a live test database." >&2
     exit 2
   fi
+fi
+
+GATE_DATABASE_URL="${TEST_DATABASE_URL:-${DATABASE_URL:-postgresql://work@127.0.0.1:5432/bridge_test}}"
+if ! env CHECK_TEST_DATABASE_URL="$GATE_DATABASE_URL" node scripts/check-test-database-url.mjs; then
+  echo "REFUSING TO RUN: resolved gate database URL did not validate as a live test database." >&2
+  exit 2
 fi
 
 echo "Bridge local gate — repo $REPO_ROOT"
@@ -86,7 +92,8 @@ step "guard: self-test"  bash scripts/tests/test-guards.sh
 #     `skipIf(!key)`. Exporting them EMPTY makes skipIf fire; `unset` does not
 #     work, because bun re-reads the real values from .env.
 step "vitest" env \
-  DATABASE_URL="${TEST_DATABASE_URL:-postgresql://work@127.0.0.1:5432/bridge_test}" \
+  DATABASE_URL="$GATE_DATABASE_URL" \
+  TEST_DATABASE_URL="$GATE_DATABASE_URL" \
   ANTHROPIC_API_KEY= \
   OPENAI_API_KEY= \
   GEMINI_API_KEY= \
@@ -94,7 +101,10 @@ step "vitest" env \
   OPENROUTER_API_KEY= \
   bun run test
 
-step "go test" bash -c 'cd platform && go test ./... -count=1 -timeout 120s'
+step "go test" env \
+  DATABASE_URL="$GATE_DATABASE_URL" \
+  TEST_DATABASE_URL="$GATE_DATABASE_URL" \
+  bash -c 'cd platform && go test ./... -count=1 -timeout 120s'
 
 # ── E2E ──────────────────────────────────────────────────────────────────────
 
@@ -110,7 +120,10 @@ elif [[ -z "${E2E_BASE_URL:-}" ]]; then
   echo "  Export E2E_BASE_URL pointing at your own stack, or use --fast." >&2
   FAILED+=("e2e (E2E_BASE_URL unset)")
 else
-  step "e2e" bun run test:e2e
+  step "e2e" env \
+    DATABASE_URL="$GATE_DATABASE_URL" \
+    TEST_DATABASE_URL="$GATE_DATABASE_URL" \
+    bun run test:e2e
 fi
 
 # ── Result ───────────────────────────────────────────────────────────────────

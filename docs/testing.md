@@ -15,7 +15,8 @@ Tier descriptions, exact commands, and gating env vars.
 | Live LLM | subset of `bun run test` | provider API keys — **bills real money** |
 | Everything | `bash scripts/ci-local.sh` | the above, orchestrated safely |
 
-`scripts/ci-local.sh` is the authoritative gate. CI runs the same script, so the two cannot drift.
+`scripts/ci-local.sh` is the authoritative local gate.
+Any future CI must run the same script, so the two cannot drift.
 
 ## The live-LLM hazard
 
@@ -39,8 +40,12 @@ To run the suite without billing anything:
 bun run --env-file=/dev/null test
 ```
 
-This is what `ci-local.sh` does. CI achieves the same by simply not supplying provider secrets.
-Plan 092 replaces this with explicit `CI=1` guards in the test files themselves.
+`ci-local.sh` explicitly exports all five provider keys as empty values for Vitest:
+`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `DASHSCOPE_API_KEY`,
+`OPENROUTER_API_KEY`.
+The empty values take precedence over values Bun auto-loads from `.env` and make the corresponding
+`skipIf` checks fire.
+Any future CI uses the same five-key mechanism.
 
 `platform/internal/llm/` (Go) is separately mock-only — no live tier, no `CI` gating.
 
@@ -64,11 +69,17 @@ falling back to the default. Never put E2E in an automated gate without it.
 
 ## Database
 
-Vitest uses `bridge_test`; Go store tests use `TEST_DATABASE_URL`. Setup: `docs/setup.md`.
+`scripts/ci-local.sh` first validates any inherited `DATABASE_URL` independently.
+It then resolves one nonempty `GATE_DATABASE_URL` from `TEST_DATABASE_URL`, `DATABASE_URL`, or the
+`bridge_test` fallback and validates it again.
+The Node 18 validator parses only PostgreSQL URLs, percent-decodes a nonempty pathname database name,
+and requires `_test`; its live probe makes one bounded `SELECT current_database()` call and requires the
+connected database name to end in `_test` too.
+The gate pins that validated URL as both `DATABASE_URL` and `TEST_DATABASE_URL` for Vitest, Go, and E2E.
+Parser-only mode exists exclusively for `scripts/tests/test-guards.sh` selftests and never gates a run.
 
 **Migrations read `DATABASE_URL`, not `TEST_DATABASE_URL`** — `drizzle.config.ts` has one URL and no
 test-only path, so an inherited `DATABASE_URL` silently targets production.
-`ci-local.sh` refuses to migrate unless `DATABASE_URL` ends in `_test` or is the ephemeral CI container.
 Migrating a real database is a hard safeguard pause (`AGENTS.md`).
 
 ## What every change owes

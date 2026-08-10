@@ -72,8 +72,8 @@ Always pause and surface to the user, regardless of operating mode.
 
   This one is *enforced*, not trusted: `drizzle.config.ts` reads `process.env.DATABASE_URL`,
   so there is no separate test-only migration path and an inherited `DATABASE_URL` silently targets production.
-  `scripts/ci-local.sh` and the CI job refuse to migrate unless `DATABASE_URL` ends in `_test`
-  or resolves to the ephemeral CI service container.
+  `scripts/check-test-database-url.mjs`, `scripts/tests/test-guards.sh`, and
+  `scripts/ci-local.sh` require a parsed and live-validated `_test` database name before tests run.
   Migrating that throwaway container is the one narrow exception.
 
 - **Auth and tenancy** — `platform/internal/middleware` session verification, org-tenancy scoping,

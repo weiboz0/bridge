@@ -97,6 +97,89 @@ expect 2 "pre-merge-guard rejects unknown args" bash "$REPO_ROOT/scripts/pre-mer
 expect 0 "lint ratchet passes on current tree" bash "$REPO_ROOT/scripts/check-lint-baseline.sh"
 expect 0 "lint ratchet trips on a new violation" bash "$REPO_ROOT/scripts/check-lint-baseline.sh" --selftest
 
+# ── 12. test database URL validator parser contracts ────────────────────────
+# Parser selftests deliberately use the validator's dedicated input variable;
+# they must never open a database connection.
+VALIDATOR="$REPO_ROOT/scripts/check-test-database-url.mjs"
+parse_test_url() {
+  env CHECK_TEST_DATABASE_URL="$1" node "$VALIDATOR" --parse-only
+}
+
+expect 0 "test database path is accepted" \
+  parse_test_url "postgresql://guard:guard@127.0.0.1:5432/bridge_test"
+expect 0 "percent-decoded test database path is accepted" \
+  parse_test_url "postgresql://guard:guard@127.0.0.1:5432/bridge%5Ftest"
+expect 1 "empty database path is rejected" \
+  parse_test_url "postgresql://guard:guard@127.0.0.1:5432/"
+expect 1 "non-Postgres scheme is rejected" \
+  parse_test_url "mysql://guard:guard@127.0.0.1:3306/bridge_test"
+expect 1 "non-test database path is rejected" \
+  parse_test_url "postgresql://guard:guard@127.0.0.1:5432/bridge"
+expect 1 "query-suffix test-name decoy is rejected" \
+  parse_test_url "postgresql://guard:guard@127.0.0.1:5432/bridge?dbname=bridge_test"
+expect 0 "safe test pathname ignores production query override in parser mode" \
+  parse_test_url "postgresql://guard:guard@127.0.0.1:5432/bridge_test?dbname=production"
+
+# ── 13. database gate wiring is explicit and complete ───────────────────────
+if rg -q 'check-test-database-url\.mjs' "$REPO_ROOT/scripts/ci-local.sh"; then
+  ok "ci-local invokes the test database URL validator"
+else
+  bad "ci-local invokes the test database URL validator"
+fi
+
+if rg -q 'CHECK_TEST_DATABASE_URL="\$DATABASE_URL"' "$REPO_ROOT/scripts/ci-local.sh" \
+  && rg -q 'GATE_DATABASE_URL=' "$REPO_ROOT/scripts/ci-local.sh"; then
+  ok "ci-local validates ambient and resolved database URLs separately"
+else
+  bad "ci-local validates ambient and resolved database URLs separately"
+fi
+
+runner_pins_database_urls() {
+  local runner="$1" active=0 database_url=0 test_database_url=0 line
+  while IFS= read -r line; do
+    if [[ "$line" == *step\ \"* ]]; then
+      active=0
+      [[ "$line" == *"$runner"* ]] && active=1
+    fi
+    if (( active )); then
+      [[ "$line" == *' DATABASE_URL="$GATE_DATABASE_URL" \' ]] && database_url=1
+      [[ "$line" == *' TEST_DATABASE_URL="$GATE_DATABASE_URL" \' ]] && test_database_url=1
+    fi
+  done < "$REPO_ROOT/scripts/ci-local.sh"
+  (( database_url && test_database_url ))
+}
+
+for runner in vitest 'go test' e2e; do
+  if runner_pins_database_urls "$runner"; then
+    ok "$runner pins both database URL variables"
+  else
+    bad "$runner pins both database URL variables"
+  fi
+done
+
+for key in ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY DASHSCOPE_API_KEY OPENROUTER_API_KEY; do
+  if rg -q "^  $key= \\\\$" "$REPO_ROOT/scripts/ci-local.sh"; then
+    ok "vitest empties $key"
+  else
+    bad "vitest empties $key"
+  fi
+done
+
+# Task 2 creates the fixture and moves direct calls into it.  Once that file
+# exists this guard automatically becomes strict: every other handler test must
+# use the fixture rather than calling RegisterUser directly.
+USER_FIXTURE="$REPO_ROOT/platform/internal/handlers/user_fixture_test.go"
+if [[ ! -e "$USER_FIXTURE" ]]; then
+  ok "RegisterUser fixture enforcement deferred until Phase 6 Task 2 creates it"
+else
+  direct_register_files="$(rg -l 'RegisterUser\(' "$REPO_ROOT/platform/internal/handlers" -g '*_test.go' | grep -Fvx "$USER_FIXTURE" || true)"
+  if [[ -z "$direct_register_files" ]]; then
+    ok "only user_fixture_test.go calls RegisterUser directly"
+  else
+    bad "only user_fixture_test.go calls RegisterUser directly"
+  fi
+fi
+
 echo ""
 echo "guard tests: $PASS passed, $FAIL failed"
 (( FAIL == 0 ))
