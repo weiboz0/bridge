@@ -1,6 +1,6 @@
 # Session whiteboard review remediation
 
-**Status:** Blocked at Design Review Round 5 with unresolved findings.
+**Status:** Design review resumed under an uncapped consensus gate by user direction on 2026-08-11.
 
 **Related plan:** `docs/plans/094-session-whiteboard.md`
 
@@ -109,9 +109,19 @@ Mutation authorization takes a transaction-scoped shared PostgreSQL advisory loc
 
 Every end transition takes the matching exclusive advisory lock before its session update and holds it through commit.
 
-The lock key is a stable hash of the session UUID; a collision may serialize unrelated sessions but cannot weaken authorization.
+The lock uses PostgreSQL's two-`int4` advisory-lock form.
 
-The universal acquisition order is session advisory lock first, then any session row or related data access, and mutation authorization locks no second entity.
+The first key is the reserved Bridge session-lifecycle class ID `0x42524447`, and the second is a stable 32-bit hash of the session UUID.
+
+A collision in the second key may serialize unrelated sessions but cannot collide with another reserved Bridge advisory-lock class or weaken authorization.
+
+Lease acquisition, lease replacement, successful or degraded end, abort cleanup, and ended-session residual cleanup take the exclusive session advisory lock.
+
+Mutation authorization takes the shared session advisory lock.
+
+Those transactions always acquire the advisory lock before any session row or related data access, and mutation authorization locks no second entity.
+
+Canvas creation and floor transactions retain their existing session-row lock and never acquire this advisory-lock class, so they cannot invert the lifecycle lock order.
 
 This avoids hot-row multixact churn while making an authorization query block behind an executing end and observe `ended` after commit.
 
@@ -127,9 +137,21 @@ Aborting a still-live operation clears the lease only when its token matches.
 
 An end that consumes any expired lease clears that expired token even when it differs from the request token.
 
-An already-ended completion is idempotent: it returns the stored archive result, never rewrites it, and may clear a matching or expired residual lease as housekeeping.
+An already-ended completion is idempotent: it returns the stored archive result, never rewrites it, and must clear a matching or expired residual lease as housekeeping.
 
 Hocuspocus mirrors active operations in an in-memory map keyed by session ID with token, database expiry, and monotonic expiry, never a boolean set.
+
+Every freeze and unfreeze operation for one session executes through the same per-session async serializer.
+
+The serializer is acquired before database validation and held through every in-memory map mutation, final flush, connection close, and operation result.
+
+An unfreeze that arrives while freeze validation or flush is in progress waits for that freeze to finish or cancel, then removes the matching entry as the final serialized action.
+
+The Hocuspocus freeze operation has its own deadline bounded by both the two-second Go deadline and the remaining database lease duration.
+
+When cancellation or the internal deadline wins, the operation is marked inactive before releasing the serializer.
+
+Every asynchronous sub-operation is awaited or cancellation-guarded, and no detached continuation may install or replace a freeze entry after the serializer is released.
 
 An unfreeze for one token cannot clear a newer or concurrent token.
 
@@ -139,9 +161,9 @@ It does not compare a Go- or Node-generated wall-clock timestamp to the database
 
 Expired in-memory entries stop blocking mutations and are removed lazily or by a bounded timer.
 
-When a newly validated database lease has a different token from an older in-memory entry, it replaces the entry only when its database expiry is later than the stored database expiry.
+Inside the serializer, a freeze installs or replaces an entry only after a fresh database query proves that its exact token owns the current unexpired lease.
 
-A late validation response with an older expiry cannot reinstate an evicted token.
+No expiry ordering or timestamp tie-break is used for token replacement because no two validations for the same session may mutate the map concurrently.
 
 Bridge currently supports one Hocuspocus process for realtime documents.
 
@@ -180,7 +202,9 @@ Any non-loopback control listener requires HTTPS with normal certificate and hos
 
 Plain HTTP is permitted only for a loopback listener.
 
-The Go client validates `HOCUSPOCUS_INTERNAL_URL` at startup and permits plain HTTP only for an IP-literal host in `127.0.0.0/8` or the exact IPv6 loopback `::1`.
+The Go client validates `HOCUSPOCUS_INTERNAL_URL` at startup and permits plain HTTP only when its canonical parsed IP is in `127.0.0.0/8` or equals IPv6 loopback `::1`.
+
+IPv4-mapped IPv6 addresses are rejected rather than normalized into the IPv4 allowlist.
 
 DNS names, including `localhost`, are not accepted as proof of loopback for plain HTTP.
 
@@ -328,7 +352,9 @@ An active temporary freeze does not mutate `connectionConfig.readOnly` because t
 
 Instead, the server rejects or closes a frozen writer with the retryable `session_freezing` outcome.
 
-The client reconnects with a maximum individual delay of two seconds and continues for at least 20 seconds, exceeding the 15-second lease duration.
+The client reconnects with a maximum individual delay of two seconds and continues for at least 20 seconds after the most recent `session_freezing` rejection, exceeding the 15-second lease duration.
+
+Every new retryable freeze rejection resets that horizon, so consecutive end attempts cannot exhaust recovery before the last lease expires.
 
 A failed or crashed end therefore restores write access after token-matched cleanup or lease expiry without a manual reload or Hocuspocus restart.
 
@@ -354,7 +380,7 @@ Both methods use the dedicated route rather than the former generic `/settings` 
 
 The former `PATCH /api/sessions/{sessionId}/settings` route is removed rather than aliased, and the live teacher panel migrates in the same phase so no supported client targets it.
 
-A stale pre-deploy tab receives and surfaces the old route's 404 as a settings error rather than silently claiming the floor changed.
+A stale pre-deploy tab treats any non-2xx response from the old route, including an HTML or otherwise unparseable body, as a surfaced settings error rather than silently claiming the floor changed.
 
 The creation authorization check and session-row lock occur within the same transaction used to enforce the per-session cap.
 
@@ -426,7 +452,9 @@ No migration is run against a non-test database.
 - A final-flush failure returns failure and keeps the session frozen until unfreeze.
 - Unfreeze is token-scoped and idempotent, and stale unfreeze cannot clear a newer freeze.
 - A different active unfreeze token returns `409 freeze_token_mismatch`.
-- A newly database-validated token with a later database expiry replaces a stale in-memory entry, while an older late validation response cannot overwrite the newer token.
+- A paused freeze validation and queued unfreeze serialize so that unfreeze is the final map action and the late validation cannot reinstall the barrier.
+- A freeze request that arrives after its matching unfreeze revalidates against the database, observes the cleared lease, and cannot install a barrier.
+- A cancelled or timed-out validation continuation cannot mutate the map after the per-session serializer is released.
 - The maximum 50 loaded canvases complete the batched or parallelized final-flush path inside the two-second Go deadline under the approved representative test latency.
 - Canvas connections close at JWT expiry under a controlled clock.
 - A stale writable token joining an already loaded ended canvas is downgraded, while one joining a temporarily frozen canvas receives the retryable freeze outcome.
@@ -476,7 +504,7 @@ The student-session effect dependencies, dead `plain_text` references, and other
 - A teacher can end a session within the database request path even when Hocuspocus is unavailable.
 - A teacher is warned when storage of the fenced Hocuspocus final snapshot is not confirmed.
 - A successful freeze persists every server-accepted loaded-canvas mutation before closing its connections.
-- No canvas mutation accepted after the freeze boundary applies or relays.
+- On a confirmed path, no canvas mutation accepted after the freeze boundary applies or relays.
 - Established canvas connections terminate when their JWT expires.
 - Public outsiders cannot consume the canvas cap.
 - Realtime scene updates do not echo, do not share local UI state, and do not imply unsupported image persistence.
@@ -508,11 +536,13 @@ A material revision after approval invalidates both prior verdicts and requires 
 
 Material revisions include behavior, interfaces, authorization, persistence, failure semantics, scope, dependencies, or acceptance criteria; spelling and formatting-only corrections do not invalidate verdicts.
 
-The gate allows at most five substantive verdict rounds.
+The design gate has no review-round cap.
 
-A runtime, transport, authentication, quota, or empty-output failure does not consume a substantive round, but it blocks the gate until the required reviewer returns a verdict.
+Round numbers are audit labels only, and review continues until both required reviewers approve the same substantive commit with no open blockers.
 
-Unresolved findings after Round 5 trigger the existing hard-safeguard pause and cannot be overridden by autopilot.
+A runtime, transport, authentication, quota, or empty-output failure blocks the gate until the required reviewer returns a verdict but does not terminate the consensus process.
+
+The gate pauses only for a hard safeguard, a genuine user decision, an unavailable required reviewer that cannot be recovered, or explicit user direction to stop.
 
 A passing design gate authorizes plan drafting or revision, not implementation.
 
@@ -621,5 +651,11 @@ The canonical rule is mirrored in `AGENTS.md`, `docs/reviewers.md`, `docs/develo
 
 **Round 5 verdicts:** `[sol]` CHANGES REQUESTED; `[fable]` CHANGES REQUESTED.
 
-**Gate result:** BLOCKED.
+**Historical gate result:** BLOCKED under the former five-round rule.
 The five-round maximum is exhausted with unresolved `[OPEN]` findings, so the hard safeguard requires user direction before any further design revision, Plan 094 re-plan, governance-file edit, or implementation.
+
+### User direction — 2026-08-11
+
+The user approved reopening the design with per-session serialized freeze and unfreeze operations and removed the design-review round cap.
+
+The historical Round 5 block is therefore resolved as a process decision, while its technical findings remain `[OPEN]` until Sol and Fable approve the same revised commit.
