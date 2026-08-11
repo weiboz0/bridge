@@ -109,9 +109,15 @@ Mutation authorization takes a transaction-scoped shared PostgreSQL advisory loc
 
 Every end transition takes the matching exclusive advisory lock before its session update and holds it through commit.
 
-The lock uses PostgreSQL's two-`int4` advisory-lock form.
+The lock uses PostgreSQL's transaction-scoped two-`int4` functions only: `pg_advisory_xact_lock_shared` and `pg_advisory_xact_lock`.
 
-The first key is the reserved Bridge session-lifecycle class ID `0x42524447`, and the second is a stable 32-bit hash of the session UUID.
+Session-scoped advisory functions are forbidden.
+
+The first key is the reserved Bridge session-lifecycle class ID hexadecimal `0x42524447`, decimal `1112687687`.
+
+The second key is derived identically in Go and TypeScript from the canonical lowercase UUID string: remove hyphens, parse the first eight hexadecimal characters as an unsigned 32-bit value, then reinterpret its two's-complement bits as a signed `int4`.
+
+The required fixture vectors are `00000000 → 0`, `12345678 → 305419896`, `7fffffff → 2147483647`, `80000000 → -2147483648`, and `ffffffff → -1`.
 
 A collision in the second key may serialize concurrently active unrelated sessions but cannot collide with another Bridge-internal class that follows the same registry or weaken authorization.
 
@@ -153,11 +159,17 @@ Unfreeze performs no database query and is never abandoned merely because its ca
 
 Its queue wait is bounded by the active freeze deadline plus cancellation settlement, after which token comparison and local removal are synchronous.
 
-Duplicate freezes for the same token share the active result, duplicate matching unfreezes coalesce, and a different freeze or unfreeze token receives a conflict without entering the queue while an operation is active.
+Duplicate freezes for the same token share the result only while that operation is unsettled; a request arriving after settlement starts a fresh database validation.
+
+Duplicate matching unfreezes coalesce, and a different freeze or unfreeze token receives a retryable conflict without entering the queue while an operation is active.
+
+Because every active operation has the client-side deadline above, a rightful replacement token cannot be starved by a stale operation and retries after that bounded conflict.
 
 The per-session queue therefore contains at most one active operation and one coalesced pending matching unfreeze.
 
-The serializer object is evicted when its queue is empty and no active freeze-map entry remains, including after session end and lease expiry.
+Serializer registry lookup-or-create, enqueue, last-dequeue eviction, and map-entry identity checks execute synchronously without an `await` between check and mutation.
+
+Only the last dequeued serialized operation may evict its serializer when the queue is empty and no active freeze-map entry remains, including after session end and lease expiry.
 
 Hocuspocus captures `performance.now()` before starting database lease validation.
 
@@ -173,7 +185,19 @@ When cancellation or the internal deadline wins, the operation is marked inactiv
 
 The serializer remains held until every started operation settles or acknowledges cancellation.
 
-Database validation and snapshot writes use server-side statement timeouts bounded by the operation deadline, so cancellation settlement cannot hang the serializer indefinitely.
+Database validation and snapshot writes use both server-side statement timeouts and client-side pool-checkout, socket, and query deadlines bounded by the operation deadline.
+
+Each freeze operation uses a short-lived, non-pipelined PostgreSQL control client with one connection, a connect timeout no greater than the remaining operation budget, and no reuse by another session.
+
+Deadline handling calls the postgres.js query cancellation API and destroys that operation client with `end({ timeout: 0 })`; a timed-out connection is never returned to the ordinary Hocuspocus pool.
+
+A zero or negative remaining budget fails before checkout or query start.
+
+When a client deadline expires, the underlying connection is destroyed and cannot return to the pool; the wrapper settles without waiting for an operating-system TCP timeout.
+
+The conditional snapshot statement remains the database-side authority if a write reached PostgreSQL immediately before client cancellation.
+
+These client and server bounds ensure cancellation settlement cannot hold the serializer indefinitely.
 
 No final-flush or connection-close stage may start after cancellation.
 
@@ -183,11 +207,15 @@ Every asynchronous sub-operation is awaited and cancellation-guarded, and no det
 
 An unfreeze for one token cannot clear a newer or concurrent token.
 
-Hocuspocus derives an in-memory monotonic duration from the remaining lease time returned by PostgreSQL when it validates the token.
+Hocuspocus stores the conservative monotonic deadline computed from the pre-validation start; it never starts a fresh full-duration timer when validation returns.
 
 It does not compare a Go- or Node-generated wall-clock timestamp to the database expiry.
 
-Expired in-memory entries stop blocking mutations and are removed lazily or by a bounded timer.
+Every expiry timer and lazy or sweep cleanup reacquires the per-session serializer and removes the map entry only when both its expected token and entry identity still match.
+
+A delayed timer for an old token cannot delete a replacement token.
+
+The same serialized cleanup synchronously performs the serializer-eviction check after removing an expired entry.
 
 Inside the serializer, a freeze installs or replaces an entry only after a fresh database query proves that its exact token owns the current unexpired lease.
 
@@ -270,7 +298,11 @@ The freeze operation succeeds only after every loaded canvas has been persisted 
 
 After a successful flush, Hocuspocus closes all loaded canvas connections for the session and reports the flushed and closed counts.
 
-If persistence fails, Hocuspocus returns a non-2xx response and leaves that operation frozen until Go ends the session, explicitly unfreezes the matching token, or the lease expires.
+If any final flush errors before the deadline, the active operation records one shared failure result, starts no later flush or close stage, retains its token-owned barrier, and returns non-2xx.
+
+Open connections remain temporarily fenced until Go ends the session, token-matched unfreeze runs after a database end failure, or the lease expires.
+
+The failure result never reports a successful flush or close count.
 
 The unfreeze operation removes only an entry with the matching token and is idempotent.
 
@@ -328,7 +360,7 @@ A degraded path is any Hocuspocus failure, timeout, lease expiry, stale-token fa
 
 The degraded path still commits `status = 'ended'` and persists `whiteboard_server_archive_complete = false` because session lifecycle outranks realtime availability.
 
-An already-authorized frame whose authorization transaction completed before the degraded end acquires its exclusive advisory lock may apply and relay transiently after the database commit.
+Any finite set of frames whose independent authorization transactions completed before the degraded end acquires its exclusive advisory lock may apply and relay transiently after the database commit.
 
 That unavoidable cross-process race is not represented as archived: the ended-session storage guard rejects it, subsequent mutation checks and reconnects observe `ended`, and the teacher receives the incomplete-server-archive warning.
 
@@ -386,7 +418,9 @@ The client reconnects with a maximum individual delay of two seconds and continu
 
 Every new retryable freeze rejection resets that horizon, so consecutive end attempts cannot exhaust recovery before the last lease expires.
 
-An uncategorized transport close while the session is believed live uses the same bounded individual delay and continues until reconnection succeeds, an ended decision arrives, JWT refresh fails, or the user leaves; it does not exhaust into a manual-reload state.
+An uncategorized transport close while the session is believed live uses the two-second ceiling for the first 20 seconds, then grows with jitter toward a 30-second ceiling while continuing until reconnection succeeds, an ended decision arrives, JWT refresh fails, or the user leaves.
+
+It never exhausts into a manual-reload state, but sustained outages avoid a synchronized two-second retry herd.
 
 A failed or crashed end therefore restores write access after token-matched cleanup or lease expiry without a manual reload or Hocuspocus restart.
 
@@ -410,11 +444,13 @@ It returns 404 for a missing session and 403 for every other represented user, i
 
 Both methods use the dedicated route rather than the former generic `/settings` name.
 
-The former `PATCH /api/sessions/{sessionId}/settings` route is removed rather than aliased, and the live teacher panel migrates in the same phase so no supported client targets it.
+The former feature-branch-only `PATCH /api/sessions/{sessionId}/settings` route is removed rather than aliased, and the live teacher panel adds the dedicated route in the same phase.
 
-A stale pre-deploy tab requires both a 2xx status and the exact expected JSON response schema before claiming the floor changed.
+Plan 094 has not shipped and the current deployed teacher panel has no floor control or caller of the old route, so no deployed pre-remediation browser bundle can invoke it.
 
-Any non-2xx, HTML, unparseable, or schema-mismatched response is a surfaced settings error.
+Pre-merge verification confirms the absence of an old-route caller in `main`; stale local feature-development tabs must reload and are not represented as a production compatibility guarantee.
+
+The new client requires both a 2xx status and the exact expected JSON response schema before claiming the floor changed; any parse or schema failure is surfaced.
 
 The creation authorization check and session-row lock occur within the same transaction used to enforce the per-session cap.
 
@@ -466,9 +502,10 @@ No migration is run against a non-test database.
 - A stale request cannot end or clear a session owned by a different unexpired lease token.
 - A stale request encountering a different expired token may end status-first but must persist `whiteboardServerArchiveComplete: false` and must not reuse either freeze result.
 - The atomic successful end update and shared advisory-lock mutation authorization prevent a post-expiry frame from being admitted between the success predicate and commit on a confirmed path.
-- A degraded-path test pauses after authorization releases its lock, commits the incomplete end, resumes the frame, and proves any transient apply cannot persist and the next mutation and reconnect are denied.
+- A degraded-path test pauses multiple independently authorized frames across several connections, commits the incomplete end, resumes the concurrent fan-in, and proves transient applies cannot persist while every later mutation and reconnect is denied.
 - Session advisory locks are always acquired before database reads or row locks, and a busy-session test proves end completion under concurrent mutation authorization without deadlock or exceeding the approved bound.
 - Lease acquire, replace, abort, and complete use the reserved exclusive advisory key, while mutation and Hocuspocus validation use its shared form; a paused validation observes a preceding abort commit.
+- Go, TypeScript, and PostgreSQL fixture vectors produce the exact same signed second advisory key for all five boundary UUID prefixes.
 - Lease acquisition, replacement, mutation authorization, final flush, and end completion use database `clock_timestamp()` semantics under controlled tests.
 - Teacher end authorization and cross-user isolation remain covered.
 - Canvas creation covers teacher, present participant, invited participant, left participant, public outsider, platform admin, impersonator, ended session, and cap races.
@@ -485,6 +522,7 @@ No migration is run against a non-test database.
 - A final flush waits for an already in-flight ordinary store and remains the last committed snapshot through the shared save mutex.
 - A final flush whose conditional live/token/unexpired predicate no longer matches writes nothing and reports failure.
 - A final-flush failure returns failure and keeps the session frozen until unfreeze.
+- A partial final-flush error starts no later flush or connection close, returns the same failure to active duplicates, and retains only the matching barrier until lifecycle cleanup.
 - Unfreeze is token-scoped and idempotent, and stale unfreeze cannot clear a newer freeze.
 - A different active unfreeze token returns `409 freeze_token_mismatch`.
 - A paused freeze validation and queued unfreeze serialize so that unfreeze is the final map action and the late validation cannot reinstall the barrier.
@@ -493,6 +531,8 @@ No migration is run against a non-test database.
 - A validation response delayed beyond database expiry cannot install a barrier because elapsed monotonic time is subtracted and checked before installation.
 - Each post-install asynchronous final-flush stage is paused across timeout and queued unfreeze to prove the serializer and cleanup wait for cancellation settlement; after acknowledgment, no write, close, map, or result effect can occur after release.
 - Duplicate operations coalesce, foreign tokens conflict without queueing, the queue stays bounded, and an idle serializer is evicted.
+- Serializer lookup, enqueue, last-dequeue eviction, expiry sweep, and token-conditional timer cleanup interleave under controlled scheduling without creating two serializers or deleting a replacement token.
+- Pool-checkout timeout, zero remaining budget, query timeout, and half-open socket each settle through client cancellation, destroy the connection, release cleanup, and permit no late effect.
 - The maximum 50 loaded canvases complete the batched or parallelized final-flush path inside the two-second Go deadline under the approved representative test latency.
 - Canvas connections close at JWT expiry under a controlled clock.
 - A stale writable token joining an already loaded ended canvas is downgraded, while one joining a temporarily frozen canvas receives the retryable freeze outcome.
@@ -515,7 +555,7 @@ No migration is run against a non-test database.
 - Teacher end failure remains in place with an error.
 - Incomplete server-archive status survives the redirect, remains durably discoverable, and displays exactly once per archive visit.
 - A 200 durable status overrides and consumes browser state, while network and non-200 responses retain it.
-- The removed settings route never produces a false success: non-2xx, unparseable, and schema-mismatched 2xx responses all surface an error in a stale client.
+- The new settings client accepts only a 2xx response with the exact schema, and repository/main-history checks prove no deployed bundle called the removed feature-branch route.
 - Missing sessions remain 404 instead of redirecting to the archive.
 
 ### Playwright contract
@@ -544,7 +584,7 @@ The student-session effect dependencies, dead `plain_text` references, and other
 - A teacher is warned when storage of the fenced Hocuspocus final snapshot is not confirmed.
 - A successful freeze persists every server-accepted loaded-canvas mutation before closing its connections.
 - On a confirmed path, no canvas mutation accepted after the freeze boundary applies or relays.
-- On a degraded path, at most an already-authorized frame may apply transiently; every later mutation-bearing frame rechecks and observes `ended` or fails closed, and every remaining canvas connection closes no later than JWT expiry.
+- On a degraded path, any finite set of frames already authorized before the exclusive end may apply transiently; every later mutation-bearing frame rechecks and observes `ended` or fails closed, and every remaining canvas connection closes no later than JWT expiry.
 - Established canvas connections terminate when their JWT expires.
 - Public outsiders cannot consume the canvas cap.
 - Realtime scene updates do not echo, do not share local UI state, and do not imply unsupported image persistence.
@@ -591,6 +631,10 @@ A runtime, transport, authentication, quota, or empty-output failure blocks the 
 The gate pauses only for a hard safeguard, a genuine user decision, an unavailable required reviewer that cannot be recovered, or explicit user direction to stop.
 
 After every three consecutive substantive rounds without consensus, the orchestrator records and surfaces a concise non-convergence checkpoint with cumulative open findings and reviewer status, then continues unless a pause condition applies.
+
+If the same finding is reopened twice after a claimed resolution, or two consecutive checkpoints show no net reduction in open blockers, that non-convergence becomes a genuine user-decision pause rather than an autonomous spending loop.
+
+After user direction, the uncapped consensus process resumes with round numbering preserved.
 
 A passing design gate authorizes plan drafting or revision, not implementation.
 
