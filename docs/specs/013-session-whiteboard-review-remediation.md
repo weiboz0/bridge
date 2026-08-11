@@ -707,3 +707,24 @@ The five-round maximum is exhausted with unresolved `[OPEN]` findings, so the ha
 The user approved reopening the design with per-session serialized freeze and unfreeze operations and removed the design-review round cap.
 
 The historical Round 5 block is therefore resolved as a process decision, while its technical findings remain `[OPEN]` until Sol and Fable approve the same revised commit.
+
+### Round 6 — 2026-08-11 — commit `fd80fde`
+
+- `[OPEN]` `[sol]` Validation delay was not subtracted from the database remaining duration, so an already-expired token could receive a new local interval.
+  → Response in `816256a`: Node anchors the conservative deadline before the database request, subtracts all validation and transport delay, and rechecks before every stage.
+- `[OPEN]` `[sol]` Cancellation tests did not cover final-flush and connection-close continuations after timeout and queued unfreeze.
+  → Response in `816256a`: the serializer remains held until every started stage settles or acknowledges cancellation, no new stage starts after cancellation, connection close is synchronous and last, and each stage gets a paused-continuation regression.
+- `[OPEN]` `[fable]` The proposed uncapped gate contradicted canonical capped governance before those files were changed.
+  → Response in `816256a`: the future rule becomes globally effective only through the reviewed governance edit; current repository rules remain authoritative elsewhere, while Spec 013 continues solely under explicit user direction.
+- `[OPEN]` `[fable]` Hocuspocus lease validation did not participate in the advisory-lock order and could race Go abort cleanup.
+  → Response in `816256a`: validation takes the shared session advisory lock and therefore observes preceding exclusive cleanup.
+- `[OPEN]` `[fable]` Unfreeze and serializer queues lacked execution bounds and eviction.
+  → Response in `816256a`: unfreeze is local and database-free, waits behind bounded cancellation settlement, duplicate operations coalesce, foreign tokens do not queue, the queue has two bounded positions, and idle serializers are evicted.
+- `[OPEN]` `[fable]` Stale clients could accept a schema-invalid 2xx response from the removed route.
+  → Response in `816256a`: success requires both 2xx and exact response schema; every parse or schema failure is surfaced.
+- `[OPEN]` `[fable]` The degraded-path acceptance contract did not state a bound on later mutations and the consensus loop had no non-convergence checkpoint.
+  → Response in `816256a`: only an already-authorized frame may be transient, all later frames recheck or fail closed, connections close by JWT expiry, and every three non-converged rounds produces a non-blocking user checkpoint.
+- `[OPEN]` `[fable]` Advisory-lock namespace, loopback parsing, redirect, and uncategorized reconnect behavior needed tighter bounds.
+  → Response in `816256a`: the two-key Bridge class is scoped honestly, canonical IP parsing rejects mapped forms, redirects remain disabled, and unexpected live disconnects continue bounded retries without manual reload.
+
+**Round 6 verdicts:** `[sol]` CHANGES REQUESTED; `[fable]` CHANGES REQUESTED.
