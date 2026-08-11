@@ -791,3 +791,15 @@ The historical Round 5 block is therefore resolved as a process decision, while 
   → Response in `de1dbae`: reconnect grows to a jittered 30-second tail after the fast window, repeated non-convergence becomes a user decision, and serialized sweep cleanup performs eviction.
 
 **Round 7 verdicts:** `[sol]` CHANGES REQUESTED; `[fable]` CHANGES REQUESTED.
+
+### Round 8 — 2026-08-11 — commit `40cb07c`
+
+- `[OPEN]` `[sol][fable]` Pinned postgres.js 3.4.9 does not provide owned, awaited cancellation and physical socket destruction through `query.cancel()` and `end({ timeout: 0 })`, so the proposed control client can leave detached query and cancel sockets.
+- `[OPEN]` `[fable]` A one-connection non-pipelined control client contradicts the parallel or batched 50-canvas final-flush deadline, while using the ordinary pool would violate isolation and risk pool poisoning.
+- `[OPEN]` `[fable]` A rightful replacement token had no actual Go retry loop within the freeze budget, so retryable conflict could degrade immediately despite the no-starvation claim.
+- `[OPEN]` `[fable]` The permanent test contract incorrectly retained a pre-merge `main` history fact, the PostgreSQL form of the advisory key remained unstated, and non-convergence metrics needed exact definitions.
+- `[OPEN]` `[fable]` Post-settlement duplicate freeze behavior and categorized-to-uncategorized reconnect backoff transitions remained ambiguous.
+
+**Round 8 verdicts:** `[sol]` CHANGES REQUESTED; `[fable]` CHANGES REQUESTED.
+
+**User-decision pause:** final snapshot persistence must either move into Go's owned pgx transaction boundary or use a new Node database primitive with genuinely owned and awaited socket abort.
