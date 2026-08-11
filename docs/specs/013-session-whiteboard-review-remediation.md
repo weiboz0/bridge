@@ -772,3 +772,22 @@ The historical Round 5 block is therefore resolved as a process decision, while 
   → Response in `816256a`: the two-key Bridge class is scoped honestly, canonical IP parsing rejects mapped forms, redirects remain disabled, and unexpected live disconnects continue bounded retries without manual reload.
 
 **Round 6 verdicts:** `[sol]` CHANGES REQUESTED; `[fable]` CHANGES REQUESTED.
+
+### Round 7 — 2026-08-11 — commit `7bf6269`
+
+- `[OPEN]` `[fable]` Server-side statement timeout could not bound pool checkout or a half-open client socket, leaving cancellation settlement and the serializer unbounded.
+  → Response in `de1dbae`: each freeze uses a short-lived one-connection control client with connect/query/socket bounds, postgres.js cancellation, forced `end({ timeout: 0 })`, and zero-budget rejection.
+- `[OPEN]` `[fable]` The spec claimed it could retrofit exact-schema handling into an already loaded pre-deploy browser bundle.
+  → Response in `de1dbae`: the route and floor UI are explicitly unshipped feature-branch work, `main` has no old caller, and only the new client carries the exact-schema contract.
+- `[OPEN]` `[sol]` The cross-language second advisory key did not define its hash algorithm or signed mapping.
+  → Response in `de1dbae`: the key is the signed reinterpretation of the canonical UUID's first eight hex digits, with exact boundary vectors for Go, TypeScript, and PostgreSQL.
+- `[OPEN]` `[sol]` A delayed expiry timer could remove a newer replacement entry without serialized token and identity checks.
+  → Response in `de1dbae`: timer, lazy, and sweep cleanup reacquire the serializer, compare expected token and entry identity, and perform atomic eviction checks.
+- `[OPEN]` `[sol]` The degraded path incorrectly bounded transient fan-in to one frame even though Hocuspocus authorizations run independently.
+  → Response in `de1dbae`: the guarantee and regression cover any finite set already authorized across multiple connections, while all later frames recheck or fail closed.
+- `[OPEN]` `[fable]` Transaction-scoped advisory functions, flush-error behavior, atomic serializer eviction, duplicate-result lifetime, and rightful replacement retry were underspecified.
+  → Response in `de1dbae`: only `pg_advisory_xact_lock*` is allowed, failure retains a bounded token barrier without closing, registry changes are synchronous, result sharing ends at settlement, and foreign-token conflicts are bounded by the active deadline.
+- `[OPEN]` `[fable]` Sustained reconnects, repeated reviewer non-convergence, and sweep-driven serializer cleanup lacked operational bounds.
+  → Response in `de1dbae`: reconnect grows to a jittered 30-second tail after the fast window, repeated non-convergence becomes a user decision, and serialized sweep cleanup performs eviction.
+
+**Round 7 verdicts:** `[sol]` CHANGES REQUESTED; `[fable]` CHANGES REQUESTED.
