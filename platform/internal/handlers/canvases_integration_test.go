@@ -297,3 +297,82 @@ func TestCanvases_ListEndedArchive_ByRole(t *testing.T) {
 	require.Empty(t, list(invitee))
 	require.Empty(t, list(fx.outsider))
 }
+
+// Phase 9 deliberately cuts the floor control away from generic session
+// settings.  A compatibility alias would let an old client bypass the exact
+// teacher-only schema and makes a partial producer/consumer deploy unsafe.
+func TestCanvasSettings_AtomicRouteCutoverRejectsLegacySettingsRoute(t *testing.T) {
+	fx := newCanvasHandlerFixture(t)
+	legacy := fx.request(t, http.MethodPatch, "/api/sessions/"+fx.session.ID+"/settings", map[string]string{"canvasFloor": "host"}, fx.claims(fx.teacher))
+	require.Equal(t, http.StatusNotFound, legacy.Code, legacy.Body.String())
+}
+
+func TestCanvasSettings_GetAndPatchUseExactTeacherOnlySchemas(t *testing.T) {
+	fx := newCanvasHandlerFixture(t)
+	path := "/api/sessions/" + fx.session.ID + "/canvas-settings"
+
+	get := fx.request(t, http.MethodGet, path, nil, fx.claims(fx.teacher))
+	require.Equal(t, http.StatusOK, get.Code, get.Body.String())
+	assert.JSONEq(t, `{"canvasFloor":"private"}`, get.Body.String())
+
+	patched := fx.request(t, http.MethodPatch, path, map[string]string{"canvasFloor": "participants"}, fx.claims(fx.teacher))
+	require.Equal(t, http.StatusOK, patched.Code, patched.Body.String())
+	assert.JSONEq(t, `{"canvasFloor":"participants"}`, patched.Body.String())
+
+	for _, tc := range []struct {
+		name string
+		body any
+		user *store.RegisteredUser
+		want int
+	}{
+		{"student forbidden", map[string]string{"canvasFloor": "host"}, fx.student, http.StatusForbidden},
+		{"outsider forbidden", map[string]string{"canvasFloor": "host"}, fx.outsider, http.StatusForbidden},
+		{"session floor rejected", map[string]string{"canvasFloor": "session"}, fx.teacher, http.StatusBadRequest},
+		{"unknown field rejected", map[string]string{"canvasFloor": "host", "status": "ended"}, fx.teacher, http.StatusBadRequest},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := fx.request(t, http.MethodPatch, path, tc.body, fx.claims(tc.user))
+			require.Equal(t, tc.want, w.Code, w.Body.String())
+		})
+	}
+}
+
+func TestCanvasSettings_EndedTeacherReadsDurableTrueFalseAndNull(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		value any
+		want  string
+	}{
+		{"confirmed", true, `{"canvasFloor":"private","whiteboardServerArchiveComplete":true}`},
+		{"degraded", false, `{"canvasFloor":"private","whiteboardServerArchiveComplete":false}`},
+		{"durable null omitted", nil, `{"canvasFloor":"private"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fx := newCanvasHandlerFixture(t)
+			_, err := fx.db.ExecContext(context.Background(), `UPDATE sessions SET status = 'ended', whiteboard_server_archive_complete = $1 WHERE id = $2`, tc.value, fx.session.ID)
+			require.NoError(t, err)
+			w := fx.request(t, http.MethodGet, "/api/sessions/"+fx.session.ID+"/canvas-settings", nil, fx.claims(fx.teacher))
+			require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+			assert.JSONEq(t, tc.want, w.Body.String())
+		})
+	}
+}
+
+func TestCanvasHandler_CreateCanvas_DeniesInvitedAndUnrepresentedAdministrator(t *testing.T) {
+	fx := newCanvasHandlerFixture(t)
+	invitee := fx.addUser(t, "invitee")
+	require.NoError(t, func() error {
+		_, err := fx.h.Sessions.AddParticipant(context.Background(), fx.session.ID, invitee.ID, fx.teacher.ID)
+		return err
+	}())
+
+	create := func(claims *auth.Claims) *httptest.ResponseRecorder {
+		return fx.request(t, http.MethodPost, "/api/sessions/"+fx.session.ID+"/canvases", map[string]string{"title": "new board", "visibility": "private"}, claims)
+	}
+	require.Equal(t, http.StatusCreated, create(fx.claims(fx.teacher)).Code, "represented teacher remains allowed")
+	require.Equal(t, http.StatusCreated, create(fx.claims(fx.student)).Code, "currently present participant remains allowed")
+	require.Equal(t, http.StatusForbidden, create(fx.claims(invitee)).Code, "invited is not present")
+	admin := fx.claims(fx.outsider)
+	admin.IsPlatformAdmin = true
+	require.Equal(t, http.StatusForbidden, create(admin).Code, "platform admin has no independent creator bypass")
+}

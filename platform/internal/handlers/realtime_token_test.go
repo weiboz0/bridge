@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -984,4 +985,59 @@ func TestInternalAuth_NilUsersStore_500(t *testing.T) {
 	h := &RealtimeHandler{HocuspocusTokenSecret: rtSecret /* Users intentionally nil */}
 	code, _ := callInternalAuth(t, h, rtSecret, "session:x:user:y", "u-1")
 	assert.Equal(t, http.StatusInternalServerError, code)
+}
+
+// Phase 9's control callback is intentionally separate from ordinary canvas
+// authorization.  Its only success shape proves that this exact still-live
+// lifecycle lease owns a positive amount of database-clock time; callers must
+// treat every other response as a closed gate.
+func TestFreezeAuth_ExactBearerBodyAndLiveLeaseFailClosed(t *testing.T) {
+	fx := newCanvasHandlerFixture(t)
+	h := newRealtimeHandlerForCanvasFixture(fx)
+	r := chi.NewRouter()
+	h.InternalRoutes(r)
+	const token = "11111111-1111-4111-8111-111111111111"
+	_, err := fx.db.ExecContext(context.Background(), `UPDATE sessions SET canvas_freeze_token = $1, canvas_freeze_until = clock_timestamp() + interval '15 seconds' WHERE id = $2`, token, fx.session.ID)
+	require.NoError(t, err)
+
+	call := func(t *testing.T, bearer string, body any) *httptest.ResponseRecorder {
+		t.Helper()
+		encoded, err := json.Marshal(body)
+		require.NoError(t, err)
+		req := httptest.NewRequest(http.MethodPost, "/api/internal/canvas-sessions/freeze-auth", bytes.NewReader(encoded))
+		req.Header.Set("Authorization", "Bearer "+bearer)
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		return w
+	}
+
+	valid := call(t, rtSecret, map[string]string{"sessionId": fx.session.ID, "token": token})
+	require.Equal(t, http.StatusOK, valid.Code, valid.Body.String())
+	var response struct {
+		Allowed     bool `json:"allowed"`
+		RemainingMS int  `json:"remainingMs"`
+	}
+	require.NoError(t, json.Unmarshal(valid.Body.Bytes(), &response))
+	require.True(t, response.Allowed)
+	require.Positive(t, response.RemainingMS)
+
+	denied := call(t, rtSecret, map[string]string{"sessionId": fx.session.ID, "token": "22222222-2222-4222-8222-222222222222"})
+	require.Equal(t, http.StatusOK, denied.Code, denied.Body.String())
+	require.JSONEq(t, `{"allowed":false}`, denied.Body.String())
+	require.Equal(t, http.StatusUnauthorized, call(t, "wrong-control-bearer", map[string]string{"sessionId": fx.session.ID, "token": token}).Code)
+	require.Equal(t, http.StatusBadRequest, call(t, rtSecret, map[string]string{"sessionId": fx.session.ID}).Code)
+}
+
+func TestRealtimeAuthLifecycle_ActiveFreezeIsRetryableNotPermanentReadOnly(t *testing.T) {
+	fx := newCanvasHandlerFixture(t)
+	canvas, err := fx.h.Canvases.CreateCanvas(context.Background(), store.CreateCanvasInput{
+		SessionID: fx.session.ID, OwnerID: fx.student.ID, Title: "Writable board", Visibility: "private",
+	})
+	require.NoError(t, err)
+	_, err = fx.db.ExecContext(context.Background(), `UPDATE sessions SET canvas_freeze_token = '11111111-1111-4111-8111-111111111111', canvas_freeze_until = clock_timestamp() + interval '15 seconds' WHERE id = $1`, fx.session.ID)
+	require.NoError(t, err)
+
+	code, _ := callInternalAuth(t, newRealtimeHandlerForCanvasFixture(fx), rtSecret, "canvas:"+canvas.ID, fx.student.ID)
+	require.Equal(t, http.StatusConflict, code, "a live freeze must report retryable session_freezing instead of minting a permanent reader decision")
 }

@@ -944,6 +944,23 @@ func TestSessionHandler_EndSession_ViaPost(t *testing.T) {
 	assert.Equal(t, "ended", session.Status)
 }
 
+func TestEndSession_DegradedResponseWarnsAndEmitsOnlyAfterDurableCommit(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	// Phase 9 must treat control unavailability as a degraded successful end,
+	// not as a failed session end.  The public response is the handoff contract
+	// for the warning UI and must expose the durable false value explicitly.
+	w := fx.doRequest(t, http.MethodPost, "/api/sessions/"+fx.sessionID+"/end", nil, fx.claims(fx.teacher, false))
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	require.Equal(t, false, body["whiteboardServerArchiveComplete"])
+	require.Equal(t, "Session ended, but the latest whiteboard changes may not have been archived.", body["warning"])
+
+	var status string
+	require.NoError(t, fx.db.QueryRowContext(context.Background(), `SELECT status FROM sessions WHERE id = $1`, fx.sessionID).Scan(&status))
+	require.Equal(t, "ended", status)
+}
+
 func TestSessionHandler_EndSession_NonTeacher403(t *testing.T) {
 	fx := newSessionFixture(t, t.Name())
 	w := fx.doRequest(t, http.MethodPost, "/api/sessions/"+fx.sessionID+"/end", nil, fx.claims(fx.student, false))
