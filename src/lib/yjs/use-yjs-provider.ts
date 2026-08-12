@@ -95,29 +95,46 @@ export function createCanvasProviderEventBridge({ documentName, now = () => Date
 export function bindInstalledCanvasProvider({ provider, refreshToken, reconnect }: {
   provider: HocuspocusProvider;
   refreshToken: () => Promise<string>;
-  reconnect: () => void;
+  reconnect?: () => void;
 }) {
   const original = provider.onMessage.bind(provider);
+  const originalSend = provider.send.bind(provider);
   let stopped = false;
+  let refreshing = false;
+  provider.send = ((...args: Parameters<typeof provider.send>) => {
+    if (!refreshing) return originalSend(...args);
+  }) as typeof provider.send;
   provider.onMessage = ((event: MessageEvent) => {
-    if (stopped || !(event.data instanceof Uint8Array)) return original(event);
+    if (stopped) return original(event);
     try {
-      const message = new IncomingMessage(event.data);
+      const bytes = event.data instanceof ArrayBuffer
+        ? new Uint8Array(event.data)
+        : event.data instanceof Uint8Array
+          ? event.data
+          : undefined;
+      if (!bytes) return original(event);
+      const message = new IncomingMessage(bytes);
       message.readVarString();
       if (message.readVarUint() !== MessageType.CLOSE) return original(event);
       const reason = message.readVarString();
       if (reason !== "canvas_jwt_expired" && reason !== "session_freezing") return original(event);
+      refreshing = true;
       original(event);
       void refreshToken().then((token) => {
         if (stopped) return;
         provider.setConfiguration({ token });
+        refreshing = false;
         void provider.sendToken();
         provider.startSync();
-        reconnect();
-      }).catch(() => undefined);
+        reconnect?.();
+      }).catch(() => {
+        // Keep writes fenced: an expired canvas token must never be replayed
+        // after a failed remint.
+        provider.configuration.onAuthenticationFailed({ reason: "canvas_jwt_refresh_failed" });
+      });
     } catch { original(event); }
   }) as typeof provider.onMessage;
-  return () => { stopped = true; provider.onMessage = original; };
+  return () => { stopped = true; provider.onMessage = original; provider.send = originalSend; };
 }
 
 interface UseYjsProviderOptions {
@@ -206,7 +223,7 @@ export function useYjsProvider({
       },
     });
     const releaseInstalledRecovery = canvas && refreshToken
-      ? bindInstalledCanvasProvider({ provider, refreshToken, reconnect: () => { void provider.connect(); } })
+      ? bindInstalledCanvasProvider({ provider, refreshToken })
       : undefined;
 
     yDocRef.current = yDoc;

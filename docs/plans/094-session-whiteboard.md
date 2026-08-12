@@ -1036,3 +1036,11 @@ _Plan-wide report pending later phases._
 - `[RED evidence]` With both database URLs pinned to `postgresql://work@127.0.0.1:5432/bridge_test`, `PATH=/home/chris/.bun/bin:$PATH bun test server/canvas-lifecycle.test.ts server/hocuspocus.canvas.test.ts` yields 56 passing contracts and 11 expected behavioral RED failures: raw-frame admission, lifecycle-owned authorization identity, cold-load ordering/watchdog release, pre-close accounting conversion, awaitable connection cancellation, terminal coalescing, incremental streaming, freeze CLOSE reason propagation, and both redirect checks.
   `PATH=/home/chris/.bun/bin:$PATH bunx --bun vitest run tests/unit/use-yjs-provider.test.ts` yields 7 passes and the expected ArrayBuffer CLOSE/remint RED.
   No service, E2E, migration, non-test database, or live-provider command ran.
+
+### Phase 10 — Sol Round 2 production remediation (2026-08-12; Terra)
+
+- `[FIXED]` `[sol]` Registered Hocuspocus admissions decode the nested installed sync envelope and pass decoded bytes, authenticated user identity, and the lifecycle-owned 500ms abortable authorization into the eight-slot turnstile; pre-turnstile mutation authorization is removed.
+- `[FIXED]` `[sol]` Lifecycle load uses a temporary reserved Y.Doc, an exact after-load registry claim, generation watchdogs, actual unload cancellation, destroy-only release, unique per-frame admission identities, coalesced terminal promises, and awaitable connection-owned cancellation.
+- `[FIXED]` `[sol]` Capture reserves before encode, shrinks atomically to exact incremental-response bytes before socket closure, streams entry-by-entry with registered writer deadlines and backpressure, and preserves empty-list no-allocation behavior.
+- `[FIXED]` `[sol]` Both bearer authorization fetch paths refuse redirects; temporary freeze errors expose the stable reason; the installed browser bridge handles `ArrayBuffer` CLOSE frames, fences outgoing writes during remint, then restores token/sendToken/sync without an unauthenticated replay.
+- `[GREEN evidence]` Test database validation passed; `bun test server/canvas-lifecycle.test.ts server/hocuspocus.canvas.test.ts` passed 67 tests / 193 assertions; scoped provider/realtime/whiteboard Vitest passed 56 tests; `bunx --bun tsc --noEmit`, scoped ESLint, and `git diff --check` passed.

@@ -29,6 +29,7 @@ export class CanvasLifecycleError extends Error {
   readonly code: string;
   readonly retryable: boolean;
   readonly closeCode?: number;
+  readonly reason: string;
 
   constructor(code: string, message = code, options: {
     status?: number;
@@ -41,6 +42,7 @@ export class CanvasLifecycleError extends Error {
     this.status = options.status;
     this.retryable = options.retryable ?? false;
     this.closeCode = options.closeCode;
+    this.reason = code;
   }
 }
 
@@ -267,14 +269,21 @@ interface Operation {
   captureBytes: number;
   readers: number;
   writers: Set<Writer>;
+  captureConnections: Array<{ close?: () => void }>;
+  unfreezePromise?: Promise<{ unfrozen: true }>;
+  completePromise?: Promise<{ released: true }>;
   expiryTimer?: ReturnType<typeof setTimeout>;
 }
 
 interface PendingAdmission {
+  identity: symbol;
   connection: unknown;
-  release: () => void;
+  release?: () => void;
   update: Uint8Array;
   controller: AbortController;
+  settled: Promise<void>;
+  resolveSettled: () => void;
+  authorization?: Promise<AuthorizationDecision>;
 }
 
 interface ManagedDocument {
@@ -286,9 +295,16 @@ interface ManagedDocument {
   generation: number;
   destroyed: boolean;
   unloading: boolean;
-  pending: Map<unknown, PendingAdmission>;
+  pending: Map<symbol, PendingAdmission>;
   admissionControllers: Set<AbortController>;
   cancellationReason?: string;
+  registry?: Map<string, Y.Doc>;
+}
+
+interface PendingLoad {
+  document: Y.Doc;
+  generation: number;
+  released: boolean;
 }
 
 export interface LeaseDecision {
@@ -306,12 +322,13 @@ export interface AuthorizationDecision {
 
 export interface MutationConnection {
   close?: (event?: { code?: number; reason?: string }) => void;
+  readOnly?: boolean;
 }
 
 export interface CanvasLifecycleOptions {
   now?: () => number;
   validateLease?: (input: { sessionId: string; freezeToken: string; signal: AbortSignal }) => Promise<LeaseDecision>;
-  authorizeMutation?: (input: { documentName: string; sessionId: string; signal: AbortSignal }) => Promise<AuthorizationDecision>;
+  authorizeMutation?: (input: { documentName: string; sessionId: string; userId: string; signal: AbortSignal }) => Promise<AuthorizationDecision>;
   capture?: (input: { sessionId: string; freezeToken: string; canvasIds: string[]; signal: AbortSignal }) => Promise<FreezeResult>;
   documents?: Map<string, Y.Doc>;
   authorizationDeadlineMs?: number;
@@ -323,6 +340,7 @@ export interface CanvasLifecycleOptions {
 export interface AdmissionInput {
   documentName: string;
   sessionId: string;
+  userId: string;
   connection: MutationConnection;
   update: Uint8Array;
 }
@@ -344,6 +362,7 @@ export class CanvasLifecycle {
   private readonly operations = new Map<string, Operation>();
   private readonly serializers = new Map<string, Promise<void>>();
   private readonly managed = new Map<string, ManagedDocument>();
+  private readonly pendingLoads = new Map<string, PendingLoad>();
   private residentBytes = 0;
   private captureBytes = 0;
   private generation = 0;
@@ -407,28 +426,36 @@ export class CanvasLifecycle {
     return operation.freezePromise;
   }
 
-  async unfreeze(request: TerminalControlRequest): Promise<{ unfrozen: true }> {
+  unfreeze(request: TerminalControlRequest): Promise<{ unfrozen: true }> {
     const parsed = parseCanvasControlRequest("unfreeze", request) as TerminalControlRequest;
     const operation = this.operations.get(parsed.sessionId);
-    if (!operation) return { unfrozen: true };
-    if (operation.token !== parsed.freezeToken) throw lifecycleError("freeze_token_mismatch", "A different token owns this session", { status: 409, retryable: true });
+    if (!operation) return Promise.resolve({ unfrozen: true });
+    if (operation.token !== parsed.freezeToken) return Promise.reject(lifecycleError("freeze_token_mismatch", "A different token owns this session", { status: 409, retryable: true }));
+    if (operation.unfreezePromise) return operation.unfreezePromise;
     operation.terminal = operation.terminal === "complete" ? "complete" : "unfreeze";
     operation.active = false;
     operation.controller.abort();
-    await this.serialize(parsed.sessionId, async () => this.cleanup(operation));
-    return { unfrozen: true };
+    operation.unfreezePromise = this.serialize(parsed.sessionId, async () => {
+      await this.cleanup(operation);
+      return { unfrozen: true } as const;
+    });
+    return operation.unfreezePromise;
   }
 
-  async complete(request: TerminalControlRequest): Promise<{ released: true }> {
+  complete(request: TerminalControlRequest): Promise<{ released: true }> {
     const parsed = parseCanvasControlRequest("complete", request) as TerminalControlRequest;
     const operation = this.operations.get(parsed.sessionId);
-    if (!operation) return { released: true };
-    if (operation.token !== parsed.freezeToken) throw lifecycleError("freeze_token_mismatch", "A different token owns this session", { status: 409, retryable: true });
+    if (!operation) return Promise.resolve({ released: true });
+    if (operation.token !== parsed.freezeToken) return Promise.reject(lifecycleError("freeze_token_mismatch", "A different token owns this session", { status: 409, retryable: true }));
+    if (operation.completePromise) return operation.completePromise;
     operation.terminal = "complete";
     operation.active = false;
     operation.controller.abort();
-    await this.serialize(parsed.sessionId, async () => this.cleanup(operation));
-    return { released: true };
+    operation.completePromise = this.serialize(parsed.sessionId, async () => {
+      await this.cleanup(operation);
+      return { released: true } as const;
+    });
+    return operation.completePromise;
   }
 
   async sweepExpired(): Promise<void> {
@@ -457,16 +484,25 @@ export class CanvasLifecycle {
     const controller = new AbortController();
     entry.readers += 1;
     const writer = {} as Writer;
-    const promise = (async () => {
+    const deadline = setTimeout(() => controller.abort(), Math.min(this.writerDeadlineMs, Math.max(0, entry.deadline - this.now())));
+    const promise = Promise.resolve().then(async () => {
       try {
-        const result = JSON.stringify(entry.result);
-        if (input.write(result) === false) await waitForDrain(input.onceDrain, controller.signal, this.writerNoProgressMs, this.writerDeadlineMs);
-        if (controller.signal.aborted) throw lifecycleError("writer_aborted", "Response writer was aborted", { retryable: true });
+        const write = async (chunk: string) => {
+          if (controller.signal.aborted) throw lifecycleError("writer_aborted", "Response writer was aborted", { retryable: true });
+          if (input.write(chunk) === false) await waitForDrain(input.onceDrain, controller.signal, this.writerNoProgressMs, this.writerDeadlineMs);
+        };
+        await write('{"snapshots":[');
+        for (let index = 0; index < entry.result.snapshots.length; index += 1) {
+          if (index > 0) await write(",");
+          await write(JSON.stringify(entry.result.snapshots[index]));
+        }
+        await write(`],"closed":${entry.result.closed}}`);
       } finally {
+        clearTimeout(deadline);
         entry.readers -= 1;
         entry.writers.delete(writer);
       }
-    })();
+    });
     Object.assign(writer, { controller, promise });
     entry.writers.add(writer);
     void promise.catch(() => undefined);
@@ -478,49 +514,56 @@ export class CanvasLifecycle {
   }
 
   async admitMutation(input: AdmissionInput): Promise<{ handoff: true }> {
-    const state = await this.prepareAdmission(input);
+    const { state, pending } = await this.prepareAdmission(input);
     try {
       Y.applyUpdate(state.document, input.update, input.connection);
-      this.commitAdmission({ documentName: input.documentName, connection: input.connection });
+      this.commitAdmission({ documentName: input.documentName, admission: pending.identity });
       return { handoff: true };
     } catch (error) {
-      this.rollbackAdmission({ documentName: input.documentName, connection: input.connection });
+      this.rollbackAdmission({ documentName: input.documentName, admission: pending.identity });
       throw error;
     }
   }
 
-  async beginAdmission(input: AdmissionInput): Promise<void> {
-    await this.prepareAdmission(input);
+  async beginAdmission(input: AdmissionInput): Promise<symbol> {
+    return (await this.prepareAdmission(input)).pending.identity;
   }
 
-  commitAdmission({ documentName, connection }: { documentName: string; connection?: unknown }): void {
+  commitAdmission({ documentName, admission, connection }: { documentName: string; admission?: symbol; connection?: unknown }): void {
     const state = this.managed.get(documentName);
-    const pending = state && connection !== undefined ? state.pending.get(connection) : undefined;
+    const pending = state && (admission !== undefined
+      ? state.pending.get(admission)
+      : [...state.pending.values()].find((entry) => entry.connection === connection));
     if (!state || !pending) return;
-    state.pending.delete(pending.connection);
+    state.pending.delete(pending.identity);
+    pending.resolveSettled();
     state.admissionControllers.delete(pending.controller);
     this.replaceShadowFromAuthoritative(state);
-    pending.release();
+    pending.release?.();
     this.finishAdmission(state);
   }
 
-  rollbackAdmission({ documentName, connection }: { documentName: string; connection?: unknown }): void {
+  rollbackAdmission({ documentName, admission, connection }: { documentName: string; admission?: symbol; connection?: unknown }): void {
     const state = this.managed.get(documentName);
-    const pending = state && connection !== undefined ? state.pending.get(connection) : undefined;
+    const pending = state && (admission !== undefined
+      ? state.pending.get(admission)
+      : [...state.pending.values()].find((entry) => entry.connection === connection));
     if (!state || !pending) return;
-    state.pending.delete(pending.connection);
+    state.pending.delete(pending.identity);
+    pending.resolveSettled();
     state.admissionControllers.delete(pending.controller);
     this.replaceShadowFromAuthoritative(state);
-    pending.release();
+    pending.release?.();
     this.finishAdmission(state);
   }
 
-  async cancelAdmissions({ documentName, reason }: { documentName: string; reason: string }): Promise<void> {
+  async cancelAdmissions({ documentName, connection, reason }: { documentName: string; connection?: unknown; reason: string }): Promise<void> {
     const state = this.managed.get(documentName);
     if (!state) return;
     state.cancellationReason = reason;
-    for (const controller of state.admissionControllers) controller.abort();
-    for (const pending of [...state.pending.values()]) this.rollbackAdmission({ documentName, connection: pending.connection });
+    const pending = [...state.pending.values()].filter((entry) => connection === undefined || entry.connection === connection);
+    for (const entry of pending) entry.controller.abort();
+    await Promise.allSettled(pending.map((entry) => entry.settled));
   }
 
   async beginLoad({ documentName, document, persistedUpdate = new Uint8Array() }: { documentName: string; document: Y.Doc; persistedUpdate?: Uint8Array }): Promise<number> {
@@ -556,20 +599,87 @@ export class CanvasLifecycle {
     setImmediate(() => {
       const current = this.managed.get(documentName);
       if (current !== state || state.destroyed) return;
-      // Hocuspocus has synchronously registered successful loads by this turn.
-      // Standalone callers have no registry, so the exact active instance is
-      // retained until its destroy listener runs.
+      if (state.registry?.get(documentName) !== document) this.releaseDocument(documentName, state);
     });
     return generation;
   }
 
-  async beforeUnload({ documentName, document, generation }: { documentName: string; document: Y.Doc; generation: number }): Promise<void> {
+  async prepareLoad({ documentName, persistedUpdate = new Uint8Array() }: { documentName: string; persistedUpdate?: Uint8Array }): Promise<Y.Doc> {
+    if (canvasDocumentName(documentName) && persistedUpdate.byteLength > MAX_PERSISTED_UPDATE) throw lifecycleError("persisted_canvas_too_large", "Persisted canvas update exceeds 4 MiB");
+    if (persistedUpdate.byteLength > this.loadScratchBytes) throw lifecycleError("load_scratch_exhausted", "Canvas load scratch ledger is full", { retryable: true });
+    if (this.residentBytes + this.loadScratchBytes > this.residentLimit) throw lifecycleError("resident_ledger_exhausted", "Canvas resident ledger is full", { retryable: true });
+    this.residentBytes += this.loadScratchBytes;
+    const document = new Y.Doc();
+    try {
+      if (persistedUpdate.byteLength) Y.applyUpdate(document, persistedUpdate);
+    } catch (error) {
+      this.residentBytes -= this.loadScratchBytes;
+      document.destroy();
+      throw lifecycleError("invalid_persisted_canvas", error instanceof Error ? error.message : "Persisted canvas could not be applied");
+    }
+    const old = this.pendingLoads.get(documentName);
+    if (old) {
+      old.released = true;
+      this.residentBytes -= this.loadScratchBytes;
+      old.document.destroy();
+    }
+    const pending: PendingLoad = { document, generation: ++this.generation, released: false };
+    this.pendingLoads.set(documentName, pending);
+    setImmediate(() => {
+      if (this.pendingLoads.get(documentName) !== pending || pending.released) return;
+      this.pendingLoads.delete(documentName);
+      pending.released = true;
+      this.residentBytes -= this.loadScratchBytes;
+      pending.document.destroy();
+    });
+    return document;
+  }
+
+  claimPreparedLoad({ documentName, document, registry }: { documentName: string; document: Y.Doc; registry: Map<string, Y.Doc> }): void {
+    const pending = this.pendingLoads.get(documentName);
+    if (!pending || pending.released) return;
+    this.pendingLoads.delete(documentName);
+    pending.released = true;
+    const old = this.managed.get(documentName);
+    if (old) this.releaseDocument(documentName, old);
+    this.documents.set(documentName, document);
+    try {
+      if (pending.document !== document) Y.applyUpdate(document, Y.encodeStateAsUpdate(pending.document));
+      const state = this.makeManagedDocument(document, pending.generation);
+      state.registry = registry;
+      this.managed.set(documentName, state);
+      setImmediate(() => {
+        if (this.managed.get(documentName) === state && registry.get(documentName) !== document) this.releaseDocument(documentName, state);
+      });
+    } finally {
+      this.residentBytes -= this.loadScratchBytes;
+      pending.document.destroy();
+    }
+  }
+
+  afterLoad({ documentName, document, registry }: { documentName: string; document: Y.Doc; registry: Map<string, Y.Doc> }): void {
+    const state = this.managed.get(documentName);
+    if (!state || state.document !== document) return;
+    state.registry = registry;
+  }
+
+  async beforeUnload({ documentName, document, generation, registry }: { documentName: string; document: Y.Doc; generation: number; registry?: Map<string, Y.Doc> }): Promise<void> {
     const state = this.managed.get(documentName);
     if (!state || state.document !== document || state.generation !== generation) return;
     state.unloading = true;
-    // Pinned Hocuspocus may cancel unload after this hook yields. Destroy is
-    // therefore the only point that releases listeners or ledger bytes.
-    state.unloading = false;
+    try {
+      await this.cancelAdmissions({ documentName, reason: "before_unload" });
+      const release = await state.turnstile.acquire();
+      try {
+        if (registry && registry.get(documentName) !== document) return;
+      } finally {
+        release();
+      }
+    } finally {
+      // Pinned Hocuspocus may cancel unload after this hook yields. Destroy is
+      // therefore the only point that releases listeners or ledger bytes.
+      state.unloading = false;
+    }
   }
 
   private newOperation(sessionId: string, token: string): Operation {
@@ -583,6 +693,7 @@ export class CanvasLifecycle {
       captureBytes: 0,
       readers: 0,
       writers: new Set<Writer>(),
+      captureConnections: [],
     };
     return operation as Operation;
   }
@@ -604,11 +715,19 @@ export class CanvasLifecycle {
       const result = await this.capture(operation, request);
       this.assertOperationActive(operation);
       operation.result = deepFreezeResult(result);
-      operation.captureBytes = responseBytes(operation.result);
-      if (operation.captureBytes > MAX_RESPONSE_BYTES || this.captureBytes + operation.captureBytes > this.captureLimit) {
+      const exactBytes = responseBytes(operation.result);
+      if (operation.captureBytes === 0) {
+        if (exactBytes > MAX_RESPONSE_BYTES || this.captureBytes + exactBytes > this.captureLimit) {
+          throw lifecycleError("capture_ledger_exhausted", "Canvas capture ledger is full", { status: 503, retryable: true });
+        }
+        operation.captureBytes = exactBytes;
+        this.captureBytes += exactBytes;
+      }
+      if (exactBytes > MAX_RESPONSE_BYTES || operation.captureBytes !== exactBytes) {
         throw lifecycleError("capture_ledger_exhausted", "Canvas capture ledger is full", { status: 503, retryable: true });
       }
-      this.captureBytes += operation.captureBytes;
+      for (const connection of operation.captureConnections) connection.close?.();
+      operation.captureConnections = [];
       return operation.result;
     } catch (error) {
       // A rejected Go validation owns no durable barrier. Capture failures
@@ -630,6 +749,7 @@ export class CanvasLifecycle {
     // Reserve before any encoder runs; the reservation is converted to the
     // actual immutable response accounting below.
     this.captureBytes += this.captureReservation;
+    let reserved = true;
     try {
       this.assertOperationActive(operation);
       let result: FreezeResult;
@@ -680,22 +800,30 @@ export class CanvasLifecycle {
           await new Promise<void>((resolve) => setImmediate(resolve));
         }
         this.assertOperationActive(operation);
-        let closed = 0;
-        for (const connection of connections) {
-          connection.close?.();
-          closed += 1;
-        }
-        result = { snapshots, closed };
+        operation.captureConnections = connections;
+        result = { snapshots, closed: connections.length };
       }
       validateFreezeResult(result, request.canvasIds);
+      const exactBytes = responseBytes(result);
+      if (exactBytes > MAX_RESPONSE_BYTES || this.captureBytes - this.captureReservation + exactBytes > this.captureLimit) {
+        throw lifecycleError("capture_ledger_exhausted", "Canvas capture ledger is full", { status: 503, retryable: true });
+      }
+      this.captureBytes += exactBytes - this.captureReservation;
+      operation.captureBytes = exactBytes;
+      reserved = false;
       return result;
     } finally {
-      this.captureBytes -= this.captureReservation;
+      if (reserved) this.captureBytes -= this.captureReservation;
     }
   }
 
-  private async prepareAdmission(input: AdmissionInput): Promise<ManagedDocument> {
-    if (!canvasDocumentName(input.documentName)) return this.documentState(input.documentName);
+  private async prepareAdmission(input: AdmissionInput): Promise<{ state: ManagedDocument; pending: PendingAdmission }> {
+    if (!canvasDocumentName(input.documentName)) {
+      const state = this.documentState(input.documentName);
+      const settlement = Promise.withResolvers<void>();
+      const pending: PendingAdmission = { identity: Symbol("admission"), connection: input.connection, update: input.update, controller: new AbortController(), settled: settlement.promise, resolveSettled: settlement.resolve };
+      return { state, pending };
+    }
     canvasIdFromDocument(input.documentName);
     this.checkParsedFrame(input.documentName, input.update);
     const state = this.documentState(input.documentName);
@@ -706,6 +834,9 @@ export class CanvasLifecycle {
     state.admissions += 1;
     const controller = new AbortController();
     state.admissionControllers.add(controller);
+    const settlement = Promise.withResolvers<void>();
+    const pending: PendingAdmission = { identity: Symbol("admission"), connection: input.connection, update: input.update, controller, settled: settlement.promise, resolveSettled: settlement.resolve };
+    state.pending.set(pending.identity, pending);
     state.cancellationReason = undefined;
     let release: (() => void) | undefined;
     try {
@@ -715,17 +846,33 @@ export class CanvasLifecycle {
         throw lifecycleError(state.cancellationReason ?? "admission_cancelled", "Canvas admission was cancelled", { retryable: true });
       }
       this.assertNotFrozen(input.sessionId);
+      pending.authorization = this.authorizeMutation({ documentName: input.documentName, sessionId: input.sessionId, userId: input.userId, signal: controller.signal });
       const decision = await withTimeout(
-        this.authorizeMutation({ documentName: input.documentName, sessionId: input.sessionId, signal: controller.signal }),
+        pending.authorization,
         controller,
         this.authorizationDeadlineMs,
         () => state.cancellationReason,
       );
       this.assertNotFrozen(input.sessionId);
-      if (!decision.allowed || decision.readOnly) {
+      if (decision.readOnly) {
+        input.connection.readOnly = true;
+        state.pending.delete(pending.identity);
+        pending.resolveSettled();
+        state.admissionControllers.delete(controller);
+        release?.();
+        this.replaceShadowFromAuthoritative(state);
+        this.finishAdmission(state);
+        return { state, pending };
+      }
+      if (!decision.allowed) {
         throw lifecycleError(decision.code ?? "canvas_mutation_denied", decision.reason ?? "Canvas mutation is not allowed");
       }
+      const scratchBytes = 16 * 1024 * 1024;
+      if (this.residentBytes + scratchBytes > this.residentLimit) throw lifecycleError("resident_ledger_exhausted", "Canvas resident ledger is full", { retryable: true, closeCode: 1013 });
+      this.residentBytes += scratchBytes;
       const candidate = new Y.Doc();
+      let scratchReserved = true;
+      try {
       Y.applyUpdate(candidate, Y.encodeStateAsUpdate(state.shadow));
       Y.applyUpdate(candidate, input.update);
       const store = candidate.store as unknown as { pendingStructs?: unknown; pendingDs?: unknown };
@@ -733,17 +880,26 @@ export class CanvasLifecycle {
       const encoded = Y.encodeStateAsUpdate(candidate);
       if (encoded.byteLength > MAX_CURRENT_STATE) throw lifecycleError("canvas_state_too_large", "Canvas state exceeds 4 MiB");
       const candidateBytes = encoded.byteLength * 2;
-      const projected = this.residentBytes - state.residentBytes + candidateBytes;
+      const projected = this.residentBytes - scratchBytes - state.residentBytes + candidateBytes;
       if (projected > this.residentLimit) throw lifecycleError("resident_ledger_exhausted", "Canvas resident ledger is full", { retryable: true, closeCode: 1013 });
       state.shadow.destroy();
       state.shadow = candidate;
       this.residentBytes = projected;
+      scratchReserved = false;
       state.residentBytes = candidateBytes;
-      state.pending.set(input.connection, { connection: input.connection, release, update: input.update, controller });
-      return state;
+      pending.release = release;
+      return { state, pending };
+      } finally {
+        if (scratchReserved) this.residentBytes -= scratchBytes;
+      }
     } catch (error) {
       controller.abort();
       state.admissionControllers.delete(controller);
+      if (pending.authorization) await Promise.allSettled([pending.authorization]);
+      if (state.pending.get(pending.identity) === pending) {
+        state.pending.delete(pending.identity);
+        pending.resolveSettled();
+      }
       if (release) release();
       this.replaceShadowFromAuthoritative(state);
       this.finishAdmission(state);
@@ -794,7 +950,11 @@ export class CanvasLifecycle {
   private releaseDocument(documentName: string, state: ManagedDocument): void {
     if (state.destroyed) return;
     state.destroyed = true;
-    for (const pending of state.pending.values()) pending.release();
+    for (const pending of state.pending.values()) {
+      pending.controller.abort();
+      pending.release?.();
+      pending.resolveSettled();
+    }
     state.pending.clear();
     for (const controller of state.admissionControllers) controller.abort();
     state.admissionControllers.clear();
@@ -895,7 +1055,8 @@ function deepFreezeResult(result: FreezeResult): FreezeResult {
 }
 
 function responseBytes(result: FreezeResult): number {
-  return Buffer.byteLength(JSON.stringify(result));
+  const snapshotBytes = result.snapshots.reduce((total, snapshot) => total + Buffer.byteLength(JSON.stringify(snapshot)), 0);
+  return Buffer.byteLength('{"snapshots":[') + snapshotBytes + Math.max(0, result.snapshots.length - 1) + Buffer.byteLength(`],"closed":${result.closed}}`);
 }
 
 function equalUpdates(a: Uint8Array, b: Uint8Array): boolean {

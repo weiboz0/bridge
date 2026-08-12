@@ -125,8 +125,8 @@ describe("Phase 10 canvas lifecycle RED contract", () => {
     const { createCanvasLifecycle } = await lifecycle();
     const blocked = Promise.withResolvers<{ allowed: boolean; readOnly: boolean }>();
     const sut = createCanvasLifecycle({ authorizeMutation: async () => blocked.promise });
-    const eight = Array.from({ length: 8 }, () => sut.admitMutation({ documentName: `canvas:${canvasId}`, sessionId, connection: { close() {} }, update: updateWith(randomUUID()) }));
-    await expect(sut.admitMutation({ documentName: `canvas:${canvasId}`, sessionId, connection: { close() {} }, update: updateWith("ninth") })).rejects.toMatchObject({ closeCode: 1013 });
+    const eight = Array.from({ length: 8 }, () => sut.admitMutation({ documentName: `canvas:${canvasId}`, sessionId, userId: "writer", connection: { close() {} }, update: updateWith(randomUUID()) }));
+    await expect(sut.admitMutation({ documentName: `canvas:${canvasId}`, sessionId, userId: "writer", connection: { close() {} }, update: updateWith("ninth") })).rejects.toMatchObject({ closeCode: 1013 });
     blocked.resolve({ allowed: false, readOnly: false });
     await Promise.allSettled(eight);
     expect(sut.inspectDocument(`canvas:${canvasId}`)?.admissions).toBe(0);
@@ -135,7 +135,7 @@ describe("Phase 10 canvas lifecycle RED contract", () => {
   test("rolls back shadow, accounting, and turnstile for auth deny, timeout, cancel, local fence, and apply failure", async () => {
     const { createCanvasLifecycle } = await lifecycle();
     const sut = createCanvasLifecycle({ authorizeMutation: async () => ({ allowed: false, readOnly: false }) });
-    await expect(sut.admitMutation({ documentName: `canvas:${canvasId}`, sessionId, connection: { close() {} }, update: updateWith("denied") })).rejects.toThrow();
+    await expect(sut.admitMutation({ documentName: `canvas:${canvasId}`, sessionId, userId: "writer", connection: { close() {} }, update: updateWith("denied") })).rejects.toThrow();
     expect(sut.inspectDocument(`canvas:${canvasId}`)).toMatchObject({ admissions: 0, turnstileLocked: false, shadowMatchesAuthoritative: true });
   });
 
@@ -145,7 +145,7 @@ describe("Phase 10 canvas lifecycle RED contract", () => {
     const sut = createCanvasLifecycle({ authorizeMutation: async () => pending.promise, authorizationDeadlineMs: 1 });
     const documentName = `canvas:${canvasId}`;
     const connection = { close() {} };
-    const admission = sut.admitMutation({ documentName, sessionId, connection, update: updateWith("late-grant") });
+    const admission = sut.admitMutation({ documentName, sessionId, userId: "writer", connection, update: updateWith("late-grant") });
     await sut.cancelAdmissions({ documentName, reason: "connection_closed" });
     pending.resolve({ allowed: true, readOnly: false });
     await expect(admission).rejects.toMatchObject({ code: "connection_closed" });
@@ -158,7 +158,7 @@ describe("Phase 10 canvas lifecycle RED contract", () => {
     const sut = createCanvasLifecycle({ documents: new Map([[`canvas:${canvasId}`, authoritative]]), authorizeMutation: async () => ({ allowed: true, readOnly: false }) });
     const first = updateWith("first");
     Y.applyUpdate(authoritative, first);
-    await expect(sut.admitMutation({ documentName: `canvas:${canvasId}`, sessionId, connection: { close() {} }, update: Y.mergeUpdates([first, updateWith("second")]) })).resolves.toMatchObject({ handoff: true });
+    await expect(sut.admitMutation({ documentName: `canvas:${canvasId}`, sessionId, userId: "writer", connection: { close() {} }, update: Y.mergeUpdates([first, updateWith("second")]) })).resolves.toMatchObject({ handoff: true });
     expect(sut.inspectDocument(`canvas:${canvasId}`)?.shadowMatchesAuthoritative).toBe(true);
   });
 
@@ -184,13 +184,16 @@ describe("Phase 10 canvas lifecycle RED contract", () => {
   test("releases a failed unregistered load from its next-turn watchdog without releasing a later generation", async () => {
     const { createCanvasLifecycle } = await lifecycle();
     const sut = createCanvasLifecycle();
-    const first = new Y.Doc();
-    const second = new Y.Doc();
-    await sut.beginLoad({ documentName: `canvas:${canvasId}`, document: first, persistedUpdate: updateWith("first") });
-    await sut.beginLoad({ documentName: `canvas:${canvasId}`, document: second, persistedUpdate: updateWith("second") });
+    const documentName = `canvas:${canvasId}`;
+    const first = await sut.prepareLoad({ documentName, persistedUpdate: updateWith("first") });
+    await sut.prepareLoad({ documentName, persistedUpdate: updateWith("second") });
+    const authoritative = new Y.Doc();
+    const registry = new Map([[documentName, authoritative]]);
+    sut.claimPreparedLoad({ documentName, document: authoritative, registry });
     await new Promise<void>((resolve) => setImmediate(resolve));
-    expect(sut.inspectDocument(`canvas:${canvasId}`)?.document).toBe(second);
+    expect(sut.inspectDocument(documentName)?.document).toBe(authoritative);
     expect(sut.accounting().residentBytes).toBeGreaterThan(0);
+    first.destroy();
   });
 
   test("decodes the installed nested Yjs sync envelope and enforces the exact 1 MiB decoded-update boundary", async () => {
@@ -219,7 +222,7 @@ describe("Phase 10 canvas lifecycle RED contract", () => {
       pending.promise.then(resolve, reject);
     }) });
     const documentName = `canvas:${canvasId}`;
-    const admissions = Array.from({ length: 8 }, () => sut.admitMutation({ documentName, sessionId, connection: { close() {} }, update: updateWith(randomUUID()) }));
+    const admissions = Array.from({ length: 8 }, () => sut.admitMutation({ documentName, sessionId, userId: "writer", connection: { close() {} }, update: updateWith(randomUUID()) }));
     await sut.cancelAdmissions({ documentName, reason: "socket_closed" });
     pending.resolve({ allowed: true, readOnly: false });
     const settled = await Promise.allSettled(admissions);
@@ -244,7 +247,7 @@ describe("Phase 10 canvas lifecycle RED contract", () => {
       return new Promise((resolve) => signal.addEventListener("abort", () => { events.push("abort"); resolve({ allowed: false, readOnly: false }); }, { once: true }));
     } });
     const documentName = `canvas:${canvasId}`;
-    const first = sut.admitMutation({ documentName, sessionId, connection: { close() {} }, update: updateWith("first") });
+    const first = sut.admitMutation({ documentName, sessionId, userId: "writer", connection: { close() {} }, update: updateWith("first") });
     await expect(first).rejects.toMatchObject({ code: "authorization_timeout" });
     expect(events).toEqual(["authorize", "abort"]);
   });
@@ -301,7 +304,7 @@ describe("Phase 10 canvas lifecycle RED contract", () => {
     const sut = createCanvasLifecycle({ authorizeMutation: async () => ({ allowed: true, readOnly: false }) });
     const documentName = `canvas:${canvasId}`;
     const connection = { close() {} };
-    await sut.beginAdmission({ documentName, sessionId, connection, update: updateWith("pending") });
+    await sut.beginAdmission({ documentName, sessionId, userId: "writer", connection, update: updateWith("pending") });
     sut.rollbackAdmission({ documentName, connection });
     expect(sut.inspectDocument(documentName)).toMatchObject({ admissions: 0, turnstileLocked: false, shadowMatchesAuthoritative: true });
   });
@@ -347,7 +350,8 @@ describe("Phase 10 canvas lifecycle RED contract", () => {
     }) });
     const documentName = `canvas:${canvasId}`;
     const connection = { close() {} };
-    const admission = sut.admitMutation({ documentName, sessionId, connection, update: updateWith("cancel-settlement") });
+    const admission = sut.admitMutation({ documentName, sessionId, userId: "writer", connection, update: updateWith("cancel-settlement") });
+    await Promise.resolve();
     await sut.cancelAdmissions({ documentName, connection, reason: "disconnect" } as never);
     expect(settled).toBe(true);
     await expect(admission).rejects.toMatchObject({ code: "disconnect" });

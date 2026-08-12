@@ -462,12 +462,12 @@ describe("hocuspocus canvas hook test seam", () => {
       expect(await store(canvasId, firstState)).toBe(true);
       const restored = new Y.Doc();
       globalThis.fetch = async () => new Response(JSON.stringify({ allowed: true, readOnly: false }));
-      await hooks.onLoadDocument({
+      const loaded = await hooks.onLoadDocument({
         document: restored,
         documentName: `canvas:${canvasId}`,
         context: { userId, sessionId },
       });
-      expect(restored.getMap("elements").toJSON()).toEqual({
+      expect(loaded.getMap("elements").toJSON()).toEqual({
         "owner-element": { type: "rectangle", owner: "owner" },
       });
 

@@ -128,6 +128,7 @@ export async function rechckDocumentAccess(args: {
       Authorization: `Bearer ${secret}`,
     },
     body: JSON.stringify(sessionId === undefined ? { documentName, sub } : { documentName, sub, sessionId }),
+    redirect: "error",
   });
   if (res.status === 200) {
     const body = (await res.json()) as { allowed?: boolean; reason?: string; readOnly?: boolean };

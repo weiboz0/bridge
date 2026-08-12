@@ -19,6 +19,7 @@ import {
   createCanvasControlServer,
   createCanvasLifecycle,
   decodeCanvasAuthorizationResponse,
+  decodeCanvasMutationUpdate,
   HOCUSPOCUS_SHARED_MAX_PAYLOAD,
   parseCanvasControlRequest,
 } from "./canvas-lifecycle";
@@ -183,6 +184,7 @@ async function currentCanvasAuthorization({ documentName, sub, sessionId }: { do
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${TOKEN_SECRET}` },
     body: JSON.stringify({ documentName, sub, sessionId }),
+    redirect: "error",
   });
   let body: unknown;
   try { body = await response.json(); } catch { throw new CanvasLifecycleError("invalid_authorization_response", "Canvas authorization response is invalid"); }
@@ -239,16 +241,21 @@ export function createCanvasLifecycleHooks({
       context: { userId?: string; sessionId?: string };
     }) {
       if (!input.documentName.startsWith("canvas:") || input.connection.readOnly || !isYjsMutationFrame(input.update)) return;
-      const config = { readOnly: input.connection.readOnly };
-      await authorizeConnection({ ...input, connectionConfig: config });
-      if (input.connection.readOnly) return;
+      if (!lifecycle.beginAdmission) {
+        const config = { readOnly: input.connection.readOnly };
+        await authorizeConnection({ ...input, connectionConfig: config });
+        return;
+      }
       if (!input.context.sessionId) throw new CanvasLifecycleError("missing_authenticated_context", "Canvas connection is missing authenticated session context");
-      await lifecycle.beginAdmission?.({
+      const decodedUpdate = decodeCanvasMutationUpdate({ documentName: input.documentName, frame: input.update });
+      const admission = await lifecycle.beginAdmission?.({
         documentName: input.documentName,
         sessionId: input.context.sessionId,
+        userId: input.context.userId,
         connection: input.connection,
-        update: input.update,
+        update: decodedUpdate,
       } as never);
+      if (input.connection.readOnly) return;
 
       if (!input.document || !lifecycle.commitAdmission) return;
       let settled = false;
@@ -260,20 +267,20 @@ export function createCanvasLifecycleHooks({
         if (settled) return;
         settled = true;
         input.document?.off("update", commit);
-        lifecycle.commitAdmission?.({ documentName: input.documentName, connection: input.connection });
+        lifecycle.commitAdmission?.({ documentName: input.documentName, admission });
       };
       input.document.on("update", commit);
       setImmediate(() => {
         if (settled) return;
         settled = true;
         input.document?.off("update", commit);
-        lifecycle.rollbackAdmission?.({ documentName: input.documentName, connection: input.connection });
+        lifecycle.rollbackAdmission?.({ documentName: input.documentName, admission });
       });
     },
 
     async onDisconnect(input: { documentName: string; connection?: unknown }) {
       if (input.documentName.startsWith("canvas:")) {
-        await lifecycle.cancelAdmissions?.({ documentName: input.documentName, reason: "disconnect" });
+        await lifecycle.cancelAdmissions?.({ documentName: input.documentName, connection: input.connection, reason: "disconnect" });
       }
     },
 
@@ -298,18 +305,17 @@ export function createCanvasLoadLifecycleHooks({ lifecycle = canvasLifecycle, fa
   return {
     async onLoadDocument({ documentName, document }: { documentName: string; document: Y.Doc }) {
       if (!documentName.startsWith("canvas:")) return document;
-      await lifecycle.beginLoad({ documentName, document });
+      const prepared = await lifecycle.prepareLoad({ documentName });
       if (failAfterLoad && !failed) {
         failed = true;
-        document.destroy();
+        prepared.destroy();
         throw new Error("after-load failure");
       }
-      return document;
+      return prepared;
     },
-    async afterLoadDocument({ documentName, document }: { documentName: string; document: Y.Doc }) {
+    async afterLoadDocument({ documentName, document, instance }: { documentName: string; document: Y.Doc; instance: { documents: Map<string, Y.Doc> } }) {
       if (!documentName.startsWith("canvas:")) return;
-      // beginLoad installs destroy-only cleanup before Hocuspocus registers.
-      void document;
+      lifecycle.claimPreparedLoad({ documentName, document, registry: instance.documents });
     },
     async beforeUnloadDocument({ documentName, document }: { documentName: string; document: Y.Doc }) {
       if (!documentName.startsWith("canvas:")) return;
@@ -354,12 +360,25 @@ export function scheduleCanvasJwtExpiry({
 }
 
 const canvasLifecycle = createCanvasLifecycle({
+  authorizeMutation: async ({ documentName, sessionId, userId, signal }) => {
+    const response = await fetch(`${GO_INTERNAL_API_URL}/api/internal/realtime/auth`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${TOKEN_SECRET}` },
+      body: JSON.stringify({ documentName, sub: userId, sessionId }),
+      signal,
+      redirect: "error",
+    });
+    let body: unknown;
+    try { body = await response.json(); } catch { throw new CanvasLifecycleError("invalid_authorization_response", "Canvas authorization response is invalid"); }
+    return decodeCanvasAuthorizationResponse({ status: response.status, json: body });
+  },
   validateLease: async ({ sessionId, freezeToken, signal }) => {
     const response = await fetch(`${GO_INTERNAL_API_URL}/api/internal/canvas-sessions/freeze-auth`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${HOCUSPOCUS_CONTROL_SECRET}` },
       body: JSON.stringify({ sessionId, freezeToken }),
       signal,
+      redirect: "error",
     });
     if (response.status !== 200) return { allowed: false };
     const body = await response.json() as { allowed?: unknown; remainingMs?: unknown };
@@ -371,6 +390,7 @@ const canvasLifecycle = createCanvasLifecycle({
 });
 
 const canvasLifecycleHooks = createCanvasLifecycleHooks({ lifecycle: canvasLifecycle });
+const canvasConnections = new Map<string, unknown>();
 
 export function canvasAuthenticationContext({
   documentName,
@@ -571,15 +591,13 @@ export const hocuspocusHooks = {
       if (yjsState !== null) {
         const update = Buffer.from(yjsState, "base64");
         if (documentName.startsWith("canvas:")) {
-          // Apply persisted bytes before Hocuspocus inserts the document, but
-          // hand lifecycle ownership to the same installed after-load path.
-          Y.applyUpdate(document, update);
+          return await canvasLifecycle.prepareLoad({ documentName, persistedUpdate: update });
         } else {
           Y.applyUpdate(document, update);
         }
         console.log(`[hocuspocus] Loaded state for: ${documentName}`);
       } else if (documentName.startsWith("canvas:")) {
-        // The actual document is registered only after this hook returns.
+        return await canvasLifecycle.prepareLoad({ documentName });
       }
     } catch (err) {
       console.error(`[hocuspocus] Failed to load state for ${documentName}:`, err);
@@ -633,25 +651,32 @@ export const hocuspocusHooks = {
     console.log(`[hocuspocus] Client connected to: ${documentName}`);
   },
 
-  async onDisconnect({ documentName }: { documentName: string }) {
+  async onDisconnect({ documentName, socketId }: { documentName: string; socketId?: string }) {
     console.log(`[hocuspocus] Client disconnected from: ${documentName}`);
-    await canvasLifecycleHooks.onDisconnect({ documentName });
+    const connection = socketId ? canvasConnections.get(socketId) : undefined;
+    if (socketId) canvasConnections.delete(socketId);
+    await canvasLifecycleHooks.onDisconnect({ documentName, connection });
   },
 
   async afterLoadDocument({ documentName, document, instance }: { documentName: string; document: Y.Doc; instance: { documents: Map<string, Y.Doc> } }) {
     if (documentName.startsWith("canvas:")) {
-      if (instance.documents.get(documentName) !== document) throw new CanvasLifecycleError("canvas_registry_mismatch", "Canvas document was not registered after load");
-      await canvasLifecycle.beginLoad({ documentName, document });
+      canvasLifecycle.claimPreparedLoad({ documentName, document, registry: instance.documents });
     }
     await canvasLifecycleHooks.afterLoadDocument({ documentName, document });
   },
 
   async beforeUnloadDocument({ documentName, document, instance }: { documentName: string; document: Y.Doc; instance: { documents: Map<string, Y.Doc> } }) {
-    if (documentName.startsWith("canvas:") && instance.documents.get(documentName) !== document) return;
+    if (documentName.startsWith("canvas:")) {
+      if (instance.documents.get(documentName) !== document) return;
+      const state = canvasLifecycle.inspectDocument(documentName);
+      if (state) await canvasLifecycle.beforeUnload({ documentName, document, generation: state.generation, registry: instance.documents });
+      return;
+    }
     await canvasLifecycleHooks.beforeUnloadDocument({ documentName, document });
   },
 
-  async connected({ documentName, context, connection }: { documentName: string; context: AuthContext; connection: { onClose: (callback: () => void) => unknown; close: (event?: { code?: number; reason?: string }) => void } }) {
+  async connected({ documentName, context, connection, socketId }: { documentName: string; context: AuthContext; socketId?: string; connection: { onClose: (callback: () => void) => unknown; close: (event?: { code?: number; reason?: string }) => void } }) {
+    if (socketId) canvasConnections.set(socketId, connection);
     if (!documentName.startsWith("canvas:") || !context.jwtExpiry) return;
     const expiry = scheduleCanvasJwtExpiry({ exp: context.jwtExpiry, connection });
     connection.onClose(() => expiry.cancel());
