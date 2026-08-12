@@ -37,6 +37,7 @@ type freezeLeaseValidation struct {
 
 type sessionEndResult struct {
 	WhiteboardServerArchiveComplete *bool
+	EndedAt                         *time.Time
 }
 
 // SessionEndPreparation is the short durable handoff between the Go lifecycle
@@ -50,6 +51,7 @@ type SessionEndPreparation struct {
 // SessionEndResult exposes only durable state needed by API producers.
 type SessionEndResult struct {
 	WhiteboardServerArchiveComplete *bool
+	EndedAt                         *time.Time
 }
 
 // CanvasSnapshot is one persisted state from an already fenced canvas bundle.
@@ -264,10 +266,18 @@ func (s *SessionStore) PrepareSessionEnd(ctx context.Context, sessionID string) 
 func (s *SessionStore) CompleteSessionConfirmed(ctx context.Context, sessionID, token string, snapshots []CanvasSnapshot) error {
 	return completeSessionConfirmed(ctx, s.db, sessionID, token, snapshots)
 }
+func (s *SessionStore) CompleteSessionConfirmedResult(ctx context.Context, sessionID, token string, snapshots []CanvasSnapshot) (SessionEndResult, error) {
+	var endedAt time.Time
+	if err := completeSessionConfirmedAt(ctx, s.db, sessionID, token, snapshots, &endedAt); err != nil {
+		return SessionEndResult{}, err
+	}
+	complete := true
+	return SessionEndResult{WhiteboardServerArchiveComplete: &complete, EndedAt: &endedAt}, nil
+}
 
 func (s *SessionStore) CompleteSessionDegraded(ctx context.Context, sessionID, token string) (SessionEndResult, error) {
 	result, err := completeSessionDegradedResult(ctx, s.db, sessionID, token)
-	return SessionEndResult{WhiteboardServerArchiveComplete: result.WhiteboardServerArchiveComplete}, err
+	return SessionEndResult{WhiteboardServerArchiveComplete: result.WhiteboardServerArchiveComplete, EndedAt: result.EndedAt}, err
 }
 
 func (s *SessionStore) AbortSessionFreezeLease(ctx context.Context, sessionID, token string) error {
@@ -275,6 +285,9 @@ func (s *SessionStore) AbortSessionFreezeLease(ctx context.Context, sessionID, t
 }
 
 func completeSessionConfirmed(ctx context.Context, db *sql.DB, sessionID, token string, snapshots []CanvasSnapshot) error {
+	return completeSessionConfirmedAt(ctx, db, sessionID, token, snapshots, nil)
+}
+func completeSessionConfirmedAt(ctx context.Context, db *sql.DB, sessionID, token string, snapshots []CanvasSnapshot, endedOut *time.Time) error {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -283,31 +296,28 @@ func completeSessionConfirmed(ctx context.Context, db *sql.DB, sessionID, token 
 	if err := lockSessionLifecycle(ctx, tx, sessionID, false); err != nil {
 		return err
 	}
-	result, err := tx.ExecContext(ctx, `UPDATE sessions SET status = 'ended', ended_at = clock_timestamp(),
+	var endedAt time.Time
+	err = tx.QueryRowContext(ctx, `UPDATE sessions SET status = 'ended', ended_at = clock_timestamp(),
 		whiteboard_server_archive_complete = true, canvas_freeze_token = NULL, canvas_freeze_until = NULL
-		WHERE id = $1 AND status = 'live' AND canvas_freeze_token = $2::uuid AND canvas_freeze_until > clock_timestamp()`, sessionID, token)
-	if err != nil {
-		return err
-	}
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if affected != 1 {
+		WHERE id = $1 AND status = 'live' AND canvas_freeze_token = $2::uuid AND canvas_freeze_until > clock_timestamp() RETURNING ended_at`, sessionID, token).Scan(&endedAt)
+	if err == sql.ErrNoRows {
 		return ErrSessionEndInProgress
+	}
+	if err != nil {
+		return err
 	}
 	if len(snapshots) > 0 {
 		ids, states := make([]string, len(snapshots)), make([]string, len(snapshots))
 		for i, snapshot := range snapshots {
 			ids[i], states[i] = snapshot.CanvasID, snapshot.YjsState
 		}
-		result, err = tx.ExecContext(ctx, `UPDATE session_canvases AS c SET yjs_state = bundle.state, updated_at = clock_timestamp()
+		result, err := tx.ExecContext(ctx, `UPDATE session_canvases AS c SET yjs_state = bundle.state, updated_at = clock_timestamp()
 			FROM unnest($2::uuid[], $3::text[]) AS bundle(id, state)
 			WHERE c.session_id = $1 AND c.id = bundle.id`, sessionID, pq.Array(ids), pq.Array(states))
 		if err != nil {
 			return err
 		}
-		affected, err = result.RowsAffected()
+		affected, err := result.RowsAffected()
 		if err != nil {
 			return err
 		}
@@ -315,7 +325,13 @@ func completeSessionConfirmed(ctx context.Context, db *sql.DB, sessionID, token 
 			return ErrSessionSnapshotCountMismatch
 		}
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	if endedOut != nil {
+		*endedOut = endedAt
+	}
+	return nil
 }
 
 // abortSessionFreezeLease only releases the still-live operation that owns
@@ -355,9 +371,10 @@ func completeSessionDegradedResult(ctx context.Context, db *sql.DB, sessionID, t
 	var active bool
 	var status string
 	var archiveComplete sql.NullBool
-	err = tx.QueryRowContext(ctx, `SELECT status, whiteboard_server_archive_complete, canvas_freeze_token,
+	var existingEndedAt sql.NullTime
+	err = tx.QueryRowContext(ctx, `SELECT status, ended_at, whiteboard_server_archive_complete, canvas_freeze_token,
 		COALESCE(canvas_freeze_until > clock_timestamp(), false) FROM sessions WHERE id = $1`, sessionID).
-		Scan(&status, &archiveComplete, &existing, &active)
+		Scan(&status, &existingEndedAt, &archiveComplete, &existing, &active)
 	if err == sql.ErrNoRows {
 		return sessionEndResult{}, ErrSessionEndInProgress
 	}
@@ -385,29 +402,30 @@ func completeSessionDegradedResult(ctx context.Context, db *sql.DB, sessionID, t
 			archive = new(bool)
 			*archive = archiveComplete.Bool
 		}
-		return sessionEndResult{WhiteboardServerArchiveComplete: archive}, nil
+		var endedAt *time.Time
+		if existingEndedAt.Valid {
+			endedAt = &existingEndedAt.Time
+		}
+		return sessionEndResult{WhiteboardServerArchiveComplete: archive, EndedAt: endedAt}, nil
 	}
 	if active && (!existing.Valid || existing.String != token) {
 		return sessionEndResult{}, ErrSessionEndInProgress
 	}
-	result, err := tx.ExecContext(ctx, `UPDATE sessions SET status = 'ended', ended_at = clock_timestamp(),
+	var endedAt time.Time
+	err = tx.QueryRowContext(ctx, `UPDATE sessions SET status = 'ended', ended_at = clock_timestamp(),
 		whiteboard_server_archive_complete = false, canvas_freeze_token = NULL, canvas_freeze_until = NULL
-		WHERE id = $1 AND status = 'live'`, sessionID)
-	if err != nil {
-		return sessionEndResult{}, err
-	}
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return sessionEndResult{}, err
-	}
-	if affected != 1 {
+		WHERE id = $1 AND status = 'live' RETURNING ended_at`, sessionID).Scan(&endedAt)
+	if err == sql.ErrNoRows {
 		return sessionEndResult{}, ErrSessionEndInProgress
+	}
+	if err != nil {
+		return sessionEndResult{}, err
 	}
 	if err := tx.Commit(); err != nil {
 		return sessionEndResult{}, err
 	}
 	archive := false
-	return sessionEndResult{WhiteboardServerArchiveComplete: &archive}, nil
+	return sessionEndResult{WhiteboardServerArchiveComplete: &archive, EndedAt: &endedAt}, nil
 }
 
 // replaceClassLiveSessions obeys the global class-guard then lifecycle-lock order.

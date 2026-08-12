@@ -213,7 +213,7 @@ starts and calls `process.exit(1)` on any misconfig — mirrors the Go API's
   The default listener target is `http://127.0.0.1:4001`, derived from
   `HOCUSPOCUS_CONTROL_PORT` (default `4001`).
   Set `HOCUSPOCUS_INTERNAL_URL` only for an explicit override: HTTP is allowed
-  only on a numeric IPv4 loopback host, while remote listeners require verified HTTPS.
+  only on canonical numeric `127.0.0.0/8` or IPv6 `::1` loopback hosts, while remote listeners require verified HTTPS.
   This URL and secret are server-only; do not put either in `NEXT_PUBLIC_*`.
 - `BRIDGE_HOST_EXPOSURE` — same semantics as the Go API (see "Host Exposure
   Declaration" above). Allowed values: `""` / `"localhost"` (default) and

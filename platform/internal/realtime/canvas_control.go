@@ -4,6 +4,7 @@ package realtime
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"crypto/tls"
@@ -17,7 +18,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"sort"
 	"strings"
 	"time"
 
@@ -51,7 +51,7 @@ type FreezeRequest struct {
 type CanvasSnapshot struct {
 	CanvasID string
 	State    []byte
-	Digest   string
+	SHA256   string
 }
 type FreezeBundle struct {
 	Snapshots []CanvasSnapshot
@@ -142,14 +142,23 @@ func (c *CanvasControlClient) Freeze(ctx context.Context, request FreezeRequest)
 			slog.Warn("canvas lifecycle freeze failed", "reason", safeControlError(last))
 			return FreezeBundle{}, fmt.Errorf("canvas freeze failed: %w", last)
 		}
-		// bounded deterministic jitter is enough to avoid immediate retry storms
-		wait := time.Duration(5+(attempt%4)*7) * time.Millisecond
+		// Independent cryptographic jitter prevents a fleet from synchronizing
+		// retry traffic after a listener restart. It remains bounded by the
+		// original request deadline.
+		wait := retryJitter()
 		select {
 		case <-ctx.Done():
 			return FreezeBundle{}, fmt.Errorf("canvas freeze failed: %w", last)
 		case <-time.After(wait):
 		}
 	}
+}
+func retryJitter() time.Duration {
+	var b [1]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return 11 * time.Millisecond
+	}
+	return time.Duration(5+int(b[0])%24) * time.Millisecond
 }
 func validateFreezeRequest(r FreezeRequest) error {
 	if id, err := uuid.Parse(r.SessionID); err != nil || id.String() != r.SessionID {
@@ -213,16 +222,16 @@ func validateFreezeBundle(data []byte, requested []string) (FreezeBundle, error)
 	type snapshot struct {
 		CanvasID string `json:"canvasId"`
 		State    string `json:"stateBase64"`
-		Digest   string `json:"digest"`
+		SHA256   string `json:"sha256"`
 	}
 	type wire struct {
 		Snapshots []snapshot `json:"snapshots"`
-		Closed    int        `json:"closed"`
+		Closed    *int       `json:"closed"`
 	}
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
 	var w wire
-	if err := dec.Decode(&w); err != nil || dec.Decode(&struct{}{}) != io.EOF || w.Snapshots == nil || w.Closed < 0 {
+	if err := dec.Decode(&w); err != nil || dec.Decode(&struct{}{}) != io.EOF || w.Snapshots == nil || w.Closed == nil || *w.Closed < 0 {
 		return FreezeBundle{}, errors.New("invalid canvas control bundle")
 	}
 	if len(w.Snapshots) > maxSnapshots {
@@ -232,7 +241,7 @@ func validateFreezeBundle(data []byte, requested []string) (FreezeBundle, error)
 	for _, id := range requested {
 		want[id] = struct{}{}
 	}
-	b := FreezeBundle{Snapshots: make([]CanvasSnapshot, 0, len(w.Snapshots)), Closed: w.Closed}
+	b := FreezeBundle{Snapshots: make([]CanvasSnapshot, 0, len(w.Snapshots)), Closed: *w.Closed}
 	aggregate := 0
 	for i, s := range w.Snapshots {
 		if _, ok := want[s.CanvasID]; !ok || (i > 0 && w.Snapshots[i-1].CanvasID >= s.CanvasID) {
@@ -250,10 +259,10 @@ func validateFreezeBundle(data []byte, requested []string) (FreezeBundle, error)
 			return FreezeBundle{}, errors.New("canvas snapshot aggregate exceeds size limit")
 		}
 		d := sha256.Sum256(state)
-		if len(s.Digest) != 64 || s.Digest != strings.ToLower(s.Digest) || subtle.ConstantTimeCompare([]byte(hex.EncodeToString(d[:])), []byte(s.Digest)) != 1 {
+		if len(s.SHA256) != 64 || s.SHA256 != strings.ToLower(s.SHA256) || subtle.ConstantTimeCompare([]byte(hex.EncodeToString(d[:])), []byte(s.SHA256)) != 1 {
 			return FreezeBundle{}, errors.New("canvas control bundle digest mismatch")
 		}
-		b.Snapshots = append(b.Snapshots, CanvasSnapshot{CanvasID: s.CanvasID, State: state, Digest: s.Digest})
+		b.Snapshots = append(b.Snapshots, CanvasSnapshot{CanvasID: s.CanvasID, State: state, SHA256: s.SHA256})
 	}
 	return b, nil
 }
@@ -280,10 +289,25 @@ func (c *CanvasControlClient) terminal(ctx context.Context, sidPath, sid, token 
 		return
 	}
 	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+	body, readErr := readBounded(resp.Body, 4096)
+	if readErr != nil || !validTerminalAck(sidPath, resp.StatusCode, body) {
 		slog.Warn("canvas lifecycle terminal acknowledgement failed", "operation", sidPath, "status", resp.StatusCode)
 	}
+}
+func validTerminalAck(path string, status int, body []byte) bool {
+	if status != http.StatusOK {
+		return false
+	}
+	var ack map[string]bool
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&ack); err != nil || dec.Decode(&struct{}{}) != io.EOF {
+		return false
+	}
+	if path == "/internal/canvas-sessions/unfreeze" {
+		return len(ack) == 1 && ack["unfrozen"]
+	}
+	return len(ack) == 1 && ack["released"]
 }
 func (c *CanvasControlClient) newRequest(ctx context.Context, path string, body []byte) (*http.Request, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, bytes.NewReader(body))
@@ -300,5 +324,3 @@ func safeControlError(err error) string {
 	}
 	return err.Error()
 }
-
-var _ = sort.Strings

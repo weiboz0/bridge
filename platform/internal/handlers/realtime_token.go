@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -323,7 +324,10 @@ func (h *RealtimeHandler) FreezeAuth(w http.ResponseWriter, r *http.Request) {
 		SessionID   string `json:"sessionId"`
 		FreezeToken string `json:"freezeToken"`
 	}
-	if !decodeJSONStrict(w, r, &body) {
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&body); err != nil || dec.Decode(&struct{}{}) != io.EOF {
+		writeError(w, http.StatusBadRequest, "Invalid JSON")
 		return
 	}
 	if parsed, err := uuid.Parse(body.SessionID); err != nil || parsed.String() != body.SessionID {

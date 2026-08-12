@@ -35,7 +35,7 @@ func TestCanvasControlClient_FreezeUsesStrictLocalTransportAndExactBundle(t *tes
 		_ = json.NewEncoder(w).Encode(map[string]any{"snapshots": []map[string]string{{
 			"canvasId":    "11111111-1111-4111-8111-111111111111",
 			"stateBase64": base64.StdEncoding.EncodeToString(state),
-			"digest":      hex.EncodeToString(digest[:]),
+			"sha256":      hex.EncodeToString(digest[:]),
 		}}, "closed": 0})
 	}))
 	defer server.Close()
@@ -56,7 +56,7 @@ func TestCanvasControlClient_FreezeUsesStrictLocalTransportAndExactBundle(t *tes
 	require.Equal(t, "22222222-2222-4222-8222-222222222222", gotBody.SessionID)
 	require.Equal(t, "33333333-3333-4333-8333-333333333333", gotBody.Token)
 	require.Equal(t, gotBody.CanvasIDs, []string{"11111111-1111-4111-8111-111111111111"})
-	require.Equal(t, []CanvasSnapshot{{CanvasID: gotBody.CanvasIDs[0], State: state, Digest: hex.EncodeToString(digest[:])}}, bundle.Snapshots)
+	require.Equal(t, []CanvasSnapshot{{CanvasID: gotBody.CanvasIDs[0], State: state, SHA256: hex.EncodeToString(digest[:])}}, bundle.Snapshots)
 }
 
 func TestCanvasControlClient_RejectsUnsafeURLsRedirectsAndMalformedBundles(t *testing.T) {
@@ -139,13 +139,13 @@ func TestCanvasControlClient_ValidatesSubsetOrderingAndClosedCount(t *testing.T)
 	}
 	_, err := validateFreezeBundle(good([]any{}, 0), []string{id})
 	require.NoError(t, err, "a loaded-document subset may be empty")
-	valid := map[string]string{"canvasId": id, "stateBase64": base64.StdEncoding.EncodeToString(state), "digest": hex.EncodeToString(digest[:])}
+	valid := map[string]string{"canvasId": id, "stateBase64": base64.StdEncoding.EncodeToString(state), "sha256": hex.EncodeToString(digest[:])}
 	for _, tc := range []struct {
 		name string
 		body []byte
 	}{
 		{"negative closed", good([]any{}, -1)},
-		{"unexpected", good([]any{map[string]string{"canvasId": "22222222-2222-4222-8222-222222222222", "stateBase64": valid["stateBase64"], "digest": valid["digest"]}}, 0)},
+		{"unexpected", good([]any{map[string]string{"canvasId": "22222222-2222-4222-8222-222222222222", "stateBase64": valid["stateBase64"], "sha256": valid["sha256"]}}, 0)},
 		{"trailing", append(good([]any{valid}, 0), []byte("x")...)},
 	} {
 		t.Run(tc.name, func(t *testing.T) { _, err := validateFreezeBundle(tc.body, []string{id}); require.Error(t, err) })
@@ -161,7 +161,11 @@ func TestCanvasControlClient_TerminalCallsUseExactRoutesAndFreezeToken(t *testin
 		var body map[string]string
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
 		require.Equal(t, "33333333-3333-4333-8333-333333333333", body["freezeToken"])
-		w.WriteHeader(http.StatusNoContent)
+		if r.URL.Path == "/internal/canvas-sessions/unfreeze" {
+			_, _ = w.Write([]byte(`{"unfrozen":true}`))
+		} else {
+			_, _ = w.Write([]byte(`{"released":true}`))
+		}
 	}))
 	defer server.Close()
 	client, err := NewCanvasControlClient(CanvasControlConfig{URL: server.URL, Secret: secret, HTTPClient: server.Client()})

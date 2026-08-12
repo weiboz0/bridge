@@ -74,6 +74,7 @@ The canvas metadata endpoints require authentication and a session UUID.
 - **`GET /api/sessions/{id}/canvases`** returns `{ "items": Canvas[] }` containing only canvases visible to the caller.
 - **`POST /api/sessions/{id}/canvases`** creates an owner canvas while the session is live.
   The body requires `title` and `visibility` (`private`, `host`, `participants`, or `session`); the session floor may raise the requested visibility.
+  Only the represented teacher or a currently `present` participant may create it; public outsiders, invited/left users, and independent administrator or impersonator claims are denied.
 - **`PATCH /api/sessions/{id}/canvases/{canvasId}`** changes an owner canvas title and/or loosens its visibility.
   Equal or tighter visibility is rejected.
 - **`DELETE /api/sessions/{id}/canvases/{canvasId}`** deletes an owner canvas and its persisted document while live.
@@ -93,8 +94,8 @@ The older `/settings` route has no compatibility alias.
 
 An explicit successful end has the ordinary top-level session fields plus
 `whiteboardServerArchiveComplete`.
-When that value is `false`, it also has stable
-`warningCode: "whiteboard_server_archive_incomplete"` and a teacher-facing warning.
+When that value is `false`, it also has
+`warning: "whiteboard_server_archive_incomplete"`.
 It has no nested session wrapper.
 Canvas documents are read through the existing realtime-token mint endpoint using the `canvas:{canvasId}` scope; a token's `readOnly` claim is enforced by Hocuspocus, not merely by the browser UI.
 

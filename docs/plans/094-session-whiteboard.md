@@ -320,6 +320,15 @@ That recheck is now defense in depth: the confirmed path gains the lifecycle lea
   Explicit end responses are top-level, include the durable completion flag, and use stable `whiteboard_server_archive_incomplete` warning metadata without a post-commit database reread.
 - `[PENDING]` Phase 10's control listener and the Phase-9 frontend consumer remain out of scope for this backend remediation.
 
+#### Phase 9 lifecycle-protocol proof remediation (2026-08-12)
+
+- `[backend]` The control response schema is now exactly `snapshots[{canvasId,stateBase64,sha256}]` plus a required non-negative `closed` count.
+  Terminal calls accept only exact HTTP 200 JSON acknowledgements: `{ "unfrozen": true }` or `{ "released": true }`.
+  The client retries pre-header, retryable-conflict, and body-read transport failures with cryptographic bounded jitter inside one original two-second deadline.
+- `[backend]` Freeze-auth rejects unknown and trailing JSON, uses a constant-time control bearer comparison, and status-first end returns the database transaction's durable `ended_at` rather than fabricating a process-clock timestamp.
+  End/replacement ordering is durable transition, event, scheduled completion, then asynchronous best-effort terminal complete; failure cleanup uses a fresh bounded context and token-conditional abort.
+- `[GREEN]` Before this commit, both `DATABASE_URL` and `TEST_DATABASE_URL` were pinned to `postgresql://work@127.0.0.1:5432/bridge_test` for `go test ./internal/realtime ./internal/config ./internal/handlers ./internal/store -run 'Test(CanvasControl|EndSession|CreateSessionReplacement|ScheduleStartReplacement|FreezeAuth|RealtimeAuthLifecycle|CanvasSettings|CanvasCreate|RealtimeControl|SessionLifecycle)' -count=1 -timeout 120s`, `go test ./... -count=1 -timeout 120s`, `go vet ./internal/realtime ./internal/config ./internal/handlers ./internal/store`, and `git diff --check`.
+
 ### Phase 10 — Hocuspocus fence, admission, capture, and control listener *(Terra backend; tests by Terra)*
 
 - Move the new lifecycle machinery into focused `server/canvas-lifecycle.ts`; `server/hocuspocus.ts` wires its hooks and starts a separate authenticated control listener.

@@ -968,8 +968,9 @@ func TestEndSession_DegradedResponseWarnsAndEmitsOnlyAfterDurableCommit(t *testi
 	var body map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
 	require.Equal(t, false, body["whiteboardServerArchiveComplete"])
-	require.Equal(t, "Session ended, but the latest whiteboard changes may not have been archived.", body["warning"])
-	require.Equal(t, "whiteboard_server_archive_incomplete", body["warningCode"])
+	require.Equal(t, "whiteboard_server_archive_incomplete", body["warning"])
+	_, hasWarningCode := body["warningCode"]
+	require.False(t, hasWarningCode)
 
 	var status string
 	require.NoError(t, fx.db.QueryRowContext(context.Background(), `SELECT status FROM sessions WHERE id = $1`, fx.sessionID).Scan(&status))
