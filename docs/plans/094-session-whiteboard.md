@@ -420,6 +420,15 @@ That recheck is now defense in depth: the confirmed path gains the lifecycle lea
   After `CHECK_TEST_DATABASE_URL=... node scripts/check-test-database-url.mjs` live-verified `bridge_test`, `PATH=/home/chris/.bun/bin:$PATH DATABASE_URL=... TEST_DATABASE_URL=... bunx --bun vitest run tests/unit/whiteboard-archive.test.tsx --config vitest.config.ts` passed 9 tests; `PATH=/home/chris/.bun/bin:$PATH bunx --bun tsc --noEmit` also passed.
 - No production file was edited by this test-only remediation; the pre-existing frontend production edits remain unstaged for their owner.
 
+#### Phase 9 settings state-isolation RED proofs (2026-08-12; tests only)
+
+- `[RED]` Added live-panel settings regressions for an immediate session A-to-B rerender, reverse-order late A settings completion, a failed or forbidden B settings read, and ensuring an old A floor cannot remain actionable as a PATCH to B.
+  The same test matrix requires a successful PATCH response to reject both the GET-only `whiteboardServerArchiveComplete` field and unknown fields, show the settings error, and retain the previously safe floor.
+- `[RED]` With `DATABASE_URL` and `TEST_DATABASE_URL` explicitly pinned to `postgresql://work@127.0.0.1:5432/bridge_test`, `/home/chris/.bun/bin/bunx --bun vitest run tests/unit/whiteboard-panel.test.tsx tests/unit/whiteboard-archive.test.tsx` recorded 6 expected panel failures: stale floor, stale archive warning, late-A overwrite, B-read failure retention, stale-floor PATCH exposure, and acceptance of GET-only archive completion in a PATCH response.
+  The paired 403 and unknown-PATCH-field cases already pass; the archive suite remains green (9 tests), so the command reports 15 passed and 6 failed tests overall.
+- `[GREEN]` The same explicitly pinned environment completed `/home/chris/.bun/bin/bunx --bun tsc --noEmit` successfully after adding the RED tests.
+- `[RED]` No production file changed in this test-only proof.
+
 ### Phase 10 — Hocuspocus fence, admission, capture, and control listener *(Terra backend; tests by Terra)*
 
 - Move the new lifecycle machinery into focused `server/canvas-lifecycle.ts`; `server/hocuspocus.ts` wires its hooks and starts a separate authenticated control listener.

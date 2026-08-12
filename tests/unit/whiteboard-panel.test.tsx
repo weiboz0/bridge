@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 const SESSION_ID = "11111111-1111-4111-8111-111111111111";
 
@@ -25,6 +25,14 @@ function json(payload: unknown, status = 200): Response {
 
 function requestURL(input: RequestInfo | URL): string {
   return typeof input === "string" ? input : input.toString();
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
 }
 
 describe("WhiteboardPanel — plan 094 phase 9 settings cutover", () => {
@@ -105,5 +113,144 @@ describe("WhiteboardPanel — plan 094 phase 9 settings cutover", () => {
       // Labels make all three cases individually legible in a RED report.
       expect(label).toBeTruthy();
     }
+  });
+
+  it("immediately hides session A's floor while session B settings are loading", async () => {
+    const sessionB = "22222222-2222-4222-8222-222222222222";
+    const settingsB = deferred<Response>();
+    const canvasesB = deferred<Response>();
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = requestURL(input);
+      if (url === `/api/sessions/${SESSION_ID}/canvases`) return Promise.resolve(json({ items: [] }));
+      if (url === `/api/sessions/${sessionB}/canvases`) return canvasesB.promise;
+      if (url === `/api/sessions/${SESSION_ID}/canvas-settings`) return Promise.resolve(json({ canvasFloor: "host" }));
+      if (url === `/api/sessions/${sessionB}/canvas-settings`) return settingsB.promise;
+      throw new Error(`unexpected endpoint ${url}`);
+    });
+
+    const { rerender } = render(<WhiteboardPanel sessionId={SESSION_ID} teacherControls />);
+    expect(await screen.findByLabelText("Canvas floor")).toHaveValue("host");
+
+    rerender(<WhiteboardPanel sessionId={sessionB} teacherControls />);
+
+    expect(screen.queryByLabelText("Canvas floor")).not.toBeInTheDocument();
+  });
+
+  it("immediately hides session A's archive warning while session B settings are loading", async () => {
+    const sessionB = "22222222-2222-4222-8222-222222222222";
+    const settingsB = deferred<Response>();
+    const canvasesB = deferred<Response>();
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = requestURL(input);
+      if (url === `/api/sessions/${SESSION_ID}/canvases`) return Promise.resolve(json({ items: [] }));
+      if (url === `/api/sessions/${sessionB}/canvases`) return canvasesB.promise;
+      if (url === `/api/sessions/${SESSION_ID}/canvas-settings`) {
+        return Promise.resolve(json({ canvasFloor: "private", whiteboardServerArchiveComplete: false }));
+      }
+      if (url === `/api/sessions/${sessionB}/canvas-settings`) return settingsB.promise;
+      throw new Error(`unexpected endpoint ${url}`);
+    });
+
+    const { rerender } = render(<WhiteboardPanel sessionId={SESSION_ID} archive />);
+    expect(await screen.findByText("Latest whiteboard changes may not have been archived")).toBeInTheDocument();
+
+    rerender(<WhiteboardPanel sessionId={sessionB} archive />);
+
+    expect(screen.queryByText("Latest whiteboard changes may not have been archived")).not.toBeInTheDocument();
+  });
+
+  it("does not allow a reverse-order session A response to overwrite session B settings", async () => {
+    const sessionB = "22222222-2222-4222-8222-222222222222";
+    const settingsA = deferred<Response>();
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = requestURL(input);
+      if (url.endsWith("/canvases")) return Promise.resolve(json({ items: [] }));
+      if (url === `/api/sessions/${SESSION_ID}/canvas-settings`) return settingsA.promise;
+      if (url === `/api/sessions/${sessionB}/canvas-settings`) return Promise.resolve(json({ canvasFloor: "participants" }));
+      throw new Error(`unexpected endpoint ${url}`);
+    });
+
+    const { rerender } = render(<WhiteboardPanel sessionId={SESSION_ID} teacherControls />);
+    rerender(<WhiteboardPanel sessionId={sessionB} teacherControls />);
+
+    expect(await screen.findByLabelText("Canvas floor")).toHaveValue("participants");
+    await act(async () => {
+      settingsA.resolve(json({ canvasFloor: "host" }));
+      await settingsA.promise;
+    });
+    expect(screen.getByLabelText("Canvas floor")).toHaveValue("participants");
+  });
+
+  it.each([
+    ["fails", json({}, 500)],
+    ["is forbidden", new Response(null, { status: 403 })],
+  ] as const)("does not retain session A settings when session B settings %s", async (_outcome, settingsB) => {
+    const sessionBId = "22222222-2222-4222-8222-222222222222";
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = requestURL(input);
+      if (url.endsWith("/canvases")) return Promise.resolve(json({ items: [] }));
+      if (url === `/api/sessions/${SESSION_ID}/canvas-settings`) return Promise.resolve(json({ canvasFloor: "host" }));
+      if (url === `/api/sessions/${sessionBId}/canvas-settings`) return Promise.resolve(settingsB);
+      throw new Error(`unexpected endpoint ${url}`);
+    });
+
+    const { rerender } = render(<WhiteboardPanel sessionId={SESSION_ID} teacherControls />);
+    expect(await screen.findByLabelText("Canvas floor")).toHaveValue("host");
+
+    rerender(<WhiteboardPanel sessionId={sessionBId} teacherControls />);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(`/api/sessions/${sessionBId}/canvas-settings`));
+
+    expect(screen.queryByLabelText("Canvas floor")).not.toBeInTheDocument();
+  });
+
+  it("cannot PATCH session B with the stale session A floor while B settings are loading", async () => {
+    const sessionB = "22222222-2222-4222-8222-222222222222";
+    const settingsB = deferred<Response>();
+    const canvasesB = deferred<Response>();
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = requestURL(input);
+      if (url === `/api/sessions/${SESSION_ID}/canvases`) return Promise.resolve(json({ items: [] }));
+      if (url === `/api/sessions/${sessionB}/canvases`) return canvasesB.promise;
+      if (url === `/api/sessions/${SESSION_ID}/canvas-settings`) return Promise.resolve(json({ canvasFloor: "host" }));
+      if (url === `/api/sessions/${sessionB}/canvas-settings` && init?.method === "PATCH") {
+        return Promise.resolve(json({ canvasFloor: "participants" }));
+      }
+      if (url === `/api/sessions/${sessionB}/canvas-settings`) return settingsB.promise;
+      throw new Error(`unexpected endpoint ${url}`);
+    });
+
+    const { rerender } = render(<WhiteboardPanel sessionId={SESSION_ID} teacherControls />);
+    expect(await screen.findByLabelText("Canvas floor")).toHaveValue("host");
+
+    rerender(<WhiteboardPanel sessionId={sessionB} teacherControls />);
+
+    expect(screen.queryByLabelText("Canvas floor")).not.toBeInTheDocument();
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "PATCH")).toHaveLength(0);
+  });
+
+  it.each([
+    ["GET-only archive status", { canvasFloor: "participants", whiteboardServerArchiveComplete: true }],
+    ["an unknown field", { canvasFloor: "participants", unexpected: true }],
+  ])("rejects a PATCH success response with %s and preserves the safe floor", async (_label, patchResponse) => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = requestURL(input);
+      if (url.endsWith("/canvases")) return Promise.resolve(json({ items: [] }));
+      if (url.endsWith("/canvas-settings") && init?.method === "PATCH") return Promise.resolve(json(patchResponse));
+      if (url.endsWith("/canvas-settings")) return Promise.resolve(json({ canvasFloor: "host" }));
+      throw new Error(`unexpected endpoint ${url}`);
+    });
+
+    render(<WhiteboardPanel sessionId={SESSION_ID} teacherControls />);
+    const floor = await screen.findByLabelText("Canvas floor");
+    fireEvent.change(floor, { target: { value: "participants" } });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Unable to update the canvas floor");
+    expect(screen.getByLabelText("Canvas floor")).toHaveValue("host");
   });
 });
