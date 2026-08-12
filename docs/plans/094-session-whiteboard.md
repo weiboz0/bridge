@@ -438,6 +438,15 @@ That recheck is now defense in depth: the confirmed path gains the lifecycle lea
 - `[GREEN]` The same explicitly pinned environment completed `/home/chris/.bun/bin/bunx --bun tsc --noEmit` successfully after adding the RED tests.
 - `[RED]` No production file changed in this test-only proof.
 
+#### Phase 9 in-flight settings PATCH isolation RED proof (2026-08-12; test-only)
+
+- `[RED]` Added a terminal-producer race: begin a session A floor PATCH, rerender session B, and first let B's dedicated settings GET render its floor control without an error.
+  Resolving A afterward as a valid PATCH success, a non-OK failure, or a malformed success must leave B's floor control and error-free settings status intact.
+- `[RED]` With both database URLs explicitly pinned to `postgresql://work@127.0.0.1:5432/bridge_test`, `/home/chris/.bun/bin/bunx --bun vitest run tests/unit/whiteboard-panel.test.tsx tests/unit/whiteboard-archive.test.tsx` reports exactly the three new expected failures: each late A terminal outcome clears B's already-rendered `Canvas floor` control.
+  The prior panel regressions and all 9 archive tests pass, yielding 21 passed and 3 failed tests across the focused command.
+- `[GREEN]` `/home/chris/.bun/bin/bunx --bun tsc --noEmit` and `git diff --check` passed with the same pinned test-database environment.
+  No production file changed.
+
 ### Phase 10 — Hocuspocus fence, admission, capture, and control listener *(Terra backend; tests by Terra)*
 
 - Move the new lifecycle machinery into focused `server/canvas-lifecycle.ts`; `server/hocuspocus.ts` wires its hooks and starts a separate authenticated control listener.

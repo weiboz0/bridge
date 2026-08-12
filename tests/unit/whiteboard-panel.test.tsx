@@ -253,4 +253,43 @@ describe("WhiteboardPanel — plan 094 phase 9 settings cutover", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Unable to update the canvas floor");
     expect(screen.getByLabelText("Canvas floor")).toHaveValue("host");
   });
+
+  it.each([
+    ["success", json({ canvasFloor: "participants" })],
+    ["failure", json({}, 500)],
+    ["malformed success", json({ canvasFloor: "participants", unexpected: true })],
+  ] as const)("keeps session B's settings state after an in-flight session A PATCH %s", async (_outcome, patchAResult) => {
+    const sessionB = "22222222-2222-4222-8222-222222222222";
+    const patchA = deferred<Response>();
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = requestURL(input);
+      if (url.endsWith("/canvases")) return Promise.resolve(json({ items: [] }));
+      if (url === `/api/sessions/${SESSION_ID}/canvas-settings` && init?.method === "PATCH") return patchA.promise;
+      if (url === `/api/sessions/${SESSION_ID}/canvas-settings`) return Promise.resolve(json({ canvasFloor: "host" }));
+      if (url === `/api/sessions/${sessionB}/canvas-settings`) {
+        return Promise.resolve(json({ canvasFloor: "participants", whiteboardServerArchiveComplete: true }));
+      }
+      throw new Error(`unexpected endpoint ${url}`);
+    });
+
+    const { rerender } = render(<WhiteboardPanel sessionId={SESSION_ID} teacherControls />);
+    fireEvent.change(await screen.findByLabelText("Canvas floor"), { target: { value: "participants" } });
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      `/api/sessions/${SESSION_ID}/canvas-settings`,
+      { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ canvasFloor: "participants" }) },
+    ));
+
+    rerender(<WhiteboardPanel sessionId={sessionB} teacherControls />);
+    expect(await screen.findByLabelText("Canvas floor")).toHaveValue("participants");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+    await act(async () => {
+      patchA.resolve(patchAResult);
+      await patchA.promise;
+    });
+
+    expect(screen.getByLabelText("Canvas floor")).toHaveValue("participants");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
 });
