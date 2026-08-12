@@ -69,11 +69,13 @@ func TestCanvasControlClient_RejectsUnsafeURLsRedirectsAndMalformedBundles(t *te
 		})
 	}
 
+	redirectTargetHit := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/freeze" {
+		if r.URL.Path == "/internal/canvas-sessions/freeze" {
 			http.Redirect(w, r, "/other", http.StatusFound)
 			return
 		}
+		redirectTargetHit = true
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
@@ -81,7 +83,38 @@ func TestCanvasControlClient_RejectsUnsafeURLsRedirectsAndMalformedBundles(t *te
 	require.NoError(t, err)
 	_, err = client.Freeze(context.Background(), FreezeRequest{SessionID: "22222222-2222-4222-8222-222222222222", FreezeToken: "33333333-3333-4333-8333-333333333333"})
 	require.Error(t, err)
+	require.False(t, redirectTargetHit)
 	require.NotContains(t, err.Error(), strings.Repeat("a", 64))
+}
+
+func TestCanvasControlClient_RetriesConflictAndPartialCapturedBodyWithSameToken(t *testing.T) {
+	state := []byte("cached-after-capture")
+	sum := sha256.Sum256(state)
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls == 1 {
+			w.WriteHeader(http.StatusConflict)
+			return
+		}
+		if calls == 2 {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"snapshots":[{"canvasId":"11111111-1111-4111-8111-111111111111","stateBase64":"` + base64.StdEncoding.EncodeToString(state) + `","sha256":"` + hex.EncodeToString(sum[:]) + `"}`))
+			if h, ok := w.(http.Hijacker); ok {
+				c, _, _ := h.Hijack()
+				_ = c.Close()
+			}
+			return
+		}
+		_, _ = w.Write([]byte(`{"snapshots":[{"canvasId":"11111111-1111-4111-8111-111111111111","stateBase64":"` + base64.StdEncoding.EncodeToString(state) + `","sha256":"` + hex.EncodeToString(sum[:]) + `"}],"closed":1}`))
+	}))
+	defer server.Close()
+	client, err := NewCanvasControlClient(CanvasControlConfig{URL: server.URL, Secret: strings.Repeat("c", 64), HTTPClient: server.Client()})
+	require.NoError(t, err)
+	bundle, err := client.Freeze(context.Background(), FreezeRequest{SessionID: "22222222-2222-4222-8222-222222222222", FreezeToken: "33333333-3333-4333-8333-333333333333", CanvasIDs: []string{"11111111-1111-4111-8111-111111111111"}})
+	require.NoError(t, err)
+	require.Equal(t, 3, calls)
+	require.Equal(t, state, bundle.Snapshots[0].State)
 }
 
 func TestCanvasControlClient_RetriesSameTokenWithinTwoSecondBudgetAndTerminalCallsAreBestEffort(t *testing.T) {

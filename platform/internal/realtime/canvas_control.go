@@ -32,7 +32,11 @@ const (
 	maxAggregateBytes         = 32 * 1024 * 1024
 )
 
-var errCanvasControlRedirect = errors.New("canvas control redirects are refused")
+var (
+	errCanvasControlRedirect   = errors.New("canvas control redirects are refused")
+	errControlResponseRead     = errors.New("control response read failed")
+	errControlResponseTooLarge = errors.New("control response exceeds size limit")
+)
 
 type CanvasControlConfig struct {
 	URL, Secret string
@@ -203,7 +207,7 @@ func (c *CanvasControlClient) freezeOnce(ctx context.Context, request FreezeRequ
 	}
 	data, err := readBounded(resp.Body, maxControlResponseBytes)
 	if err != nil {
-		return FreezeBundle{}, true, err
+		return FreezeBundle{}, errors.Is(err, errControlResponseRead), err
 	}
 	bundle, err := validateFreezeBundle(data, request.CanvasIDs)
 	return bundle, false, err
@@ -211,10 +215,10 @@ func (c *CanvasControlClient) freezeOnce(ctx context.Context, request FreezeRequ
 func readBounded(r io.Reader, limit int64) ([]byte, error) {
 	b, err := io.ReadAll(io.LimitReader(r, limit+1))
 	if err != nil {
-		return nil, errors.New("control response read failed")
+		return nil, errControlResponseRead
 	}
 	if int64(len(b)) > limit {
-		return nil, errors.New("control response exceeds size limit")
+		return nil, errControlResponseTooLarge
 	}
 	return b, nil
 }

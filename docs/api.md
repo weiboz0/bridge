@@ -97,6 +97,10 @@ An explicit successful end has the ordinary top-level session fields plus
 When that value is `false`, it also has
 `warning: "whiteboard_server_archive_incomplete"`.
 It has no nested session wrapper.
+
+Session creation and scheduled-session start always return `replacedSessions`
+as an array, including `[]` when no live session was replaced. Each item has
+the replaced `id` and durable `whiteboardServerArchiveComplete` flag.
 Canvas documents are read through the existing realtime-token mint endpoint using the `canvas:{canvasId}` scope; a token's `readOnly` claim is enforced by Hocuspocus, not merely by the browser UI.
 
 Live access follows the visibility ladder: owner at `private`; teacher at `host` and wider; a `present` participant at `participants` and wider; and any caller allowed into the live session at `session`.

@@ -566,6 +566,7 @@ func (h *SessionHandler) EndSession(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusConflict, map[string]string{"error": "Session end in progress", "code": "session_end_in_progress"})
 			return
 		}
+		slog.Error("canvas end preparation failed", "sessionId", sessionID, "error", err)
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
 	}
@@ -593,6 +594,7 @@ func (h *SessionHandler) EndSession(w http.ResponseWriter, r *http.Request) {
 				// safely record the honest false/no-snapshot result.
 				degradedEnd, degradedErr := h.Sessions.CompleteSessionDegraded(r.Context(), sessionID, prep.Token)
 				if degradedErr != nil {
+					slog.Error("canvas degraded end failed after confirmed rollback", "sessionId", sessionID, "error", degradedErr)
 					h.cleanupFailedEnd(sessionID, prep.Token)
 					writeError(w, http.StatusInternalServerError, "Database error")
 					return
@@ -601,6 +603,7 @@ func (h *SessionHandler) EndSession(w http.ResponseWriter, r *http.Request) {
 				durablyEnded = true
 				completeAfterCommit = true
 			} else {
+				slog.Error("canvas confirmed end failed", "sessionId", sessionID, "error", completeErr)
 				// An infrastructure failure is not evidence that an end committed.
 				// Keep the session live, clear only our own lease, and release the
 				// realtime fence best-effort.
@@ -612,6 +615,7 @@ func (h *SessionHandler) EndSession(w http.ResponseWriter, r *http.Request) {
 	}
 	if !durablyEnded {
 		if degradedEnd, err := h.Sessions.CompleteSessionDegraded(r.Context(), sessionID, prep.Token); err != nil {
+			slog.Error("canvas degraded end failed", "sessionId", sessionID, "error", err)
 			h.cleanupFailedEnd(sessionID, prep.Token)
 			writeError(w, http.StatusInternalServerError, "Database error")
 			return
@@ -686,13 +690,13 @@ func (h *SessionHandler) settleReplacedSessions(ctx context.Context, replaced []
 
 func settleReplacedSessions(ctx context.Context, replaced []store.ReplacedSession, schedules *store.ScheduleStore, broadcaster *events.Broadcaster, control CanvasControl) {
 	for _, prior := range replaced {
-		if broadcaster != nil {
-			broadcaster.Emit(prior.ID, "session_ended", nil)
-		}
 		if schedules != nil {
 			if err := schedules.CompleteScheduledSession(ctx, prior.ID); err != nil {
 				slog.Warn("failed to complete replaced scheduled session", "sessionId", prior.ID, "error", err)
 			}
+		}
+		if broadcaster != nil {
+			broadcaster.Emit(prior.ID, "session_ended", nil)
 		}
 		if control != nil && prior.ClearedFreezeToken != nil {
 			id, token := prior.ID, *prior.ClearedFreezeToken

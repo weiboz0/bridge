@@ -1,7 +1,9 @@
 package handlers
 
 import (
+	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -246,7 +248,10 @@ func (h *CanvasHandler) PatchCanvasSettings(w http.ResponseWriter, r *http.Reque
 	var body struct {
 		CanvasFloor string `json:"canvasFloor"`
 	}
-	if !decodeJSONStrict(w, r, &body) {
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&body); err != nil || dec.Decode(&struct{}{}) != io.EOF {
+		writeError(w, http.StatusBadRequest, "Invalid JSON")
 		return
 	}
 	if body.CanvasFloor != "private" && body.CanvasFloor != "host" && body.CanvasFloor != "participants" {

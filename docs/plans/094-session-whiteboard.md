@@ -329,6 +329,13 @@ That recheck is now defense in depth: the confirmed path gains the lifecycle lea
   End/replacement ordering is durable transition, event, scheduled completion, then asynchronous best-effort terminal complete; failure cleanup uses a fresh bounded context and token-conditional abort.
 - `[GREEN]` Before this commit, both `DATABASE_URL` and `TEST_DATABASE_URL` were pinned to `postgresql://work@127.0.0.1:5432/bridge_test` for `go test ./internal/realtime ./internal/config ./internal/handlers ./internal/store -run 'Test(CanvasControl|EndSession|CreateSessionReplacement|ScheduleStartReplacement|FreezeAuth|RealtimeAuthLifecycle|CanvasSettings|CanvasCreate|RealtimeControl|SessionLifecycle)' -count=1 -timeout 120s`, `go test ./... -count=1 -timeout 120s`, `go vet ./internal/realtime ./internal/config ./internal/handlers ./internal/store`, and `git diff --check`.
 
+#### Phase 9 final backend boundary proofs (2026-08-12)
+
+- `[backend]` The canvas auth transaction performs only a canvas-to-session identity lookup before its shared lifecycle lock, then rereads the canvas, session, participant, and access state under that lock so a deleted canvas cannot authorize after the lock wait.
+  Freeze retry is limited to retryable control transport/409 paths; deterministic response bounds and schema errors fail closed without retry.
+- `[backend]` Control terminal acknowledgements are exact 200 JSON, and replacement responses always serialize `replacedSessions` as an array.
+  The phase remains backend-only; the Hocuspocus listener and frontend consumer work are not claimed by this evidence.
+
 ### Phase 10 — Hocuspocus fence, admission, capture, and control listener *(Terra backend; tests by Terra)*
 
 - Move the new lifecycle machinery into focused `server/canvas-lifecycle.ts`; `server/hocuspocus.ts` wires its hooks and starts a separate authenticated control listener.
