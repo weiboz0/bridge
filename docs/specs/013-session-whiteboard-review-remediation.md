@@ -141,7 +141,9 @@ Because that name does not contain the session lifecycle lock key, every canvas 
 
 The hint is untrusted and grants no access.
 
-The mint transaction acquires the shared lifecycle advisory lock for that supplied session ID before every canvas, session, user, participant, class, or membership read, then authorizes only a row satisfying both the supplied session ID and canvas ID.
+After the ordinary authenticated-request middleware completes, the canvas-authorization transaction acquires the shared lifecycle advisory lock for the supplied session ID before every canvas, session, user, participant, class, or membership read in that transaction, then authorizes only a row satisfying both the supplied session ID and canvas ID.
+
+The lifecycle invariant begins at that authorization-transaction boundary; user/session reads performed by the existing request-authentication middleware before the handler are outside it and grant no canvas access.
 
 A missing, malformed, or mismatched canvas session ID fails closed without an identity-discovery fallback.
 
@@ -159,7 +161,17 @@ The internal canvas authorization branch performs its represented-user existence
 
 The browser token cache and in-flight de-duplication key include both document name and canvas session ID so a mismatched hint cannot reuse a token minted for another identity pair.
 
+The production `useWhiteboard` callsite passes its `canvasId`-derived document name and its selected canvas's `sessionId` together to `useRealtimeToken`.
+
+Changing either value clears the retained token before reminting, so no render can connect a document with a token minted for a different identity pair.
+
 Existing canvas tokens without the new claim fail closed and are reminted during the coordinated feature-branch cutover; their bounded lifetime is not used as a compatibility fallback.
+
+An authenticated caller may supply another session's canonical ID and briefly acquire that session's shared lifecycle lock before the constrained no-row query fails.
+
+This grants no authorization, the lock is transaction-scoped, and PostgreSQL does not grant new shared locks ahead of a queued exclusive end transition.
+
+The residual effect is bounded availability pressure equivalent to deliberate serialization, not a confidentiality or integrity path; request-level abuse controls remain the mitigation rather than weakening lock-before-read.
 
 Canvas create, visibility, delete, and floor transactions join the same order by taking the shared advisory lock before their existing session-row lock.
 
@@ -720,10 +732,11 @@ No migration is run against a non-test database.
 - The atomic successful end update and shared advisory-lock mutation authorization prevent a post-expiry frame from being admitted between the success predicate and commit on a confirmed path.
 - A degraded-path test pauses multiple independently authorized frames across several connections, commits the incomplete end, resumes the concurrent fan-in, and proves transient applies cannot persist while every later mutation and reconnect is denied.
 - Session advisory locks are always acquired before database reads or row locks, and busy-session tests prove end completion under concurrent mutation authorization, canvas creation, visibility, deletion, floor changes, and the legacy one-argument session advisory-lock caller without deadlock or exceeding the approved bound.
-- Canvas mint rejects missing, malformed, and mismatched session-ID hints before authorization can succeed; its first database operation is the matching shared lifecycle advisory lock, and a deterministic exclusive-lock test proves no canvas, session, user, participant, class, or membership query completes before release.
+- Canvas mint rejects missing, malformed, and mismatched session-ID hints before authorization can succeed; after ordinary request authentication, the canvas-authorization transaction's first database operation is the matching shared lifecycle advisory lock, and a deterministic exclusive-lock test proves no canvas, session, user, participant, class, or membership query in that transaction completes before release.
 - The authoritative canvas/session binding round-trips through the required canvas-only signed JWT claim, TypeScript verification, Hocuspocus context, and every internal admission/mutation request; forged hints and claims grant nothing because the post-lock query constrains both IDs.
 - Legacy canvas JWTs missing `sessionId` and non-canvas JWTs carrying it fail closed, while every established non-canvas token/request shape remains compatible.
 - Realtime token cache and in-flight de-duplication tests prove that `canvas:{canvasId}` with two different session-ID hints cannot reuse the same minted token.
+- A production `useWhiteboard` test proves the selected canvas's `(canvas:{canvasId}, sessionId)` pair reaches `useRealtimeToken`; rerendering with a different session-ID hint synchronously clears the retained token and remints before any provider connection.
 - Lease acquire, replace, abort, and complete use the reserved exclusive advisory key, while mutation and Hocuspocus validation use its shared form; a paused validation observes a preceding abort commit.
 - Go, TypeScript, and PostgreSQL fixture vectors produce the exact same signed second advisory key for all five boundary UUID prefixes.
 - Lease acquisition, replacement, mutation authorization, Go freeze validation, and end completion use database `clock_timestamp()` semantics under controlled tests.
@@ -1202,7 +1215,15 @@ The user authorized the long-term correction and exact Plan 094 scope widening o
 This revision preserves the stable document name and adds an untrusted mint hint plus a required canvas-only signed session-ID claim.
 Every canvas authorization path now has an implementable lock key before its first database read and must re-verify the canvas/session binding after locking.
 
-**Round 15 verdicts await Sol and Fable 5 on the exact substantive commit.**
+**Round 15 verdicts on exact commit `81af8748a98574a3eb4e7edab182521b15ab6771`:** `[sol]` CHANGES REQUESTED; `[fable]` APPROVE with one non-blocking availability concern.
+
+- `[sol]` The first-database-operation claim did not exclude existing authenticated-request middleware reads, and the acceptance test could therefore overclaim production request ordering.
+- `[sol]` Helper and backend tests did not force the real `useWhiteboard` producer to pass the selected session ID or prove rerender token clearing.
+- `[fable]` A forged canonical session hint can briefly take an unrelated session's shared lock before the constrained mismatch fails; document this bounded availability property.
+
+Round 16 narrows the lifecycle invariant to the canvas-authorization transaction after normal request authentication, adds the production-callsite/rerender proof, and records the deliberate-hint availability behavior without weakening the authoritative post-lock binding.
+
+**Round 16 verdicts await Sol and Fable 5 on the next exact substantive commit.**
 
 **Design-review gate result:** PENDING consensus on the lock-key correction.
 

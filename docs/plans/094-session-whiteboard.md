@@ -75,10 +75,11 @@ This approval covers the exact additions above, including the governance files; 
 
 Scope-widening (canvas lifecycle lock-key correction) authorized by the user 2026-08-12 via “go ahead.”
 The canvas document name remains `canvas:{canvasId}`, while the four added realtime helper/test files carry a required canvas-only `sessionId` hint through minting and cache identity.
-The signed canvas JWT and every internal canvas recheck carry the authoritative session ID so Go can acquire the matching shared lifecycle lock before any canvas, session, user, participant, class, or membership read.
+The signed canvas JWT and every internal canvas recheck carry the authoritative session ID so, after ordinary request authentication, Go can acquire the matching shared lifecycle lock before any canvas, session, user, participant, class, or membership read in the canvas-authorization transaction.
 The hint and claim select a lock and constrain the authoritative query; neither grants access.
 Missing, malformed, or mismatched canvas session IDs fail closed, while non-canvas request and JWT contracts remain compatible.
 This substantive Spec 013 revision must clear the uncapped Sol + Fable 5 design gate before implementation.
+The scoped `src/lib/whiteboard/**` tests must exercise the real `useWhiteboard` producer with the selected `(canvas:{canvasId}, sessionId)` pair and prove a changed hint clears the retained token before reminting.
 
 Governance provenance: before this revision the user explicitly directed that “all plan reviews” and then “all review” pursue consensus rather than stop at a numeric cap; the later design-gate direction separately fixed the permanent design roster to Sol + Fable 5 and removed its round cap.
 Phase 7 materializes both directions without retroactively changing the gate governing this committed plan revision.
