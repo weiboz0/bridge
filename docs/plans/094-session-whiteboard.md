@@ -32,6 +32,7 @@ Phase 7 is complete; Phases 8 through 13 are authorized for phase-by-phase imple
 `next.config.ts` (only if `/api/sessions/{id}/canvases` isn't already covered by `/api/sessions/:path*`) ·
 `src/lib/whiteboard/**` (new — the binding + hook) ·
 **`src/lib/yjs/use-yjs-provider.ts`** + **`tests/unit/use-yjs-provider.test.ts`** (shared retry classification and bounded reconnect policy; preserve attempt/session compatibility) ·
+**`src/lib/realtime/get-token.ts`** + **`src/lib/realtime/use-realtime-token.ts`** + **`tests/unit/realtime-get-token.test.ts`** + **`tests/unit/use-realtime-token.test.tsx`** (canvas-only session identity hint, cache identity, and signed-claim propagation) ·
 **`src/lib/whiteboard/vitest.config.ts`** (mirror Bun/Vitest Zod boundary) ·
 `src/components/session/whiteboard/**` (new — canvas list, board surface, visibility control) ·
 `src/components/session/teacher/teacher-dashboard.tsx` · `src/components/session/student/student-session.tsx` (add the whiteboard surface) ·
@@ -71,6 +72,13 @@ The existing broad entries for `drizzle/**`, `src/lib/db/schema.ts`, `platform/c
 
 Scope-widening (Spec 013 remediation) authorized by the user 2026-08-11 via “approved” after the Sol + Fable 5 design gate passed.
 This approval covers the exact additions above, including the governance files; database migrations remain subject to the non-test-database hard safeguard, and E2E remains forbidden without a separately started Bridge stack plus explicit pinned `E2E_BASE_URL`.
+
+Scope-widening (canvas lifecycle lock-key correction) authorized by the user 2026-08-12 via “go ahead.”
+The canvas document name remains `canvas:{canvasId}`, while the four added realtime helper/test files carry a required canvas-only `sessionId` hint through minting and cache identity.
+The signed canvas JWT and every internal canvas recheck carry the authoritative session ID so Go can acquire the matching shared lifecycle lock before any canvas, session, user, participant, class, or membership read.
+The hint and claim select a lock and constrain the authoritative query; neither grants access.
+Missing, malformed, or mismatched canvas session IDs fail closed, while non-canvas request and JWT contracts remain compatible.
+This substantive Spec 013 revision must clear the uncapped Sol + Fable 5 design gate before implementation.
 
 Governance provenance: before this revision the user explicitly directed that “all plan reviews” and then “all review” pursue consensus rather than stop at a numeric cap; the later design-gate direction separately fixed the permanent design roster to Sol + Fable 5 and removed its round cap.
 Phase 7 materializes both directions without retroactively changing the gate governing this committed plan revision.

@@ -135,6 +135,32 @@ Mutation authorization takes the shared session advisory lock.
 
 Those transactions always acquire the advisory lock before any session row or related data access, and mutation authorization locks no second entity.
 
+Canvas document names remain `canvas:{canvasId}`.
+
+Because that name does not contain the session lifecycle lock key, every canvas token-mint request also carries a canonical `sessionId` hint.
+
+The hint is untrusted and grants no access.
+
+The mint transaction acquires the shared lifecycle advisory lock for that supplied session ID before every canvas, session, user, participant, class, or membership read, then authorizes only a row satisfying both the supplied session ID and canvas ID.
+
+A missing, malformed, or mismatched canvas session ID fails closed without an identity-discovery fallback.
+
+After the locked query proves the binding, Go signs that authoritative session ID into a required canvas-only `sessionId` JWT claim.
+
+Non-canvas mint requests and JWTs do not carry the claim and retain their existing wire contract.
+
+TypeScript JWT verification requires a canonical `sessionId` on every `canvas:` scope and rejects the claim on non-canvas scopes.
+
+Hocuspocus retains the verified session ID in the canvas authentication context and sends it with every canvas admission and mutation recheck.
+
+Each Go canvas recheck uses the supplied session ID only to acquire the shared lifecycle lock, then re-verifies the exact canvas-to-session binding and all current authorization state in the same transaction.
+
+The internal canvas authorization branch performs its represented-user existence and permission reads inside that locked transaction; it does not perform the generic pre-lock user rehydration used by non-canvas document types.
+
+The browser token cache and in-flight de-duplication key include both document name and canvas session ID so a mismatched hint cannot reuse a token minted for another identity pair.
+
+Existing canvas tokens without the new claim fail closed and are reminted during the coordinated feature-branch cutover; their bounded lifetime is not used as a compatibility fallback.
+
 Canvas create, visibility, delete, and floor transactions join the same order by taking the shared advisory lock before their existing session-row lock.
 
 This avoids hot-row multixact churn while making an authorization query block behind an executing end and observe `ended` after commit.
@@ -457,6 +483,8 @@ The canvas mutation guard checks the operation-owned freeze map before the autho
 
 Every mutation-bearing Yjs frame performs the existing uncached Go authorization request in a short transaction that takes the session's shared advisory lock.
 
+That request includes the session ID from the verified canvas JWT context, never a value newly supplied by an unauthenticated websocket message.
+
 That request evaluates the active durable lease in PostgreSQL using `clock_timestamp()` on every call; the in-memory map is an immediate local barrier for the freeze handler, not an authorization cache.
 
 A frame already awaiting authorization when freeze begins is rejected by the second frozen check.
@@ -692,6 +720,10 @@ No migration is run against a non-test database.
 - The atomic successful end update and shared advisory-lock mutation authorization prevent a post-expiry frame from being admitted between the success predicate and commit on a confirmed path.
 - A degraded-path test pauses multiple independently authorized frames across several connections, commits the incomplete end, resumes the concurrent fan-in, and proves transient applies cannot persist while every later mutation and reconnect is denied.
 - Session advisory locks are always acquired before database reads or row locks, and busy-session tests prove end completion under concurrent mutation authorization, canvas creation, visibility, deletion, floor changes, and the legacy one-argument session advisory-lock caller without deadlock or exceeding the approved bound.
+- Canvas mint rejects missing, malformed, and mismatched session-ID hints before authorization can succeed; its first database operation is the matching shared lifecycle advisory lock, and a deterministic exclusive-lock test proves no canvas, session, user, participant, class, or membership query completes before release.
+- The authoritative canvas/session binding round-trips through the required canvas-only signed JWT claim, TypeScript verification, Hocuspocus context, and every internal admission/mutation request; forged hints and claims grant nothing because the post-lock query constrains both IDs.
+- Legacy canvas JWTs missing `sessionId` and non-canvas JWTs carrying it fail closed, while every established non-canvas token/request shape remains compatible.
+- Realtime token cache and in-flight de-duplication tests prove that `canvas:{canvasId}` with two different session-ID hints cannot reuse the same minted token.
 - Lease acquire, replace, abort, and complete use the reserved exclusive advisory key, while mutation and Hocuspocus validation use its shared form; a paused validation observes a preceding abort commit.
 - Go, TypeScript, and PostgreSQL fixture vectors produce the exact same signed second advisory key for all five boundary UUID prefixes.
 - Lease acquisition, replacement, mutation authorization, Go freeze validation, and end completion use database `clock_timestamp()` semantics under controlled tests.
@@ -1160,5 +1192,18 @@ The user approved moving final snapshot persistence into Go.
 **Round 14 verdicts on exact commit `aa34784e1e51596bf1b6779176a86187fe3306ab`:** `[sol]` APPROVE; `[fable]` APPROVE WITH NITS.
 
 **Design-review gate result:** PASSED by consensus with no open blockers.
+
+### Round 15 — 2026-08-12 — canvas lifecycle lock-key correction
+
+Phase 9 review found that `canvas:{canvasId}` does not itself provide the session advisory-lock key.
+The implementation's identity-only `session_canvases` lookup before locking was race-safe after its locked re-read, but it contradicted the approved invariant that no related row is read before the lifecycle lock.
+
+The user authorized the long-term correction and exact Plan 094 scope widening on 2026-08-12.
+This revision preserves the stable document name and adds an untrusted mint hint plus a required canvas-only signed session-ID claim.
+Every canvas authorization path now has an implementable lock key before its first database read and must re-verify the canvas/session binding after locking.
+
+**Round 15 verdicts await Sol and Fable 5 on the exact substantive commit.**
+
+**Design-review gate result:** PENDING consensus on the lock-key correction.
 
 Following the gate rule, every historical finding above is mechanically transitioned from `[OPEN]` to `[FIXED]`; response prose did not self-certify resolution before both reviewers approved the same substantive commit.
