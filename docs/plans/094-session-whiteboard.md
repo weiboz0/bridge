@@ -412,6 +412,9 @@ That recheck is now defense in depth: the confirmed path gains the lifecycle lea
   Each GET owns a cancellation guard, every success/403/failure publishes an identity-scoped complete state, and late prior-session continuations cannot surface or enable a PATCH against the current session.
 - `[FIXED]` PATCH has a separate exact one-field parser and preserves the last safe current-session floor while rendering a mutation error for non-200, malformed, GET-shaped, or unknown-field responses.
 - `[GREEN]` The expanded panel/archive suite passed 21 tests with both database URLs pinned to `bridge_test`; forced-Bun TypeScript compilation, exact production lint, and `git diff --check` passed.
+- `[RED/FIXED]` A final reverse-order regression proved a session-A PATCH continuation could overwrite the single state slot after session B had loaded.
+  PATCH success, failure, and malformed-response continuations now publish only when the current stored identity still matches their captured request session; otherwise they leave B's complete state untouched.
+- `[GREEN]` The final panel/archive suite passed 24 tests; forced-Bun TypeScript compilation, exact panel lint, and `git diff --check` passed.
 
 #### Phase 9 review-remediation RED proofs (2026-08-12; tests only)
 

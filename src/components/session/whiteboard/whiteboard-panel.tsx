@@ -163,12 +163,9 @@ export function WhiteboardPanel({
   const updateFloor = async (nextFloor: CanvasFloor) => {
     const requestSessionId = sessionId;
     const publishPatchError = () => {
-      setSettings((current) => ({
-        sessionId: requestSessionId,
-        floor: current.sessionId === requestSessionId ? current.floor : null,
-        archiveComplete: current.sessionId === requestSessionId ? current.archiveComplete : undefined,
-        error: "Unable to update the canvas floor",
-      }));
+      setSettings((current) => current.sessionId === requestSessionId
+        ? { ...current, error: "Unable to update the canvas floor" }
+        : current);
     };
     try {
       const response = await fetch(`/api/sessions/${requestSessionId}/canvas-settings`, {
@@ -186,10 +183,9 @@ export function WhiteboardPanel({
         return;
       }
       setSettings((current) => ({
-        sessionId: requestSessionId,
-        floor: parsed.canvasFloor,
-        archiveComplete: current.sessionId === requestSessionId ? current.archiveComplete : undefined,
-        error: null,
+        ...current,
+        floor: current.sessionId === requestSessionId ? parsed.canvasFloor : current.floor,
+        error: current.sessionId === requestSessionId ? null : current.error,
       }));
     } catch {
       publishPatchError();
