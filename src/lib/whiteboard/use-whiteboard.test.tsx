@@ -55,6 +55,7 @@ describe("useWhiteboard", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     (state.yDoc as Y.Doc).destroy();
     state.yDoc = null;
   });
@@ -80,14 +81,60 @@ describe("useWhiteboard", () => {
     }));
 
     await waitFor(() => expect(state.readScene).toHaveBeenCalledTimes(1));
+    vi.useFakeTimers();
     act(() => result.current.onChange(scene));
 
+    expect(state.writeScene).not.toHaveBeenCalled();
+    act(() => vi.advanceTimersByTime(100));
     expect(state.writeScene).toHaveBeenCalledTimes(1);
     expect(state.writeScene).toHaveBeenCalledWith(
       (state.yDoc as Y.Doc).getMap("excalidraw-scene"),
       scene,
       expect.any(Symbol),
     );
+  });
+
+  it("drops a pending canvas A scene when the active Yjs document changes to canvas B", async () => {
+    const canvasA = "22222222-2222-4222-8222-222222222222";
+    const canvasB = "33333333-3333-4333-8333-333333333333";
+    const sessionA = "11111111-1111-4111-8111-111111111111";
+    const sessionB = "44444444-4444-4444-8444-444444444444";
+    const docA = state.yDoc as Y.Doc;
+    const docB = new Y.Doc();
+    const { result, rerender } = renderHook(
+      ({ canvasId, sessionId }) => useWhiteboard({ canvasId, sessionId, readOnly: false }),
+      { initialProps: { canvasId: canvasA, sessionId: sessionA } },
+    );
+
+    await waitFor(() => expect(state.readScene).toHaveBeenCalledTimes(1));
+    vi.useFakeTimers();
+    act(() => result.current.onChange(scene));
+
+    // A later selection may mount a completely different Y.Doc before the
+    // trailing callback fires.  The A scene must be discarded, never applied
+    // to B's map (the historical implementation retargeted it to B).
+    state.yDoc = docB;
+    rerender({ canvasId: canvasB, sessionId: sessionB });
+    act(() => vi.advanceTimersByTime(100));
+
+    expect(state.writeScene).not.toHaveBeenCalled();
+    expect(docA.getMap("excalidraw-scene").size).toBe(0);
+    expect(docB.getMap("excalidraw-scene").size).toBe(0);
+    docB.destroy();
+  });
+
+  it("drops a pending scene when the board becomes read-only before the debounce fires", async () => {
+    const opts = { canvasId: "22222222-2222-4222-8222-222222222222", sessionId: "11111111-1111-4111-8111-111111111111" };
+    const { result, rerender } = renderHook(
+      ({ readOnly }) => useWhiteboard({ ...opts, readOnly }),
+      { initialProps: { readOnly: false } },
+    );
+    await waitFor(() => expect(state.readScene).toHaveBeenCalledTimes(1));
+    vi.useFakeTimers();
+    act(() => result.current.onChange(scene));
+    rerender({ readOnly: true });
+    act(() => vi.advanceTimersByTime(100));
+    expect(state.writeScene).not.toHaveBeenCalled();
   });
 
   it("passes the selected canvas sessionId to the real token producer before mounting a provider", async () => {

@@ -285,6 +285,34 @@ describe("WhiteboardArchive — plan 094 phase 3", () => {
     });
   });
 
+  it("persists the degraded archive fallback before redirecting after a durable false end result", async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url === `/api/sessions/${SESSION_ID}/end`) {
+        return Promise.resolve(new Response(JSON.stringify({ whiteboardServerArchiveComplete: false }), { status: 200 }));
+      }
+      return Promise.resolve(canvasList([]));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderTeacherDashboard();
+    fireEvent.click(screen.getByRole("button", { name: "End session" }));
+    await waitFor(() => expect(routerPush).toHaveBeenCalledWith(`/sessions/${SESSION_ID}/whiteboards`));
+    expect(window.sessionStorage.getItem(`whiteboard-archive-fallback:${SESSION_ID}`)).toBe("1");
+  });
+
+  it("shows a non-OK end error and never redirects", async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url === `/api/sessions/${SESSION_ID}/end`) {
+        return Promise.resolve(new Response(JSON.stringify({ error: "The session cannot be ended" }), { status: 409 }));
+      }
+      return Promise.resolve(canvasList([]));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderTeacherDashboard();
+    fireEvent.click(screen.getByRole("button", { name: "End session" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("The session cannot be ended");
+    expect(routerPush).not.toHaveBeenCalled();
+  });
+
   it("redirects a student to the archive when the live session emits session_ended", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(canvasList([])));
 

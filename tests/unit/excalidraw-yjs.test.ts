@@ -16,18 +16,29 @@ const secondScene = {
   appState: { viewBackgroundColor: "#111111", scrollX: 12 },
 };
 
+const firstDurableScene = {
+  elements: firstScene.elements,
+  appState: { viewBackgroundColor: "#ffffff" },
+};
+
+const secondDurableScene = {
+  elements: secondScene.elements,
+  appState: { viewBackgroundColor: "#111111" },
+};
+
 function createSceneMap(): { doc: Y.Doc; sceneMap: Y.Map<unknown> } {
   const doc = new Y.Doc();
   return { doc, sceneMap: doc.getMap<unknown>("scene") };
 }
 
 describe("Excalidraw Yjs scene binding", () => {
-  it("round-trips JSON-safe elements and appState through the Y.Map", () => {
+  it("round-trips elements and only the exact durable app-state allowlist through the Y.Map", () => {
     const { sceneMap } = createSceneMap();
 
     writeExcalidrawScene(sceneMap, firstScene);
 
-    expect(readExcalidrawScene(sceneMap)).toEqual(firstScene);
+    expect(readExcalidrawScene(sceneMap)).toEqual(firstDurableScene);
+    expect(JSON.parse(sceneMap.get("scene") as string)).toEqual(firstDurableScene);
   });
 
   it("does not persist Excalidraw files or blob payloads", () => {
@@ -46,7 +57,7 @@ describe("Excalidraw Yjs scene binding", () => {
 
     const stored = sceneMap.get("scene");
     expect(typeof stored).toBe("string");
-    expect(JSON.parse(stored as string)).toEqual(firstScene);
+    expect(JSON.parse(stored as string)).toEqual(firstDurableScene);
     expect(stored).not.toContain("student-upload-bytes");
   });
 
@@ -82,7 +93,18 @@ describe("Excalidraw Yjs scene binding", () => {
     writeExcalidrawScene(remoteSceneMap, secondScene, Symbol("remote-editor"));
     Y.applyUpdate(doc, Y.encodeStateAsUpdate(remoteDoc, Y.encodeStateVector(doc)), "remote-sync");
 
-    expect(received).toEqual([secondScene]);
+    expect(received).toEqual([secondDurableScene]);
     stopObserving();
+  });
+
+  it("skips an identical durable serialization without creating a Yjs transaction", () => {
+    const { doc, sceneMap } = createSceneMap();
+    let updateCount = 0;
+    doc.on("update", () => { updateCount += 1; });
+
+    expect(writeExcalidrawScene(sceneMap, firstScene, "first")).toBe(true);
+    expect(updateCount).toBe(1);
+    expect(writeExcalidrawScene(sceneMap, { ...firstScene, appState: { ...firstScene.appState, scrollX: 999 } }, "same durable scene")).toBe(false);
+    expect(updateCount).toBe(1);
   });
 });

@@ -507,6 +507,18 @@ That recheck is now defense in depth: the confirmed path gains the lifecycle lea
 - `[GAP]` The plan also asks this phase to "add a production-source scan proving no TypeScript session-status writer remains" and to update `tests/unit/shadow-routes.test.ts` — both are test-authorship, owned by Terra; `tests/unit/shadow-routes.test.ts` needed no edit for this commit (the PATCH-export removal doesn't change its route-file census, so the existing forward/reverse allowlist checks already cover it) and `TODO.md` has no entry referencing the removed writers, so neither needed a change.
 - Phase 11 is **not** claimed complete: the RED/GAP items above (owned by Terra per the plan's test/production split) remain outstanding, and Phase 11's own GREEN command list cannot fully run until `scheduled-session-list.test.tsx` exists.
 
+#### Phase 11 Terra test-first completion (2026-08-12)
+
+- `[RED]` The real `useWhiteboard` producer initially retargeted a pending canvas-A scene to the current map after a canvas/Y.Doc swap, and still wrote after a live board became read-only.
+  The new cross-canvas and read-only transition regressions failed against that behavior.
+  The hook now clears a queued scene and its timer on Y.Doc, canvas, session, read-only, and unmount transitions, so a trailing write is either delivered to its original active canvas or dropped; it can never cross into a replacement canvas.
+- `[RED]` Phase-11 contract tests found that the class-mode `StartSessionButton` constructed, but did not render, its replacement warning dialog, and that an archive `403` discarded the one-shot degraded-completion fallback despite the contract requiring fallback retention for every non-200 settings result.
+  Class mode now renders the existing replacement dialog, and archive settings consumes the fallback for 403 alongside all other non-200/network outcomes; a 200 remains authoritative and clears it.
+- `[GREEN]` Added mechanism-facing coverage for owner/viewer create and visibility controls, irreversible-raise confirmation and failure, archive fallback consumption and durable override, end failure/no-navigation and durable-false fallback-before-navigation, exact one-shot replacement warnings and preserved 422 confirmation, scheduled discovery/start/auth/error/navigation, neutral missing-versus-ended routing, shadow session-writer source scans, durable Excalidraw allowlist/identical-write/remote-origin behavior, native image paste/drop rejection, and trailing-write cross-canvas/read-only cancellation.
+- `[GREEN evidence]` After live validation with `CHECK_TEST_DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test` and both `DATABASE_URL` and `TEST_DATABASE_URL` pinned to that same test database, the Phase-11 focused root Vitest command passed **8 files / 86 tests** and the source-local whiteboard Vitest configuration passed **1 file / 6 tests**.
+  `bunx --bun tsc --noEmit`, scoped ESLint, and `git diff --check` passed.
+  No service, E2E, migration, non-test database, or live provider was run.
+
 ### Phase 12 — Integration tests (NAMED: lifecycle + realtime + API + persistence) *(Terra tests)*
 
 - **Fixtures:** `_test`-guarded host, present/left/invited participants, outsider, other-org user, live class and class-less sessions, scheduled session, 0/1/50 loaded canvases, controlled Hocuspocus server, fake clock, half-open control transport, and two concurrent database connections.

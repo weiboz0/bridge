@@ -63,4 +63,45 @@ describe("StartSessionButton — redirect branching (plan 090 phase 5)", () => {
     await waitFor(() => expect(pushMock).toHaveBeenCalledTimes(1));
     expect(pushMock).toHaveBeenCalledWith("/teacher/sessions/sess-class-1");
   });
+
+  it("preserves the 422 unlinked-topic confirmation before retrying the exact create payload", async () => {
+    fetchMock
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        code: "some_topics_unlinked",
+        error: "Some focus areas have no material",
+        unlinkedTopicTitles: ["Functions"],
+      }), { status: 422 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: "sess-class-1", classId: "class-42", title: "Period 3" }), { status: 201 }));
+
+    render(<StartSessionButton classId="class-42" defaultTitle="Period 3" />);
+    fireEvent.click(screen.getByRole("button", { name: /Start Live Session/i }));
+    expect(await screen.findByRole("dialog", { name: /some focus areas have no material/i })).toBeInTheDocument();
+    expect(pushMock).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Start anyway" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenLastCalledWith("/api/sessions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "Period 3", classId: "class-42", confirmUnlinkedTopics: true }),
+    }));
+    await waitFor(() => expect(pushMock).toHaveBeenCalledWith("/teacher/sessions/sess-class-1"));
+  });
+
+  it("acknowledges the replacement archive warning exactly once before navigating", async () => {
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({
+      id: "sess-class-1",
+      classId: "class-42",
+      replacedSessions: [{ id: "previous-session", whiteboardServerArchiveComplete: false }],
+    }), { status: 201 }));
+    render(<StartSessionButton classId="class-42" defaultTitle="Period 3" />);
+    fireEvent.click(screen.getByRole("button", { name: /Start Live Session/i }));
+
+    expect(await screen.findByRole("dialog", { name: "Previous session ended" })).toHaveTextContent(
+      "Starting this session ended 1 other live session for this class. Its whiteboard archive may be incomplete.",
+    );
+    expect(pushMock).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    await waitFor(() => expect(pushMock).toHaveBeenCalledTimes(1));
+    expect(pushMock).toHaveBeenCalledWith("/teacher/sessions/sess-class-1");
+  });
 });

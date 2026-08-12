@@ -243,6 +243,16 @@ describe("shadow-routes contract-parity", () => {
         `\n\nRemove these entries from KNOWN_SHADOW_ALLOWLIST in tests/unit/shadow-routes.test.ts.`
     ).toEqual([]);
   });
+
+  it("contains no legacy TypeScript session-status server writer", () => {
+    // Session lifecycle now has one authoritative Go writer.  This deliberately
+    // scans production source rather than a hand-maintained list so a revived
+    // Next route or lib helper cannot silently bypass the freeze/archive path.
+    const sessionRoute = readFileSync(path.join(repoRoot, "src/app/api/sessions/[id]/route.ts"), "utf8");
+    const sessionLibrary = readFileSync(path.join(repoRoot, "src/lib/sessions.ts"), "utf8");
+    expect(sessionRoute).not.toMatch(/export\s+(?:async\s+)?function\s+(?:PATCH|PUT|POST|DELETE)\b/);
+    expect(sessionLibrary).not.toMatch(/export\s+(?:async\s+)?function\s+(?:endSession|createSession)\b/);
+  });
 });
 
 // ---------------------------------------------------------------------------

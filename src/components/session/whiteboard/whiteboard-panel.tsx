@@ -164,11 +164,6 @@ export function WhiteboardPanel({
     void (async () => {
       try {
         const response = await fetch(`/api/sessions/${sessionId}/canvas-settings`);
-        if (response.status === 403) {
-          if (archive) clearArchiveFallbackWarning(sessionId);
-          publish({ floor: null, archiveComplete: undefined, error: null });
-          return;
-        }
         if (!response.ok) {
           const fallback = archive && consumeArchiveFallbackWarning(sessionId);
           publish({ floor: null, archiveComplete: fallback ? false : undefined, error: "Unable to load whiteboard settings" });

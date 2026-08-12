@@ -188,6 +188,22 @@ describe("SessionRoomPage — plan 090 phase 5", () => {
     ).toBe(false);
   });
 
+  it("keeps a genuinely missing session as a 404 instead of redirecting to an archive that cannot exist", async () => {
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === `/api/sessions/${SESSION_ID}/teacher-page`) {
+        throw new ApiError(403, "Not a teacher");
+      }
+      if (path === `/api/sessions/${SESSION_ID}/student-page`) {
+        throw new ApiError(404, "Not found", { error: "Not found" });
+      }
+      throw new Error(`Unexpected api() call: ${path}`);
+    });
+
+    await expect(renderRoom()).rejects.toThrow("NEXT_NOT_FOUND");
+    expect(mockedNotFound).toHaveBeenCalledTimes(1);
+    expect(mockedRedirect).not.toHaveBeenCalled();
+  });
+
   it("renders the 'Session ended' notice instead of TeacherDashboard for a non-live session", async () => {
     mockedApi.mockImplementation(async (path: string) => {
       if (path === `/api/sessions/${SESSION_ID}/teacher-page`) {

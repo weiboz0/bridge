@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 const SESSION_ID = "11111111-1111-4111-8111-111111111111";
+const excalidrawState = vi.hoisted(() => ({ props: null as Record<string, unknown> | null }));
 
 vi.mock("next-auth/react", () => ({
   useSession: () => ({ data: { user: { id: "teacher-id" } } }),
@@ -17,7 +18,15 @@ vi.mock("next/dynamic", () => ({
   default: () => () => <div data-testid="board" />,
 }));
 
+vi.mock("@excalidraw/excalidraw", () => ({
+  Excalidraw: (props: Record<string, unknown>) => {
+    excalidrawState.props = props;
+    return <div data-testid="excalidraw-stub" />;
+  },
+}));
+
 import { WhiteboardPanel } from "@/components/session/whiteboard/whiteboard-panel";
+import { ExcalidrawBoard } from "@/components/session/whiteboard/excalidraw-board";
 
 function json(payload: unknown, status = 200): Response {
   return new Response(JSON.stringify(payload), { status, headers: { "content-type": "application/json" } });
@@ -291,5 +300,144 @@ describe("WhiteboardPanel — plan 094 phase 9 settings cutover", () => {
 
     expect(screen.getByLabelText("Canvas floor")).toHaveValue("participants");
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("shows the settled create error and selects a successfully created owner canvas", async () => {
+    const canvas = {
+      id: "22222222-2222-4222-8222-222222222222",
+      sessionId: SESSION_ID,
+      ownerId: "teacher-id",
+      title: "Teacher board",
+      visibility: "private",
+    };
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = requestURL(input);
+      if (url.endsWith("/canvases") && init?.method === "POST") return Promise.resolve(json({}, 500));
+      if (url.endsWith("/canvases")) return Promise.resolve(json({ items: [] }));
+      throw new Error(`unexpected endpoint ${url}`);
+    });
+    render(<WhiteboardPanel sessionId={SESSION_ID} />);
+    fireEvent.click(await screen.findByRole("button", { name: "New whiteboard" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Unable to create whiteboard");
+
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = requestURL(input);
+      if (url.endsWith("/canvases") && init?.method === "POST") return Promise.resolve(json(canvas, 201));
+      if (url.endsWith("/canvases")) return Promise.resolve(json({ items: [] }));
+      throw new Error(`unexpected endpoint ${url}`);
+    });
+    fireEvent.click(screen.getByRole("button", { name: "New whiteboard" }));
+    expect((await screen.findAllByText("Teacher board")).length).toBeGreaterThan(0);
+    expect(screen.getByText("Visibility").parentElement?.querySelector("select")).toHaveValue("private");
+  });
+
+  it("keeps viewer controls absent while an owner visibility raise waits for confirmation", async () => {
+    const ownerCanvas = {
+      id: "22222222-2222-4222-8222-222222222222",
+      sessionId: SESSION_ID,
+      ownerId: "teacher-id",
+      title: "Owner board",
+      visibility: "private",
+    };
+    const viewerCanvas = { ...ownerCanvas, id: "33333333-3333-4333-8333-333333333333", ownerId: "student-id", title: "Viewer board" };
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = requestURL(input);
+      if (url.endsWith("/canvases") && init?.method === "PATCH") return Promise.resolve(json({ ...ownerCanvas, visibility: "participants" }));
+      if (url.endsWith("/canvases")) return Promise.resolve(json({ items: [ownerCanvas, viewerCanvas] }));
+      throw new Error(`unexpected endpoint ${url}`);
+    });
+    render(<WhiteboardPanel sessionId={SESSION_ID} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /owner board/i }));
+    const visibility = screen.getByText("Visibility").parentElement?.querySelector("select") as HTMLSelectElement;
+    fireEvent.change(visibility, { target: { value: "participants" } });
+    expect(screen.getByRole("dialog", { name: "Raise whiteboard visibility?" })).toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([, init]) => init?.method === "PATCH")).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: "Raise visibility" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      `/api/sessions/${SESSION_ID}/canvases/${ownerCanvas.id}`,
+      { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ visibility: "participants" }) },
+    ));
+
+    fireEvent.click(screen.getByRole("button", { name: /viewer board/i }));
+    expect(screen.queryByText("Visibility")).not.toBeInTheDocument();
+    expect(screen.getByText("View only")).toBeInTheDocument();
+  });
+
+  it("keeps the owner on the selected board and reports a failed confirmed visibility raise", async () => {
+    const canvas = {
+      id: "22222222-2222-4222-8222-222222222222",
+      sessionId: SESSION_ID,
+      ownerId: "teacher-id",
+      title: "Owner board",
+      visibility: "private",
+    };
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = requestURL(input);
+      if (url.endsWith(`/canvases/${canvas.id}`) && init?.method === "PATCH") return Promise.resolve(json({}, 500));
+      if (url.endsWith("/canvases")) return Promise.resolve(json({ items: [canvas] }));
+      throw new Error(`unexpected endpoint ${url}`);
+    });
+    render(<WhiteboardPanel sessionId={SESSION_ID} />);
+    fireEvent.click(await screen.findByRole("button", { name: /owner board/i }));
+    fireEvent.change(screen.getByText("Visibility").parentElement?.querySelector("select") as HTMLSelectElement, { target: { value: "host" } });
+    fireEvent.click(screen.getByRole("button", { name: "Raise visibility" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Unable to update whiteboard visibility");
+    expect(screen.getAllByText("Owner board").length).toBeGreaterThan(0);
+  });
+
+  it.each([
+    ["non-200", () => new Response(null, { status: 503 })],
+    ["403 response", () => new Response(null, { status: 403 })],
+    ["network failure", () => Promise.reject(new Error("offline"))],
+  ])("retains and consumes the teacher archive fallback once when settings has a %s", async (_label, settingsResponse) => {
+    window.sessionStorage.setItem(`whiteboard-archive-fallback:${SESSION_ID}`, "1");
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = requestURL(input);
+      if (url.endsWith("/canvases")) return Promise.resolve(json({ items: [] }));
+      if (url.endsWith("/canvas-settings")) return Promise.resolve(settingsResponse());
+      throw new Error(`unexpected endpoint ${url}`);
+    });
+    const { unmount } = render(<WhiteboardPanel sessionId={SESSION_ID} archive />);
+    expect(await screen.findByText("Latest whiteboard changes may not have been archived")).toBeInTheDocument();
+    expect(window.sessionStorage.getItem(`whiteboard-archive-fallback:${SESSION_ID}`)).toBeNull();
+    unmount();
+
+    render(<WhiteboardPanel sessionId={SESSION_ID} archive />);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(`/api/sessions/${SESSION_ID}/canvas-settings`));
+    expect(screen.queryByText("Latest whiteboard changes may not have been archived")).not.toBeInTheDocument();
+  });
+
+  it("uses a durable 200 archive result over and clears the transient teacher fallback", async () => {
+    window.sessionStorage.setItem(`whiteboard-archive-fallback:${SESSION_ID}`, "1");
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = requestURL(input);
+      if (url.endsWith("/canvases")) return Promise.resolve(json({ items: [] }));
+      if (url.endsWith("/canvas-settings")) return Promise.resolve(json({ canvasFloor: "private", whiteboardServerArchiveComplete: true }));
+      throw new Error(`unexpected endpoint ${url}`);
+    });
+    render(<WhiteboardPanel sessionId={SESSION_ID} archive />);
+    expect(await screen.findByText("Whiteboard archive confirmed")).toBeInTheDocument();
+    expect(screen.queryByText("Latest whiteboard changes may not have been archived")).not.toBeInTheDocument();
+    expect(window.sessionStorage.getItem(`whiteboard-archive-fallback:${SESSION_ID}`)).toBeNull();
+  });
+
+  it("rejects image paste and file drag/drop before Excalidraw can create a non-durable image element", () => {
+    const onChange = vi.fn();
+    const { getByTestId } = render(<ExcalidrawBoard scene={null} readOnly={false} onChange={onChange} />);
+    const props = excalidrawState.props as { onPaste: (data: { files?: Record<string, unknown> }) => boolean };
+    expect(props.onPaste({ files: { image: { id: "image" } } })).toBe(false);
+    expect(props.onPaste({ files: {} })).toBe(true);
+
+    const board = getByTestId("excalidraw-board");
+    const fileDrop = fireEvent.drop(board, { dataTransfer: { types: ["Files"] } });
+    expect(fileDrop).toBe(false);
+    expect(onChange).not.toHaveBeenCalled();
   });
 });

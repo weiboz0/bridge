@@ -58,11 +58,19 @@ export function useWhiteboard({ canvasId, sessionId, readOnly }: UseWhiteboardOp
     return observeExcalidrawScene(sceneMap, localOriginRef.current, setScene);
   }, [yDoc]);
 
-  // A pending write targets whichever Yjs doc/map was live when the timer
-  // fires, not the map captured at schedule time — otherwise a doc swap
-  // mid-debounce would silently drop the trailing write.
+  // A queued scene belongs to the selected canvas and its current write
+  // permission.  Never retarget it after a document/selection/permission
+  // change: that would leak a scene composed on canvas A into canvas B.
+  useEffect(() => {
+    if (writeTimerRef.current) clearTimeout(writeTimerRef.current);
+    writeTimerRef.current = null;
+    pendingSceneRef.current = null;
+  }, [yDoc, canvasId, sessionId, readOnly]);
+
   useEffect(() => () => {
     if (writeTimerRef.current) clearTimeout(writeTimerRef.current);
+    writeTimerRef.current = null;
+    pendingSceneRef.current = null;
   }, []);
 
   const onChange = useCallback((nextScene: ExcalidrawScene) => {

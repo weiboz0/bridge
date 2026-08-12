@@ -290,6 +290,7 @@ export function StartSessionButton({
       </Button>
       {error && <p className="text-sm text-red-600">{error}</p>}
       {guardDialog}
+      {replacedWarningDialog}
     </div>
   );
 }
