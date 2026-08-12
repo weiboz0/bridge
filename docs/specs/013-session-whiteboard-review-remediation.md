@@ -916,3 +916,28 @@ The user approved moving final snapshot persistence into Go.
   → The SQL bit-cast expression is exact; history evidence is pre-merge rather than a permanent test; metrics are deduplicated and prospective; successful bundles are cached idempotently under a global bound; and uncategorized disconnects move to the jittered long-tail policy.
 
 **Round 8 responses await Sol and Fable confirmation on commit `2695e6a`.**
+
+### Round 9 — 2026-08-11 — commit `36132fc`
+
+- `[OPEN]` `[fable]` Holding the exclusive advisory lock across the Hocuspocus request could self-deadlock when the freeze-validation callback tried to acquire the shared form.
+  → Response in `73b0764`: the lease-and-list transaction commits and releases all database locks before the control request, and the test contract pauses the callback to prove the ordering.
+- `[OPEN]` `[fable]` Go retried serializer conflicts but not a transport loss after Hocuspocus had captured and cached a successful result.
+  → Response in `73b0764`: transport-class failures retry the same token inside the original two-second budget and recover the identical cached bundle without recapture.
+- `[OPEN]` `[fable]` Canvas creation and related mutations did not participate in the lifecycle advisory-lock order, so the authoritative canvas set could change during lease acquisition.
+  → Response in `73b0764`: create, visibility, delete, and floor transactions take the shared lifecycle lock before their session-row lock, while lease acquisition takes the exclusive form before reading the list.
+- `[OPEN]` `[fable]` A completed cached bundle had no prompt release acknowledgment and could retain its large reservation until lease expiry.
+  → Response in `73b0764`: the control API now has token-scoped complete acknowledgment after either database end result, with token-conditional expiry as the lost-ack fallback.
+- `[OPEN]` `[fable]` Synchronous multi-document encoding and aggregate response construction could stall the event loop and multiply memory use.
+  → Response in `73b0764`: Hocuspocus reserves capture capacity before encoding, yields between documents, and streams entries with backpressure without constructing one aggregate JSON string.
+- `[OPEN]` `[fable]` Empty authoritative canvas lists and the SHA-256 trust role were ambiguous.
+  → Response in `73b0764`: an empty list has an exact validated confirmed response, while the digest is explicitly framing and corruption detection rather than an authorization boundary.
+- `[OPEN]` `[sol]` Snapshot rows were ordered before the conditional ended update, allowing lease expiry between the writes to contradict the no-bundle degraded contract.
+  → Response in `73b0764`: the confirmed transaction performs the conditional true end first, batches snapshots only after it succeeds, and rolls both back before a separate false/no-snapshot degraded transaction on any failure.
+- `[OPEN]` `[sol][fable]` Size checks and cache accounting began only after synchronous Yjs encoding, so a large document or concurrent captures could allocate beyond the intended bound before rejection.
+  → Response in `73b0764`: transport, persisted-load, cumulative document, resident-process, request-aggregate, and capture-ledger admission limits run before apply or encode, with exact reservation and release tests.
+- `[OPEN]` `[sol]` Acceptance claimed every successful freeze persisted snapshots even when the later database transaction failed.
+  → Response in `73b0764`: persistence is claimed only for a successful confirmed end; a successful freeze followed by database failure makes no persistence claim.
+
+**Round 9 verdicts:** `[sol]` CHANGES REQUESTED; `[fable]` CHANGES REQUESTED.
+
+**Round 9 responses await Sol and Fable confirmation on commit `73b0764`.**
