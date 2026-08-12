@@ -69,10 +69,19 @@ const ExpectedSchemaProbe = "session_canvases"
 // The current migration has no named constraints, but Constraints remains a
 // first-class field so future migrations keep the generic probe coverage.
 type SchemaTableSentinels struct {
-	Table       string
-	Columns     []string
-	Constraints []string
-	Indexes     []string
+	Table             string
+	Columns           []string
+	ColumnDefinitions []SchemaColumnSentinel
+	Constraints       []string
+	Indexes           []string
+}
+
+// SchemaColumnSentinel pins physical properties that are security-relevant
+// for nullable lifecycle state, beyond mere column existence.
+type SchemaColumnSentinel struct {
+	Name     string
+	DataType string
+	Nullable bool
 }
 
 // SchemaEnumSentinel requires a PostgreSQL enum's labels in their declared
@@ -110,6 +119,12 @@ var ExpectedSchemaSentinels = SchemaSentinels{
 		{
 			Table:   "sessions",
 			Columns: []string{"canvas_floor", "canvas_freeze_token", "canvas_freeze_until", "whiteboard_server_archive_complete"},
+			ColumnDefinitions: []SchemaColumnSentinel{
+				{Name: "canvas_freeze_token", DataType: "uuid", Nullable: true},
+				{Name: "canvas_freeze_until", DataType: "timestamp with time zone", Nullable: true},
+				{Name: "whiteboard_server_archive_complete", DataType: "boolean", Nullable: true},
+			},
+			Constraints: []string{"sessions_canvas_freeze_lease_pair"},
 		},
 	},
 	Enums: []SchemaEnumSentinel{

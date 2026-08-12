@@ -78,6 +78,17 @@ func hasTable(s SchemaSentinels, tableName string) bool {
 	return false
 }
 
+type ErrSchemaColumnDefinitionMismatch struct {
+	Table          string
+	Expected       SchemaColumnSentinel
+	ActualDataType string
+	ActualNullable bool
+}
+
+func (e *ErrSchemaColumnDefinitionMismatch) Error() string {
+	return fmt.Sprintf("schema sentinel mismatch: column %q on table %q has type %q nullable=%t; expected type %q nullable=%t", e.Expected.Name, e.Table, e.ActualDataType, e.ActualNullable, e.Expected.DataType, e.Expected.Nullable)
+}
+
 func checkTableExists(ctx context.Context, sqlDB *sql.DB, tableName string) error {
 	var result sql.NullString
 	if err := sqlDB.QueryRowContext(ctx, `SELECT to_regclass($1)::text`, "public."+tableName).Scan(&result); err != nil {
@@ -105,6 +116,19 @@ func checkColumns(ctx context.Context, sqlDB *sql.DB, s SchemaSentinels) error {
 			}
 			if err != nil {
 				return fmt.Errorf("db.CheckSchemaProbe: column query failed for %q: %w", col, err)
+			}
+		}
+		for _, definition := range table.ColumnDefinitions {
+			var dataType, nullable string
+			err := sqlDB.QueryRowContext(ctx, `SELECT data_type, is_nullable FROM information_schema.columns WHERE table_schema='public' AND table_name=$1 AND column_name=$2`, table.Table, definition.Name).Scan(&dataType, &nullable)
+			if errors.Is(err, sql.ErrNoRows) {
+				return &ErrSchemaSentinelMissing{Table: table.Table, Kind: "column", Name: definition.Name}
+			}
+			if err != nil {
+				return fmt.Errorf("db.CheckSchemaProbe: column definition query failed for %q: %w", definition.Name, err)
+			}
+			if dataType != definition.DataType || (nullable == "YES") != definition.Nullable {
+				return &ErrSchemaColumnDefinitionMismatch{Table: table.Table, Expected: definition, ActualDataType: dataType, ActualNullable: nullable == "YES"}
 			}
 		}
 	}

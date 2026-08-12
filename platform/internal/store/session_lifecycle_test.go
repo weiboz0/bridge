@@ -224,6 +224,7 @@ func TestSessionLifecycleConfirmedEndRejectsMatchingExpiredLeaseWithoutWrites(t 
 	_, teacherID := setupSessionTest(t, db, t.Name()+uuid.NewString())
 	session, err := sessions.CreateSession(ctx, CreateSessionInput{TeacherID: teacherID, Title: "confirmed expiry"})
 	require.NoError(t, err)
+	t.Cleanup(func() { _, _ = db.ExecContext(context.Background(), `DELETE FROM sessions WHERE id = $1`, session.ID) })
 	canvas, err := canvases.CreateCanvas(ctx, CreateCanvasInput{SessionID: session.ID, OwnerID: teacherID, Title: "state", Visibility: "private"})
 	require.NoError(t, err)
 	token := uuid.NewString()
@@ -243,6 +244,19 @@ func TestSessionLifecycleConfirmedEndRejectsMatchingExpiredLeaseWithoutWrites(t 
 	assert.False(t, state.Valid)
 }
 
+func TestSessionLifecycleRejectsMalformedLeasePairs(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	sessions := NewSessionStore(db)
+	_, teacherID := setupSessionTest(t, db, t.Name()+uuid.NewString())
+	session, err := sessions.CreateSession(ctx, CreateSessionInput{TeacherID: teacherID, Title: "pair"})
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `UPDATE sessions SET canvas_freeze_token = $2::uuid, canvas_freeze_until = NULL WHERE id = $1`, session.ID, uuid.NewString())
+	require.Error(t, err)
+	_, err = db.ExecContext(ctx, `UPDATE sessions SET canvas_freeze_token = NULL, canvas_freeze_until = clock_timestamp() WHERE id = $1`, session.ID)
+	require.Error(t, err)
+}
+
 func TestSessionLifecycleAlreadyEndedPreservesNullableArchiveAndEmptyTokenCleanup(t *testing.T) {
 	db := testDB(t)
 	ctx := context.Background()
@@ -260,6 +274,7 @@ func TestSessionLifecycleAlreadyEndedPreservesNullableArchiveAndEmptyTokenCleanu
 		t.Run(tc.name, func(t *testing.T) {
 			session, err := sessions.CreateSession(ctx, CreateSessionInput{TeacherID: teacherID, Title: t.Name()})
 			require.NoError(t, err)
+			t.Cleanup(func() { _, _ = db.ExecContext(context.Background(), `DELETE FROM sessions WHERE id = $1`, session.ID) })
 			token := uuid.NewString()
 			_, err = db.ExecContext(ctx, `UPDATE sessions SET status='ended', whiteboard_server_archive_complete=$2, canvas_freeze_token=$3::uuid, canvas_freeze_until=clock_timestamp()-interval '1 second' WHERE id=$1`, session.ID, tc.archive, token)
 			require.NoError(t, err)
@@ -280,6 +295,7 @@ func TestSessionStoreEndSessionEmptyTokenNeverClearsDifferentUnexpiredResidue(t 
 	_, teacherID := setupSessionTest(t, db, t.Name()+uuid.NewString())
 	session, err := sessions.CreateSession(ctx, CreateSessionInput{TeacherID: teacherID, Title: "unexpired residue"})
 	require.NoError(t, err)
+	t.Cleanup(func() { _, _ = db.ExecContext(context.Background(), `DELETE FROM sessions WHERE id = $1`, session.ID) })
 	token := uuid.NewString()
 	_, err = acquireSessionFreezeLease(ctx, db, session.ID, token)
 	require.NoError(t, err)

@@ -66,8 +66,24 @@ func TestExpectedSchemaProbe_TracksSessionCanvases(t *testing.T) {
 	require.ElementsMatch(t, []string{
 		"session_canvases_session_idx", "session_canvases_session_owner_idx",
 	}, primary.Indexes)
-	require.Equal(t, SchemaTableSentinels{Table: "sessions", Columns: []string{"canvas_floor", "canvas_freeze_token", "canvas_freeze_until", "whiteboard_server_archive_complete"}}, ExpectedSchemaSentinels.Tables[1])
+	require.Equal(t, SchemaTableSentinels{Table: "sessions", Columns: []string{"canvas_floor", "canvas_freeze_token", "canvas_freeze_until", "whiteboard_server_archive_complete"}, ColumnDefinitions: []SchemaColumnSentinel{{Name: "canvas_freeze_token", DataType: "uuid", Nullable: true}, {Name: "canvas_freeze_until", DataType: "timestamp with time zone", Nullable: true}, {Name: "whiteboard_server_archive_complete", DataType: "boolean", Nullable: true}}, Constraints: []string{"sessions_canvas_freeze_lease_pair"}}, ExpectedSchemaSentinels.Tables[1])
 	require.Equal(t, []SchemaEnumSentinel{{Name: "canvas_visibility", Labels: []string{"private", "host", "participants", "session"}}}, ExpectedSchemaSentinels.Enums)
+}
+
+func TestExpectedSchemaProbe_TracksLifecycleColumnTypeAndNullability(t *testing.T) {
+	var sessions SchemaTableSentinels
+	for _, table := range ExpectedSchemaSentinels.Tables {
+		if table.Table == "sessions" {
+			sessions = table
+			break
+		}
+	}
+	require.Equal(t, []SchemaColumnSentinel{
+		{Name: "canvas_freeze_token", DataType: "uuid", Nullable: true},
+		{Name: "canvas_freeze_until", DataType: "timestamp with time zone", Nullable: true},
+		{Name: "whiteboard_server_archive_complete", DataType: "boolean", Nullable: true},
+	}, sessions.ColumnDefinitions)
+	require.Contains(t, sessions.Constraints, "sessions_canvas_freeze_lease_pair")
 }
 
 func TestCheckSchemaProbe_NullToRegclass(t *testing.T) {

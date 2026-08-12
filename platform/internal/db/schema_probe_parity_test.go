@@ -52,7 +52,7 @@ var migrationFilenameRE = regexp.MustCompile(`^\d{4}_.+\.sql$`)
 // commented-out DDL does not register as a real declaration.
 var (
 	// CONSTRAINT <name> on its own line or after whitespace inside CREATE TABLE.
-	constraintNameRE = regexp.MustCompile(`(?m)^\s*CONSTRAINT\s+(\w+)\b`)
+	constraintNameRE = regexp.MustCompile(`(?im)(?:^\s*|ADD\s+)CONSTRAINT\s+(\w+)\b`)
 	// CREATE [UNIQUE] INDEX [IF NOT EXISTS] <name> ON ...
 	indexNameRE = regexp.MustCompile(`(?im)^\s*CREATE\s+(?:UNIQUE\s+)?INDEX(?:\s+IF\s+NOT\s+EXISTS)?\s+(\w+)\b`)
 	// Column lines inside CREATE TABLE: leading-whitespace + identifier + type.
@@ -257,6 +257,7 @@ func TestExtractDeclaredSchema_CapturesAlterColumnAndOrderedEnum(t *testing.T) {
 	require.Contains(t, declared.Tables, SchemaTableSentinels{
 		Table:   "sessions",
 		Columns: []string{"canvas_floor", "canvas_freeze_token", "canvas_freeze_until", "whiteboard_server_archive_complete"},
+		Constraints: []string{"sessions_canvas_freeze_lease_pair"},
 	})
 	require.Contains(t, declared.Enums, SchemaEnumSentinel{
 		Name:   "canvas_visibility",
@@ -265,10 +266,11 @@ func TestExtractDeclaredSchema_CapturesAlterColumnAndOrderedEnum(t *testing.T) {
 }
 
 var (
-	alterTableAddColumnRE = regexp.MustCompile(`(?ims)ALTER\s+TABLE\s+"?(\w+)"?\s+ADD\s+COLUMN(?:\s+IF\s+NOT\s+EXISTS)?\s+"?(\w+)"?\s+\w+`)
-	indexTableRE          = regexp.MustCompile(`(?im)^\s*CREATE\s+(?:UNIQUE\s+)?INDEX(?:\s+IF\s+NOT\s+EXISTS)?\s+(\w+)\s+ON\s+"?(\w+)"?`)
-	createEnumRE          = regexp.MustCompile(`(?is)CREATE\s+TYPE\s+"?(\w+)"?\s+AS\s+ENUM\s*\(([^)]*)\)`)
-	enumLabelRE           = regexp.MustCompile(`'((?:''|[^'])*)'`)
+	alterTableAddColumnRE     = regexp.MustCompile(`(?ims)ALTER\s+TABLE\s+"?(\w+)"?\s+ADD\s+COLUMN(?:\s+IF\s+NOT\s+EXISTS)?\s+"?(\w+)"?\s+\w+`)
+	alterTableAddConstraintRE = regexp.MustCompile(`(?ims)ALTER\s+TABLE\s+"?(\w+)"?\s+ADD\s+CONSTRAINT\s+(\w+)`)
+	indexTableRE              = regexp.MustCompile(`(?im)^\s*CREATE\s+(?:UNIQUE\s+)?INDEX(?:\s+IF\s+NOT\s+EXISTS)?\s+(\w+)\s+ON\s+"?(\w+)"?`)
+	createEnumRE              = regexp.MustCompile(`(?is)CREATE\s+TYPE\s+"?(\w+)"?\s+AS\s+ENUM\s*\(([^)]*)\)`)
+	enumLabelRE               = regexp.MustCompile(`'((?:''|[^'])*)'`)
 )
 
 // extractDeclaredSchema reads the latest migration as a multi-object schema
@@ -307,6 +309,9 @@ func extractDeclaredSchema(content string) SchemaSentinels {
 	}
 	for _, match := range alterTableAddColumnRE.FindAllStringSubmatch(stripped, -1) {
 		getTable(match[1]).Columns = append(getTable(match[1]).Columns, match[2])
+	}
+	for _, match := range alterTableAddConstraintRE.FindAllStringSubmatch(stripped, -1) {
+		getTable(match[1]).Constraints = append(getTable(match[1]).Constraints, match[2])
 	}
 	for _, match := range indexTableRE.FindAllStringSubmatch(stripped, -1) {
 		getTable(match[2]).Indexes = append(getTable(match[2]).Indexes, match[1])

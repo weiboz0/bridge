@@ -81,6 +81,20 @@ func TestCheckConstraints_InjectsNamedConstraint(t *testing.T) {
 	}))
 }
 
+func TestCheckColumns_RejectsWrongLifecycleTypeAndNullability(t *testing.T) {
+	db := integrationDB(t)
+	ctx := context.Background()
+	_, err := db.ExecContext(ctx, `CREATE TABLE lifecycle_probe_fixture (token text NOT NULL)`)
+	require.NoError(t, err)
+	t.Cleanup(func() { _, _ = db.ExecContext(context.Background(), `DROP TABLE IF EXISTS lifecycle_probe_fixture`) })
+	err = checkColumns(ctx, db, SchemaSentinels{Tables: []SchemaTableSentinels{{Table: "lifecycle_probe_fixture", ColumnDefinitions: []SchemaColumnSentinel{{Name: "token", DataType: "uuid", Nullable: true}}}}})
+	var mismatch *ErrSchemaColumnDefinitionMismatch
+	require.Error(t, err)
+	require.True(t, errors.As(err, &mismatch))
+	assert.Equal(t, "uuid", mismatch.Expected.DataType)
+	assert.False(t, mismatch.ActualNullable)
+}
+
 // TestCheckSchemaProbe_MissingIndex drops `session_canvases_session_idx`,
 // registers a re-CREATE cleanup, then asserts that CheckSchemaProbe returns
 // *ErrSchemaSentinelMissing with Kind=="index" and

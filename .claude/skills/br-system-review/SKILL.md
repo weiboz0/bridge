@@ -133,7 +133,7 @@ psql postgresql://work@127.0.0.1:5432/bridge_test -c 'select 1' 2>&1
 # Schema probe — current contract from drizzle/0028_session_canvases.sql:
 # public.session_canvases; all eight named canvas columns; both named indexes
 # on that table; public.sessions.canvas_floor and the three nullable lifecycle
-# columns with exact types; and ordered public.canvas_visibility.
+# columns with exact types, their paired-null CHECK constraint; and ordered public.canvas_visibility.
 psql postgresql://work@127.0.0.1:5432/bridge -tAc \
   "SELECT to_regclass('public.session_canvases') IS NOT NULL
      AND (SELECT count(DISTINCT column_name)
@@ -159,6 +159,7 @@ psql postgresql://work@127.0.0.1:5432/bridge -tAc \
                ('canvas_freeze_until','timestamp with time zone','YES'),
                ('whiteboard_server_archive_complete','boolean','YES')
              )) = 3
+     AND EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.sessions'::regclass AND conname='sessions_canvas_freeze_lease_pair')
      AND ARRAY(SELECT e.enumlabel::text
                  FROM pg_type t
                  JOIN pg_namespace n ON n.oid=t.typnamespace

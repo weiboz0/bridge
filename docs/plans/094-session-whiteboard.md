@@ -786,3 +786,15 @@ _Plan-wide report pending later phases._
   This test would fail under discovery-before-reread ordering.
 - A database-clock confirmed-end regression expires a matching lease with `clock_timestamp()`, then proves confirmed completion returns the lifecycle conflict while the session remains live, no archive-true result persists, and no snapshot state is written.
 - The active-freeze HTTP regression now also counts `session_canvases` and proves blocked create leaves no extra row, alongside the existing update/delete/floor no-write assertions.
+
+### Phase 8 schema and lock hardening (2026-08-11)
+
+- RED: probe tests first failed because lifecycle sentinels asserted names only, and malformed one-sided token/until writes were accepted by PostgreSQL.
+- GREEN: lifecycle schema sentinels now pin each column's exact physical type and nullable state, and the schema probe returns a typed definition mismatch on wrong type or nullability.
+  Parity recognizes the named `sessions_canvas_freeze_lease_pair` CHECK constraint declared through `ALTER TABLE`.
+- Migration 0028 now enforces paired nullable lease fields with `CHECK ((canvas_freeze_token IS NULL) = (canvas_freeze_until IS NULL))`.
+  The store regression proves both malformed pair forms are rejected.
+- Test-only reconciliation was required after live verification returned `bridge_test`: the first constraint addition found one stale malformed local test row.
+  In one transaction, the exact prerequisite repair cleared both lease fields on that malformed row and added `sessions_canvas_freeze_lease_pair`; afterward the constraint existed and the malformed-pair count was zero.
+  No migration runner or non-test database was used.
+- New class-less lifecycle tests register cleanup immediately after session creation, including subtests, so fixture users and sessions do not accumulate.

@@ -22,6 +22,10 @@ ALTER TABLE sessions
 ALTER TABLE sessions
   ADD COLUMN whiteboard_server_archive_complete boolean;
 
+ALTER TABLE sessions
+  ADD CONSTRAINT sessions_canvas_freeze_lease_pair
+  CHECK ((canvas_freeze_token IS NULL) = (canvas_freeze_until IS NULL));
+
 CREATE TABLE session_canvases (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   session_id uuid NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
