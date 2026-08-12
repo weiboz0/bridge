@@ -125,6 +125,10 @@ A collision in the second key may serialize concurrently active unrelated sessio
 
 External database clients do not share that registry, so an accidental external collision remains an availability-only risk and is documented with the lock constant.
 
+The existing one-argument `pg_advisory_xact_lock(hashtext(...))` uses PostgreSQL's disjoint `int8` advisory-lock keyspace.
+
+If a future transaction needs both classes, it must take the new two-`int4` session-lifecycle lock first and the legacy one-`int8` lock second; the implementation audit and deadlock test include the current legacy caller.
+
 Lease acquisition, lease replacement, successful or degraded end, abort cleanup, and ended-session residual cleanup take the exclusive session advisory lock.
 
 Mutation authorization takes the shared session advisory lock.
@@ -151,9 +155,9 @@ An already-ended completion is idempotent: it returns the stored archive result,
 
 Hocuspocus mirrors active operations in an in-memory map keyed by session ID with token, database expiry, and monotonic expiry, never a boolean set.
 
-Every freeze and unfreeze operation for one session executes through the same per-session async serializer.
+Every freeze, unfreeze, and complete operation for one session executes through the same per-session async serializer.
 
-The serializer is acquired before lease validation and held through every in-memory map mutation, document snapshot capture, connection close, and operation result.
+The serializer is acquired before lease validation and held through every in-memory map mutation, document snapshot capture, connection close, and immutable cache publication, but response writers use tracked reader references outside it.
 
 Lease validation is an abortable HTTP callback to Go, not a Node database query.
 
@@ -161,9 +165,13 @@ The callback takes the session ID and freeze token, acquires the shared session 
 
 The freeze request also carries the authoritative canvas-ID list read by Go after lease acquisition.
 
-An unfreeze that arrives while validation or capture is in progress waits for that operation to finish or abort, then removes the matching entry as the final serialized action.
+An unfreeze or complete that arrives while validation, capture, or response writing is in progress becomes the one coalesced pending terminal cleanup for that token.
 
-Unfreeze is never abandoned merely because its caller disconnects.
+Complete takes precedence if matching unfreeze and complete requests race because the database has ended by the time Go sends complete.
+
+The terminal cleanup marks the active operation inactive, aborts every matching response writer, waits for the validation, capture, and writer continuations to settle, then removes only the matching entry and releases its accounting as the final serialized action.
+
+Terminal cleanup is never abandoned merely because its unfreeze or complete caller disconnects.
 
 Its queue wait is bounded by the active freeze deadline plus abort settlement, after which token comparison and local removal are synchronous.
 
@@ -171,31 +179,45 @@ Duplicate freezes for the same token share the in-flight result and, after succe
 
 They never recapture an already-closed zero-document state as a new successful result.
 
-Duplicate matching unfreezes coalesce, and a different freeze or unfreeze token receives a retryable conflict without entering the queue while an operation is active.
+Duplicate matching terminal cleanups coalesce, and a different freeze, unfreeze, or complete token receives a retryable conflict without entering the queue while an operation is active.
 
 Go retries a retryable token conflict with bounded jitter while time remains inside the one overall two-second freeze budget; it does not reset the budget.
 
 If no retry succeeds, the end proceeds on the degraded path with the warning.
 
-The per-session queue therefore contains at most one active operation and one coalesced pending matching unfreeze.
+The per-session queue therefore contains at most one active operation and one coalesced pending matching terminal cleanup, whose mode may be promoted from unfreeze to complete but never duplicated.
 
-The websocket transport rejects a mutation-bearing Yjs update above 1 MiB before buffering a complete application message, with only the fixed protocol-envelope allowance added to the transport ceiling.
+Hocuspocus passes `maxPayload: 1 MiB plus the fixed protocol-envelope allowance` as the second argument to the pinned `Server` constructor, so `ws` rejects every oversized websocket message during reassembly with close code 1009 before Hocuspocus receives it.
 
-Before applying persisted state, Hocuspocus rejects a decoded update above 4 MiB and reserves its decoded byte count from a process-wide 128 MiB resident-document admission ledger.
+Before applying persisted state, Hocuspocus rejects a decoded update above 4 MiB and reserves the same 16 MiB scratch slot from a process-wide 128 MiB resident-document admission ledger; successful authoritative-and-shadow load shrinks it to twice the encoded current-state size and any failure releases it.
 
-Before applying a mutation, it reserves the decoded update byte count against both that canvas's 4 MiB cumulative admitted-input ceiling and the resident-document ledger; a rejected or failed apply rolls the reservation back.
+Each loaded canvas owns a shadow `Y.Doc`, a per-document admission turnstile, and exact resident-ledger accounting for the authoritative document plus shadow.
 
-The conservative cumulative counter is the loaded canvas's decoded persisted-state bytes plus every accepted mutation-update byte and is released only when that exact document instance unloads.
+For a mutation, `beforeHandleMessage` first reserves a 16 MiB mutation-scratch slot from the resident ledger, holds the turnstile across the library handoff, applies the at-most-1-MiB decoded Yjs update to the shadow, encodes the shadow's resulting current state, and rejects before the authoritative apply if syntax, the 4 MiB current-state ceiling, or the process ledger fails.
 
-Once a canvas reaches its ceiling, further mutation writes fail closed and the client receives a visible size-limit error instead of allowing unbounded Yjs expansion.
+The hook schedules a `setImmediate` failure fallback before resolving.
+
+An `afterLoadDocument` hook installs a direct synchronous Yjs `document.on("update")` admission-commit listener and `beforeUnloadDocument` removes that exact listener.
+
+During the subsequent `MessageReceiver.apply`, that listener matches the transaction-origin connection, document instance, and update digest, commits the shadow and exact current-state accounting, cancels the fallback, and releases the turnstile before the apply call returns.
+
+If `MessageReceiver.apply` throws or emits no matching document update, the fallback rebuilds the shadow from the unchanged authoritative document, rolls back the temporary accounting, and releases the turnstile before another mutation may validate.
+
+Awareness, stateless, query, and sync-step-one messages do not reserve mutation state and release the turnstile through an explicit non-mutation path.
+
+After success the scratch slot shrinks to twice the encoded current-state size, accounting for the authoritative and shadow serialized-state baselines; that accounting is released only when those exact instances unload.
+
+These ledgers bound admitted encoded inputs, scratch concurrency, encoded states, capture buffers, and cached responses, not the Yjs implementation's unobservable object overhead; the design makes no exact JavaScript-heap bound claim.
+
+An update whose shadow result exceeds the ceiling fails closed with a visible size-limit error instead of changing the authoritative document.
 
 The sum of those counters for the authoritative canvases in one freeze request must not exceed 16 MiB.
 
-Before the first snapshot encode, the operation synchronously reserves 64 MiB from one process-wide 256 MiB capture-and-cache ledger.
+Before the first snapshot encode of a nonempty authoritative list, the operation synchronously reserves 64 MiB from one process-wide 256 MiB capture-and-cache ledger.
 
 Failure to reserve returns 503 before any connection close and therefore produces the degraded warning.
 
-The transport, per-document, resident-document, per-session, and capture-reservation limits are hard admission bounds that run before Yjs apply or snapshot encode, while the 8 MiB per-snapshot and 32 MiB aggregate limits independently validate actual encoded output.
+The transport, shadow-result, resident-document, per-session, and capture-reservation limits are hard admission bounds that run before authoritative Yjs apply or snapshot encode, while the 8 MiB per-snapshot and 32 MiB aggregate limits independently validate actual encoded output.
 
 After capture, the reservation shrinks atomically to the actual cached entry and response byte accounting, never exceeding the existing 48 MiB response limit.
 
@@ -217,21 +239,27 @@ The callback uses `fetch` with an owned `AbortController` and a deadline no grea
 
 When cancellation or the internal deadline wins, the operation is marked inactive, the callback is aborted, and no new snapshot or connection-close stage may start.
 
-One document's snapshot encoding, digest, and entry construction are synchronous Node operations performed only while the serializer is held and the operation remains active.
+One document's snapshot encoding, digest, and entry construction are synchronous Bun runtime operations performed only while the serializer is held and the operation remains active.
 
 Hocuspocus yields with `setImmediate` between documents so other sessions can process websocket and awareness traffic.
 
-The JSON response is emitted incrementally by entry with stream backpressure and is not assembled through one 48 MiB `JSON.stringify` call.
+Only after every document capture succeeds and the immutable bundle is cached does the handler emit a 200 response incrementally by entry with stream backpressure; it never constructs one 48 MiB `JSON.stringify` value.
 
-Cached entries are re-streamed through the same writer for an idempotent retry.
+Each response writer takes a reference on that cached token entry, streams outside the per-session serializer, owns an `AbortController`, has a 250-millisecond no-progress timeout reset by successful writes, and has an absolute deadline no later than the operation deadline.
+
+Abort forcibly destroys the HTTP response and the writer's settled promise releases its reader reference by token and entry identity.
+
+Cached entries are re-streamed through the same writer for an idempotent retry, so a stalled first writer cannot block serializer access by the retry.
+
+Complete aborts all matching writers inside the serializer, awaits their bounded settlement, and releases cached bytes only after the last reader reference reaches zero.
 
 Every save-mutex acquisition is awaited with the deadline before synchronous encoding begins.
 
-The serializer remains held until the callback and every started save-mutex wait settle or acknowledge abort.
+The serializer remains held until the callback and every started save-mutex wait settle or acknowledge abort, but not while an immutable cached response is streamed under a reader reference.
 
 No postgres.js query, pool checkout, cancel connection, or snapshot database write exists in the Hocuspocus freeze path.
 
-No detached continuation may encode or return a snapshot, mutate the map, close a connection, or publish a result after the serializer is released.
+No detached continuation may encode a new snapshot, mutate the map, close a connection, or publish a new cache result after the serializer is released; every immutable response writer is registered, deadline-owned, reference-counted, and settled before its entry is freed.
 
 An unfreeze for one token cannot clear a newer or concurrent token.
 
@@ -239,7 +267,7 @@ Hocuspocus stores the conservative monotonic deadline computed from the pre-call
 
 It does not compare a Go- or Node-generated wall-clock timestamp to the database expiry.
 
-Every expiry timer and lazy or sweep cleanup reacquires the per-session serializer and removes the map entry only when both its expected token and entry identity still match.
+Every expiry timer and lazy or sweep cleanup reacquires the per-session serializer, aborts and settles matching response writers, and removes the map entry only when both its expected token and entry identity still match.
 
 A delayed timer for an old token cannot delete a replacement token.
 
@@ -283,9 +311,11 @@ An empty snapshot list is a valid confirmed result when none of the authoritativ
 
 The unfreeze success response is `{ "unfrozen": true }` when the matching operation was cleared or no operation is active.
 
-The complete success response is `{ "released": true }` when the matching completed bundle, fence entry, and serializer reservation were released or were already absent.
+The complete success response is `{ "released": true }` only after the matching active operation and response writers have been aborted and settled and the completed bundle, fence entry, and capture reservation were released or were already absent.
 
 Complete never reopens an ended connection and a foreign active token returns `409 freeze_token_mismatch`.
+
+A matching complete during validation, capture, or response writing becomes the final serialized terminal cleanup and does not report success until that bounded cleanup settles.
 
 The Go client treats a non-2xx response, timeout, transport error, invalid JSON, duplicate or unexpected canvas ID, invalid base64 or digest, missing field, negative count, or wrong field type as a freeze failure.
 
@@ -389,7 +419,7 @@ A frame that has fully passed the second guard check must apply and relay before
 
 The installed Hocuspocus promise continuation between `beforeHandleMessage` and `MessageReceiver.apply` is permitted because its microtask drains before the next HTTP event-loop task.
 
-No timer, I/O callback, `setImmediate`, or other macrotask yield is permitted between the second check and completed Yjs apply and relay.
+No timer, I/O callback, `setImmediate`, or other macrotask yield is permitted between the second check and completed Yjs apply and relay except the already-scheduled admission-failure fallback, which cannot run until the synchronous apply/onChange chain has either committed the reservation or failed.
 
 The subsequent snapshot capture therefore includes every mutation accepted before the freeze boundary.
 
@@ -473,7 +503,7 @@ Canvas authentication places the verified JWT expiry and token read-only decisio
 
 Hocuspocus schedules a connection close at the JWT expiry and clears the timer when the connection closes earlier.
 
-Expiry delays beyond Node's maximum timer duration are chained or clamped and rechecked, while already expired tokens close immediately.
+Expiry delays beyond Bun's maximum supported timer duration are chained or clamped and rechecked, while already expired tokens close immediately.
 
 The close applies to writable and read-only canvas connections.
 
@@ -580,7 +610,7 @@ No migration is run against a non-test database.
 - A lost freeze response after successful capture is retried with the same token inside the original deadline and recovers the identical cached bundle without recapture.
 - The atomic successful end update and shared advisory-lock mutation authorization prevent a post-expiry frame from being admitted between the success predicate and commit on a confirmed path.
 - A degraded-path test pauses multiple independently authorized frames across several connections, commits the incomplete end, resumes the concurrent fan-in, and proves transient applies cannot persist while every later mutation and reconnect is denied.
-- Session advisory locks are always acquired before database reads or row locks, and busy-session tests prove end completion under concurrent mutation authorization, canvas creation, visibility, deletion, and floor changes without deadlock or exceeding the approved bound.
+- Session advisory locks are always acquired before database reads or row locks, and busy-session tests prove end completion under concurrent mutation authorization, canvas creation, visibility, deletion, floor changes, and the legacy one-argument session advisory-lock caller without deadlock or exceeding the approved bound.
 - Lease acquire, replace, abort, and complete use the reserved exclusive advisory key, while mutation and Hocuspocus validation use its shared form; a paused validation observes a preceding abort commit.
 - Go, TypeScript, and PostgreSQL fixture vectors produce the exact same signed second advisory key for all five boundary UUID prefixes.
 - Lease acquisition, replacement, mutation authorization, Go freeze validation, and end completion use database `clock_timestamp()` semantics under controlled tests.
@@ -598,6 +628,7 @@ No migration is run against a non-test database.
 ### Hocuspocus tests
 
 - Freeze authenticates the bearer secret and validates strict input.
+- The installed pinned `Server` receives the exact `ws.maxPayload` option, and a real fragmented oversized websocket message closes with code 1009 before any Hocuspocus message hook runs.
 - A mutation racing a successful freeze proves that the last accepted scene is present in the returned bundle before connections close and is later persisted by the Go integration test.
 - A mutation awaiting authorization when freeze begins is rejected before Yjs apply and relay.
 - Two successive frames on one connection perform two Go rechecks, and a durable lease acquired between them is observed even when the local freeze map is empty.
@@ -614,13 +645,17 @@ No migration is run against a non-test database.
 - Each save-mutex wait and Go-validation fetch is paused across timeout and queued unfreeze to prove the serializer and cleanup wait for abort settlement; after acknowledgment, no encode, close, map, or result effect can occur after release.
 - Duplicate operations coalesce, foreign tokens conflict without queueing, the queue stays bounded, and an idle serializer is evicted.
 - A post-success duplicate receives the byte-identical cached bundle rather than an empty recapture; complete, unfreeze, and expiry release only its exact cache reservation, and a stale cleanup cannot release a replacement token's reservation.
+- Matching complete paused during validation, save-mutex wait, capture, and response streaming cancels and settles the active work and readers, becomes the final serialized action, and cannot permit a late cache publish or release a replacement token's bytes.
 - Transport abort after successful capture followed by a same-token request re-streams the identical entries, while successful complete acknowledgment frees them promptly and lost acknowledgment falls back to token-conditional expiry.
-- Websocket transport rejects an oversized frame before complete application buffering; persisted-state load, per-document mutation, per-session aggregate, resident-document, and concurrent capture reservations each fail at their exact boundary before Yjs apply, snapshot encode, or connection close.
+- A half-open first response hits its no-progress timeout, destroys and settles its writer, permits a same-token cached retry inside the overall deadline, and protects cached bytes with reader references until complete settles every writer.
+- `ws` rejects every oversized websocket message during reassembly with code 1009; persisted-state load, shadow-result mutation, per-session aggregate, resident-document, and concurrent capture reservations each fail at their exact boundary before authoritative Yjs apply, snapshot encode, or connection close.
+- An accepted reservation followed by a real installed-path `MessageReceiver.apply` failure exercises the `setImmediate` fallback, rebuilds the shadow, rolls back accounting, and releases the admission turnstile; a successful apply exercises the direct synchronous Yjs update-listener commit path, and unload removes the exact listener and accounting.
 - Concurrent capture reservation never exceeds the 256 MiB capture-and-cache ledger, resident documents never exceed their separate 128 MiB ledger, and rejection or unload releases only the exact instance reservation.
 - The maximum accepted document and 50-canvas request stay within the declared pre-reserved allocation; controlled instrumentation proves no encode begins without its 64 MiB reservation.
 - Incremental response streaming honors backpressure and request abort, yields between document encodes, never constructs one aggregate JSON string, and leaves other-session websocket and awareness work schedulable.
 - Serializer lookup, enqueue, last-dequeue eviction, expiry sweep, and token-conditional timer cleanup interleave under controlled scheduling without creating two serializers or deleting a replacement token.
 - Go-validation timeout, zero remaining budget, and half-open HTTP each settle through owned `AbortController` cancellation, release cleanup, and permit no late effect or open handle.
+- All microtask, `setImmediate`, response-destroy, backpressure, and maximum-timer-clamp scheduling tests execute under the production Bun runtime.
 - The maximum 50 loaded canvases produce a bounded snapshot bundle inside the two-second Go deadline under the approved representative test latency.
 - Canvas connections close at JWT expiry under a controlled clock.
 - A stale writable token joining an already loaded ended canvas is downgraded, while one joining a temporarily frozen canvas receives the retryable freeze outcome.
@@ -670,7 +705,7 @@ The student-session effect dependencies, dead `plain_text` references, and other
 
 - A teacher can end a session within the database request path even when Hocuspocus is unavailable.
 - A teacher is warned when storage of the fenced Hocuspocus final snapshot is not confirmed.
-- A successful confirmed end persists every server-accepted loaded-canvas mutation returned by its fence before closing its connections; a successful freeze followed by database failure makes no persistence claim.
+- A successful confirmed end captures every server-accepted loaded-canvas mutation before closing its connections, then persists the returned snapshots before committing the confirmed database end; a successful freeze followed by database failure makes no persistence claim.
 - On a confirmed path, no canvas mutation accepted after the freeze boundary applies or relays.
 - On a degraded path, any finite set of frames already authorized before the exclusive end may apply transiently; every later mutation-bearing frame rechecks and observes `ended` or fails closed, and every remaining canvas connection closes no later than JWT expiry.
 - Established canvas connections terminate when their JWT expires.
