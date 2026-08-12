@@ -101,6 +101,26 @@ describe("Phase 10 canvas lifecycle RED contract", () => {
     expect(sut.accounting().captureBytes).toBeLessThanOrEqual(48 * 1024 * 1024);
   });
 
+  test("does not report a frozen bundle until the installed Document save mutex releases, then closes its registered connections and reports their exact count", async () => {
+    const { createCanvasLifecycle } = await lifecycle();
+    const { Document } = await import("@hocuspocus/server");
+    const document = new Document(`canvas:${canvasId}`);
+    const closed: string[] = [];
+    for (const label of ["first", "second"]) {
+      document.connections.set({} as never, { clients: new Set(), connection: { close: () => closed.push(label) } } as never);
+    }
+    const releaseSave = await document.saveMutex.acquire();
+    const sut = createCanvasLifecycle({ validateLease: async () => ({ allowed: true, remainingMs: 2_000 }), documents: new Map([[document.name, document]]) });
+    let settled = false;
+    const frozen = sut.freeze({ sessionId, freezeToken: token, canvasIds: [canvasId] }).then((result: unknown) => { settled = true; return result; });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(closed).toEqual([]);
+    releaseSave();
+    await expect(frozen).resolves.toMatchObject({ closed: 2, snapshots: [{ canvasId }] });
+    expect(closed).toEqual(["first", "second"]);
+  });
+
   test("rejects the ninth canvas mutation before allocating a waiter and settles all eight on cancellation", async () => {
     const { createCanvasLifecycle } = await lifecycle();
     const blocked = Promise.withResolvers<{ allowed: boolean; readOnly: boolean }>();
@@ -171,5 +191,48 @@ describe("Phase 10 canvas lifecycle RED contract", () => {
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(sut.inspectDocument(`canvas:${canvasId}`)?.document).toBe(second);
     expect(sut.accounting().residentBytes).toBeGreaterThan(0);
+  });
+
+  test("decodes the installed nested Yjs sync envelope and enforces the exact 1 MiB decoded-update boundary", async () => {
+    const { decodeCanvasMutationUpdate } = await lifecycle();
+    // This is intentionally not a raw-buffer-size check: Hocuspocus wraps the
+    // Yjs update in a document-name and sync envelope before the hook sees it.
+    const nested = new Uint8Array(1_048_576);
+    const { OutgoingMessage } = await import("@hocuspocus/server");
+    const frame = new OutgoingMessage(`canvas:${canvasId}`).createSyncMessage().writeUpdate(nested).toUint8Array();
+    expect(decodeCanvasMutationUpdate({ documentName: `canvas:${canvasId}`, frame })).toEqual(nested);
+    const oversized = new OutgoingMessage(`canvas:${canvasId}`).createSyncMessage().writeUpdate(new Uint8Array(1_048_577)).toUint8Array();
+    expect(() => decodeCanvasMutationUpdate({ documentName: `canvas:${canvasId}`, frame: oversized })).toThrow(/1 MiB|too large/i);
+  });
+
+  test("maps the real Go 409 session_freezing response to a retryable client condition rather than a permanent read-only decision", async () => {
+    const { decodeCanvasAuthorizationResponse } = await lifecycle();
+    expect(decodeCanvasAuthorizationResponse({ status: 409, json: { code: "session_freezing" } })).toMatchObject({ code: "session_freezing", retryable: true, readOnly: false });
+    expect(decodeCanvasAuthorizationResponse({ status: 409, json: { code: "session_end_in_progress" } })).not.toMatchObject({ code: "session_freezing" });
+  });
+
+  test("turnstile admission owns a deadline and AbortSignal for all eight entries and settles every waiter on close", async () => {
+    const { createCanvasLifecycle } = await lifecycle();
+    const pending = Promise.withResolvers<{ allowed: boolean; readOnly: boolean }>();
+    const sut = createCanvasLifecycle({ authorizeMutation: ({ signal }: { signal: AbortSignal }) => new Promise((resolve, reject) => {
+      signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
+      pending.promise.then(resolve, reject);
+    }) });
+    const documentName = `canvas:${canvasId}`;
+    const admissions = Array.from({ length: 8 }, () => sut.admitMutation({ documentName, sessionId, connection: { close() {} }, update: updateWith(randomUUID()) }));
+    await sut.cancelAdmissions({ documentName, reason: "socket_closed" });
+    pending.resolve({ allowed: true, readOnly: false });
+    const settled = await Promise.allSettled(admissions);
+    expect(settled.every((item) => item.status === "rejected")).toBe(true);
+    expect(sut.inspectDocument(documentName)).toMatchObject({ admissions: 0, turnstileLocked: false });
+  });
+
+  test("a token-keyed zero-snapshot freeze is immutable and terminal cleanup rejects post-terminal reuse without recapture", async () => {
+    const { createCanvasLifecycle } = await lifecycle();
+    const sut = createCanvasLifecycle({ validateLease: async () => ({ allowed: true, remainingMs: 2_000 }) });
+    const first = await sut.freeze({ sessionId, freezeToken: token, canvasIds: [] });
+    await expect(sut.freeze({ sessionId, freezeToken: token, canvasIds: [canvasId] })).resolves.toEqual(first);
+    await sut.complete({ sessionId, freezeToken: token });
+    await expect(sut.freeze({ sessionId, freezeToken: token, canvasIds: [] })).rejects.toMatchObject({ code: "operation_completed" });
   });
 });

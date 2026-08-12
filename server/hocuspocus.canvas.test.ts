@@ -511,6 +511,60 @@ describe("canvas realtime JWT compatibility", () => {
 });
 
 describe("Phase 10 installed Hocuspocus hook RED contract", () => {
+  test("propagates an actual Go 409 session_freezing response as the retryable client condition", async () => {
+    const runtime = await import("./hocuspocus") as Record<string, unknown>;
+    const hooks = runtime.createCanvasLifecycleHooks as ((input: Record<string, unknown>) => Record<string, (input: Record<string, unknown>) => Promise<unknown>>) | undefined;
+    expect(hooks).toBeTypeOf("function");
+    globalThis.fetch = async () => new Response(JSON.stringify({ code: "session_freezing" }), { status: 409 });
+    const changed = new Y.Doc();
+    changed.getMap("elements").set("fenced", "shape");
+    const frame = new OutgoingMessage(`canvas:${phase10CanvasId}`).createSyncMessage().writeUpdate(Y.encodeStateAsUpdate(changed)).toUint8Array();
+    const installed = hooks!({ lifecycle: {} });
+    await expect(installed.beforeHandleMessage({ documentName: `canvas:${phase10CanvasId}`, connection: { readOnly: false }, update: frame, context: { userId: "writer", sessionId: randomUUID() } })).rejects.toMatchObject({ code: "session_freezing", retryable: true });
+  });
+
+  test("validates the outbound Go internal URL before any bearer can be sent", async () => {
+    const runtime = await import("./hocuspocus") as Record<string, unknown>;
+    const validate = runtime.validateGoInternalApiUrl as ((value: string) => string) | undefined;
+    expect(validate).toBeTypeOf("function");
+    expect(validate!("http://127.0.0.1:8002")).toBe("http://127.0.0.1:8002");
+    expect(validate!("http://[::1]:8002")).toBe("http://[::1]:8002");
+    expect(validate!("https://api.bridge.example/internal")).toBe("https://api.bridge.example/internal");
+    for (const unsafe of ["http://localhost:8002", "http://api.bridge.example", "http://10.0.0.1:8002", "ftp://127.0.0.1", "https://127.0.0.1:8002@evil.example"]) {
+      expect(() => validate!(unsafe)).toThrow();
+    }
+  });
+
+  test("the registered connected hook closes an installed canvas connection at expiry so provider reauthentication can begin", async () => {
+    const runtime = await import("./hocuspocus") as Record<string, unknown>;
+    const hooks = registeredCanvasHooks(runtime) as CanvasHooks & { connected?: (input: Record<string, unknown>) => Promise<void> };
+    let closed = 0;
+    const callbacks: Array<() => void> = [];
+    await hooks.connected?.({ documentName: `canvas:${phase10CanvasId}`, context: { jwtExpiry: Math.floor((Date.now() - 1) / 1_000) }, connection: { close: () => closed++, onClose: (callback: () => void) => callbacks.push(callback) } });
+    await Bun.sleep(0);
+    expect(closed).toBe(1);
+    callbacks.forEach((callback) => callback());
+  });
+
+  test("installs after-load and before-unload hooks around the real Hocuspocus registry instead of releasing a generation from a logical load alone", async () => {
+    const runtime = await import("./hocuspocus") as Record<string, unknown>;
+    const hooks = registeredCanvasHooks(runtime) as CanvasHooks & {
+      afterLoadDocument?: (input: Record<string, unknown>) => Promise<void>;
+      beforeUnloadDocument?: (input: Record<string, unknown>) => Promise<void>;
+    };
+    expect(hooks.afterLoadDocument).toBeTypeOf("function");
+    expect(hooks.beforeUnloadDocument).toBeTypeOf("function");
+    const document = new Document(`canvas:${phase10CanvasId}`);
+    const registry = new Map([[document.name, document]]);
+    const instance = { documents: registry };
+    await hooks.afterLoadDocument!({ documentName: document.name, document, instance });
+    await hooks.beforeUnloadDocument!({ documentName: document.name, document, instance });
+    // Pinned 3.4.4 can cancel unload after its hook; instrumentation must
+    // survive that path until the installed document's destroy event.
+    expect(registry.get(document.name)).toBe(document);
+    document.destroy();
+  });
+
   test("runs current authorization for every canvas admission, including an already-loaded document", async () => {
     const runtime = await import("./hocuspocus") as Record<string, unknown>;
     const install = runtime.createCanvasLifecycleHooks as ((input: Record<string, unknown>) => Record<string, (input: Record<string, unknown>) => Promise<unknown>>) | undefined;

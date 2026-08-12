@@ -31,4 +31,26 @@ describe("canvas reconnect policy", () => {
     expect(canvasReconnectPolicy({ now: 0, documentName: "attempt:abc", event: { code: "session_freezing" }, believedLive: true })).toMatchObject({ compatibility: "legacy" });
     expect(canvasReconnectPolicy({ now: 0, documentName: "session:abc", event: { code: "transport_closed" }, believedLive: true })).toMatchObject({ compatibility: "legacy" });
   });
+
+  it("gives the installed CLOSE reason precedence over its generic close code so session_freezing resets recovery", () => {
+    const result = canvasReconnectPolicy({
+      now: 1_000,
+      event: { code: 1000, reason: "session_freezing" },
+      believedLive: true,
+    });
+    expect(result.fastRecoveryUntil).toBe(21_000);
+    expect(result.retry).toBe(true);
+  });
+
+  it("models one provider close as one retry advance, resets it on a real connect, and stops after a terminal close", async () => {
+    const { createCanvasProviderEventBridge } = await import("@/lib/yjs/use-yjs-provider");
+    const bridge = createCanvasProviderEventBridge({ documentName: "canvas:abc", now: () => 1_000 });
+    bridge.onClose({ code: 1000, reason: "session_freezing" });
+    bridge.onDisconnect({ code: 1000, reason: "session_freezing" });
+    expect(bridge.state()).toMatchObject({ attempt: 1, retry: true });
+    bridge.onConnect();
+    expect(bridge.state()).toBeUndefined();
+    bridge.onClose({ code: 1000, reason: "canvas_jwt_expired" });
+    expect(bridge.state()).toMatchObject({ terminal: true, retry: false });
+  });
 });
