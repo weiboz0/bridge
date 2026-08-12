@@ -4,6 +4,7 @@ import { ApiError } from "@/lib/api-error";
 import { isValidUUID } from "@/lib/utils";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { StartSessionButton } from "@/components/teacher/start-session-button";
+import { ScheduledSessionList } from "@/components/teacher/scheduled-session-list";
 import Link from "next/link";
 import { buttonVariants } from "@/components/ui/button";
 import { ClassStudentsList } from "@/components/teacher/class-students-list";
@@ -141,6 +142,8 @@ export default async function TeacherClassDetailPage({
           <p className="text-3xl font-mono tracking-widest font-bold text-center">{cls.joinCode}</p>
         </CardContent>
       </Card>
+
+      <ScheduledSessionList classId={id} />
 
       <div className="grid gap-6 md:grid-cols-2">
         <div>

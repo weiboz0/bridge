@@ -22,6 +22,22 @@ type UnlinkedTopicsGuard = {
   message: string;
 };
 
+// Plan 094 phase 11: creating a session on a class with an already-live
+// session silently ends the old one (session_lifecycle.go's replacement
+// path). That old session's whiteboard archive is never confirmed through
+// the normal Hocuspocus freeze/capture flow, so the teacher must be warned
+// once, before navigating away, that its archive may be incomplete.
+type ReplacedSession = { id: string; whiteboardServerArchiveComplete: boolean };
+
+function describeReplacedSessions(replaced: ReplacedSession[]): string | null {
+  if (replaced.length === 0) return null;
+  const incomplete = replaced.filter((session) => !session.whiteboardServerArchiveComplete).length;
+  const suffix = replaced.length === 1 ? "session" : "sessions";
+  return incomplete > 0
+    ? `Starting this session ended ${replaced.length} other live ${suffix} for this class. ${incomplete === replaced.length ? "Its" : "Some of its"} whiteboard archive may be incomplete.`
+    : `Starting this session ended ${replaced.length} other live ${suffix} for this class.`;
+}
+
 export function StartSessionButton({
   classId,
   mode = "class",
@@ -35,6 +51,7 @@ export function StartSessionButton({
   const [error, setError] = useState<string | null>(null);
   const [pendingTitle, setPendingTitle] = useState<string | null>(null);
   const [guard, setGuard] = useState<UnlinkedTopicsGuard | null>(null);
+  const [replacedWarning, setReplacedWarning] = useState<{ message: string; destination: string } | null>(null);
 
   const isOrphan = mode === "orphan";
   const resolvedButtonLabel =
@@ -84,11 +101,25 @@ export function StartSessionButton({
     // so a non-teacher host isn't bounced by the /teacher portal's role
     // gate. A class-bound session keeps the existing teacher portal route.
     const session = await res.json();
-    if (session.classId) {
-      router.push(`/teacher/sessions/${session.id}`);
-    } else {
-      router.push(`/sessions/${session.id}`);
+    const destination = session.classId
+      ? `/teacher/sessions/${session.id}`
+      : `/sessions/${session.id}`;
+
+    const replaced = Array.isArray(session.replacedSessions) ? session.replacedSessions as ReplacedSession[] : [];
+    const warningMessage = describeReplacedSessions(replaced);
+    if (warningMessage) {
+      setLoading(false);
+      setReplacedWarning({ message: warningMessage, destination });
+      return;
     }
+
+    router.push(destination);
+  }
+
+  function acknowledgeReplacedWarning() {
+    if (!replacedWarning) return;
+    router.push(replacedWarning.destination);
+    setReplacedWarning(null);
   }
 
   async function handleStart() {
@@ -172,6 +203,25 @@ export function StartSessionButton({
     </div>
   ) : null;
 
+  const replacedWarningDialog = replacedWarning ? (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="replaced-session-warning-title"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+    >
+      <div className="w-full max-w-md rounded-lg border bg-background p-5 shadow-xl space-y-3">
+        <h2 id="replaced-session-warning-title" className="text-lg font-semibold">
+          Previous session ended
+        </h2>
+        <p className="text-sm text-muted-foreground">{replacedWarning.message}</p>
+        <div className="flex justify-end pt-2">
+          <Button onClick={acknowledgeReplacedWarning}>Continue</Button>
+        </div>
+      </div>
+    </div>
+  ) : null;
+
   if (isOrphan) {
     return (
       <div className="space-y-2">
@@ -228,6 +278,7 @@ export function StartSessionButton({
         )}
         {error && <p className="text-sm text-red-600">{error}</p>}
         {guardDialog}
+        {replacedWarningDialog}
       </div>
     );
   }

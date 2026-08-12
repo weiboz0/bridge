@@ -5,7 +5,41 @@ import { useCallback, useEffect, useState } from "react";
 import { useSession } from "next-auth/react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useWhiteboard } from "@/lib/whiteboard/use-whiteboard";
+
+/**
+ * One-shot fallback written by the teacher end flow when the durable
+ * archive-completeness result is unknown (`teacher-dashboard.tsx`). Reading
+ * it here is consume-on-read: a failed durable settings fetch shows it once,
+ * then deletes it, so a later remount never repeats a stale warning. A
+ * successful durable fetch (any value) also deletes it, since the durable
+ * value has superseded the fallback.
+ */
+function archiveFallbackWarningKey(sessionId: string): string {
+  return `whiteboard-archive-fallback:${sessionId}`;
+}
+
+function consumeArchiveFallbackWarning(sessionId: string): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    const key = archiveFallbackWarningKey(sessionId);
+    const present = window.sessionStorage.getItem(key) === "1";
+    if (present) window.sessionStorage.removeItem(key);
+    return present;
+  } catch {
+    return false;
+  }
+}
+
+function clearArchiveFallbackWarning(sessionId: string): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.removeItem(archiveFallbackWarningKey(sessionId));
+  } catch {
+    // Storage may be unavailable (private browsing); the durable value still renders.
+  }
+}
 
 const ExcalidrawBoard = dynamic(
   () => import("./excalidraw-board").then((module) => module.ExcalidrawBoard),
@@ -95,6 +129,7 @@ export function WhiteboardPanel({
   const currentSettings = settings.sessionId === sessionId
     ? settings
     : { sessionId, floor: null, archiveComplete: undefined, error: null };
+  const [pendingVisibility, setPendingVisibility] = useState<{ canvas: WhiteboardCanvas; visibility: Visibility } | null>(null);
 
   const loadCanvases = useCallback(async () => {
     setLoading(true);
@@ -130,27 +165,34 @@ export function WhiteboardPanel({
       try {
         const response = await fetch(`/api/sessions/${sessionId}/canvas-settings`);
         if (response.status === 403) {
+          if (archive) clearArchiveFallbackWarning(sessionId);
           publish({ floor: null, archiveComplete: undefined, error: null });
           return;
         }
         if (!response.ok) {
-          publish({ floor: null, archiveComplete: undefined, error: "Unable to load whiteboard settings" });
+          const fallback = archive && consumeArchiveFallbackWarning(sessionId);
+          publish({ floor: null, archiveComplete: fallback ? false : undefined, error: "Unable to load whiteboard settings" });
           return;
         }
         const parsed = parseCanvasSettings(await response.json());
         if (!parsed) {
-          publish({ floor: null, archiveComplete: undefined, error: "Unable to load whiteboard settings" });
+          const fallback = archive && consumeArchiveFallbackWarning(sessionId);
+          publish({ floor: null, archiveComplete: fallback ? false : undefined, error: "Unable to load whiteboard settings" });
           return;
         }
+        // A 200 durable response is authoritative regardless of value —
+        // it supersedes and consumes any prior fallback warning.
+        if (archive) clearArchiveFallbackWarning(sessionId);
         publish({
           floor: parsed.canvasFloor,
           archiveComplete: parsed.whiteboardServerArchiveComplete,
           error: null,
         });
       } catch (cause) {
+        const fallback = archive && consumeArchiveFallbackWarning(sessionId);
         publish({
           floor: null,
-          archiveComplete: undefined,
+          archiveComplete: fallback ? false : undefined,
           error: cause instanceof Error ? cause.message : "Unable to load whiteboard settings",
         });
       }
@@ -215,8 +257,7 @@ export function WhiteboardPanel({
     setSelectedId(created.id);
   };
 
-  const updateVisibility = async (canvas: WhiteboardCanvas, visibility: Visibility) => {
-    if (visibilityRank(visibility) <= visibilityRank(canvas.visibility)) return;
+  const applyVisibilityChange = async (canvas: WhiteboardCanvas, visibility: Visibility) => {
     setError(null);
     const response = await fetch(`/api/sessions/${sessionId}/canvases/${canvas.id}`, {
       method: "PATCH",
@@ -229,6 +270,13 @@ export function WhiteboardPanel({
     }
     const updated = await response.json() as WhiteboardCanvas;
     setCanvases((current) => current.map((item) => item.id === updated.id ? updated : item));
+  };
+
+  // Visibility is loosen-only (Decision 7): any accepted raise is
+  // irreversible from this UI, so every raise is confirmed before it fires.
+  const requestVisibilityChange = (canvas: WhiteboardCanvas, visibility: Visibility) => {
+    if (visibilityRank(visibility) <= visibilityRank(canvas.visibility)) return;
+    setPendingVisibility({ canvas, visibility });
   };
 
   return (
@@ -302,7 +350,7 @@ export function WhiteboardPanel({
                   <select
                     className="ml-2 rounded border bg-background px-2 py-1"
                     value={selected.visibility}
-                    onChange={(event) => void updateVisibility(selected, event.target.value as Visibility)}
+                    onChange={(event) => requestVisibilityChange(selected, event.target.value as Visibility)}
                   >
                     {VISIBILITY_LEVELS.map((visibility) => (
                       <option key={visibility} value={visibility} disabled={visibilityRank(visibility) <= visibilityRank(selected.visibility)}>
@@ -319,6 +367,24 @@ export function WhiteboardPanel({
           </div>
         )}
       </div>
+      {pendingVisibility && (
+        <ConfirmDialog
+          open
+          onClose={() => setPendingVisibility(null)}
+          onConfirm={() => applyVisibilityChange(pendingVisibility.canvas, pendingVisibility.visibility)}
+          title="Raise whiteboard visibility?"
+          body={
+            <>
+              Changing “{pendingVisibility.canvas.title}” from{" "}
+              <strong>{pendingVisibility.canvas.visibility}</strong> to{" "}
+              <strong>{pendingVisibility.visibility}</strong> cannot be undone from this screen —
+              visibility can only be raised, never lowered.
+            </>
+          }
+          confirmLabel="Raise visibility"
+          confirmingLabel="Updating…"
+        />
+      )}
     </section>
   );
 }

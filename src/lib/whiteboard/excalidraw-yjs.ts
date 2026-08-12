@@ -2,6 +2,22 @@ import * as Y from "yjs";
 
 const SCENE_KEY = "scene";
 
+/**
+ * The only `appState` fields persisted to the shared Yjs document. Everything
+ * else — viewport/scroll, zoom, selection, active tool, collaborator
+ * awareness, and view-mode — is per-viewer local state that must never
+ * overwrite another viewer's canvas position or in-progress interaction.
+ */
+const DURABLE_APP_STATE_KEYS = ["viewBackgroundColor"] as const;
+
+function pickDurableAppState(appState: Record<string, unknown>): Record<string, unknown> {
+  const durable: Record<string, unknown> = {};
+  for (const key of DURABLE_APP_STATE_KEYS) {
+    if (key in appState) durable[key] = appState[key];
+  }
+  return durable;
+}
+
 export interface ExcalidrawScene {
   elements: readonly unknown[];
   appState: Record<string, unknown>;
@@ -22,6 +38,10 @@ function isScene(value: unknown): value is ExcalidrawScene {
  * Writes only the serializable Excalidraw scene. Binary files deliberately do
  * not belong in the collaborative document: the whiteboard MVP has no upload
  * path, and persisting blobs in a Yjs snapshot would make each update huge.
+ * `appState` is narrowed to the durable allowlist so local viewport/zoom/
+ * selection/tool/collaborator/view-mode state never propagates to remote
+ * viewers. Returns false (and skips the transaction entirely) when the
+ * serialized result is byte-identical to the currently stored scene.
  */
 export function writeExcalidrawScene(
   sceneMap: Y.Map<unknown>,
@@ -32,11 +52,13 @@ export function writeExcalidrawScene(
   try {
     serialized = JSON.stringify({
       elements: scene.elements,
-      appState: scene.appState,
+      appState: pickDurableAppState(scene.appState),
     });
   } catch {
     return false;
   }
+
+  if (sceneMap.get(SCENE_KEY) === serialized) return false;
 
   const write = () => sceneMap.set(SCENE_KEY, serialized);
   if (sceneMap.doc) {

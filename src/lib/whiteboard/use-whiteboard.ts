@@ -13,6 +13,7 @@ import {
 } from "./excalidraw-yjs";
 
 const SCENE_MAP_NAME = "excalidraw-scene";
+const WRITE_DEBOUNCE_MS = 100;
 
 export interface UseWhiteboardOptions {
   canvasId: string | null;
@@ -41,6 +42,8 @@ export function useWhiteboard({ canvasId, sessionId, readOnly }: UseWhiteboardOp
   const [scene, setScene] = useState<ExcalidrawScene | null>(null);
   const sceneMapRef = useRef<Y.Map<unknown> | null>(null);
   const localOriginRef = useRef(Symbol("whiteboard-local-change"));
+  const pendingSceneRef = useRef<ExcalidrawScene | null>(null);
+  const writeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (!yDoc) {
@@ -55,12 +58,28 @@ export function useWhiteboard({ canvasId, sessionId, readOnly }: UseWhiteboardOp
     return observeExcalidrawScene(sceneMap, localOriginRef.current, setScene);
   }, [yDoc]);
 
+  // A pending write targets whichever Yjs doc/map was live when the timer
+  // fires, not the map captured at schedule time — otherwise a doc swap
+  // mid-debounce would silently drop the trailing write.
+  useEffect(() => () => {
+    if (writeTimerRef.current) clearTimeout(writeTimerRef.current);
+  }, []);
+
   const onChange = useCallback((nextScene: ExcalidrawScene) => {
     // This is intentionally a client-side guard as well as viewModeEnabled.
     // A live owner opening the archive route has a writable server token, so
     // the archive must not enqueue a local update in the first place.
-    if (readOnly || !sceneMapRef.current) return;
-    writeExcalidrawScene(sceneMapRef.current, nextScene, localOriginRef.current);
+    if (readOnly) return;
+    pendingSceneRef.current = nextScene;
+    if (writeTimerRef.current) clearTimeout(writeTimerRef.current);
+    writeTimerRef.current = setTimeout(() => {
+      writeTimerRef.current = null;
+      const scheduled = pendingSceneRef.current;
+      pendingSceneRef.current = null;
+      if (scheduled && sceneMapRef.current) {
+        writeExcalidrawScene(sceneMapRef.current, scheduled, localOriginRef.current);
+      }
+    }, WRITE_DEBOUNCE_MS);
   }, [readOnly]);
 
   return { scene, connected, realtimeUnavailable, onChange };

@@ -131,6 +131,7 @@ export function TeacherDashboard({
   const [participantLookupError, setParticipantLookupError] = useState<string | null>(null);
   const [isAddingParticipant, setIsAddingParticipant] = useState(false);
   const [showWhiteboard, setShowWhiteboard] = useState(false);
+  const [endSessionError, setEndSessionError] = useState<string | null>(null);
 
   const userId = session?.user?.id || "";
 
@@ -245,10 +246,33 @@ export function TeacherDashboard({
   }
 
   const endSession = useCallback(async () => {
-    const response = await fetch(`/api/sessions/${sessionId}/end`, { method: "POST" });
-    if (response.ok) {
-      router.push(`/sessions/${sessionId}/whiteboards`);
+    let response: Response;
+    try {
+      response = await fetch(`/api/sessions/${sessionId}/end`, { method: "POST" });
+    } catch (cause) {
+      setEndSessionError(cause instanceof Error ? cause.message : "Unable to end the session");
+      return;
     }
+
+    if (!response.ok) {
+      const body = await response.json().catch(() => null) as { error?: string } | null;
+      setEndSessionError(body?.error || "Unable to end the session");
+      return;
+    }
+
+    setEndSessionError(null);
+    const ended = await response.json().catch(() => null) as { whiteboardServerArchiveComplete?: unknown } | null;
+    // The durable completion flag is authoritative for the archive page's own
+    // settings fetch; this fallback only covers the window before that fetch
+    // resolves (or if it never can — network/non-200 on the archive route).
+    if (ended?.whiteboardServerArchiveComplete === false && typeof window !== "undefined") {
+      try {
+        window.sessionStorage.setItem(`whiteboard-archive-fallback:${sessionId}`, "1");
+      } catch {
+        // Storage may be unavailable (private browsing); the durable value still renders.
+      }
+    }
+    router.push(`/sessions/${sessionId}/whiteboards`);
   }, [sessionId, router]);
 
   function handleSelectStudent(id: string) {
@@ -419,6 +443,11 @@ export function TeacherDashboard({
         leftVisible={layout.leftVisible}
         rightVisible={layout.rightVisible}
       />
+      {endSessionError && (
+        <p role="alert" className="border-b border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive">
+          {endSessionError}
+        </p>
+      )}
 
       <div className="flex min-h-0 flex-1">
         {layout.leftVisible && (

@@ -1,43 +1,6 @@
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import { sessions, sessionParticipants, users } from "@/lib/db/schema";
 import type { Database } from "@/lib/db";
-
-interface CreateSessionInput {
-  classId: string;
-  teacherId: string;
-  settings?: Record<string, unknown>;
-}
-
-export async function createSession(db: Database, input: CreateSessionInput) {
-  // End any live session for this class first
-  const [existing] = await db
-    .select()
-    .from(sessions)
-    .where(
-      and(
-        eq(sessions.classId, input.classId),
-        eq(sessions.status, "live")
-      )
-    );
-
-  if (existing) {
-    await db
-      .update(sessions)
-      .set({ status: "ended", endedAt: new Date() })
-      .where(eq(sessions.id, existing.id));
-  }
-
-  const [session] = await db
-    .insert(sessions)
-    .values({
-      classId: input.classId,
-      teacherId: input.teacherId,
-      title: "Untitled session",
-      settings: input.settings ?? {},
-    })
-    .returning();
-  return session;
-}
 
 export async function getSession(db: Database, sessionId: string) {
   const [session] = await db
@@ -57,15 +20,6 @@ export async function getActiveSession(db: Database, classId: string) {
         eq(sessions.status, "live")
       )
     );
-  return session || null;
-}
-
-export async function endSession(db: Database, sessionId: string) {
-  const [session] = await db
-    .update(sessions)
-    .set({ status: "ended", endedAt: new Date() })
-    .where(eq(sessions.id, sessionId))
-    .returning();
   return session || null;
 }
 

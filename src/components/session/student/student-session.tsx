@@ -99,7 +99,7 @@ export function StudentSession({
       window.location.href = `/sessions/${sessionId}/whiteboards`;
     });
     return () => eventSource.close();
-  }, [sessionId, classId, returnPath, userId]);
+  }, [sessionId, userId]);
 
   // Plan 044 phase 2: render the linked teaching_unit per topic.
   // Click-through opens the Chapter's projected view at /student/chapters/<id>

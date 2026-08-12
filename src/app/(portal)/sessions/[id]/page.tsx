@@ -110,9 +110,19 @@ export default async function SessionRoomPage({
     studentPayload = await api<StudentPagePayload>(`/api/sessions/${sessionId}/student-page`);
   } catch (err) {
     if (err instanceof ApiError && err.status === 404) {
-      // student-page deliberately rejects ended sessions, including former
-      // participants. The archive endpoint performs its own archive auth.
-      redirect(`/sessions/${sessionId}/whiteboards`);
+      // GetStudentPage returns 404 for two distinct cases with the same HTTP
+      // status: a session that truly does not exist ("Not found") and an
+      // existing session that has ended ("Session has ended"), including for
+      // former participants. Only the latter has an archive to redirect to —
+      // a genuinely missing session must still 404 at the page level. The
+      // real Go handler puts the distinguishing text in the JSON body; check
+      // both it and `message` so a caller that only sets one still resolves.
+      const body = err.body as { error?: string } | undefined;
+      const sessionEnded = body?.error === "Session has ended" || /session (has )?ended/i.test(err.message);
+      if (sessionEnded) {
+        redirect(`/sessions/${sessionId}/whiteboards`);
+      }
+      notFound();
     }
     if (err instanceof ApiError && err.status === 403) {
       notFound();
