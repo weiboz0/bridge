@@ -54,7 +54,7 @@ type SandboxConfig struct {
 type RealtimeConfig struct {
 	HocuspocusTokenSecret string `toml:"-"`
 	// HocuspocusInternalURL is server-to-server only. HTTP is accepted only
-	// for a numeric IPv4 loopback origin; non-loopback deployments use normal
+	// for a canonical numeric IPv4 or IPv6 loopback origin; non-loopback deployments use normal
 	// verified HTTPS. The listener port defaults to 4001 when no URL override
 	// is supplied.
 	HocuspocusInternalURL   string `toml:"-"`

@@ -589,15 +589,16 @@ func (h *SessionHandler) EndSession(w http.ResponseWriter, r *http.Request) {
 				durablyEnded = true
 				completeAfterCommit = true
 				durableEnd = confirmedEnd
-			} else if errors.Is(completeErr, store.ErrSessionEndInProgress) {
-				h.cleanupFailedEnd(sessionID, prep.Token)
-				writeJSON(w, http.StatusConflict, map[string]string{"error": "Session end in progress", "code": "session_end_in_progress"})
-				return
-			} else if errors.Is(completeErr, store.ErrSessionSnapshotCountMismatch) {
+			} else if errors.Is(completeErr, store.ErrSessionSnapshotCountMismatch) || errors.Is(completeErr, store.ErrSessionEndInProgress) {
 				// The confirmed transaction rolled back. A separate transaction may
 				// safely record the honest false/no-snapshot result.
 				degradedEnd, degradedErr := h.Sessions.CompleteSessionDegraded(r.Context(), sessionID, prep.Token)
 				if degradedErr != nil {
+					if errors.Is(degradedErr, store.ErrSessionEndInProgress) {
+						h.cleanupFailedEnd(sessionID, prep.Token)
+						writeJSON(w, http.StatusConflict, map[string]string{"error": "Session end in progress", "code": "session_end_in_progress"})
+						return
+					}
 					slog.Error("canvas degraded end failed after confirmed rollback", "sessionId", sessionID, "error", degradedErr)
 					h.cleanupFailedEnd(sessionID, prep.Token)
 					writeError(w, http.StatusInternalServerError, "Database error")
@@ -637,7 +638,9 @@ func (h *SessionHandler) EndSession(w http.ResponseWriter, r *http.Request) {
 		h.Broadcaster.Emit(sessionID, "session_ended", nil)
 	}
 	if h.Schedules != nil {
-		if err := h.Schedules.CompleteScheduledSession(r.Context(), sessionID); err != nil {
+		settleCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if err := h.Schedules.CompleteScheduledSession(settleCtx, sessionID); err != nil {
 			slog.Warn("failed to complete scheduled session", "sessionId", sessionID, "error", err)
 		}
 	}
@@ -688,14 +691,17 @@ func (h *SessionHandler) cleanupFailedEnd(sessionID, token string) {
 	}
 }
 
-func (h *SessionHandler) settleReplacedSessions(ctx context.Context, replaced []store.ReplacedSession) {
-	settleReplacedSessions(ctx, replaced, h.Schedules, h.Broadcaster, h.CanvasControl)
+func (h *SessionHandler) settleReplacedSessions(_ context.Context, replaced []store.ReplacedSession) {
+	settleReplacedSessions(context.Background(), replaced, h.Schedules, h.Broadcaster, h.CanvasControl)
 }
 
 func settleReplacedSessions(ctx context.Context, replaced []store.ReplacedSession, schedules *store.ScheduleStore, broadcaster *events.Broadcaster, control CanvasControl) {
 	for _, prior := range replaced {
 		if schedules != nil {
-			if err := schedules.CompleteScheduledSession(ctx, prior.ID); err != nil {
+			settleCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			err := schedules.CompleteScheduledSession(settleCtx, prior.ID)
+			cancel()
+			if err != nil {
 				slog.Warn("failed to complete replaced scheduled session", "sessionId", prior.ID, "error", err)
 			}
 		}

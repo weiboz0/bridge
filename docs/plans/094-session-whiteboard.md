@@ -383,6 +383,18 @@ That recheck is now defense in depth: the confirmed path gains the lifecycle lea
   The focused Vitest suites passed 43 tests across JWT/cache/hook files and four source-local whiteboard tests; the Hocuspocus canvas suite passed 19 tests; exact changed-file ESLint and `git diff --check` passed.
 - `[UNVERIFIED]` Root `tsc --noEmit` remains red only in the pre-existing Phase 9 `whiteboard-panel.test.tsx` RED contract (`teacherControls` and strict fetch mock signatures), which the pending frontend slice owns.
 
+#### Phase 9 code-review remediation (2026-08-12)
+
+- `[FIXED]` A matching freeze token whose lease expires after successful capture now takes the separate degraded status-first transition and returns durable archive-incomplete success.
+  A genuinely foreign live token still makes that degraded transaction return stable `409 session_end_in_progress`, and token-conditional cleanup cannot clear it.
+- `[FIXED]` Empty prepared canvas lists are initialized as non-nil slices, so the strict control wire sends `canvasIds: []`; the real HTTP regression proves it never sends `null`.
+- `[FIXED]` A missing session now maps the canvas store's nil result to HTTP 404 instead of serializing `201 null`.
+- `[FIXED]` Explicit and replacement post-commit schedule settlement uses fresh bounded contexts rather than the canceled request context.
+  The mechanism tests cancel at the durable event boundary and prove schedule completion precedes asynchronous terminal cleanup; replacement retains schedule-before-event ordering.
+- `[FIXED]` Control-origin comments and operator documentation now consistently permit canonical numeric IPv4 and IPv6 loopback while requiring verified HTTPS elsewhere.
+- `[GREEN]` With configured and live database identity verified as `bridge_test`, the four focused review regressions passed in the handler and realtime packages.
+  Terra also corrected the Phase 9 panel test fetch typings and the archive's approved `sessionId` option expectation; root TypeScript compilation passed before production remediation.
+
 #### Phase 9 review-remediation RED proofs (2026-08-12; tests only)
 
 - `[GREEN]` The real Go control-client/`httptest` wire now proves an empty authoritative canvas list serializes exactly as `"canvasIds":[]`, never `null`, while the listener accepts the exact empty snapshots bundle.

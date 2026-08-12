@@ -72,6 +72,10 @@ func (h *CanvasHandler) CreateCanvas(w http.ResponseWriter, r *http.Request) {
 		h.writeCanvasMutationError(w, err)
 		return
 	}
+	if canvas == nil {
+		writeError(w, http.StatusNotFound, "Session not found")
+		return
+	}
 	writeJSON(w, http.StatusCreated, canvas)
 }
 

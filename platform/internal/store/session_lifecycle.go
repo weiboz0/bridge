@@ -246,7 +246,7 @@ func (s *SessionStore) PrepareSessionEnd(ctx context.Context, sessionID string) 
 		return SessionEndPreparation{}, err
 	}
 	defer rows.Close()
-	prep := SessionEndPreparation{Token: token}
+	prep := SessionEndPreparation{Token: token, CanvasIDs: make([]string, 0)}
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
