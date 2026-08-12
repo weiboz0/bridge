@@ -59,6 +59,10 @@ type RealtimeConfig struct {
 	// is supplied.
 	HocuspocusInternalURL   string `toml:"-"`
 	HocuspocusControlSecret string `toml:"-"`
+	// E2ECanvasControlFailure is a deliberately exact test-only opt-in. Startup
+	// independently verifies parsed and live database names before it can reach
+	// the control client; any value other than "1" leaves the seam unavailable.
+	E2ECanvasControlFailure bool `toml:"-"`
 }
 
 // ValidateControl is called at API startup, before any database connection or
@@ -169,6 +173,7 @@ func Load(path string) (*Config, error) {
 	if v := os.Getenv("HOCUSPOCUS_CONTROL_SECRET"); v != "" {
 		cfg.Realtime.HocuspocusControlSecret = v
 	}
+	cfg.Realtime.E2ECanvasControlFailure = os.Getenv("BRIDGE_E2E_CANVAS_CONTROL_FAILURE") == "1"
 
 	// Plan 065 — Bridge session secrets. Prefer the plural
 	// (rotation-aware) BRIDGE_SESSION_SECRETS; fall back to the

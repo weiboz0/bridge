@@ -131,6 +131,24 @@ func TestLoad_RealtimeControlUsesNumericLoopbackDefaultAndSeparateSecret(t *test
 	require.NotEqual(t, cfg.Realtime.HocuspocusTokenSecret, cfg.Realtime.HocuspocusControlSecret)
 }
 
+func TestLoad_E2ECanvasControlFailureUsesExactExplicitOptIn(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		want  bool
+	}{
+		{"", false},
+		{"true", false},
+		{"1", true},
+	} {
+		t.Run(tc.value, func(t *testing.T) {
+			t.Setenv("BRIDGE_E2E_CANVAS_CONTROL_FAILURE", tc.value)
+			cfg, err := Load("")
+			require.NoError(t, err)
+			require.Equal(t, tc.want, cfg.Realtime.E2ECanvasControlFailure)
+		})
+	}
+}
+
 func TestRealtimeControlConfig_FailsClosedForMissingSharedSecretAndUnsafeOverride(t *testing.T) {
 	for _, tc := range []struct {
 		name, controlURL, controlSecret, signingSecret string

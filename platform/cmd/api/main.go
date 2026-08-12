@@ -55,11 +55,10 @@ func main() {
 		slog.Error("Invalid canvas control configuration", "error", err)
 		os.Exit(1)
 	}
-	canvasControl, err := realtime.NewCanvasControlClient(realtime.CanvasControlConfig{
-		URL: cfg.Realtime.HocuspocusInternalURL, Secret: cfg.Realtime.HocuspocusControlSecret,
-	})
-	if err != nil {
-		slog.Error("Invalid canvas control client", "error", err)
+	// Reject an unsafe E2E failure-injection configuration before opening any
+	// database connection. The live database proof below remains mandatory.
+	if err := realtime.ValidateE2ECanvasControlFailureDatabaseURL(cfg.Realtime.E2ECanvasControlFailure, cfg.Database.URL); err != nil {
+		slog.Error("Invalid E2E canvas control failure injection", "error", err)
 		os.Exit(1)
 	}
 
@@ -82,6 +81,28 @@ func main() {
 	// into a startup refusal with a clear remediation message.
 	if err := db.CheckSchemaProbe(context.Background(), database); err != nil {
 		slog.Error("Schema probe failed", "error", err.Error())
+		os.Exit(1)
+	}
+
+	// The only live-stack E2E fault seam is a synthetic client Freeze failure.
+	// It cannot become active unless the explicit flag and both independent
+	// parsed/live _test database proofs have already succeeded.
+	failureInjection, err := realtime.NewE2ECanvasControlFailureInjection(
+		context.Background(),
+		cfg.Realtime.E2ECanvasControlFailure,
+		cfg.Database.URL,
+		realtime.SQLCurrentDatabase{DB: database},
+	)
+	if err != nil {
+		slog.Error("Invalid E2E canvas control failure injection", "error", err)
+		os.Exit(1)
+	}
+	canvasControl, err := realtime.NewCanvasControlClient(realtime.CanvasControlConfig{
+		URL: cfg.Realtime.HocuspocusInternalURL, Secret: cfg.Realtime.HocuspocusControlSecret,
+		E2EFailureInjection: failureInjection,
+	})
+	if err != nil {
+		slog.Error("Invalid canvas control client", "error", err)
 		os.Exit(1)
 	}
 

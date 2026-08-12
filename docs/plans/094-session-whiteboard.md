@@ -545,8 +545,15 @@ That recheck is now defense in depth: the confirmed path gains the lifecycle lea
   Focused lifecycle/replacement/freeze/auth/control Go tests passed; package runs for `./internal/handlers`, `./internal/store`, and `./internal/realtime` passed with `-count=1 -timeout 120s`, followed by `go vet` on the same packages.
   `bun test server/canvas-lifecycle.test.ts server/hocuspocus.canvas.test.ts` passed **82 tests / 247 assertions**; the focused frontend/retry suite passed **6 files / 62 tests**; `bunx --bun tsc --noEmit`, scoped ESLint, and `git diff --check` passed.
   No migration, non-test database, service, E2E, or live provider ran.
+- `[RED → GREEN]` The newly added E2E-control seam tests first failed to compile because the explicit opt-in config, parsed/live database authorization, and client injection did not exist.
+  `BRIDGE_E2E_CANVAS_CONTROL_FAILURE=1` now authorizes only after the parsed URL database name and independent `SELECT current_database()` name each end in `_test`; the disabled case does not probe, parsed non-test names reject before probing, live non-test names reject after probing, and the injected `Freeze` failure makes no control-listener request.
+  The focused realtime/config Go tests and `go vet ./internal/realtime ./internal/config ./cmd/api` passed with both database variables pinned to `bridge_test` and the validator accepted.
+- `[GREEN — static live-stack artifact]` Added guarded `e2e/session-whiteboard.spec.ts` for teacher create, public-session outsider denial, irreversible visibility confirmation, floor raise, participant view, rendered scene propagation, explicit end, and archive read-only controls.
+  It is suite-skipped without an explicit `E2E_BASE_URL`; its incomplete-archive assertion is separately skipped unless the exact E2E failure flag is enabled.
+  Playwright was not invoked.
+  The current shell has no `bun`/`bunx` executable, so the repository-local `node_modules/.bin/tsc --noEmit`, scoped ESLint, and `git diff --check` were used as static fallbacks and passed.
 - `[UNVERIFIED — hard safeguard]` The live-stack E2E acceptance remains intentionally unrun.
-  It requires user-provisioned `HOCUSPOCUS_CONTROL_SECRET`, any necessary collision-free control-port override, and a separately started Bridge stack with explicit `E2E_BASE_URL`; this phase did not read or edit `.env`, start a service, or run Playwright.
+  It requires user-provisioned `HOCUSPOCUS_CONTROL_SECRET`, any necessary collision-free control-port override, a separately started Bridge stack with explicit `E2E_BASE_URL`, and (for the degraded-archive branch) a start-time `BRIDGE_E2E_CANVAS_CONTROL_FAILURE=1` whose configured and live database names are both `_test`; this phase did not read or edit `.env`, start a service, or run Playwright.
 
 ### Phase 13 — Documentation, cross-phase verification, and shipping evidence *(orchestrator)*
 

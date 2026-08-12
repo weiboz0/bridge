@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -83,6 +84,75 @@ func TestCanvasControlClient_FreezeZeroCanvasIDsSendsAnEmptyArray(t *testing.T) 
 	require.NoError(t, err)
 	require.JSONEq(t, `{"sessionId":"`+sessionID+`","freezeToken":"`+token+`","canvasIds":[]}`, string(body))
 	require.NotContains(t, string(body), `"canvasIds":null`)
+}
+
+type fakeCurrentDatabase struct {
+	name  string
+	err   error
+	calls int
+}
+
+func (f *fakeCurrentDatabase) CurrentDatabaseName(context.Context) (string, error) {
+	f.calls++
+	return f.name, f.err
+}
+
+func TestE2ECanvasControlFailureInjection_RequiresExplicitFlagAndTwoTestDatabaseProofs(t *testing.T) {
+	for _, tc := range []struct {
+		name, databaseURL, liveName string
+		liveErr                     error
+		enabled                     bool
+		wantInjection               bool
+		wantProbe                   bool
+		wantErr                     bool
+	}{
+		{"disabled does not probe or inject", "postgresql://bridge@127.0.0.1:5432/bridge", "bridge", nil, false, false, false, false},
+		{"parsed database is not test", "postgresql://bridge@127.0.0.1:5432/bridge", "bridge_test", nil, true, false, false, true},
+		{"live database lookup fails closed", "postgresql://bridge@127.0.0.1:5432/bridge_test", "", errors.New("database unavailable"), true, false, true, true},
+		{"live database is not test", "postgresql://bridge@127.0.0.1:5432/bridge_test", "bridge", nil, true, false, true, true},
+		{"decoded parsed and live database names are test", "postgresql://bridge@127.0.0.1:5432/bridge%5Ftest", "bridge_test", nil, true, true, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			live := &fakeCurrentDatabase{name: tc.liveName, err: tc.liveErr}
+			injection, err := NewE2ECanvasControlFailureInjection(context.Background(), tc.enabled, tc.databaseURL, live)
+			if tc.wantInjection {
+				require.NoError(t, err)
+				require.NotNil(t, injection)
+			} else {
+				require.Nil(t, injection)
+				if tc.wantErr {
+					require.Error(t, err)
+				} else {
+					require.NoError(t, err)
+				}
+			}
+			require.Equal(t, tc.wantProbe, live.calls == 1)
+		})
+	}
+}
+
+func TestCanvasControlClient_E2EFailureInjectionNeverContactsControlListener(t *testing.T) {
+	hitControl := false
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { hitControl = true }))
+	defer server.Close()
+
+	injection, err := NewE2ECanvasControlFailureInjection(
+		context.Background(),
+		true,
+		"postgresql://bridge@127.0.0.1:5432/bridge_test",
+		&fakeCurrentDatabase{name: "bridge_test"},
+	)
+	require.NoError(t, err)
+	client, err := NewCanvasControlClient(CanvasControlConfig{
+		URL: server.URL, Secret: strings.Repeat("a", 64), HTTPClient: server.Client(), E2EFailureInjection: injection,
+	})
+	require.NoError(t, err)
+
+	_, err = client.Freeze(context.Background(), FreezeRequest{
+		SessionID: "22222222-2222-4222-8222-222222222222", FreezeToken: "33333333-3333-4333-8333-333333333333",
+	})
+	require.EqualError(t, err, "canvas freeze failed: E2E canvas control freeze failure injected")
+	require.False(t, hitControl)
 }
 
 func TestCanvasControlClient_RejectsUnsafeURLsRedirectsAndMalformedBundles(t *testing.T) {

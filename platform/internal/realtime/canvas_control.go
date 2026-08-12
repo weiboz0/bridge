@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"crypto/tls"
+	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -37,15 +38,84 @@ var (
 	errCanvasControlRedirect   = errors.New("canvas control redirects are refused")
 	errControlResponseRead     = errors.New("control response read failed")
 	errControlResponseTooLarge = errors.New("control response exceeds size limit")
+	errE2ECanvasControlFailure = errors.New("E2E canvas control freeze failure injected")
 )
 
 type CanvasControlConfig struct {
-	URL, Secret string
-	HTTPClient  *http.Client
+	URL, Secret         string
+	HTTPClient          *http.Client
+	E2EFailureInjection *E2ECanvasControlFailureInjection
 }
 type CanvasControlClient struct {
-	baseURL, secret string
-	client          *http.Client
+	baseURL, secret     string
+	client              *http.Client
+	e2eFailureInjection bool
+}
+
+// CurrentDatabaseNamer makes the live database proof independently testable.
+// The sole production implementation issues only SELECT current_database().
+type CurrentDatabaseNamer interface {
+	CurrentDatabaseName(context.Context) (string, error)
+}
+
+type SQLCurrentDatabase struct {
+	DB *sql.DB
+}
+
+func (d SQLCurrentDatabase) CurrentDatabaseName(ctx context.Context) (string, error) {
+	if d.DB == nil {
+		return "", errors.New("live database is required for E2E control failure injection")
+	}
+	var name string
+	if err := d.DB.QueryRowContext(ctx, "SELECT current_database()").Scan(&name); err != nil {
+		return "", fmt.Errorf("query live database name: %w", err)
+	}
+	return name, nil
+}
+
+// E2ECanvasControlFailureInjection is unconstructable outside this package.
+// It is deliberately a client-side synthetic Freeze failure: it neither opens,
+// closes, nor otherwise controls any listener or process.
+type E2ECanvasControlFailureInjection struct {
+	enabled bool
+}
+
+func ValidateE2ECanvasControlFailureDatabaseURL(enabled bool, rawURL string) error {
+	if !enabled {
+		return nil
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed == nil || (parsed.Scheme != "postgres" && parsed.Scheme != "postgresql") {
+		return errors.New("E2E canvas control failure injection requires a PostgreSQL test database URL")
+	}
+	databaseName, err := url.PathUnescape(strings.TrimPrefix(parsed.EscapedPath(), "/"))
+	if err != nil || databaseName == "" || strings.Contains(databaseName, "/") || !strings.HasSuffix(databaseName, "_test") {
+		return errors.New("E2E canvas control failure injection requires a parsed database name ending in _test")
+	}
+	return nil
+}
+
+// NewE2ECanvasControlFailureInjection authorizes the test-only fault only
+// after both independent database-name proofs succeed. A disabled flag is a
+// no-op and intentionally never probes a database.
+func NewE2ECanvasControlFailureInjection(ctx context.Context, enabled bool, rawURL string, live CurrentDatabaseNamer) (*E2ECanvasControlFailureInjection, error) {
+	if !enabled {
+		return nil, nil
+	}
+	if err := ValidateE2ECanvasControlFailureDatabaseURL(true, rawURL); err != nil {
+		return nil, err
+	}
+	if live == nil {
+		return nil, errors.New("E2E canvas control failure injection requires a live test database")
+	}
+	liveName, err := live.CurrentDatabaseName(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("E2E canvas control failure injection could not validate live database: %w", err)
+	}
+	if !strings.HasSuffix(liveName, "_test") {
+		return nil, errors.New("E2E canvas control failure injection requires a live database name ending in _test")
+	}
+	return &E2ECanvasControlFailureInjection{enabled: true}, nil
 }
 
 type FreezeRequest struct {
@@ -80,7 +150,10 @@ func NewCanvasControlClient(cfg CanvasControlConfig) (*CanvasControlClient, erro
 	}
 	copyClient := *client
 	copyClient.CheckRedirect = func(_ *http.Request, _ []*http.Request) error { return errCanvasControlRedirect }
-	return &CanvasControlClient{baseURL: strings.TrimRight(u.String(), "/"), secret: cfg.Secret, client: &copyClient}, nil
+	return &CanvasControlClient{
+		baseURL: strings.TrimRight(u.String(), "/"), secret: cfg.Secret, client: &copyClient,
+		e2eFailureInjection: cfg.E2EFailureInjection != nil && cfg.E2EFailureInjection.enabled,
+	}, nil
 }
 
 // ValidateControlSecret deliberately pins the on-wire bearer to 32 random
@@ -135,6 +208,9 @@ var _ = tls.Config{}
 func (c *CanvasControlClient) Freeze(ctx context.Context, request FreezeRequest) (FreezeBundle, error) {
 	if err := validateFreezeRequest(request); err != nil {
 		return FreezeBundle{}, err
+	}
+	if c.e2eFailureInjection {
+		return FreezeBundle{}, fmt.Errorf("canvas freeze failed: %w", errE2ECanvasControlFailure)
 	}
 	deadline := time.Now().Add(canvasControlFreezeBudget)
 	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
