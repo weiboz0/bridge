@@ -1,6 +1,6 @@
 # Session whiteboard review remediation
 
-**Status:** Design review resumed under an uncapped consensus gate by user direction on 2026-08-11.
+**Status:** Design approved by Sol and Fable 5 at exact commit `aa34784e1e51596bf1b6779176a86187fe3306ab` on 2026-08-11.
 
 **Related plan:** `docs/plans/094-session-whiteboard.md`
 
@@ -870,100 +870,100 @@ The canonical rule is mirrored in `AGENTS.md`, `docs/reviewers.md`, `docs/develo
 
 ### Round 1 — 2026-08-10 — commit `b589dd7`
 
-- `[OPEN]` `[sol][fable]` A global boolean freeze can be cleared by an overlapping end attempt, can reappear after a delayed request, and can strand a live session when best-effort unfreeze fails.
+- `[FIXED]` `[sol][fable]` A global boolean freeze can be cleared by an overlapping end attempt, can reappear after a delayed request, and can strand a live session when best-effort unfreeze fails.
   The revision replaces it with a token-owned PostgreSQL lease, matching in-memory operation records, conditional cleanup, single-flight conflict behavior, and a 15-second expiry.
-- `[OPEN]` `[fable]` A Hocuspocus restart after successful freeze but before database end can admit new writes while Go still reports archive success.
+- `[FIXED]` `[fable]` A Hocuspocus restart after successful freeze but before database end can admit new writes while Go still reports archive success.
   The durable lease is now checked by connection authorization and every mutation recheck, so process restart cannot erase the freeze boundary.
-- `[OPEN]` `[sol]` A final flush can be overwritten by an older ordinary store completing later.
+- `[FIXED]` `[sol]` A final flush can be overwritten by an older ordinary store completing later.
   The final path now shares the document save mutex and holds it through the database write.
-- `[OPEN]` `[sol][fable]` The prior archive-complete field overstated what could be known while clients coalesce unsent scenes.
+- `[FIXED]` `[sol][fable]` The prior archive-complete field overstated what could be known while clients coalesce unsent scenes.
   The contract is narrowed and renamed to `whiteboardServerArchiveComplete`, which covers only Yjs updates accepted by the server.
-- `[OPEN]` `[sol]` `onLoadDocument` does not run for every connection to an already loaded document.
+- `[FIXED]` `[sol]` `onLoadDocument` does not run for every connection to an already loaded document.
   Current read-only authorization now occurs in a per-connection hook.
-- `[OPEN]` `[fable]` Archive incompleteness was transient browser state.
+- `[FIXED]` `[fable]` Archive incompleteness was transient browser state.
   The result is now persisted atomically on the session row and exposed to the teacher archive.
-- `[OPEN]` `[fable]` The control API reused the signing secret and had no separate listener requirement.
+- `[FIXED]` `[fable]` The control API reused the signing secret and had no separate listener requirement.
   The revision specifies a distinct control secret, constant-time comparison, and an internal-only listener.
-- `[OPEN]` `[fable]` The no-yield ordering assumption, fixed deadline load, timer overflow, multi-process assumption, and migration-shipping check were underspecified.
+- `[FIXED]` `[fable]` The no-yield ordering assumption, fixed deadline load, timer overflow, multi-process assumption, and migration-shipping check were underspecified.
   The revision makes the no-yield and single-process invariants explicit, adds timer and migration checks, and retains the teacher-selected two-second bound with maximum-cap test evidence required before approval.
 
 **Round 1 verdicts:** `[sol]` CHANGES REQUESTED; `[fable]` CHANGES REQUESTED.
 
 ### Round 2 — 2026-08-10 — commit `d572d25`
 
-- `[OPEN]` `[sol][fable]` An end request could outlive its 15-second lease and still commit a pre-expiry successful archive result after writes resumed.
+- `[FIXED]` `[sol][fable]` An end request could outlive its 15-second lease and still commit a pre-expiry successful archive result after writes resumed.
   → Response in `aaf2f44` and `260ca47`: the successful end uses an atomic token-and-unexpired `UPDATE`, mutation authorization takes a shared row lock, and every expired-lease path records an incomplete server archive.
-- `[OPEN]` `[fable]` Go, Node, and PostgreSQL clocks could disagree about lease expiry.
+- `[FIXED]` `[fable]` Go, Node, and PostgreSQL clocks could disagree about lease expiry.
   → Response in `aaf2f44`: PostgreSQL `clock_timestamp()` is the wall-clock authority, and Node derives only a monotonic remaining duration from a fresh database validation.
-- `[OPEN]` `[fable]` Final-flush liveness and lease validation could be a check-before-write race.
+- `[FIXED]` `[fable]` Final-flush liveness and lease validation could be a check-before-write race.
   → Response in `aaf2f44`: the live, token, and unexpired predicates execute in the snapshot write statement or its locking transaction.
-- `[OPEN]` `[fable]` The durable per-mutation lease check was underspecified and could be weakened by caching.
+- `[FIXED]` `[fable]` The durable per-mutation lease check was underspecified and could be weakened by caching.
   → Response in `aaf2f44` and `260ca47`: every mutation-bearing frame retains the uncached, shared-row-lock Go recheck, and the test contract now proves two consecutive frames observe an intervening durable lease.
-- `[OPEN]` `[fable]` Older null archive state had no defined public representation.
+- `[FIXED]` `[fable]` Older null archive state had no defined public representation.
   → Response in `aaf2f44`: null omits the optional boolean and warning and produces no completeness claim in the archive.
-- `[OPEN]` `[fable]` A non-loopback internal listener could send its bearer and freeze token over plaintext.
+- `[FIXED]` `[fable]` A non-loopback internal listener could send its bearer and freeze token over plaintext.
   → Response in `aaf2f44` and `260ca47`: non-loopback traffic requires verified HTTPS, the Go client rejects non-loopback HTTP at startup, and the configuration test matrix enforces both sides.
-- `[OPEN]` `[sol]` The internal URL default incorrectly reused the public websocket port.
+- `[FIXED]` `[sol]` The internal URL default incorrectly reused the public websocket port.
   → Response in `aaf2f44`: a distinct `HOCUSPOCUS_CONTROL_PORT` defaults to 4001 and drives the loopback internal URL.
-- `[OPEN]` `[sol]` Durable archive status had no ended-session-readable producer-to-consumer API.
+- `[FIXED]` `[sol]` Durable archive status had no ended-session-readable producer-to-consumer API.
   → Response in `aaf2f44`: the canvas-settings GET contract defines its response, represented-teacher authorization, null behavior, 403, 404, and integration matrix.
-- `[OPEN]` `[sol]` The no-microtask invariant contradicted Hocuspocus 3.4.4's promise continuation.
+- `[FIXED]` `[sol]` The no-microtask invariant contradicted Hocuspocus 3.4.4's promise continuation.
   → Response in `aaf2f44`: the actual invariant permits the installed microtask and forbids an interleaving macrotask before apply and relay.
-- `[OPEN]` `[sol]` Design approvals were not bound to a commit and could survive an unreviewed material edit.
+- `[FIXED]` `[sol]` Design approvals were not bound to a commit and could survive an unreviewed material edit.
   → Response in `aaf2f44`: both reviewers approve an exact commit and must be re-dispatched after every substantive revision.
 
 **Round 2 verdicts:** `[sol]` CHANGES REQUESTED; `[fable]` CHANGES REQUESTED.
 
 ### Round 3 — 2026-08-10 — commit `aaf2f44`
 
-- `[OPEN]` `[fable]` The end transaction could check expiry before its write and admit a post-expiry mutation before committing a successful result.
+- `[FIXED]` `[fable]` The end transaction could check expiry before its write and admit a post-expiry mutation before committing a successful result.
   → Response in `260ca47`: success is a single conditional `UPDATE`, and mutation authorization takes a shared row lock that blocks behind the update and observes the committed ended status.
-- `[OPEN]` `[fable]` A stale request encountering a different expired lease token had no defined state transition.
+- `[FIXED]` `[fable]` A stale request encountering a different expired lease token had no defined state transition.
   → Response in `260ca47`: status may still end, but the stale request must record an incomplete archive and cannot reuse either operation's freeze result.
-- `[OPEN]` `[sol]` A temporary freeze could irreversibly set an established writer's connection to read-only.
+- `[FIXED]` `[sol]` A temporary freeze could irreversibly set an established writer's connection to read-only.
   → Response in `260ca47`: temporary freeze rejects or closes with retryable `session_freezing`; only permanent viewer or ended decisions set read-only, and reconnect restores writing after cleanup or expiry.
-- `[OPEN]` `[sol][fable]` The control transport rules lacked client-side non-loopback HTTP rejection and an executable configuration matrix.
+- `[FIXED]` `[sol][fable]` The control transport rules lacked client-side non-loopback HTTP rejection and an executable configuration matrix.
   → Response in `260ca47`: Go fails startup on non-loopback HTTP, Node fails on invalid secret, TLS, or bind configuration, and the named test matrix covers listener isolation and verified HTTPS.
-- `[OPEN]` `[sol]` The uncached mutation rule lacked a same-connection proof.
+- `[FIXED]` `[sol]` The uncached mutation rule lacked a same-connection proof.
   → Response in `260ca47`: two consecutive frames must perform distinct rechecks and observe a durable lease acquired between them with an empty local map.
-- `[OPEN]` `[fable]` A newly valid token had no rule when an older in-memory token's monotonic timer remained active.
+- `[FIXED]` `[fable]` A newly valid token had no rule when an older in-memory token's monotonic timer remained active.
   → Response in `260ca47`: a freshly database-validated token replaces the stale in-memory entry because PostgreSQL is authoritative.
-- `[OPEN]` `[fable]` The review ledger attributed resolution text to the older reviewed commit.
+- `[FIXED]` `[fable]` The review ledger attributed resolution text to the older reviewed commit.
   → Response in this ledger revision: every response names the later commit that contains it, while headings retain the exact reviewed SHA.
-- `[OPEN]` `[fable]` The old settings route, normative freeze-result write, control-port bind failure, and browser-warning consumption order were underspecified.
+- `[FIXED]` `[fable]` The old settings route, normative freeze-result write, control-port bind failure, and browser-warning consumption order were underspecified.
   → Response in `260ca47`: the old route is removed with same-phase client migration, matched unexpired end must persist the result, bind failure aborts startup, and durable confirmation precedes one-shot consumption.
 
 **Round 3 verdicts:** `[sol]` CHANGES REQUESTED; `[fable]` CHANGES REQUESTED.
 
 ### Round 4 — 2026-08-10 — commit `7b2e644`
 
-- `[OPEN]` `[sol]` A degraded end could commit after an authorization transaction released its lock but before the allowed frame applied and relayed.
+- `[FIXED]` `[sol]` A degraded end could commit after an authorization transaction released its lock but before the allowed frame applied and relayed.
   → Response in `18e9216`: the design no longer claims impossible cross-process apply-and-relay atomicity when Hocuspocus cannot retain a fence; it defines the confirmed guarantee separately and proves that a degraded transient frame cannot persist, continue, or survive reconnect while the teacher receives the incomplete warning.
-- `[OPEN]` `[fable]` The ledger self-certified findings as fixed even though the exact response commit had not been approved.
+- `[FIXED]` `[fable]` The ledger self-certified findings as fixed even though the exact response commit had not been approved.
   → Response in `18e9216`: every finding is restored to `[OPEN]`, responses never change status, and only exact-commit reviewer approval permits a mechanical ledger-only transition to `[FIXED]`.
-- `[OPEN]` `[fable]` An older asynchronous database-validation response could overwrite a newer in-memory freeze token.
+- `[FIXED]` `[fable]` An older asynchronous database-validation response could overwrite a newer in-memory freeze token.
   → Response in `18e9216`: the map stores database expiry and accepts a different token only when its database expiry is later than the current entry.
-- `[OPEN]` `[fable]` Foreign expired and already-ended lease cleanup states were undefined.
+- `[FIXED]` `[fable]` Foreign expired and already-ended lease cleanup states were undefined.
   → Response in `18e9216`: any consumed expired lease is cleared, an already-ended completion never rewrites the archive result, and matching or expired residue may be cleaned safely.
-- `[OPEN]` `[fable]` A row-level shared lock on every mutation risked multixact churn and lacked a universal lock order.
+- `[FIXED]` `[fable]` A row-level shared lock on every mutation risked multixact churn and lacked a universal lock order.
   → Response in `18e9216`: mutation and end use transaction-scoped shared/exclusive session advisory locks, always acquired before database access, and the busy-session test covers deadlock and latency.
-- `[OPEN]` `[fable]` Plain-HTTP loopback and redirect behavior was ambiguous.
+- `[FIXED]` `[fable]` Plain-HTTP loopback and redirect behavior was ambiguous.
   → Response in `18e9216`: only IP-literal `127.0.0.0/8` and `::1` are accepted for HTTP, DNS names are rejected, and redirects are disabled.
-- `[OPEN]` `[fable]` The reconnect horizon could expire before the 15-second freeze lease.
+- `[FIXED]` `[fable]` The reconnect horizon could expire before the 15-second freeze lease.
   → Response in `18e9216`: reconnect continues for at least 20 seconds with no individual delay above two seconds, and the crash test requires recovery without reload.
-- `[OPEN]` `[fable]` Durable/browser warning disagreement, permanent viewer promotion, and stale old-route clients were underspecified.
+- `[FIXED]` `[fable]` Durable/browser warning disagreement, permanent viewer promotion, and stale old-route clients were underspecified.
   → Response in `18e9216`: a 200 durable result is authoritative, failed requests retain browser state, promotion requires reconnect, and stale-route 404 is surfaced as an error.
 
 **Round 4 verdicts:** `[sol]` CHANGES REQUESTED; `[fable]` CHANGES REQUESTED.
 
 ### Round 5 — 2026-08-10 — commit `5e8b4ab`
 
-- `[OPEN]` `[sol][fable]` A database validation started before cleanup can return after token-matched unfreeze removed an empty map entry and reinstall the stale freeze barrier.
+- `[FIXED]` `[sol][fable]` A database validation started before cleanup can return after token-matched unfreeze removed an empty map entry and reinstall the stale freeze barrier.
   The later-expiry comparison has no state to compare when the map is empty, so the accepted design still needs per-session freeze/unfreeze serialization or a bounded tombstone or generation retained after removal.
-- `[OPEN]` `[fable]` The acceptance criterion still states unconditional post-freeze apply-and-relay atomicity even though the body intentionally limits that guarantee to confirmed paths.
-- `[OPEN]` `[fable]` The reconnect horizon must reset on every retryable freeze rejection to survive consecutive end attempts.
-- `[OPEN]` `[fable]` Advisory-lock participation needs to cover lease acquisition and replacement explicitly, use a reserved two-part application keyspace, and define equal-expiry token ordering without timestamp truncation ambiguity.
-- `[OPEN]` `[fable]` Already-ended residual-lease cleanup must be deterministic, stale-route errors must tolerate an unparseable non-2xx body, and loopback checks must use canonical parsed addresses while rejecting IPv4-mapped IPv6 forms.
+- `[FIXED]` `[fable]` The acceptance criterion still states unconditional post-freeze apply-and-relay atomicity even though the body intentionally limits that guarantee to confirmed paths.
+- `[FIXED]` `[fable]` The reconnect horizon must reset on every retryable freeze rejection to survive consecutive end attempts.
+- `[FIXED]` `[fable]` Advisory-lock participation needs to cover lease acquisition and replacement explicitly, use a reserved two-part application keyspace, and define equal-expiry token ordering without timestamp truncation ambiguity.
+- `[FIXED]` `[fable]` Already-ended residual-lease cleanup must be deterministic, stale-route errors must tolerate an unparseable non-2xx body, and loopback checks must use canonical parsed addresses while rejecting IPv4-mapped IPv6 forms.
 
 **Round 5 verdicts:** `[sol]` CHANGES REQUESTED; `[fable]` CHANGES REQUESTED.
 
@@ -978,51 +978,51 @@ The historical Round 5 block is therefore resolved as a process decision, while 
 
 ### Round 6 — 2026-08-11 — commit `fd80fde`
 
-- `[OPEN]` `[sol]` Validation delay was not subtracted from the database remaining duration, so an already-expired token could receive a new local interval.
+- `[FIXED]` `[sol]` Validation delay was not subtracted from the database remaining duration, so an already-expired token could receive a new local interval.
   → Response in `816256a`: Node anchors the conservative deadline before the database request, subtracts all validation and transport delay, and rechecks before every stage.
-- `[OPEN]` `[sol]` Cancellation tests did not cover final-flush and connection-close continuations after timeout and queued unfreeze.
+- `[FIXED]` `[sol]` Cancellation tests did not cover final-flush and connection-close continuations after timeout and queued unfreeze.
   → Response in `816256a`: the serializer remains held until every started stage settles or acknowledges cancellation, no new stage starts after cancellation, connection close is synchronous and last, and each stage gets a paused-continuation regression.
-- `[OPEN]` `[fable]` The proposed uncapped gate contradicted canonical capped governance before those files were changed.
+- `[FIXED]` `[fable]` The proposed uncapped gate contradicted canonical capped governance before those files were changed.
   → Response in `816256a`: the future rule becomes globally effective only through the reviewed governance edit; current repository rules remain authoritative elsewhere, while Spec 013 continues solely under explicit user direction.
-- `[OPEN]` `[fable]` Hocuspocus lease validation did not participate in the advisory-lock order and could race Go abort cleanup.
+- `[FIXED]` `[fable]` Hocuspocus lease validation did not participate in the advisory-lock order and could race Go abort cleanup.
   → Response in `816256a`: validation takes the shared session advisory lock and therefore observes preceding exclusive cleanup.
-- `[OPEN]` `[fable]` Unfreeze and serializer queues lacked execution bounds and eviction.
+- `[FIXED]` `[fable]` Unfreeze and serializer queues lacked execution bounds and eviction.
   → Response in `816256a`: unfreeze is local and database-free, waits behind bounded cancellation settlement, duplicate operations coalesce, foreign tokens do not queue, the queue has two bounded positions, and idle serializers are evicted.
-- `[OPEN]` `[fable]` Stale clients could accept a schema-invalid 2xx response from the removed route.
+- `[FIXED]` `[fable]` Stale clients could accept a schema-invalid 2xx response from the removed route.
   → Response in `816256a`: success requires both 2xx and exact response schema; every parse or schema failure is surfaced.
-- `[OPEN]` `[fable]` The degraded-path acceptance contract did not state a bound on later mutations and the consensus loop had no non-convergence checkpoint.
+- `[FIXED]` `[fable]` The degraded-path acceptance contract did not state a bound on later mutations and the consensus loop had no non-convergence checkpoint.
   → Response in `816256a`: only an already-authorized frame may be transient, all later frames recheck or fail closed, connections close by JWT expiry, and every three non-converged rounds produces a non-blocking user checkpoint.
-- `[OPEN]` `[fable]` Advisory-lock namespace, loopback parsing, redirect, and uncategorized reconnect behavior needed tighter bounds.
+- `[FIXED]` `[fable]` Advisory-lock namespace, loopback parsing, redirect, and uncategorized reconnect behavior needed tighter bounds.
   → Response in `816256a`: the two-key Bridge class is scoped honestly, canonical IP parsing rejects mapped forms, redirects remain disabled, and unexpected live disconnects continue bounded retries without manual reload.
 
 **Round 6 verdicts:** `[sol]` CHANGES REQUESTED; `[fable]` CHANGES REQUESTED.
 
 ### Round 7 — 2026-08-11 — commit `7bf6269`
 
-- `[OPEN]` `[fable]` Server-side statement timeout could not bound pool checkout or a half-open client socket, leaving cancellation settlement and the serializer unbounded.
+- `[FIXED]` `[fable]` Server-side statement timeout could not bound pool checkout or a half-open client socket, leaving cancellation settlement and the serializer unbounded.
   → Response in `de1dbae`: each freeze uses a short-lived one-connection control client with connect/query/socket bounds, postgres.js cancellation, forced `end({ timeout: 0 })`, and zero-budget rejection.
-- `[OPEN]` `[fable]` The spec claimed it could retrofit exact-schema handling into an already loaded pre-deploy browser bundle.
+- `[FIXED]` `[fable]` The spec claimed it could retrofit exact-schema handling into an already loaded pre-deploy browser bundle.
   → Response in `de1dbae`: the route and floor UI are explicitly unshipped feature-branch work, `main` has no old caller, and only the new client carries the exact-schema contract.
-- `[OPEN]` `[sol]` The cross-language second advisory key did not define its hash algorithm or signed mapping.
+- `[FIXED]` `[sol]` The cross-language second advisory key did not define its hash algorithm or signed mapping.
   → Response in `de1dbae`: the key is the signed reinterpretation of the canonical UUID's first eight hex digits, with exact boundary vectors for Go, TypeScript, and PostgreSQL.
-- `[OPEN]` `[sol]` A delayed expiry timer could remove a newer replacement entry without serialized token and identity checks.
+- `[FIXED]` `[sol]` A delayed expiry timer could remove a newer replacement entry without serialized token and identity checks.
   → Response in `de1dbae`: timer, lazy, and sweep cleanup reacquire the serializer, compare expected token and entry identity, and perform atomic eviction checks.
-- `[OPEN]` `[sol]` The degraded path incorrectly bounded transient fan-in to one frame even though Hocuspocus authorizations run independently.
+- `[FIXED]` `[sol]` The degraded path incorrectly bounded transient fan-in to one frame even though Hocuspocus authorizations run independently.
   → Response in `de1dbae`: the guarantee and regression cover any finite set already authorized across multiple connections, while all later frames recheck or fail closed.
-- `[OPEN]` `[fable]` Transaction-scoped advisory functions, flush-error behavior, atomic serializer eviction, duplicate-result lifetime, and rightful replacement retry were underspecified.
+- `[FIXED]` `[fable]` Transaction-scoped advisory functions, flush-error behavior, atomic serializer eviction, duplicate-result lifetime, and rightful replacement retry were underspecified.
   → Response in `de1dbae`: only `pg_advisory_xact_lock*` is allowed, failure retains a bounded token barrier without closing, registry changes are synchronous, result sharing ends at settlement, and foreign-token conflicts are bounded by the active deadline.
-- `[OPEN]` `[fable]` Sustained reconnects, repeated reviewer non-convergence, and sweep-driven serializer cleanup lacked operational bounds.
+- `[FIXED]` `[fable]` Sustained reconnects, repeated reviewer non-convergence, and sweep-driven serializer cleanup lacked operational bounds.
   → Response in `de1dbae`: reconnect grows to a jittered 30-second tail after the fast window, repeated non-convergence becomes a user decision, and serialized sweep cleanup performs eviction.
 
 **Round 7 verdicts:** `[sol]` CHANGES REQUESTED; `[fable]` CHANGES REQUESTED.
 
 ### Round 8 — 2026-08-11 — commit `40cb07c`
 
-- `[OPEN]` `[sol][fable]` Pinned postgres.js 3.4.9 does not provide owned, awaited cancellation and physical socket destruction through `query.cancel()` and `end({ timeout: 0 })`, so the proposed control client can leave detached query and cancel sockets.
-- `[OPEN]` `[fable]` A one-connection non-pipelined control client contradicts the parallel or batched 50-canvas final-flush deadline, while using the ordinary pool would violate isolation and risk pool poisoning.
-- `[OPEN]` `[fable]` A rightful replacement token had no actual Go retry loop within the freeze budget, so retryable conflict could degrade immediately despite the no-starvation claim.
-- `[OPEN]` `[fable]` The permanent test contract incorrectly retained a pre-merge `main` history fact, the PostgreSQL form of the advisory key remained unstated, and non-convergence metrics needed exact definitions.
-- `[OPEN]` `[fable]` Post-settlement duplicate freeze behavior and categorized-to-uncategorized reconnect backoff transitions remained ambiguous.
+- `[FIXED]` `[sol][fable]` Pinned postgres.js 3.4.9 does not provide owned, awaited cancellation and physical socket destruction through `query.cancel()` and `end({ timeout: 0 })`, so the proposed control client can leave detached query and cancel sockets.
+- `[FIXED]` `[fable]` A one-connection non-pipelined control client contradicts the parallel or batched 50-canvas final-flush deadline, while using the ordinary pool would violate isolation and risk pool poisoning.
+- `[FIXED]` `[fable]` A rightful replacement token had no actual Go retry loop within the freeze budget, so retryable conflict could degrade immediately despite the no-starvation claim.
+- `[FIXED]` `[fable]` The permanent test contract incorrectly retained a pre-merge `main` history fact, the PostgreSQL form of the advisory key remained unstated, and non-convergence metrics needed exact definitions.
+- `[FIXED]` `[fable]` Post-settlement duplicate freeze behavior and categorized-to-uncategorized reconnect backoff transitions remained ambiguous.
 
 **Round 8 verdicts:** `[sol]` CHANGES REQUESTED; `[fable]` CHANGES REQUESTED.
 
@@ -1034,36 +1034,36 @@ The user approved moving final snapshot persistence into Go.
 
 ### Round 8 responses — commit `2695e6a`
 
-- `[OPEN]` `[sol][fable]` Node could not own and await postgres.js query and cancel sockets.
+- `[FIXED]` `[sol][fable]` Node could not own and await postgres.js query and cancel sockets.
   → Hocuspocus no longer performs any database validation or snapshot write during freeze; its only asynchronous external operation is an owned, abortable HTTP validation callback to Go.
-- `[OPEN]` `[fable]` The one-connection Node design contradicted the 50-canvas capture deadline and isolated-pool promise.
+- `[FIXED]` `[fable]` The one-connection Node design contradicted the 50-canvas capture deadline and isolated-pool promise.
   → Hocuspocus now captures Yjs updates synchronously under document save mutexes and returns a bounded bundle; Go performs one batch persistence transaction.
-- `[OPEN]` `[fable]` Retryable replacement-token conflicts had no retrier.
+- `[FIXED]` `[fable]` Retryable replacement-token conflicts had no retrier.
   → Go retries with bounded jitter inside the original two-second budget and degrades honestly if no attempt succeeds.
-- `[OPEN]` `[fable]` The PostgreSQL advisory-key expression, pre-merge history evidence, non-convergence metrics, duplicate success, and reconnect category transition were underspecified.
+- `[FIXED]` `[fable]` The PostgreSQL advisory-key expression, pre-merge history evidence, non-convergence metrics, duplicate success, and reconnect category transition were underspecified.
   → The SQL bit-cast expression is exact; history evidence is pre-merge rather than a permanent test; metrics are deduplicated and prospective; successful bundles are cached idempotently under a global bound; and uncategorized disconnects move to the jittered long-tail policy.
 
 **Round 8 responses await Sol and Fable confirmation on commit `2695e6a`.**
 
 ### Round 9 — 2026-08-11 — commit `36132fc`
 
-- `[OPEN]` `[fable]` Holding the exclusive advisory lock across the Hocuspocus request could self-deadlock when the freeze-validation callback tried to acquire the shared form.
+- `[FIXED]` `[fable]` Holding the exclusive advisory lock across the Hocuspocus request could self-deadlock when the freeze-validation callback tried to acquire the shared form.
   → Response in `73b0764`: the lease-and-list transaction commits and releases all database locks before the control request, and the test contract pauses the callback to prove the ordering.
-- `[OPEN]` `[fable]` Go retried serializer conflicts but not a transport loss after Hocuspocus had captured and cached a successful result.
+- `[FIXED]` `[fable]` Go retried serializer conflicts but not a transport loss after Hocuspocus had captured and cached a successful result.
   → Response in `73b0764`: transport-class failures retry the same token inside the original two-second budget and recover the identical cached bundle without recapture.
-- `[OPEN]` `[fable]` Canvas creation and related mutations did not participate in the lifecycle advisory-lock order, so the authoritative canvas set could change during lease acquisition.
+- `[FIXED]` `[fable]` Canvas creation and related mutations did not participate in the lifecycle advisory-lock order, so the authoritative canvas set could change during lease acquisition.
   → Response in `73b0764`: create, visibility, delete, and floor transactions take the shared lifecycle lock before their session-row lock, while lease acquisition takes the exclusive form before reading the list.
-- `[OPEN]` `[fable]` A completed cached bundle had no prompt release acknowledgment and could retain its large reservation until lease expiry.
+- `[FIXED]` `[fable]` A completed cached bundle had no prompt release acknowledgment and could retain its large reservation until lease expiry.
   → Response in `73b0764`: the control API now has token-scoped complete acknowledgment after either database end result, with token-conditional expiry as the lost-ack fallback.
-- `[OPEN]` `[fable]` Synchronous multi-document encoding and aggregate response construction could stall the event loop and multiply memory use.
+- `[FIXED]` `[fable]` Synchronous multi-document encoding and aggregate response construction could stall the event loop and multiply memory use.
   → Response in `73b0764`: Hocuspocus reserves capture capacity before encoding, yields between documents, and streams entries with backpressure without constructing one aggregate JSON string.
-- `[OPEN]` `[fable]` Empty authoritative canvas lists and the SHA-256 trust role were ambiguous.
+- `[FIXED]` `[fable]` Empty authoritative canvas lists and the SHA-256 trust role were ambiguous.
   → Response in `73b0764`: an empty list has an exact validated confirmed response, while the digest is explicitly framing and corruption detection rather than an authorization boundary.
-- `[OPEN]` `[sol]` Snapshot rows were ordered before the conditional ended update, allowing lease expiry between the writes to contradict the no-bundle degraded contract.
+- `[FIXED]` `[sol]` Snapshot rows were ordered before the conditional ended update, allowing lease expiry between the writes to contradict the no-bundle degraded contract.
   → Response in `73b0764`: the confirmed transaction performs the conditional true end first, batches snapshots only after it succeeds, and rolls both back before a separate false/no-snapshot degraded transaction on any failure.
-- `[OPEN]` `[sol][fable]` Size checks and cache accounting began only after synchronous Yjs encoding, so a large document or concurrent captures could allocate beyond the intended bound before rejection.
+- `[FIXED]` `[sol][fable]` Size checks and cache accounting began only after synchronous Yjs encoding, so a large document or concurrent captures could allocate beyond the intended bound before rejection.
   → Response in `73b0764`: transport, persisted-load, cumulative document, resident-process, request-aggregate, and capture-ledger admission limits run before apply or encode, with exact reservation and release tests.
-- `[OPEN]` `[sol]` Acceptance claimed every successful freeze persisted snapshots even when the later database transaction failed.
+- `[FIXED]` `[sol]` Acceptance claimed every successful freeze persisted snapshots even when the later database transaction failed.
   → Response in `73b0764`: persistence is claimed only for a successful confirmed end; a successful freeze followed by database failure makes no persistence claim.
 
 **Round 9 verdicts:** `[sol]` CHANGES REQUESTED; `[fable]` CHANGES REQUESTED.
@@ -1072,21 +1072,21 @@ The user approved moving final snapshot persistence into Go.
 
 ### Round 10 — 2026-08-11 — commit `0509fca`
 
-- `[OPEN]` `[sol][fable]` The new complete operation mutated serializer-owned state without participating in the serializer or defining its matching-active-token behavior.
+- `[FIXED]` `[sol][fable]` The new complete operation mutated serializer-owned state without participating in the serializer or defining its matching-active-token behavior.
   → Response in `5933b14`: freeze, unfreeze, and complete share the serializer; one coalesced terminal cleanup cancels and settles validation, capture, and writers, complete wins a matching terminal race, and identity-checked removal is the final action.
-- `[OPEN]` `[sol]` Incremental response streaming had no owned deadline or reader lifetime, so a half-open first stream could block recovery or allow completion to free bytes still in use.
+- `[FIXED]` `[sol]` Incremental response streaming had no owned deadline or reader lifetime, so a half-open first stream could block recovery or allow completion to free bytes still in use.
   → Response in `5933b14`: capture publishes an immutable cache before streaming, writers run outside the serializer with reader references and no-progress plus absolute deadlines, forced response destruction is awaited, and complete settles all readers before release.
-- `[OPEN]` `[sol]` The admission contract promised rollback after downstream apply failure through `beforeHandleMessage`, but that hook cannot observe pinned Hocuspocus's internal `MessageReceiver.apply` result.
+- `[FIXED]` `[sol]` The admission contract promised rollback after downstream apply failure through `beforeHandleMessage`, but that hook cannot observe pinned Hocuspocus's internal `MessageReceiver.apply` result.
   → Response in `5933b14`: an admission turnstile spans the library handoff, a direct synchronous Yjs update listener commits the matching shadow reservation during apply, and a `setImmediate` failure fallback rebuilds and rolls back before releasing the turnstile.
-- `[OPEN]` `[sol][fable]` Acceptance wording could be read to promise database persistence before Hocuspocus closed connections, contrary to the protocol sequence.
+- `[FIXED]` `[sol][fable]` Acceptance wording could be read to promise database persistence before Hocuspocus closed connections, contrary to the protocol sequence.
   → Response in `5933b14`: the criterion now separately orders capture before close and Go persistence before the confirmed database-end commit.
-- `[OPEN]` `[fable]` Current response-failure prose did not explicitly prohibit starting a 200 stream before all capture stages succeeded.
+- `[FIXED]` `[fable]` Current response-failure prose did not explicitly prohibit starting a 200 stream before all capture stages succeeded.
   → Response in `5933b14`: a 200 response begins only after complete capture and immutable cache publication, preserving the non-2xx whole-capture failure contract.
-- `[OPEN]` `[fable]` The spec named Node scheduling although production uses Bun, and its oversized-message wording promised mutation classification before buffering that `ws` cannot perform.
+- `[FIXED]` `[fable]` The spec named Node scheduling although production uses Bun, and its oversized-message wording promised mutation classification before buffering that `ws` cannot perform.
   → Response in `5933b14`: scheduling and timer rules name Bun and run under Bun tests; the exact pinned `Server` `maxPayload` option rejects every oversized fragmented websocket message with code 1009 during reassembly.
-- `[OPEN]` `[fable]` Cumulative admitted-update counters could permanently reject a busy but compact live document.
+- `[FIXED]` `[fable]` Cumulative admitted-update counters could permanently reject a busy but compact live document.
   → Response in `5933b14`: admission now validates the shadow document's current encoded state rather than lifetime traffic, while a scratch ledger bounds concurrent validation and unload releases exact instance accounting.
-- `[OPEN]` `[fable]` The lock-order registry omitted the existing disjoint one-argument advisory-lock class.
+- `[FIXED]` `[fable]` The lock-order registry omitted the existing disjoint one-argument advisory-lock class.
   → Response in `5933b14`: the registry names the legacy `int8` class, requires two-`int4` lifecycle lock first if both are ever needed, and includes the current legacy caller in deadlock testing.
 
 **Round 10 verdicts:** `[sol]` CHANGES REQUESTED; `[fable]` CHANGES REQUESTED.
@@ -1095,19 +1095,19 @@ The user approved moving final snapshot persistence into Go.
 
 ### Round 11 — 2026-08-11 — commit `0af5bd0`
 
-- `[OPEN]` `[sol][fable]` Class-session creation and scheduled-session start directly ended existing live sessions outside the lifecycle protocol, silently losing unflushed state and leaving archive completeness null.
+- `[FIXED]` `[sol][fable]` Class-session creation and scheduled-session start directly ended existing live sessions outside the lifecycle protocol, silently losing unflushed state and leaving archive completeness null.
   → Response in `4a2848d`: both producers use a class guard plus sorted session lifecycle locks, durably record an intentionally degraded false result, clear and complete tokens, emit ended events, return replacement metadata, and show the initiating teacher a warning without depending on Hocuspocus.
-- `[OPEN]` `[sol][fable]` Turnstile acquisition was not ordered relative to authorization and the second fence check, so a waiting accepted frame could apply after confirmed capture.
+- `[FIXED]` `[sol][fable]` Turnstile acquisition was not ordered relative to authorization and the second fence check, so a waiting accepted frame could apply after confirmed capture.
   → Response in `4a2848d`: the mutation path acquires the turnstile before uncached authorization and rechecks after every yield, while freeze installs its fence and then acquires the same turnstile before save mutex and capture.
-- `[OPEN]` `[sol][fable]` Digest correlation assumed Yjs emitted the incoming update bytes and fallback assumed an unchanged authoritative document, both false for partial overlap and pending structs.
+- `[FIXED]` `[sol][fable]` Digest correlation assumed Yjs emitted the incoming update bytes and fallback assumed an unchanged authoritative document, both false for partial overlap and pending structs.
   → Response in `4a2848d`: the unique pending admission correlates by identity, origin, and document; fallback reconciles actual authoritative state; partially overlapping updates are covered; and shadow results with pinned-Yjs pending structs or deletes are rejected before handoff.
-- `[OPEN]` `[sol]` Pre-handoff authorization denial, timeout, cancellation, or frozen recheck had no explicit shadow, accounting, and turnstile rollback.
+- `[FIXED]` `[sol]` Pre-handoff authorization denial, timeout, cancellation, or frozen recheck had no explicit shadow, accounting, and turnstile rollback.
   → Response in `4a2848d`: every pre-handoff exit synchronously restores shadow and accounting and releases the turnstile before rejecting, with an exhaustive rejection-path test matrix.
-- `[OPEN]` `[sol]` The `ws.maxPayload` envelope allowance was unspecified, so the exact boundary test was not falsifiable.
+- `[FIXED]` `[sol]` The `ws.maxPayload` envelope allowance was unspecified, so the exact boundary test was not falsifiable.
   → Response in `4a2848d`: the pinned constructor receives exactly 1,048,625 bytes with its byte-level derivation, and fragmented boundary tests accept that value and reject 1,048,626 with code 1009.
-- `[OPEN]` `[fable]` Initial load could fail before `afterLoadDocument` installed cleanup, leaking its reservation.
+- `[FIXED]` `[fable]` Initial load could fail before `afterLoadDocument` installed cleanup, leaking its reservation.
   → Response in `4a2848d`: `onLoadDocument` installs document-destroy cleanup before returning state, and tests distinguish apply failure from successful after-load, unload, and reload identities.
-- `[OPEN]` `[fable]` Cached retry writer deadlines, retryable ledger exhaustion, writer wording, and mutable-readOnly rationale were ambiguous.
+- `[FIXED]` `[fable]` Cached retry writer deadlines, retryable ledger exhaustion, writer wording, and mutable-readOnly rationale were ambiguous.
   → Response in `4a2848d`: each writer gets a fresh deadline bounded by remaining lease, transient ledger exhaustion uses retryable 1013, retries use a new writer over the immutable entry, and one-way read-only is stated as a Bridge concurrency invariant rather than a library limitation.
 
 **Round 11 verdicts:** `[sol]` CHANGES REQUESTED; `[fable]` CHANGES REQUESTED.
@@ -1116,19 +1116,19 @@ The user approved moving final snapshot persistence into Go.
 
 ### Round 12 — 2026-08-11 — commit `555a663`
 
-- `[OPEN]` `[sol]` Failed authoritative initial load could not rely on document destruction because pinned Hocuspocus never registers or destroys that failed document.
+- `[FIXED]` `[sol]` Failed authoritative initial load could not rely on document destruction because pinned Hocuspocus never registers or destroys that failed document.
   → Response in `62840cf`: the hook releases its own temporary apply failures and registers a generation-keyed pending reservation whose `setImmediate` watchdog releases it unless successful `afterLoadDocument` claims it.
-- `[OPEN]` `[sol]` Mutation authorization became load-bearing under the turnstile without an owned timeout, cancellation, or cancelled-grant settlement rule.
+- `[FIXED]` `[sol]` Mutation authorization became load-bearing under the turnstile without an owned timeout, cancellation, or cancelled-grant settlement rule.
   → Response in `62840cf`: mutation auth uses an owned 500-millisecond `AbortController`; close, unload, deadline, and cancellation abort and await settlement; both mutation and freeze waiters release a late cancelled grant synchronously.
-- `[OPEN]` `[sol]` Unload did not serialize with pending admission, so a stale authorization could resume after listener/accounting removal or document replacement.
+- `[FIXED]` `[sol]` Unload did not serialize with pending admission, so a stale authorization could resume after listener/accounting removal or document replacement.
   → Response in `62840cf`: unload marks the exact generation, aborts and settles authorization/admission under the turnstile, rechecks registry identity, removes exact listener/accounting, and cannot touch a reload generation.
-- `[OPEN]` `[sol][fable]` The canvas-derived global `ws.maxPayload` applied to every shared realtime namespace and would reject existing non-canvas documents above 1 MiB.
+- `[FIXED]` `[sol][fable]` The canvas-derived global `ws.maxPayload` applied to every shared realtime namespace and would reject existing non-canvas documents above 1 MiB.
   → Response in `62840cf`: the listener preserves its 100 MiB compatibility cap and the parsed canvas hook alone enforces exactly 1,048,576 decoded update bytes before shadow apply, with explicit cross-namespace regression coverage and no pre-buffer claim.
-- `[OPEN]` `[fable]` Legacy Next.js and Drizzle session writers remained potential status-ending producers outside the protocol.
+- `[FIXED]` `[fable]` Legacy Next.js and Drizzle session writers remained potential status-ending producers outside the protocol.
   → Response in `62840cf`: the remediation deletes the shadow PATCH route and unused TypeScript create/end helpers, updates the inventory, and proves no TypeScript end writer remains rather than relying on proxy reachability.
-- `[OPEN]` `[sol][fable]` Replacement ends omitted scheduled-session completion work.
+- `[FIXED]` `[sol][fable]` Replacement ends omitted scheduled-session completion work.
   → Response in `62840cf`: every replaced session runs the same scheduled completion step as explicit end before event emission and token cleanup.
-- `[OPEN]` `[fable]` Replacement lock sorting, actual schedule-store method naming, and non-teacher archive settings behavior needed precision.
+- `[FIXED]` `[fable]` Replacement lock sorting, actual schedule-store method naming, and non-teacher archive settings behavior needed precision.
   → Response in `62840cf`: locks sort by derived signed key plus UUID, the method is `StartScheduledSession`, and a non-teacher 403 produces no completeness claim or archive error.
 
 **Round 12 verdicts:** `[sol]` CHANGES REQUESTED; `[fable]` CHANGES REQUESTED.
@@ -1137,15 +1137,28 @@ The user approved moving final snapshot persistence into Go.
 
 ### Round 13 — 2026-08-11 — commit `24087c5`
 
-- `[OPEN]` `[sol][fable]` The pending-load watchdog was cancelled inside `afterLoadDocument` before shadow/listener initialization and before pinned Hocuspocus registry insertion, so later failure could leak an unregistered generation.
+- `[FIXED]` `[sol][fable]` The pending-load watchdog was cancelled inside `afterLoadDocument` before shadow/listener initialization and before pinned Hocuspocus registry insertion, so later failure could leak an unregistered generation.
   → Response in `18df349`: after-load initialization is caught while the watchdog remains armed; the next-turn watchdog alone finalizes an exact initialized instance after registry insertion or removes every partial resource otherwise, with the final-extension/no-macrotask invariant enforced at startup.
-- `[OPEN]` `[sol]` Individual admission waits were bounded but an authenticated burst could allocate an unbounded waiter, timer, abort, and listener population before the turnstile.
+- `[FIXED]` `[sol]` Individual admission waits were bounded but an authenticated burst could allocate an unbounded waiter, timer, abort, and listener population before the turnstile.
   → Response in `18df349`: a synchronous per-document counter admits at most eight active-plus-queued mutations before any waiter allocation, the ninth closes retryably, and saturated freeze/unload tests prove exact settlement.
-- `[OPEN]` `[fable]` Irreversible cleanup in `beforeUnloadDocument` was unsafe because pinned Hocuspocus can abort unload after that hook when a reconnect arrives.
+- `[FIXED]` `[fable]` Irreversible cleanup in `beforeUnloadDocument` was unsafe because pinned Hocuspocus can abort unload after that hook when a reconnect arrives.
   → Response in `18df349`: the hook only cancels and settles pending admission, clears its transient flag, and retains instrumentation; exact Yjs destruction alone removes listeners and accounting, so an aborted unload remains operational.
-- `[OPEN]` `[fable]` The production-writer scan and TypeScript helper wording were insufficiently scoped.
+- `[FIXED]` `[fable]` The production-writer scan and TypeScript helper wording were insufficiently scoped.
   → Response in `18df349`: the deletion distinguishes the live end helper from dead create helper, names the allowlist and `TODO.md`, and limits the scan to production while excluding fixtures.
 
 **Round 13 verdicts:** `[sol]` CHANGES REQUESTED; `[fable]` CHANGES REQUESTED.
 
 **Round 13 responses await Sol and Fable confirmation on commit `18df349`.**
+
+### Round 14 — 2026-08-11 — commit `aa34784`
+
+- `[sol]` No material findings.
+  The load watchdog, destroy-only unload cleanup, eight-admission cap, transport compatibility, complete status-producer census, replacement locking, scheduled completion, and test contracts are coherent against the pinned implementation.
+- `[fable]` No material findings.
+  Two non-blocking wording nits remain: generation-keyed release must be idempotent when destroy precedes the watchdog, which the exact-once test already requires; and the larger Go bundle limits intentionally remain as defense in depth against a faulty peer despite tighter honest-Node limits.
+
+**Round 14 verdicts on exact commit `aa34784e1e51596bf1b6779176a86187fe3306ab`:** `[sol]` APPROVE; `[fable]` APPROVE WITH NITS.
+
+**Design-review gate result:** PASSED by consensus with no open blockers.
+
+Following the gate rule, every historical finding above is mechanically transitioned from `[OPEN]` to `[FIXED]`; response prose did not self-certify resolution before both reviewers approved the same substantive commit.
