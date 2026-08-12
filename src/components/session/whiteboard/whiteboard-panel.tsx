@@ -23,6 +23,13 @@ interface CanvasSettings {
   whiteboardServerArchiveComplete?: boolean;
 }
 
+interface CanvasSettingsState {
+  sessionId: string;
+  floor: CanvasFloor | null;
+  archiveComplete?: boolean;
+  error: string | null;
+}
+
 /** Strict parse of the dedicated canvas-settings response; malformed shapes fail closed. */
 function parseCanvasSettings(payload: unknown): CanvasSettings | null {
   if (typeof payload !== "object" || payload === null) return null;
@@ -36,6 +43,16 @@ function parseCanvasSettings(payload: unknown): CanvasSettings | null {
     return null;
   }
   return { canvasFloor: canvasFloor as CanvasFloor, whiteboardServerArchiveComplete };
+}
+
+function parseCanvasFloorPatch(payload: unknown): { canvasFloor: CanvasFloor } | null {
+  if (typeof payload !== "object" || payload === null) return null;
+  const record = payload as Record<string, unknown>;
+  if (Object.keys(record).length !== 1 || !("canvasFloor" in record)) return null;
+  if (typeof record.canvasFloor !== "string" || !CANVAS_FLOORS.includes(record.canvasFloor as CanvasFloor)) {
+    return null;
+  }
+  return { canvasFloor: record.canvasFloor as CanvasFloor };
 }
 
 export interface WhiteboardCanvas {
@@ -70,9 +87,14 @@ export function WhiteboardPanel({
   const [title, setTitle] = useState("Untitled whiteboard");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [floor, setFloor] = useState<CanvasFloor | null>(null);
-  const [archiveComplete, setArchiveComplete] = useState<boolean | undefined>(undefined);
-  const [settingsError, setSettingsError] = useState<string | null>(null);
+  const [settings, setSettings] = useState<CanvasSettingsState>({
+    sessionId: "",
+    floor: null,
+    error: null,
+  });
+  const currentSettings = settings.sessionId === sessionId
+    ? settings
+    : { sessionId, floor: null, archiveComplete: undefined, error: null };
 
   const loadCanvases = useCallback(async () => {
     setLoading(true);
@@ -98,57 +120,79 @@ export function WhiteboardPanel({
 
   // The dedicated settings route is only fetched when this surface can use it:
   // the archive needs the durable completeness status, the live teacher panel needs the floor.
-  const loadSettings = useCallback(async () => {
+  useEffect(() => {
     if (!archive && !teacherControls) return;
-    setSettingsError(null);
-    try {
-      const response = await fetch(`/api/sessions/${sessionId}/canvas-settings`);
-      if (response.status === 403) {
-        // A 403 here means no teacher controls, not a broken panel.
-        setFloor(null);
-        setArchiveComplete(undefined);
-        return;
+    let cancelled = false;
+    const publish = (next: Omit<CanvasSettingsState, "sessionId">) => {
+      if (!cancelled) setSettings({ sessionId, ...next });
+    };
+    void (async () => {
+      try {
+        const response = await fetch(`/api/sessions/${sessionId}/canvas-settings`);
+        if (response.status === 403) {
+          publish({ floor: null, archiveComplete: undefined, error: null });
+          return;
+        }
+        if (!response.ok) {
+          publish({ floor: null, archiveComplete: undefined, error: "Unable to load whiteboard settings" });
+          return;
+        }
+        const parsed = parseCanvasSettings(await response.json());
+        if (!parsed) {
+          publish({ floor: null, archiveComplete: undefined, error: "Unable to load whiteboard settings" });
+          return;
+        }
+        publish({
+          floor: parsed.canvasFloor,
+          archiveComplete: parsed.whiteboardServerArchiveComplete,
+          error: null,
+        });
+      } catch (cause) {
+        publish({
+          floor: null,
+          archiveComplete: undefined,
+          error: cause instanceof Error ? cause.message : "Unable to load whiteboard settings",
+        });
       }
-      if (!response.ok) {
-        setSettingsError("Unable to load whiteboard settings");
-        return;
-      }
-      const parsed = parseCanvasSettings(await response.json());
-      if (!parsed) {
-        setSettingsError("Unable to load whiteboard settings");
-        return;
-      }
-      setFloor(parsed.canvasFloor);
-      setArchiveComplete(parsed.whiteboardServerArchiveComplete);
-    } catch (cause) {
-      setSettingsError(cause instanceof Error ? cause.message : "Unable to load whiteboard settings");
-    }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [archive, teacherControls, sessionId]);
 
-  useEffect(() => {
-    void loadSettings();
-  }, [loadSettings]);
-
   const updateFloor = async (nextFloor: CanvasFloor) => {
-    setSettingsError(null);
+    const requestSessionId = sessionId;
+    const publishPatchError = () => {
+      setSettings((current) => ({
+        sessionId: requestSessionId,
+        floor: current.sessionId === requestSessionId ? current.floor : null,
+        archiveComplete: current.sessionId === requestSessionId ? current.archiveComplete : undefined,
+        error: "Unable to update the canvas floor",
+      }));
+    };
     try {
-      const response = await fetch(`/api/sessions/${sessionId}/canvas-settings`, {
+      const response = await fetch(`/api/sessions/${requestSessionId}/canvas-settings`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ canvasFloor: nextFloor }),
       });
       if (!response.ok) {
-        setSettingsError("Unable to update the canvas floor");
+        publishPatchError();
         return;
       }
-      const parsed = parseCanvasSettings(await response.json());
+      const parsed = parseCanvasFloorPatch(await response.json());
       if (!parsed) {
-        setSettingsError("Unable to update the canvas floor");
+        publishPatchError();
         return;
       }
-      setFloor(parsed.canvasFloor);
+      setSettings((current) => ({
+        sessionId: requestSessionId,
+        floor: parsed.canvasFloor,
+        archiveComplete: current.sessionId === requestSessionId ? current.archiveComplete : undefined,
+        error: null,
+      }));
     } catch {
-      setSettingsError("Unable to update the canvas floor");
+      publishPatchError();
     }
   };
 
@@ -197,22 +241,22 @@ export function WhiteboardPanel({
         <div className="border-b px-3 py-3">
           <h2 className="font-semibold">{archive ? "Whiteboard archive" : "Whiteboards"}</h2>
           {archive && <p className="mt-1 text-xs text-muted-foreground">Read-only session archive</p>}
-          {archive && archiveComplete === true && (
+          {archive && currentSettings.archiveComplete === true && (
             <p className="mt-1 text-xs text-muted-foreground">Whiteboard archive confirmed</p>
           )}
-          {archive && archiveComplete === false && (
+          {archive && currentSettings.archiveComplete === false && (
             <p className="mt-1 text-xs text-destructive">Latest whiteboard changes may not have been archived</p>
           )}
-          {settingsError && (
-            <p className="mt-1 text-xs text-destructive" role="alert">{settingsError}</p>
+          {currentSettings.error && (
+            <p className="mt-1 text-xs text-destructive" role="alert">{currentSettings.error}</p>
           )}
-          {teacherControls && !archive && floor && (
+          {teacherControls && !archive && currentSettings.floor && (
             <label className="mt-2 block text-xs">
               Canvas floor
               <select
                 aria-label="Canvas floor"
                 className="ml-2 rounded border bg-background px-2 py-1 text-sm"
-                value={floor}
+                value={currentSettings.floor}
                 onChange={(event) => void updateFloor(event.target.value as CanvasFloor)}
               >
                 {CANVAS_FLOORS.map((level) => (

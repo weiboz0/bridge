@@ -404,6 +404,15 @@ That recheck is now defense in depth: the confirmed path gains the lifecycle lea
 - `[GREEN]` With both test database URLs pinned to `bridge_test`, the focused whiteboard panel/archive Vitest command passed 13 tests.
   Forced-Bun `tsc --noEmit`, exact changed-production ESLint, and `git diff --check` passed.
 
+#### Phase 9 frontend identity review remediation (2026-08-12)
+
+- `[RED]` Session-rerender tests proved a late settings response, a failed next-session request, or an outstanding PATCH could retain or publish another session's floor/archive state.
+  Near-miss PATCH responses also proved the shared GET parser accepted the GET-only archive field.
+- `[FIXED]` Settings state is tagged with its session identity and derived as empty whenever the rendered session differs.
+  Each GET owns a cancellation guard, every success/403/failure publishes an identity-scoped complete state, and late prior-session continuations cannot surface or enable a PATCH against the current session.
+- `[FIXED]` PATCH has a separate exact one-field parser and preserves the last safe current-session floor while rendering a mutation error for non-200, malformed, GET-shaped, or unknown-field responses.
+- `[GREEN]` The expanded panel/archive suite passed 21 tests with both database URLs pinned to `bridge_test`; forced-Bun TypeScript compilation, exact production lint, and `git diff --check` passed.
+
 #### Phase 9 review-remediation RED proofs (2026-08-12; tests only)
 
 - `[GREEN]` The real Go control-client/`httptest` wire now proves an empty authoritative canvas list serializes exactly as `"canvasIds":[]`, never `null`, while the listener accepts the exact empty snapshots bundle.
