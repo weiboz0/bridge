@@ -261,4 +261,23 @@ describe("Phase 10 canvas lifecycle RED contract", () => {
     await expect(Promise.all([completeA, completeB])).resolves.toEqual([{ released: true }, { released: true }]);
     await expect(freezing).rejects.toMatchObject({ code: "operation_completed" });
   });
+
+  test("reserves exact load, mutation, per-session, and capture ledgers before Yjs apply or encode and rolls only the failed generation back", async () => {
+    const { createCanvasLifecycle } = await lifecycle();
+    const encoded = updateWith("boundary");
+    const sut = createCanvasLifecycle({ limits: { loadScratchBytes: encoded.byteLength - 1, residentBytes: 128 * 1024 * 1024, sessionCaptureBytes: 16 * 1024 * 1024, captureReservationBytes: 64 * 1024 * 1024 } });
+    await expect(sut.beginLoad({ documentName: `canvas:${canvasId}`, document: new Y.Doc(), persistedUpdate: encoded })).rejects.toMatchObject({ code: "load_scratch_exhausted" });
+    expect(sut.accounting()).toEqual({ residentBytes: 0, captureBytes: 0 });
+  });
+
+  test("installed MessageReceiver apply failure reconciles the exact origin/document pending admission through fallback before another frame can acquire the turnstile", async () => {
+    const { createCanvasLifecycle } = await lifecycle();
+    const lifecycle = createCanvasLifecycle({ authorizeMutation: async () => ({ allowed: true, readOnly: false }) });
+    const documentName = `canvas:${canvasId}`;
+    const connection = { close() {} };
+    await lifecycle.beginAdmission({ documentName, sessionId, connection, update: updateWith("pending") });
+    lifecycle.rollbackAdmission({ documentName, connection });
+    expect(lifecycle.inspectDocument(documentName)).toMatchObject({ admissions: 0, turnstileLocked: false, shadowMatchesAuthoritative: true });
+  });
+
 });

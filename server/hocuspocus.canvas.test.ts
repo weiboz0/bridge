@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { Document, Hocuspocus, IncomingMessage, MessageReceiver, OutgoingMessage } from "@hocuspocus/server";
 import { createHmac, randomUUID } from "node:crypto";
+import { Readable } from "node:stream";
 import postgres from "postgres";
 import { Awareness } from "y-protocols/awareness";
 import { writeSyncStep2 } from "y-protocols/sync";
@@ -580,6 +581,21 @@ describe("Phase 10 installed Hocuspocus hook RED contract", () => {
     await instance.unloadDocument(replacement);
   });
 
+  test("registered onDisconnect and beforeUnload abort and settle all eight half-open admissions while reconnect-aborted unload preserves the exact document generation", async () => {
+    const runtime = await import("./hocuspocus") as Record<string, unknown>;
+    const install = runtime.createCanvasLifecycleHooks as ((input: Record<string, unknown>) => Record<string, (input: Record<string, unknown>) => Promise<unknown>>) | undefined;
+    expect(install).toBeTypeOf("function");
+    const calls: string[] = [];
+    const hooks = install!({ lifecycle: { cancelAdmissions: async (input: { reason: string }) => { calls.push(input.reason); } }, authorize: async () => new Promise(() => {}) });
+    const document = new Document(`canvas:${phase10CanvasId}`);
+    const instance = { documents: new Map([[document.name, document]]) };
+    await hooks.onDisconnect!({ documentName: document.name, document, instance, connection: { close() {} }, context: { userId: "writer", sessionId: randomUUID() } });
+    await hooks.beforeUnloadDocument!({ documentName: document.name, document, instance });
+    expect(calls).toEqual(["disconnect", "before_unload"]);
+    expect(instance.documents.get(document.name)).toBe(document);
+    document.destroy();
+  });
+
   test("rolls back the authenticated control listener if the installed websocket listener fails after control bind", async () => {
     const runtime = await import("./hocuspocus") as Record<string, unknown>;
     const start = runtime.startHocuspocusListeners as ((input: Record<string, unknown>) => Promise<void>) | undefined;
@@ -604,6 +620,27 @@ describe("Phase 10 installed Hocuspocus hook RED contract", () => {
       waitForDrain: async () => { destroyed?.(); },
     });
     expect(writes.length).toBeGreaterThan(1);
+  });
+
+  test("the actual createCanvasControlListener freeze request invokes lifecycle freeze then incrementally streams its token cache through backpressure and complete waits for the reader", async () => {
+    const runtime = await import("./hocuspocus") as Record<string, unknown>;
+    const create = runtime.createCanvasControlListener as ((input: Record<string, unknown>) => { listener: import("node:http").Server }) | undefined;
+    expect(create).toBeTypeOf("function");
+    const calls: string[] = [];
+    const lifecycle = {
+      freeze: async () => { calls.push("freeze"); return { snapshots: [{ canvasId: phase10CanvasId, stateBase64: "AA==", sha256: "0".repeat(64) }], closed: 0 }; },
+      stream: async () => { calls.push("stream"); },
+      complete: async () => { calls.push("complete"); return { released: true }; },
+    };
+    const { listener } = create!({ secret: "a".repeat(32), lifecycle });
+    const request = Readable.from([JSON.stringify({ sessionId: randomUUID(), freezeToken: randomUUID(), canvasIds: [] })]) as Readable & { method?: string; url?: string; headers?: Record<string, string> };
+    request.method = "POST";
+    request.url = "/internal/canvas-sessions/freeze";
+    request.headers = { authorization: `Bearer ${"a".repeat(32)}` };
+    const response = { writeHead() {}, write: () => false, end() {}, once() {} };
+    listener.emit("request", request, response);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(calls).toEqual(["freeze", "stream"]);
   });
 
   test("runs current authorization for every canvas admission, including an already-loaded document", async () => {

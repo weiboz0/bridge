@@ -1006,3 +1006,9 @@ _Plan-wide report pending later phases._
 - `[RED]` Added an installed Hocuspocus server `OutgoingMessage.writeCloseMessage` → provider `onMessage` contract requiring token refresh/re-auth/reconnect without an unauthenticated queued write, and an installed `Hocuspocus.createDocument` contract requiring failed pre-registry/after-load generations to release without touching a next-turn replacement.
 - `[OPEN]` Both contracts remain RED until the production hook wires the listener CLOSE reason to the canvas provider recovery producer and supplies generation-owned load hooks to the real `createDocument` path.
 - `[RED evidence]` With both database URLs pinned to `postgresql://work@127.0.0.1:5432/bridge_test`, the focused provider Vitest suite has 5 passing existing contracts and 2 expected RED failures: `createCanvasProviderEventBridge` and `bindInstalledCanvasProvider` are absent.
+
+### Phase 10 — control, unload, allocation, and apply RED evidence (2026-08-12; Terra; tests only)
+
+- `[RED]` Added actual unbound-node-listener request emission for `createCanvasControlListener` (freeze must stream its cached token entry), installed Hocuspocus disconnect/unload hook contracts, exact ledger pre-reservation boundary/rollback, and pending admission fallback identity coverage.
+- `[RED evidence]` After live `_test` URL validation, `bun test server/hocuspocus.canvas.test.ts` recorded 24 pass and 8 expected RED failures, including absent registry/disconnect/startup/stream hooks and the real listener currently calling `freeze` without incremental `stream`.
+  No listener was bound, and no service, migration, E2E, non-test database, or live provider was started.
