@@ -131,7 +131,7 @@ Mutation authorization takes the shared session advisory lock.
 
 Those transactions always acquire the advisory lock before any session row or related data access, and mutation authorization locks no second entity.
 
-Canvas creation and floor transactions retain their existing session-row lock and never acquire this advisory-lock class, so they cannot invert the lifecycle lock order.
+Canvas create, visibility, delete, and floor transactions join the same order by taking the shared advisory lock before their existing session-row lock.
 
 This avoids hot-row multixact churn while making an authorization query block behind an executing end and observe `ended` after commit.
 
@@ -179,9 +179,27 @@ If no retry succeeds, the end proceeds on the degraded path with the warning.
 
 The per-session queue therefore contains at most one active operation and one coalesced pending matching unfreeze.
 
-Successful serialized response bundles count against a process-wide 192 MiB cache budget in addition to the 32 MiB per-session decoded limit.
+The websocket transport rejects a mutation-bearing Yjs update above 1 MiB before buffering a complete application message, with only the fixed protocol-envelope allowance added to the transport ceiling.
 
-Budget reservation and release are synchronous; inability to reserve the complete bundle fails the freeze before connections close and therefore produces the degraded warning.
+Before applying persisted state, Hocuspocus rejects a decoded update above 4 MiB and reserves its decoded byte count from a process-wide 128 MiB resident-document admission ledger.
+
+Before applying a mutation, it reserves the decoded update byte count against both that canvas's 4 MiB cumulative admitted-input ceiling and the resident-document ledger; a rejected or failed apply rolls the reservation back.
+
+The conservative cumulative counter is the loaded canvas's decoded persisted-state bytes plus every accepted mutation-update byte and is released only when that exact document instance unloads.
+
+Once a canvas reaches its ceiling, further mutation writes fail closed and the client receives a visible size-limit error instead of allowing unbounded Yjs expansion.
+
+The sum of those counters for the authoritative canvases in one freeze request must not exceed 16 MiB.
+
+Before the first snapshot encode, the operation synchronously reserves 64 MiB from one process-wide 256 MiB capture-and-cache ledger.
+
+Failure to reserve returns 503 before any connection close and therefore produces the degraded warning.
+
+The transport, per-document, resident-document, per-session, and capture-reservation limits are hard admission bounds that run before Yjs apply or snapshot encode, while the 8 MiB per-snapshot and 32 MiB aggregate limits independently validate actual encoded output.
+
+After capture, the reservation shrinks atomically to the actual cached entry and response byte accounting, never exceeding the existing 48 MiB response limit.
+
+Matching complete, unfreeze, or token-conditional expiry releases that exact capture accounting; document unload releases the separate resident-document accounting by instance identity.
 
 Serializer registry lookup-or-create, enqueue, last-dequeue eviction, and map-entry identity checks execute synchronously without an `await` between check and mutation.
 
@@ -199,7 +217,13 @@ The callback uses `fetch` with an owned `AbortController` and a deadline no grea
 
 When cancellation or the internal deadline wins, the operation is marked inactive, the callback is aborted, and no new snapshot or connection-close stage may start.
 
-Snapshot encoding and connection close are synchronous Node operations performed only while the serializer is held and the operation remains active.
+One document's snapshot encoding, digest, and entry construction are synchronous Node operations performed only while the serializer is held and the operation remains active.
+
+Hocuspocus yields with `setImmediate` between documents so other sessions can process websocket and awareness traffic.
+
+The JSON response is emitted incrementally by entry with stream backpressure and is not assembled through one 48 MiB `JSON.stringify` call.
+
+Cached entries are re-streamed through the same writer for an idempotent retry.
 
 Every save-mutex acquisition is awaited with the deadline before synchronous encoding begins.
 
@@ -233,18 +257,21 @@ Running multiple Hocuspocus replicas is unsupported until a coordinated document
 
 ### Internal Hocuspocus API
 
-Hocuspocus exposes two internal HTTP operations:
+Hocuspocus exposes three internal HTTP operations:
 
 - `POST /internal/canvas-sessions/freeze`
 - `POST /internal/canvas-sessions/unfreeze`
+- `POST /internal/canvas-sessions/complete`
 
-Both operations require `Authorization: Bearer <HOCUSPOCUS_CONTROL_SECRET>`.
+All three operations require `Authorization: Bearer <HOCUSPOCUS_CONTROL_SECRET>`.
 
 Freeze accepts a strict JSON body of `{ "sessionId": "<uuid>", "freezeToken": "<uuid>", "canvasIds": ["<uuid>"] }`.
 
 The canvas list is sorted, unique, and limited to the existing 50-canvas session cap.
 
-Unfreeze accepts `{ "sessionId": "<uuid>", "freezeToken": "<uuid>" }`.
+An empty `canvasIds` list is valid and returns `{ "snapshots": [], "closed": 0 }` without document lookup or capture allocation after token validation and fence installation.
+
+Unfreeze and complete accept `{ "sessionId": "<uuid>", "freezeToken": "<uuid>" }`.
 
 Unknown fields, a missing field, and a malformed session or freeze-token UUID are rejected.
 
@@ -255,6 +282,10 @@ Snapshots are sorted by canvas ID and include exactly the supplied canvases curr
 An empty snapshot list is a valid confirmed result when none of the authoritative canvases is loaded.
 
 The unfreeze success response is `{ "unfrozen": true }` when the matching operation was cleared or no operation is active.
+
+The complete success response is `{ "released": true }` when the matching completed bundle, fence entry, and serializer reservation were released or were already absent.
+
+Complete never reopens an ended connection and a foreign active token returns `409 freeze_token_mismatch`.
 
 The Go client treats a non-2xx response, timeout, transport error, invalid JSON, duplicate or unexpected canvas ID, invalid base64 or digest, missing field, negative count, or wrong field type as a freeze failure.
 
@@ -314,6 +345,8 @@ For every supplied canvas ID whose `canvas:{canvasId}` document is currently loa
 
 Hocuspocus computes SHA-256 over the decoded update bytes, applies the per-snapshot and aggregate limits, and adds the base64 state plus digest to the response bundle.
 
+The digest detects framing or transport corruption only; it is not an authenticity or authorization boundary because the mutually authenticated control channel and Go's authoritative membership validation provide trust.
+
 Hocuspocus performs no database write in the freeze path.
 
 The freeze operation fails as a whole if any mutex wait, encode, digest, or limit check fails.
@@ -369,16 +402,18 @@ Client-side 100-millisecond coalescing reduces mutation volume without weakening
 ### Go end-session sequence
 
 1. The existing handler authorizes the represented user as the session teacher under the existing tenancy rules.
-2. Go acquires the operation-owned freeze lease and reads the sorted authoritative canvas-ID list under the exclusive session advisory lock, or returns an idempotent ended response or stable in-progress conflict.
-3. Go calls Hocuspocus freeze with the matching token, canvas IDs, and one overall two-second deadline; retryable serializer conflicts use bounded jitter inside that same budget.
+2. In one short transaction, Go acquires the exclusive session advisory lock, acquires or replaces the operation-owned lease, reads the sorted authoritative canvas-ID list, commits, and releases every database lock before any HTTP call.
+3. Go calls Hocuspocus freeze with the matching token, canvas IDs, and one overall two-second deadline; retryable serializer conflicts and transport-class failures retry the same token with bounded jitter inside that same budget so a cached completed bundle can be recovered.
 4. Go size-limits, strictly decodes, membership-checks, base64-decodes, and digest-checks the complete response before opening the end transaction.
-5. Go executes one `database/sql` transaction through the existing pgx driver under the exclusive session advisory lock regardless of the Hocuspocus result.
-6. For a valid bundle with the matching unexpired lease, the transaction batch-updates every returned canvas using parameterized arrays or `UNNEST`, requiring every ID to belong to the session and the affected count to equal the bundle count, then sets `status = 'ended'`, archive-complete true, and clears the lease.
-7. If bundle validation, membership, affected-count, token, or expiry validation fails, the transaction writes no bundle snapshots, still ends the session status-first with archive-complete false when permitted by the lease ownership rules, and clears the consumed lease.
-8. Snapshot rows and the ended status commit atomically; no partial bundle can survive a rollback.
-9. If the database transition succeeds, Go emits the existing session-ended event and schedules the existing completion work.
-10. If the database transition fails, Go clears only its matching database lease in a separate cleanup transaction, sends a best-effort token-matched unfreeze request, and returns the existing safe 500-class error.
-11. A freeze, bundle, or unfreeze failure is logged as an actionable operational event without tokens, document content, user content, or internal response bodies.
+5. For a valid bundle, Go begins a confirmed `database/sql` transaction through the existing pgx driver and takes the exclusive session advisory lock.
+6. The confirmed transaction first performs the token-and-unexpired conditional session update to `status = 'ended'`, archive-complete true, and cleared lease.
+7. Only after that conditional update succeeds does the same transaction batch-update every returned canvas using parameterized arrays or `UNNEST`, requiring every ID to belong to the session and the affected count to equal the bundle count.
+8. If the batch succeeds, snapshot rows and ended status commit atomically.
+9. If the conditional update affects no row or any batch step fails, Go rolls back the entire confirmed transaction so no true status or snapshot survives.
+10. Go then opens a separate degraded transaction under the exclusive session advisory lock, applies the lease ownership rules, ends with archive-complete false and no bundle snapshots, and clears the consumed lease.
+11. A database error that prevents both the confirmed and degraded transactions leaves the session live, triggers matching lease cleanup plus best-effort Hocuspocus unfreeze, emits no ended event, and returns the existing safe 500-class error.
+12. If either end transition succeeds, Go emits the existing session-ended event, schedules the existing completion work, and best-effort calls complete with the matching token so Hocuspocus releases the bundle and capture reservation promptly; token-conditional expiry remains the fallback if the acknowledgment is lost.
+13. A freeze, bundle, acknowledgment, or unfreeze failure is logged as an actionable operational event without tokens, document content, user content, or internal response bodies.
 
 A freeze request that completes after Go's timeout may leave its Hocuspocus operation frozen only until token-matched cleanup or the lease expiry.
 
@@ -490,9 +525,9 @@ The new client requires both a 2xx status and the exact expected JSON response s
 
 The creation authorization check and session-row lock occur within the same transaction used to enforce the per-session cap.
 
-Canvas create, visibility update, delete, and floor mutation reject an unexpired freeze lease with `409 session_end_in_progress` while holding their existing session-row lock.
+Canvas create, visibility update, delete, and floor mutation first take the shared session advisory lock and then their existing session-row lock, reject an unexpired freeze lease with `409 session_end_in_progress`, and hold both through their write transaction.
 
-The authoritative canvas-ID list therefore cannot gain or lose a row between lease acquisition and the atomic end transaction.
+Lease acquisition takes the exclusive form of the same advisory lock before its session-row access, so the authoritative canvas-ID list cannot gain or lose a row between lease acquisition and the atomic end transaction.
 
 The accepted creator matrix is:
 
@@ -541,14 +576,17 @@ No migration is run against a non-test database.
 - A request that resumes after its lease expires still ends the session but must persist and return `whiteboardServerArchiveComplete: false`.
 - A stale request cannot end or clear a session owned by a different unexpired lease token.
 - A stale request encountering a different expired token may end status-first but must persist `whiteboardServerArchiveComplete: false` and must not reuse either freeze result.
+- The lease-and-list transaction commits and releases its exclusive advisory lock before the freeze HTTP request, while the Hocuspocus validation callback acquires and releases the shared form without self-deadlock.
+- A lost freeze response after successful capture is retried with the same token inside the original deadline and recovers the identical cached bundle without recapture.
 - The atomic successful end update and shared advisory-lock mutation authorization prevent a post-expiry frame from being admitted between the success predicate and commit on a confirmed path.
 - A degraded-path test pauses multiple independently authorized frames across several connections, commits the incomplete end, resumes the concurrent fan-in, and proves transient applies cannot persist while every later mutation and reconnect is denied.
-- Session advisory locks are always acquired before database reads or row locks, and a busy-session test proves end completion under concurrent mutation authorization without deadlock or exceeding the approved bound.
+- Session advisory locks are always acquired before database reads or row locks, and busy-session tests prove end completion under concurrent mutation authorization, canvas creation, visibility, deletion, and floor changes without deadlock or exceeding the approved bound.
 - Lease acquire, replace, abort, and complete use the reserved exclusive advisory key, while mutation and Hocuspocus validation use its shared form; a paused validation observes a preceding abort commit.
 - Go, TypeScript, and PostgreSQL fixture vectors produce the exact same signed second advisory key for all five boundary UUID prefixes.
 - Lease acquisition, replacement, mutation authorization, Go freeze validation, and end completion use database `clock_timestamp()` semantics under controlled tests.
 - Bundle validation rejects oversized HTTP, oversized decoded state, excessive aggregate state, duplicate or unexpected IDs, invalid base64, digest mismatch, and more than 50 entries before the end transaction.
-- A valid subset bundle atomically updates exactly its loaded canvas rows and ends true; an invalid or affected-count-mismatch bundle updates no snapshots and ends false.
+- A valid subset bundle atomically updates exactly its loaded canvas rows and ends true; an invalid or affected-count-mismatch bundle rolls back the preceding conditional true update, updates no snapshots, and ends false only in the separate degraded transaction.
+- A controlled lease-expiry boundary between the conditional true update and batch write cannot partially commit: batch success commits both under the acquired lock, while any injected batch failure rolls back both and takes the separate degraded path.
 - A zero-snapshot confirmed bundle preserves unloaded persisted states and ends true.
 - The end transaction rolls back both snapshot rows and session status on any database error.
 - Teacher end authorization and cross-user isolation remain covered.
@@ -566,6 +604,7 @@ No migration is run against a non-test database.
 - The installed promise microtask from the second freeze check through Yjs apply cannot be interleaved by the freeze HTTP macrotask.
 - Snapshot capture waits for an already in-flight ordinary store through the shared save mutex, then returns the current encoded state without writing PostgreSQL.
 - A capture or size-limit failure starts no later capture or connection close, returns the same failure to active duplicates, and retains only the matching barrier until lifecycle cleanup.
+- An empty authoritative canvas list validates and fences the token, returns the exact empty success response, performs no document lookup or capture reservation, and completes as a confirmed end.
 - Unfreeze is token-scoped and idempotent, and stale unfreeze cannot clear a newer freeze.
 - A different active unfreeze token returns `409 freeze_token_mismatch`.
 - A paused freeze validation and queued unfreeze serialize so that unfreeze is the final map action and the late validation cannot reinstall the barrier.
@@ -574,8 +613,12 @@ No migration is run against a non-test database.
 - A validation response delayed beyond database expiry cannot install a barrier because elapsed monotonic time is subtracted and checked before installation.
 - Each save-mutex wait and Go-validation fetch is paused across timeout and queued unfreeze to prove the serializer and cleanup wait for abort settlement; after acknowledgment, no encode, close, map, or result effect can occur after release.
 - Duplicate operations coalesce, foreign tokens conflict without queueing, the queue stays bounded, and an idle serializer is evicted.
-- A post-success duplicate receives the byte-identical cached bundle rather than an empty recapture; unfreeze and expiry release its exact cache reservation.
-- Concurrent bundle reservation never exceeds the 192 MiB serialized cache budget, and exhaustion fails before connection close.
+- A post-success duplicate receives the byte-identical cached bundle rather than an empty recapture; complete, unfreeze, and expiry release only its exact cache reservation, and a stale cleanup cannot release a replacement token's reservation.
+- Transport abort after successful capture followed by a same-token request re-streams the identical entries, while successful complete acknowledgment frees them promptly and lost acknowledgment falls back to token-conditional expiry.
+- Websocket transport rejects an oversized frame before complete application buffering; persisted-state load, per-document mutation, per-session aggregate, resident-document, and concurrent capture reservations each fail at their exact boundary before Yjs apply, snapshot encode, or connection close.
+- Concurrent capture reservation never exceeds the 256 MiB capture-and-cache ledger, resident documents never exceed their separate 128 MiB ledger, and rejection or unload releases only the exact instance reservation.
+- The maximum accepted document and 50-canvas request stay within the declared pre-reserved allocation; controlled instrumentation proves no encode begins without its 64 MiB reservation.
+- Incremental response streaming honors backpressure and request abort, yields between document encodes, never constructs one aggregate JSON string, and leaves other-session websocket and awareness work schedulable.
 - Serializer lookup, enqueue, last-dequeue eviction, expiry sweep, and token-conditional timer cleanup interleave under controlled scheduling without creating two serializers or deleting a replacement token.
 - Go-validation timeout, zero remaining budget, and half-open HTTP each settle through owned `AbortController` cancellation, release cleanup, and permit no late effect or open handle.
 - The maximum 50 loaded canvases produce a bounded snapshot bundle inside the two-second Go deadline under the approved representative test latency.
@@ -627,7 +670,7 @@ The student-session effect dependencies, dead `plain_text` references, and other
 
 - A teacher can end a session within the database request path even when Hocuspocus is unavailable.
 - A teacher is warned when storage of the fenced Hocuspocus final snapshot is not confirmed.
-- A successful freeze persists every server-accepted loaded-canvas mutation before closing its connections.
+- A successful confirmed end persists every server-accepted loaded-canvas mutation returned by its fence before closing its connections; a successful freeze followed by database failure makes no persistence claim.
 - On a confirmed path, no canvas mutation accepted after the freeze boundary applies or relays.
 - On a degraded path, any finite set of frames already authorized before the exclusive end may apply transiently; every later mutation-bearing frame rechecks and observes `ended` or fails closed, and every remaining canvas connection closes no later than JWT expiry.
 - Established canvas connections terminate when their JWT expires.
