@@ -336,6 +336,13 @@ That recheck is now defense in depth: the confirmed path gains the lifecycle lea
 - `[backend]` Control terminal acknowledgements are exact 200 JSON, and replacement responses always serialize `replacedSessions` as an array.
   The phase remains backend-only; the Hocuspocus listener and frontend consumer work are not claimed by this evidence.
 
+#### Phase 9 adversarial RED matrix (2026-08-12; test-only)
+
+- `[RED]` Terra added mechanism-level rejection coverage before any further production change: invalid explicit control ports, numeric IPv4/IPv6 loopback boundaries, strict control request and bundle schemas, canonical base64/digest and decoded-size limits, exact terminal acknowledgements, freeze-auth malformed/expired/missing lifecycle cases, retryable ordinary canvas authorization, and a capture-to-completion stale-token race.
+- `[RED]` With both URLs parsed and live-verified as `bridge_test`, the focused control command fails because `ValidateControlURL` accepts ports `0` and `65536` for both canonical loopback forms.
+  The focused end command independently fails because a different unexpired lease installed after capture reaches the degraded completion branch as a generic `500 {"error":"Database error"}` rather than `409 {"code":"session_end_in_progress"}`.
+- `[RED]` No production file changed in this matrix commit.
+
 ### Phase 10 — Hocuspocus fence, admission, capture, and control listener *(Terra backend; tests by Terra)*
 
 - Move the new lifecycle machinery into focused `server/canvas-lifecycle.ts`; `server/hocuspocus.ts` wires its hooks and starts a separate authenticated control listener.

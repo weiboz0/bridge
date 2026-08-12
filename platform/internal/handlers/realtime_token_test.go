@@ -1029,6 +1029,67 @@ func TestFreezeAuth_ExactBearerBodyAndLiveLeaseFailClosed(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, call(t, canvasControlTestSecret, map[string]string{"sessionId": fx.session.ID}).Code)
 }
 
+func TestFreezeAuth_RejectsTrailingUnknownExpiredAndMissingLeaseWithoutLeakingState(t *testing.T) {
+	fx := newCanvasHandlerFixture(t)
+	h := newRealtimeHandlerForCanvasFixture(fx)
+	r := chi.NewRouter()
+	h.InternalRoutes(r)
+	const token = "11111111-1111-4111-8111-111111111111"
+
+	callRaw := func(t *testing.T, raw string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, "/api/internal/canvas-sessions/freeze-auth", strings.NewReader(raw))
+		req.Header.Set("Authorization", "Bearer "+canvasControlTestSecret)
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		return w
+	}
+
+	for _, raw := range []string{
+		`{"sessionId":"` + fx.session.ID + `","freezeToken":"` + token + `","extra":true}`,
+		`{"sessionId":"` + fx.session.ID + `","freezeToken":"` + token + `}{}`,
+		`{"sessionId":"` + fx.session.ID + `"}`,
+		`{"sessionId":"not-a-uuid","freezeToken":"` + token + `"}`,
+	} {
+		w := callRaw(t, raw)
+		require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+		require.NotContains(t, w.Body.String(), fx.session.ID)
+	}
+
+	// A missing or expired operation is deliberately indistinguishable from a
+	// wrong token.  The control caller receives a closed gate, never a detail
+	// about this teacher's session lifecycle.
+	missing := callRaw(t, `{"sessionId":"`+fx.session.ID+`","freezeToken":"`+token+`"}`)
+	require.Equal(t, http.StatusOK, missing.Code, missing.Body.String())
+	require.JSONEq(t, `{"allowed":false}`, missing.Body.String())
+	_, err := fx.db.ExecContext(context.Background(), `UPDATE sessions SET canvas_freeze_token = $1, canvas_freeze_until = clock_timestamp() - interval '1 second' WHERE id = $2`, token, fx.session.ID)
+	require.NoError(t, err)
+	expired := callRaw(t, `{"sessionId":"`+fx.session.ID+`","freezeToken":"`+token+`"}`)
+	require.Equal(t, http.StatusOK, expired.Code, expired.Body.String())
+	require.JSONEq(t, `{"allowed":false}`, expired.Body.String())
+}
+
+func TestRealtimeAuthLifecycle_ActiveFreezeReturnsStableRetryableCode(t *testing.T) {
+	fx := newCanvasHandlerFixture(t)
+	canvas, err := fx.h.Canvases.CreateCanvas(context.Background(), store.CreateCanvasInput{
+		SessionID: fx.session.ID, OwnerID: fx.student.ID, Title: "Writable board", Visibility: "private",
+	})
+	require.NoError(t, err)
+	_, err = fx.db.ExecContext(context.Background(), `UPDATE sessions SET canvas_freeze_token = '11111111-1111-4111-8111-111111111111', canvas_freeze_until = clock_timestamp() + interval '15 seconds' WHERE id = $1`, fx.session.ID)
+	require.NoError(t, err)
+
+	body, err := json.Marshal(map[string]string{"documentName": "canvas:" + canvas.ID, "sub": fx.student.ID})
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/realtime/auth", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+rtSecret)
+	w := httptest.NewRecorder()
+	newRealtimeHandlerForCanvasFixture(fx).InternalAuth(w, req)
+	require.Equal(t, http.StatusConflict, w.Code, w.Body.String())
+	require.Contains(t, w.Body.String(), "session_freezing")
+	require.NotContains(t, w.Body.String(), "readOnly")
+}
+
 func TestRealtimeAuthLifecycle_ActiveFreezeIsRetryableNotPermanentReadOnly(t *testing.T) {
 	fx := newCanvasHandlerFixture(t)
 	canvas, err := fx.h.Canvases.CreateCanvas(context.Background(), store.CreateCanvasInput{

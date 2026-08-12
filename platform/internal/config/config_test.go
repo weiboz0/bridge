@@ -151,3 +151,21 @@ func TestRealtimeControlConfig_FailsClosedForMissingSharedSecretAndUnsafeOverrid
 		})
 	}
 }
+
+// The listener port is an operator boundary, not a best-effort convenience
+// default.  A malformed override must make startup fail before main can open
+// a database connection or register a route on a different listener.
+func TestLoad_RealtimeControlRejectsEveryInvalidExplicitPort(t *testing.T) {
+	for _, port := range []string{"0", "65536", "-1", "4001.5", "not-a-port"} {
+		t.Run(port, func(t *testing.T) {
+			t.Setenv("HOCUSPOCUS_TOKEN_SECRET", "jwt-signing-secret")
+			t.Setenv("HOCUSPOCUS_CONTROL_SECRET", strings.Repeat("a", 64))
+			t.Setenv("HOCUSPOCUS_INTERNAL_URL", "")
+			t.Setenv("HOCUSPOCUS_CONTROL_PORT", port)
+
+			cfg, err := Load("")
+			require.NoError(t, err)
+			require.Error(t, cfg.Realtime.ValidateControl(), "invalid explicit port %q must fail before startup", port)
+		})
+	}
+}

@@ -207,3 +207,107 @@ func TestCanvasControlClient_TerminalCallsUseExactRoutesAndFreezeToken(t *testin
 	client.Unfreeze(context.Background(), "22222222-2222-4222-8222-222222222222", "33333333-3333-4333-8333-333333333333")
 	require.Equal(t, []string{"/internal/canvas-sessions/complete", "/internal/canvas-sessions/unfreeze"}, paths)
 }
+
+func TestCanvasControlClient_RejectsInvalidPortAndAcceptsBothCanonicalLoopbacks(t *testing.T) {
+	for _, rawURL := range []string{
+		"http://127.0.0.1:0",
+		"http://127.0.0.1:65536",
+		"http://[::1]:0",
+		"http://[::1]:65536",
+	} {
+		t.Run(rawURL, func(t *testing.T) {
+			require.Error(t, ValidateControlURL(rawURL), "port must be a usable TCP port")
+		})
+	}
+	for _, rawURL := range []string{"http://127.0.0.1:4001", "http://[::1]:4001"} {
+		t.Run(rawURL, func(t *testing.T) {
+			require.NoError(t, ValidateControlURL(rawURL))
+		})
+	}
+}
+
+func TestCanvasControlClient_RejectsEveryInvalidRequestAndBundleBoundary(t *testing.T) {
+	const (
+		sessionID = "22222222-2222-4222-8222-222222222222"
+		token     = "33333333-3333-4333-8333-333333333333"
+		canvasID  = "11111111-1111-4111-8111-111111111111"
+	)
+	for _, request := range []FreezeRequest{
+		{SessionID: "not-a-uuid", FreezeToken: token},
+		{SessionID: sessionID, FreezeToken: "not-a-uuid"},
+		{SessionID: sessionID, FreezeToken: token, CanvasIDs: []string{canvasID, canvasID}},
+		{SessionID: sessionID, FreezeToken: token, CanvasIDs: []string{"22222222-2222-4222-8222-222222222222", canvasID}},
+		{SessionID: sessionID, FreezeToken: token, CanvasIDs: make([]string, maxSnapshots+1)},
+	} {
+		require.Error(t, validateFreezeRequest(request))
+	}
+
+	state := []byte("state")
+	digest := sha256.Sum256(state)
+	valid := map[string]any{
+		"canvasId": canvasID, "stateBase64": base64.StdEncoding.EncodeToString(state), "sha256": hex.EncodeToString(digest[:]),
+	}
+	marshal := func(v any) []byte {
+		b, err := json.Marshal(v)
+		require.NoError(t, err)
+		return b
+	}
+	for name, body := range map[string][]byte{
+		"missing snapshots":  marshal(map[string]any{"closed": 0}),
+		"null snapshots":     marshal(map[string]any{"snapshots": nil, "closed": 0}),
+		"missing closed":     marshal(map[string]any{"snapshots": []any{}}),
+		"wrong closed type":  marshal(map[string]any{"snapshots": []any{}, "closed": "0"}),
+		"negative closed":    marshal(map[string]any{"snapshots": []any{}, "closed": -1}),
+		"unknown field":      marshal(map[string]any{"snapshots": []any{}, "closed": 0, "extra": true}),
+		"duplicate snapshot": marshal(map[string]any{"snapshots": []any{valid, valid}, "closed": 0}),
+		"wrong digest": marshal(map[string]any{"snapshots": []any{map[string]any{
+			"canvasId": canvasID, "stateBase64": valid["stateBase64"], "sha256": strings.Repeat("0", 64),
+		}}, "closed": 0}),
+		"noncanonical base64": marshal(map[string]any{"snapshots": []any{map[string]any{
+			"canvasId": canvasID, "stateBase64": base64.StdEncoding.EncodeToString(state) + "\n", "sha256": valid["sha256"],
+		}}, "closed": 0}),
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := validateFreezeBundle(body, []string{canvasID})
+			require.Error(t, err)
+		})
+	}
+
+	// These exact decoded limits are independent of the 48 MiB transport cap.
+	tooLargeSnapshot := make([]byte, maxSnapshotBytes+1)
+	tooLargeDigest := sha256.Sum256(tooLargeSnapshot)
+	_, err := validateFreezeBundle(marshal(map[string]any{"snapshots": []any{map[string]any{
+		"canvasId": canvasID, "stateBase64": base64.StdEncoding.EncodeToString(tooLargeSnapshot), "sha256": hex.EncodeToString(tooLargeDigest[:]),
+	}}, "closed": 0}), []string{canvasID})
+	require.Error(t, err)
+}
+
+func TestCanvasControlClient_TerminalAcknowledgementsAreExactAndNoSecretLeaks(t *testing.T) {
+	secret := strings.Repeat("d", 64)
+	for _, tc := range []struct {
+		name, path string
+		status     int
+		body       string
+	}{
+		{"complete wrong field", "/internal/canvas-sessions/complete", http.StatusOK, `{"unfrozen":true}`},
+		{"unfreeze wrong field", "/internal/canvas-sessions/unfreeze", http.StatusOK, `{"released":true}`},
+		{"complete trailing", "/internal/canvas-sessions/complete", http.StatusOK, `{"released":true}{}`},
+		{"complete non-200", "/internal/canvas-sessions/complete", http.StatusConflict, `{"released":true}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				require.Equal(t, "Bearer "+secret, r.Header.Get("Authorization"))
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer server.Close()
+			client, err := NewCanvasControlClient(CanvasControlConfig{URL: server.URL, Secret: secret, HTTPClient: server.Client()})
+			require.NoError(t, err)
+			// Terminal cleanup is deliberately best effort.  This test keeps its
+			// strict acknowledgement parser covered without making durable end
+			// success depend on listener availability.
+			client.terminal(context.Background(), tc.path, "22222222-2222-4222-8222-222222222222", "33333333-3333-4333-8333-333333333333")
+			require.False(t, validTerminalAck(tc.path, tc.status, []byte(tc.body)))
+		})
+	}
+}

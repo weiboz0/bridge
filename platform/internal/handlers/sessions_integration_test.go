@@ -24,11 +24,15 @@ import (
 type fakeCanvasControl struct {
 	bundle                     realtime.FreezeBundle
 	err                        error
+	onFreeze                   func(realtime.FreezeRequest)
 	freeze, complete, unfreeze int
 }
 
-func (f *fakeCanvasControl) Freeze(_ context.Context, _ realtime.FreezeRequest) (realtime.FreezeBundle, error) {
+func (f *fakeCanvasControl) Freeze(_ context.Context, request realtime.FreezeRequest) (realtime.FreezeBundle, error) {
 	f.freeze++
+	if f.onFreeze != nil {
+		f.onFreeze(request)
+	}
 	return f.bundle, f.err
 }
 func (f *fakeCanvasControl) Complete(context.Context, string, string) { f.complete++ }
@@ -994,6 +998,28 @@ func TestEndSession_ConfirmedSubsetPersistsSnapshotsWithoutWarning(t *testing.T)
 	var state string
 	require.NoError(t, fx.db.QueryRowContext(context.Background(), `SELECT yjs_state FROM session_canvases WHERE id=$1`, canvas.ID).Scan(&state))
 	require.Equal(t, "ZmluYWw=", state)
+}
+
+func TestEndSession_ConflictingLiveFreezeAfterCaptureReturnsStable409(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	// A control response can race a replacement operation after this request
+	// has already acquired its lease.  The stale token must become the stable
+	// retryable conflict, not a generic database 500 that hides the live owner.
+	fx.h.CanvasControl = &fakeCanvasControl{onFreeze: func(request realtime.FreezeRequest) {
+		_, err := fx.db.ExecContext(context.Background(), `
+			UPDATE sessions
+			SET canvas_freeze_token = '11111111-1111-4111-8111-111111111111',
+			    canvas_freeze_until = clock_timestamp() + interval '15 seconds'
+			WHERE id = $1`, request.SessionID)
+		require.NoError(t, err)
+	}}
+	w := fx.doRequest(t, http.MethodPost, "/api/sessions/"+fx.sessionID+"/end", nil, fx.claims(fx.teacher, false))
+	require.Equal(t, http.StatusConflict, w.Code, w.Body.String())
+	require.JSONEq(t, `{"error":"Session end in progress","code":"session_end_in_progress"}`, w.Body.String())
+
+	var status string
+	require.NoError(t, fx.db.QueryRowContext(context.Background(), `SELECT status FROM sessions WHERE id = $1`, fx.sessionID).Scan(&status))
+	require.Equal(t, "live", status, "a stale control token must not end a different live operation")
 }
 
 func TestSessionHandler_EndSession_NonTeacher403(t *testing.T) {
