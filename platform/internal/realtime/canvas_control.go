@@ -18,6 +18,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -105,6 +106,12 @@ func validateControlURL(raw string) (*url.URL, error) {
 	}
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return nil, errors.New("canvas control URL must use HTTP or HTTPS")
+	}
+	if port := u.Port(); port != "" {
+		parsedPort, parseErr := strconv.Atoi(port)
+		if parseErr != nil || parsedPort < 1 || parsedPort > 65535 {
+			return nil, errors.New("canvas control URL port must be between 1 and 65535")
+		}
 	}
 	if u.Scheme == "http" {
 		ip := net.ParseIP(u.Hostname())

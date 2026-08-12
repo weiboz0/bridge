@@ -41,9 +41,13 @@ func newRealtimeHandlerForFixture(fx *sessionPageFixture) *RealtimeHandler {
 	}
 }
 
-func callMintToken(t *testing.T, h *RealtimeHandler, docName string, claims *auth.Claims) (int, mintResponse) {
+func callMintToken(t *testing.T, h *RealtimeHandler, docName string, claims *auth.Claims, sessionIDs ...string) (int, mintResponse) {
 	t.Helper()
-	body, _ := json.Marshal(map[string]string{"documentName": docName})
+	payload := map[string]string{"documentName": docName}
+	if len(sessionIDs) == 1 {
+		payload["sessionId"] = sessionIDs[0]
+	}
+	body, _ := json.Marshal(payload)
 	req := httptest.NewRequest(http.MethodPost, "/api/realtime/token", bytes.NewReader(body))
 	req = withClaims(req, claims)
 	w := httptest.NewRecorder()
@@ -80,7 +84,7 @@ func TestCanvasMint_OwnerWrite(t *testing.T) {
 	canvas, err := fx.h.Canvases.CreateCanvas(context.Background(), store.CreateCanvasInput{SessionID: fx.session.ID, OwnerID: fx.student.ID, Title: "Owner board", Visibility: "private"})
 	require.NoError(t, err)
 	h := newRealtimeHandlerForCanvasFixture(fx)
-	code, response := callMintToken(t, h, "canvas:"+canvas.ID, fx.claims(fx.student))
+	code, response := callMintToken(t, h, "canvas:"+canvas.ID, fx.claims(fx.student), fx.session.ID)
 	require.Equal(t, http.StatusOK, code)
 	claims, err := auth.VerifyRealtimeToken(rtSecret, response.Token)
 	require.NoError(t, err)
@@ -162,7 +166,7 @@ func TestCanvasMint_HostReadWhenHostVisible(t *testing.T) {
 	canvas, err := fx.h.Canvases.CreateCanvas(context.Background(), store.CreateCanvasInput{SessionID: fx.session.ID, OwnerID: fx.student.ID, Title: "Host board", Visibility: "host"})
 	require.NoError(t, err)
 	h := newRealtimeHandlerForCanvasFixture(fx)
-	code, response := callMintToken(t, h, "canvas:"+canvas.ID, fx.claims(fx.teacher))
+	code, response := callMintToken(t, h, "canvas:"+canvas.ID, fx.claims(fx.teacher), fx.session.ID)
 	require.Equal(t, http.StatusOK, code)
 	claims, err := auth.VerifyRealtimeToken(rtSecret, response.Token)
 	require.NoError(t, err)
@@ -199,7 +203,7 @@ func TestCanvasMintMatrix(t *testing.T) {
 	h := newRealtimeHandlerForCanvasFixture(fx)
 	mint := func(t *testing.T, canvas *store.Canvas, user *store.RegisteredUser, want int, readOnly bool) {
 		t.Helper()
-		code, response := callMintToken(t, h, "canvas:"+canvas.ID, fx.claims(user))
+		code, response := callMintToken(t, h, "canvas:"+canvas.ID, fx.claims(user), fx.session.ID)
 		require.Equal(t, want, code)
 		if want == http.StatusOK {
 			claims, err := auth.VerifyRealtimeToken(rtSecret, response.Token)
@@ -252,7 +256,7 @@ func TestCanvasMint_SessionVisibleClassBoundDeniesOutsider(t *testing.T) {
 	require.NoError(t, err)
 	canvas, err := fx.h.Canvases.CreateCanvas(ctx, store.CreateCanvasInput{SessionID: fx.session.ID, OwnerID: fx.student.ID, Title: "Class board", Visibility: "session"})
 	require.NoError(t, err)
-	code, _ := callMintToken(t, newRealtimeHandlerForCanvasFixture(fx), "canvas:"+canvas.ID, fx.claims(fx.outsider))
+	code, _ := callMintToken(t, newRealtimeHandlerForCanvasFixture(fx), "canvas:"+canvas.ID, fx.claims(fx.outsider), fx.session.ID)
 	require.Equal(t, http.StatusForbidden, code)
 }
 
@@ -263,7 +267,7 @@ func TestCanvasMint_OtherSessionMemberDenied(t *testing.T) {
 	t.Cleanup(func() { _, _ = fx.db.ExecContext(context.Background(), "DELETE FROM sessions WHERE id = $1", other.ID) })
 	canvas, err := fx.h.Canvases.CreateCanvas(context.Background(), store.CreateCanvasInput{SessionID: other.ID, OwnerID: fx.teacher.ID, Title: "Other board", Visibility: "participants"})
 	require.NoError(t, err)
-	code, _ := callMintToken(t, newRealtimeHandlerForCanvasFixture(fx), "canvas:"+canvas.ID, fx.claims(fx.student))
+	code, _ := callMintToken(t, newRealtimeHandlerForCanvasFixture(fx), "canvas:"+canvas.ID, fx.claims(fx.student), other.ID)
 	require.Equal(t, http.StatusForbidden, code)
 }
 
@@ -272,13 +276,13 @@ func TestInternalAuth_CanvasReturnsCurrentReadOnly(t *testing.T) {
 	canvas, err := fx.h.Canvases.CreateCanvas(context.Background(), store.CreateCanvasInput{SessionID: fx.session.ID, OwnerID: fx.student.ID, Title: "Board", Visibility: "host"})
 	require.NoError(t, err)
 	h := newRealtimeHandlerForCanvasFixture(fx)
-	code, response := callInternalAuth(t, h, rtSecret, "canvas:"+canvas.ID, fx.teacher.ID)
+	code, response := callInternalAuth(t, h, rtSecret, "canvas:"+canvas.ID, fx.teacher.ID, fx.session.ID)
 	require.Equal(t, http.StatusOK, code)
 	require.True(t, response.Allowed)
 	require.True(t, response.ReadOnly)
 	_, err = fx.h.Sessions.EndSession(context.Background(), fx.session.ID)
 	require.NoError(t, err)
-	code, response = callInternalAuth(t, h, rtSecret, "canvas:"+canvas.ID, fx.student.ID)
+	code, response = callInternalAuth(t, h, rtSecret, "canvas:"+canvas.ID, fx.student.ID, fx.session.ID)
 	require.Equal(t, http.StatusOK, code)
 	require.True(t, response.Allowed)
 	require.True(t, response.ReadOnly)
@@ -295,11 +299,11 @@ func TestCanvasDocumentIDValidation_MintAndInternalAuth(t *testing.T) {
 		{"missing", "11111111-1111-4111-8111-111111111111", http.StatusNotFound},
 	} {
 		t.Run(tc.name+" mint", func(t *testing.T) {
-			code, _ := callMintToken(t, h, "canvas:"+tc.id, fx.claims(fx.student))
+			code, _ := callMintToken(t, h, "canvas:"+tc.id, fx.claims(fx.student), fx.session.ID)
 			require.Equal(t, tc.want, code)
 		})
 		t.Run(tc.name+" internal auth", func(t *testing.T) {
-			code, _ := callInternalAuth(t, h, rtSecret, "canvas:"+tc.id, fx.student.ID)
+			code, _ := callInternalAuth(t, h, rtSecret, "canvas:"+tc.id, fx.student.ID, fx.session.ID)
 			require.Equal(t, tc.want, code)
 		})
 	}
@@ -338,7 +342,7 @@ func TestInternalAuth_CanvasBranchesAndExistingScopeReadOnly(t *testing.T) {
 		{"public session outsider", "canvas:" + sessionCanvas.ID, fx.outsider, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			code, response := callInternalAuth(t, h, rtSecret, tc.doc, tc.user.ID)
+			code, response := callInternalAuth(t, h, rtSecret, tc.doc, tc.user.ID, fx.session.ID)
 			require.Equal(t, http.StatusOK, code)
 			require.Equal(t, tc.want, response.Allowed)
 			if tc.want {
@@ -351,7 +355,7 @@ func TestInternalAuth_CanvasBranchesAndExistingScopeReadOnly(t *testing.T) {
 	t.Cleanup(func() { _, _ = fx.db.ExecContext(context.Background(), "DELETE FROM sessions WHERE id = $1", other.ID) })
 	otherCanvas, err := fx.h.Canvases.CreateCanvas(context.Background(), store.CreateCanvasInput{SessionID: other.ID, OwnerID: fx.teacher.ID, Title: "Other", Visibility: "participants"})
 	require.NoError(t, err)
-	code, response = callInternalAuth(t, h, rtSecret, "canvas:"+otherCanvas.ID, fx.student.ID)
+	code, response = callInternalAuth(t, h, rtSecret, "canvas:"+otherCanvas.ID, fx.student.ID, other.ID)
 	require.Equal(t, http.StatusOK, code)
 	require.False(t, response.Allowed)
 }
@@ -900,9 +904,13 @@ func TestMintToken_UnitDoc_OrgTeacherOK_StudentDenied(t *testing.T) {
 
 // --- internal auth endpoint --------------------------------------------------
 
-func callInternalAuth(t *testing.T, h *RealtimeHandler, secretHeader, docName, sub string) (int, internalAuthResponse) {
+func callInternalAuth(t *testing.T, h *RealtimeHandler, secretHeader, docName, sub string, sessionIDs ...string) (int, internalAuthResponse) {
 	t.Helper()
-	body, _ := json.Marshal(map[string]string{"documentName": docName, "sub": sub})
+	payload := map[string]string{"documentName": docName, "sub": sub}
+	if len(sessionIDs) == 1 {
+		payload["sessionId"] = sessionIDs[0]
+	}
+	body, _ := json.Marshal(payload)
 	req := httptest.NewRequest(http.MethodPost, "/api/internal/realtime/auth", bytes.NewReader(body))
 	if secretHeader != "" {
 		req.Header.Set("Authorization", "Bearer "+secretHeader)
@@ -1150,7 +1158,7 @@ func TestRealtimeAuthLifecycle_ActiveFreezeReturnsStableRetryableCode(t *testing
 	_, err = fx.db.ExecContext(context.Background(), `UPDATE sessions SET canvas_freeze_token = '11111111-1111-4111-8111-111111111111', canvas_freeze_until = clock_timestamp() + interval '15 seconds' WHERE id = $1`, fx.session.ID)
 	require.NoError(t, err)
 
-	body, err := json.Marshal(map[string]string{"documentName": "canvas:" + canvas.ID, "sub": fx.student.ID})
+	body, err := json.Marshal(map[string]string{"documentName": "canvas:" + canvas.ID, "sub": fx.student.ID, "sessionId": fx.session.ID})
 	require.NoError(t, err)
 	req := httptest.NewRequest(http.MethodPost, "/api/internal/realtime/auth", bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+rtSecret)
@@ -1170,6 +1178,6 @@ func TestRealtimeAuthLifecycle_ActiveFreezeIsRetryableNotPermanentReadOnly(t *te
 	_, err = fx.db.ExecContext(context.Background(), `UPDATE sessions SET canvas_freeze_token = '11111111-1111-4111-8111-111111111111', canvas_freeze_until = clock_timestamp() + interval '15 seconds' WHERE id = $1`, fx.session.ID)
 	require.NoError(t, err)
 
-	code, _ := callInternalAuth(t, newRealtimeHandlerForCanvasFixture(fx), rtSecret, "canvas:"+canvas.ID, fx.student.ID)
+	code, _ := callInternalAuth(t, newRealtimeHandlerForCanvasFixture(fx), rtSecret, "canvas:"+canvas.ID, fx.student.ID, fx.session.ID)
 	require.Equal(t, http.StatusConflict, code, "a live freeze must report retryable session_freezing instead of minting a permanent reader decision")
 }

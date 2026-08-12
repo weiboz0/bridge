@@ -15,6 +15,7 @@ const SCENE_MAP_NAME = "excalidraw-scene";
 
 export interface UseWhiteboardOptions {
   canvasId: string | null;
+  sessionId: string;
   /** Archive surfaces and viewers must never publish an Excalidraw update. */
   readOnly: boolean;
 }
@@ -31,9 +32,9 @@ export interface UseWhiteboardResult {
  * The server JWT remains authoritative; `readOnly` additionally prevents the
  * client from creating local Yjs writes on archive and viewer surfaces.
  */
-export function useWhiteboard({ canvasId, readOnly }: UseWhiteboardOptions): UseWhiteboardResult {
+export function useWhiteboard({ canvasId, sessionId, readOnly }: UseWhiteboardOptions): UseWhiteboardResult {
   const documentName = canvasId ? `canvas:${canvasId}` : "noop";
-  const { token, unavailable: realtimeUnavailable } = useRealtimeToken(documentName);
+  const { token, unavailable: realtimeUnavailable } = useRealtimeToken(documentName, canvasId ? sessionId : undefined);
   const { yDoc, connected } = useYjsProvider({ documentName, token });
   const [scene, setScene] = useState<ExcalidrawScene | null>(null);
   const sceneMapRef = useRef<Y.Map<unknown> | null>(null);

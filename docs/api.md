@@ -101,7 +101,10 @@ It has no nested session wrapper.
 Session creation and scheduled-session start always return `replacedSessions`
 as an array, including `[]` when no live session was replaced. Each item has
 the replaced `id` and durable `whiteboardServerArchiveComplete` flag.
-Canvas documents are read through the existing realtime-token mint endpoint using the `canvas:{canvasId}` scope; a token's `readOnly` claim is enforced by Hocuspocus, not merely by the browser UI.
+Canvas documents are read through the existing realtime-token mint endpoint using the `canvas:{canvasId}` scope.
+Canvas mint requests additionally require the selected canvas's canonical `sessionId`; the server uses it only to acquire the lifecycle lock before authorization, then verifies the exact canvas/session binding.
+The signed canvas token carries the authoritative `sessionId` for locked admission and mutation rechecks, while its `readOnly` claim is enforced by Hocuspocus rather than merely by the browser UI.
+Non-canvas mint requests and tokens retain their existing shape.
 
 Live access follows the visibility ladder: owner at `private`; teacher at `host` and wider; a `present` participant at `participants` and wider; and any caller allowed into the live session at `session`.
 For a public class-less session, that last live level intentionally includes any authenticated caller.

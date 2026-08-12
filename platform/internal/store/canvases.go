@@ -26,6 +26,8 @@ var (
 	ErrCanvasFloorTooLoose       = errors.New("session canvas floor may not be session")
 	ErrCanvasFloorUnauthorized   = errors.New("only the session host may set the canvas floor")
 	ErrCanvasCreatorUnauthorized = errors.New("only the session teacher or present participant may create a canvas")
+	ErrCanvasSessionMismatch     = errors.New("canvas does not belong to supplied session")
+	ErrCanvasUserNotFound        = errors.New("canvas authorization user not found")
 )
 
 // Canvas is a persisted whiteboard owned by one user within a session.
@@ -56,34 +58,36 @@ type CanvasDocumentAccess struct {
 	SessionAccess            bool
 }
 
-func (s *CanvasStore) AuthorizeCanvasDocument(ctx context.Context, canvasID, userID string) (*CanvasDocumentAccess, error) {
+func (s *CanvasStore) AuthorizeCanvasDocument(ctx context.Context, canvasID, sessionID, userID string) (*CanvasDocumentAccess, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback()
 	var result CanvasDocumentAccess
-	var sessionID string
-	// This pre-lock lookup is deliberately identity-only: canvasId has no
-	// session component. Every authoritative canvas/session/access field is
-	// re-read only after the shared lifecycle lock is held below.
-	err = tx.QueryRowContext(ctx, `SELECT session_id FROM session_canvases WHERE id=$1`, canvasID).Scan(&sessionID)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
 	if err := lockSessionLifecycle(ctx, tx, sessionID, true); err != nil {
 		return nil, err
 	}
-	// Re-read after acquiring the lock; the first join only identifies its key.
+	var userExists bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM users WHERE id=$1)`, userID).Scan(&userExists); err != nil {
+		return nil, err
+	}
+	if !userExists {
+		return nil, ErrCanvasUserNotFound
+	}
 	var classID *string
 	var visibility string
 	var freezing bool
 	err = tx.QueryRowContext(ctx, `SELECT c.id,c.session_id,c.owner_id,c.title,c.visibility,c.created_at,c.updated_at,se.status,se.teacher_id,se.class_id,se.visibility,COALESCE(se.canvas_freeze_until>clock_timestamp(),false)
 		FROM session_canvases c JOIN sessions se ON se.id=c.session_id WHERE c.id=$1 AND c.session_id=$2`, canvasID, sessionID).Scan(&result.Canvas.ID, &result.Canvas.SessionID, &result.Canvas.OwnerID, &result.Canvas.Title, &result.Canvas.Visibility, &result.Canvas.CreatedAt, &result.Canvas.UpdatedAt, &result.SessionStatus, &result.TeacherID, &classID, &visibility, &freezing)
 	if err == sql.ErrNoRows {
+		var canvasExists bool
+		if existsErr := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM session_canvases WHERE id=$1)`, canvasID).Scan(&canvasExists); existsErr != nil {
+			return nil, existsErr
+		}
+		if canvasExists {
+			return nil, ErrCanvasSessionMismatch
+		}
 		return nil, nil
 	}
 	if err != nil {

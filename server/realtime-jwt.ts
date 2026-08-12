@@ -14,6 +14,7 @@ export interface RealtimeClaims {
   role: string;
   scope: string;
   readOnly: boolean;
+  sessionId?: string;
   iss: string;
   iat: number;
   exp: number;
@@ -95,6 +96,15 @@ export function verifyRealtimeJwt(token: string, secret: string): RealtimeClaims
   } else if (typeof claims.readOnly !== "boolean") {
     throw new JwtVerifyError("invalid readOnly");
   }
+  const canvasScope = claims.scope.startsWith("canvas:");
+  const canonicalUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+  if (canvasScope) {
+    if (typeof claims.sessionId !== "string" || !canonicalUuid.test(claims.sessionId)) {
+      throw new JwtVerifyError("invalid canvas sessionId");
+    }
+  } else if (claims.sessionId !== undefined) {
+    throw new JwtVerifyError("sessionId is only valid for canvas scopes");
+  }
   return claims as RealtimeClaims;
 }
 
@@ -108,15 +118,16 @@ export async function rechckDocumentAccess(args: {
   secret: string;
   documentName: string;
   sub: string;
+  sessionId?: string;
 }): Promise<{ allowed: boolean; reason?: string; readOnly?: boolean }> {
-  const { apiBaseUrl, secret, documentName, sub } = args;
+  const { apiBaseUrl, secret, documentName, sub, sessionId } = args;
   const res = await fetch(`${apiBaseUrl}/api/internal/realtime/auth`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${secret}`,
     },
-    body: JSON.stringify({ documentName, sub }),
+    body: JSON.stringify(sessionId === undefined ? { documentName, sub } : { documentName, sub, sessionId }),
   });
   if (res.status === 200) {
     const body = (await res.json()) as { allowed?: boolean; reason?: string; readOnly?: boolean };

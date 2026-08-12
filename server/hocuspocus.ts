@@ -94,6 +94,7 @@ interface AuthContext {
   role: string;
   attemptId?: string;
   canvasId?: string;
+  sessionId?: string;
   readOnly?: boolean;
 }
 
@@ -103,17 +104,21 @@ export function canvasAuthenticationContext({
   connectionConfig,
 }: {
   documentName: string;
-  claims: { sub: string; role: string; readOnly: boolean };
+  claims: { sub: string; role: string; readOnly: boolean; sessionId?: string };
   connectionConfig: { readOnly: boolean };
 }): AuthContext {
   if (!documentName.startsWith("canvas:")) {
     throw new Error("Canvas authentication requires a canvas document");
+  }
+  if (!claims.sessionId) {
+    throw new Error("Canvas authentication requires a verified sessionId");
   }
   connectionConfig.readOnly = claims.readOnly;
   return {
     userId: claims.sub,
     role: claims.role,
     canvasId: documentName.slice("canvas:".length),
+    sessionId: claims.sessionId,
     readOnly: claims.readOnly,
   };
 }
@@ -136,12 +141,14 @@ export async function guardCanvasMutationFrame({
   update,
   connection,
   userId,
+  sessionId,
   recheck = rechckDocumentAccess,
 }: {
   documentName: string;
   update: Uint8Array;
   connection: { readOnly: boolean };
   userId: string;
+  sessionId?: string;
   recheck?: DocumentRecheck;
 }): Promise<void> {
   if (!documentName.startsWith("canvas:") || connection.readOnly || !isYjsMutationFrame(update)) {
@@ -150,11 +157,15 @@ export async function guardCanvasMutationFrame({
   if (!userId) {
     throw new Error("Canvas mutation is missing authenticated user context");
   }
+  if (!sessionId) {
+    throw new Error("Canvas mutation is missing authenticated session context");
+  }
   const decision = await recheck({
     apiBaseUrl: GO_INTERNAL_API_URL,
     secret: TOKEN_SECRET,
     documentName,
     sub: userId,
+    sessionId,
   });
   if (!decision.allowed) {
     throw new Error(`Access denied (mutation recheck): ${decision.reason ?? "unauthorized"}`);
@@ -259,6 +270,7 @@ export const hocuspocusHooks = {
         secret: TOKEN_SECRET,
         documentName,
         sub: context.userId,
+        sessionId: documentName.startsWith("canvas:") ? context.sessionId : undefined,
       });
       if (!decision.allowed) {
         throw new Error(`Access denied (recheck): ${decision.reason ?? "unauthorized"}`);
@@ -300,6 +312,7 @@ export const hocuspocusHooks = {
       connection,
       update,
       userId: (context as AuthContext | undefined)?.userId ?? "",
+      sessionId: (context as AuthContext | undefined)?.sessionId,
     });
   },
 

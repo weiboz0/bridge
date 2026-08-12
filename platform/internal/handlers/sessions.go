@@ -589,7 +589,11 @@ func (h *SessionHandler) EndSession(w http.ResponseWriter, r *http.Request) {
 				durablyEnded = true
 				completeAfterCommit = true
 				durableEnd = confirmedEnd
-			} else if errors.Is(completeErr, store.ErrSessionSnapshotCountMismatch) || errors.Is(completeErr, store.ErrSessionEndInProgress) {
+			} else if errors.Is(completeErr, store.ErrSessionEndInProgress) {
+				h.cleanupFailedEnd(sessionID, prep.Token)
+				writeJSON(w, http.StatusConflict, map[string]string{"error": "Session end in progress", "code": "session_end_in_progress"})
+				return
+			} else if errors.Is(completeErr, store.ErrSessionSnapshotCountMismatch) {
 				// The confirmed transaction rolled back. A separate transaction may
 				// safely record the honest false/no-snapshot result.
 				degradedEnd, degradedErr := h.Sessions.CompleteSessionDegraded(r.Context(), sessionID, prep.Token)

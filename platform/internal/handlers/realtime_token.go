@@ -154,6 +154,7 @@ func (h *RealtimeHandler) Health(w http.ResponseWriter, r *http.Request) {
 // mintRequest is the body shape clients post to /api/realtime/token.
 type mintRequest struct {
 	DocumentName string `json:"documentName"`
+	SessionID    string `json:"sessionId,omitempty"`
 }
 
 // mintResponse is what we return to the client. `expiresAt` lets the
@@ -187,7 +188,7 @@ func (h *RealtimeHandler) MintToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	access, decision := h.authorizeDocumentResult(r.Context(), claims, body.DocumentName)
+	access, decision := h.authorizeDocumentResult(r.Context(), claims, body.DocumentName, body.SessionID)
 	if decision != nil {
 		if decision.Status == http.StatusConflict && decision.Message == "session_freezing" {
 			writeJSON(w, http.StatusConflict, map[string]string{"error": "Session end in progress", "code": "session_freezing"})
@@ -198,7 +199,13 @@ func (h *RealtimeHandler) MintToken(w http.ResponseWriter, r *http.Request) {
 	}
 
 	const ttl = 25 * time.Minute
-	token, err := auth.SignRealtimeTokenWithReadOnly(h.HocuspocusTokenSecret, claims.UserID, access.Role, body.DocumentName, access.ReadOnly, ttl)
+	var token string
+	var err error
+	if strings.HasPrefix(body.DocumentName, "canvas:") {
+		token, err = auth.SignRealtimeCanvasToken(h.HocuspocusTokenSecret, claims.UserID, access.Role, body.DocumentName, body.SessionID, access.ReadOnly, ttl)
+	} else {
+		token, err = auth.SignRealtimeTokenWithReadOnly(h.HocuspocusTokenSecret, claims.UserID, access.Role, body.DocumentName, access.ReadOnly, ttl)
+	}
 	if err != nil {
 		slog.Error("canvas authorization state query failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "Token sign failed")
@@ -214,6 +221,7 @@ func (h *RealtimeHandler) MintToken(w http.ResponseWriter, r *http.Request) {
 type internalAuthRequest struct {
 	DocumentName string `json:"documentName"`
 	Sub          string `json:"sub"` // claim from the verified JWT
+	SessionID    string `json:"sessionId,omitempty"`
 }
 
 // internalAuthResponse tells Hocuspocus whether to allow the
@@ -265,6 +273,11 @@ func (h *RealtimeHandler) InternalAuth(w http.ResponseWriter, r *http.Request) {
 	//   400 → malformed input (bad sub, bad documentName).
 	//   404 → user or resource doesn't exist.
 	//   500 → server-side failure (DB down, store misconfigured).
+	if strings.HasPrefix(body.DocumentName, "canvas:") {
+		access, decision := h.authorizeDocumentResult(r.Context(), &auth.Claims{UserID: body.Sub}, body.DocumentName, body.SessionID)
+		h.writeInternalAuthDecision(w, access, decision)
+		return
+	}
 	if h.Users == nil {
 		writeError(w, http.StatusInternalServerError, "Users store unavailable")
 		return
@@ -287,7 +300,11 @@ func (h *RealtimeHandler) InternalAuth(w http.ResponseWriter, r *http.Request) {
 		// is a session-level superpower; the internal recheck enforces
 		// the underlying user's actual permissions.
 	}
-	access, decision := h.authorizeDocumentResult(r.Context(), rehydratedClaims, body.DocumentName)
+	access, decision := h.authorizeDocumentResult(r.Context(), rehydratedClaims, body.DocumentName, "")
+	h.writeInternalAuthDecision(w, access, decision)
+}
+
+func (h *RealtimeHandler) writeInternalAuthDecision(w http.ResponseWriter, access documentAuthorization, decision *authDecision) {
 	if decision != nil {
 		if decision.Status == http.StatusConflict && decision.Message == "session_freezing" {
 			writeJSON(w, http.StatusConflict, map[string]string{"error": "Session end in progress", "code": "session_freezing"})
@@ -298,7 +315,7 @@ func (h *RealtimeHandler) InternalAuth(w http.ResponseWriter, r *http.Request) {
 		// attempt, 500 DB error) surfaces as a real HTTP error so
 		// Hocuspocus retry logic and ops alerting can tell the
 		// difference between "deny" and "broken".
-		if decision.Status == http.StatusForbidden {
+		if decision.Status == http.StatusForbidden && decision.Message != "canvas_session_mismatch" {
 			writeJSON(w, http.StatusOK, internalAuthResponse{Allowed: false, Reason: decision.Message})
 			return
 		}
@@ -364,10 +381,10 @@ type documentAuthorization struct {
 
 // authorizeDocumentResult preserves all existing document decisions while
 // carrying the current connection write decision for canvas documents.
-func (h *RealtimeHandler) authorizeDocumentResult(ctx context.Context, claims *auth.Claims, docName string) (documentAuthorization, *authDecision) {
+func (h *RealtimeHandler) authorizeDocumentResult(ctx context.Context, claims *auth.Claims, docName, sessionID string) (documentAuthorization, *authDecision) {
 	parts := strings.Split(docName, ":")
 	if len(parts) == 2 && parts[0] == "canvas" {
-		return h.authorizeCanvasDoc(ctx, claims, parts[1])
+		return h.authorizeCanvasDoc(ctx, claims, parts[1], sessionID)
 	}
 	role, decision := h.authorizeDocument(ctx, claims, docName)
 	if decision != nil {
@@ -376,18 +393,28 @@ func (h *RealtimeHandler) authorizeDocumentResult(ctx context.Context, claims *a
 	return documentAuthorization{Role: role}, nil
 }
 
-func (h *RealtimeHandler) authorizeCanvasDoc(ctx context.Context, claims *auth.Claims, canvasID string) (documentAuthorization, *authDecision) {
+func (h *RealtimeHandler) authorizeCanvasDoc(ctx context.Context, claims *auth.Claims, canvasID, sessionID string) (documentAuthorization, *authDecision) {
 	if h.Canvases == nil || h.Sessions == nil {
 		return documentAuthorization{}, &authDecision{Status: http.StatusInternalServerError, Message: "Canvas store unavailable"}
 	}
 	if _, err := uuid.Parse(canvasID); err != nil {
 		return documentAuthorization{}, &authDecision{Status: http.StatusBadRequest, Message: "canvas doc-name must be canvas:{uuid}"}
 	}
-	state, err := h.Canvases.AuthorizeCanvasDocument(ctx, canvasID, claims.UserID)
+	parsedSessionID, err := uuid.Parse(sessionID)
+	if err != nil || parsedSessionID.String() != sessionID {
+		return documentAuthorization{}, &authDecision{Status: http.StatusBadRequest, Message: "sessionId must be a canonical UUID"}
+	}
+	state, err := h.Canvases.AuthorizeCanvasDocument(ctx, canvasID, sessionID, claims.UserID)
 	if errors.Is(err, store.ErrSessionEndInProgress) {
 		return documentAuthorization{}, &authDecision{Status: http.StatusConflict, Message: "session_freezing"}
 	}
 	if err != nil {
+		if errors.Is(err, store.ErrCanvasSessionMismatch) {
+			return documentAuthorization{}, &authDecision{Status: http.StatusForbidden, Message: "canvas_session_mismatch"}
+		}
+		if errors.Is(err, store.ErrCanvasUserNotFound) {
+			return documentAuthorization{}, &authDecision{Status: http.StatusNotFound, Message: "User not found"}
+		}
 		slog.Error("canvas authorization state query failed", "error", err)
 		return documentAuthorization{}, &authDecision{Status: http.StatusInternalServerError, Message: "Database error"}
 	}

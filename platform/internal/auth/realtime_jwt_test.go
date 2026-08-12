@@ -30,7 +30,7 @@ func TestSignAndVerifyRealtimeToken_RoundTrip(t *testing.T) {
 }
 
 func TestSignAndVerifyRealtimeToken_ReadOnlyClaim(t *testing.T) {
-	tok, err := SignRealtimeTokenWithReadOnly(realtimeTestSecret, "user-123", "teacher", "canvas:abc-123", true, 5*time.Minute)
+	tok, err := SignRealtimeCanvasToken(realtimeTestSecret, "user-123", "teacher", "canvas:22222222-2222-4222-8222-222222222222", "11111111-1111-4111-8111-111111111111", true, 5*time.Minute)
 	require.NoError(t, err)
 
 	claims, err := VerifyRealtimeToken(realtimeTestSecret, tok)

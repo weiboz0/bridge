@@ -99,6 +99,9 @@ This is why E2E requires a pinned `E2E_BASE_URL` (`docs/testing.md`).
 ## §10 — Session whiteboards are persisted, visibility-floored realtime documents
 
 Each whiteboard has a durable owner and a `canvas:{uuid}` Yjs document.
+Canvas realtime minting also carries a canonical session-ID hint.
+The hint grants no access: Go acquires that session's shared lifecycle lock first, then authorizes only the exact canvas/session pair and signs the authoritative binding into a canvas-only JWT claim used by every Hocuspocus recheck.
+Canvas tokens missing the binding fail closed; non-canvas JWTs omit it.
 Canvas visibility is ordered `private < host < participants < session`; PostgreSQL enum ordering is part of the persistence contract.
 The enum is append-only: adding a level between existing levels would change `<` comparisons, so a new level belongs at an end or the comparison must move to explicit ranks.
 

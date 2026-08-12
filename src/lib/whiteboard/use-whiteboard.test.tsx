@@ -62,6 +62,7 @@ describe("useWhiteboard", () => {
   it("does not enqueue a Yjs scene write from an archive read-only onChange", async () => {
     const { result } = renderHook(() => useWhiteboard({
       canvasId: "22222222-2222-4222-8222-222222222222",
+      sessionId: "11111111-1111-4111-8111-111111111111",
       readOnly: true,
     }));
 
@@ -74,6 +75,7 @@ describe("useWhiteboard", () => {
   it("writes a scene through the custom Yjs binding when the board is writable", async () => {
     const { result } = renderHook(() => useWhiteboard({
       canvasId: "22222222-2222-4222-8222-222222222222",
+      sessionId: "11111111-1111-4111-8111-111111111111",
       readOnly: false,
     }));
 

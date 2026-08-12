@@ -16,6 +16,7 @@ function signedClaims(claims: Record<string, unknown>): string {
     sub: "11111111-1111-4111-8111-111111111111",
     role: "user",
     scope: "canvas:22222222-2222-4222-8222-222222222222",
+    sessionId: "11111111-1111-4111-8111-111111111111",
     iss: "bridge-platform",
     iat: Math.floor(Date.now() / 1000),
     exp: Math.floor(Date.now() / 1000) + 60,
@@ -43,12 +44,12 @@ type CanvasHooks = {
     documentName: string;
     connection: { readOnly: boolean };
     update: Uint8Array;
-    context: { userId: string };
+    context: { userId: string; sessionId?: string };
   }): Promise<void>;
   onLoadDocument(input: {
     document: Y.Doc;
     documentName: string;
-    context: { userId: string };
+    context: { userId: string; sessionId?: string };
   }): Promise<Y.Doc>;
   onStoreDocument(input: {
     document: Y.Doc;
@@ -126,12 +127,12 @@ describe("hocuspocus canvas hook test seam", () => {
       return { allowed: true, readOnly: true };
     };
 
-    await guard({ documentName, update: awareness, connection, userId: "user-1", recheck });
+    await guard({ documentName, update: awareness, connection, userId: "user-1", sessionId: "11111111-1111-4111-8111-111111111111", recheck });
     expect(rechecks).toBe(0);
-    await guard({ documentName, update: mutation, connection, userId: "user-1", recheck });
+    await guard({ documentName, update: mutation, connection, userId: "user-1", sessionId: "11111111-1111-4111-8111-111111111111", recheck });
     expect(rechecks).toBe(1);
     expect(connection.readOnly).toBe(true);
-    await guard({ documentName, update: mutation, connection, userId: "user-1", recheck });
+    await guard({ documentName, update: mutation, connection, userId: "user-1", sessionId: "11111111-1111-4111-8111-111111111111", recheck });
     expect(rechecks).toBe(1);
   });
 
@@ -154,6 +155,7 @@ describe("hocuspocus canvas hook test seam", () => {
       update: mutation,
       connection: { readOnly: false },
       userId: "user-1",
+      sessionId: "11111111-1111-4111-8111-111111111111",
       recheck: async () => ({ allowed: false, readOnly: true, reason: "removed" }),
     })).rejects.toThrow(/removed/);
     await expect(guard({
@@ -161,6 +163,7 @@ describe("hocuspocus canvas hook test seam", () => {
       update: mutation,
       connection: { readOnly: false },
       userId: "user-1",
+      sessionId: "11111111-1111-4111-8111-111111111111",
       recheck: async () => { throw new Error("database unavailable"); },
     })).rejects.toThrow(/database unavailable/);
   });
@@ -225,6 +228,7 @@ describe("hocuspocus canvas hook test seam", () => {
         sub: "11111111-1111-4111-8111-111111111111",
         role: "user",
         readOnly: true,
+        sessionId: "11111111-1111-4111-8111-111111111111",
       },
       connectionConfig,
     }) as { canvasId?: string; readOnly?: boolean };
@@ -249,7 +253,7 @@ describe("hocuspocus canvas hook test seam", () => {
       return new Response(JSON.stringify({ allowed: true, readOnly: false }));
     };
     const hooks = registeredCanvasHooks(runtime);
-    await hooks.onLoadDocument({ document: new Y.Doc(), documentName, context: context as { userId: string } });
+    await expect(hooks.onLoadDocument({ document: new Y.Doc(), documentName, context: context as { userId: string } })).rejects.toThrow(/Canvas does not exist/);
     expect(calls.at(-1)).toMatchObject({ documentName, sub: "user", sessionId });
 
     const changed = new Y.Doc();
@@ -288,7 +292,7 @@ describe("hocuspocus canvas hook test seam", () => {
       .writeUpdate(Y.encodeStateAsUpdate(source))
       .toUint8Array();
     const config = { readOnly: false, isAuthenticated: false };
-    authenticate({ documentName, claims: { sub: "viewer", role: "user", readOnly: true }, connectionConfig: config });
+    authenticate({ documentName, claims: { sub: "viewer", role: "user", readOnly: true, sessionId: "11111111-1111-4111-8111-111111111111" }, connectionConfig: config });
 
     const target = new Document(documentName);
     let relayedUpdates = 0;
@@ -334,6 +338,7 @@ describe("hocuspocus canvas hook test seam", () => {
       update: frame,
       connection,
       userId: "owner",
+      sessionId: "11111111-1111-4111-8111-111111111111",
       recheck: async () => ({ allowed: true, readOnly: true }),
     });
     const incoming = new IncomingMessage(frame);
@@ -374,7 +379,7 @@ describe("hocuspocus canvas hook test seam", () => {
       documentName,
       connection,
       update: frame,
-      context: { userId: "owner" },
+      context: { userId: "owner", sessionId: "11111111-1111-4111-8111-111111111111" },
     });
     const incoming = new IncomingMessage(frame);
     incoming.readVarString();
@@ -419,7 +424,7 @@ describe("hocuspocus canvas hook test seam", () => {
       await expect(hooks.onLoadDocument({
         document: new Y.Doc(),
         documentName: `canvas:${randomUUID()}`,
-        context: { userId: "owner" },
+        context: { userId: "owner", sessionId: "11111111-1111-4111-8111-111111111111" },
       })).rejects.toThrow(/Canvas does not exist/);
     } finally {
       await db.end();
@@ -458,7 +463,7 @@ describe("hocuspocus canvas hook test seam", () => {
       await hooks.onLoadDocument({
         document: restored,
         documentName: `canvas:${canvasId}`,
-        context: { userId },
+        context: { userId, sessionId },
       });
       expect(restored.getMap("elements").toJSON()).toEqual({
         "owner-element": { type: "rectangle", owner: "owner" },

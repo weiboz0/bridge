@@ -370,6 +370,19 @@ That recheck is now defense in depth: the confirmed path gains the lifecycle lea
   The handler-focused command passed with both configured and live database names verified as `bridge_test`.
 - `[RED]` The preceding invalid-port and stale-live-token failures remain unresolved; this test-only update did not change production behavior.
 
+#### Phase 9 canvas lock-identity cutover and boundary fixes (2026-08-12)
+
+- `[RED]` The coordinated-cutover suite proved the old implementation accepted missing, malformed, and mismatched canvas session IDs; omitted the binding from signed JWTs; reused cached and in-flight tokens across different hints; omitted the hint at the real `useWhiteboard` producer; and lost it in Hocuspocus admission and mutation rechecks.
+- `[backend]` Canvas mint and internal auth now canonical-validate a supplied session ID, acquire its shared lifecycle lock as the canvas-authorization transaction's first database operation, verify user existence and the exact canvas/session binding under that lock, and sign the authoritative binding into a required canvas-only JWT claim.
+  Non-canvas request and JWT shapes remain unchanged, while legacy or malformed canvas claims fail closed in both Go and TypeScript.
+- `[realtime/frontend]` Hocuspocus retains the verified binding in its authentication context and includes it in every canvas admission and mutation recheck.
+  The browser token cache and in-flight map use the `(documentName, sessionId)` identity, `useRealtimeToken` derives an empty result synchronously when either identity component changes, and the real whiteboard producer supplies the selected canvas pair before mounting a provider.
+- `[backend]` Control origins now reject explicit ports outside `1..65535` for canonical IPv4 and IPv6 loopback.
+  A different live lease installed after capture returns stable `409 session_end_in_progress`; token-conditional cleanup cannot clear the foreign operation.
+- `[GREEN]` With configured and live database identity pinned to `bridge_test`, the focused Go auth/handler/store lock-identity suite passed, as did the exact invalid-port and stale-token regression tests.
+  The focused Vitest suites passed 43 tests across JWT/cache/hook files and four source-local whiteboard tests; the Hocuspocus canvas suite passed 19 tests; exact changed-file ESLint and `git diff --check` passed.
+- `[UNVERIFIED]` Root `tsc --noEmit` remains red only in the pre-existing Phase 9 `whiteboard-panel.test.tsx` RED contract (`teacherControls` and strict fetch mock signatures), which the pending frontend slice owns.
+
 ### Phase 10 — Hocuspocus fence, admission, capture, and control listener *(Terra backend; tests by Terra)*
 
 - Move the new lifecycle machinery into focused `server/canvas-lifecycle.ts`; `server/hocuspocus.ts` wires its hooks and starts a separate authenticated control listener.

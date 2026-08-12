@@ -67,7 +67,7 @@ export function WhiteboardPanel({ sessionId, archive = false }: WhiteboardPanelP
   const selected = canvases.find((canvas) => canvas.id === selectedId) ?? null;
   // Archive mode wins even for a live-session owner with a write-capable JWT.
   const readOnly = archive || !selected || selected.ownerId !== currentUserId;
-  const whiteboard = useWhiteboard({ canvasId: selected?.id ?? null, readOnly });
+  const whiteboard = useWhiteboard({ canvasId: selected?.id ?? null, sessionId: selected?.sessionId ?? sessionId, readOnly });
 
   const createCanvas = async () => {
     const normalizedTitle = title.trim();

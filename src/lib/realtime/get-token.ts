@@ -35,40 +35,41 @@ export class RealtimeMintError extends Error {
   }
 }
 
-export async function getRealtimeToken(documentName: string): Promise<string> {
+export async function getRealtimeToken(documentName: string, sessionId?: string): Promise<string> {
   if (!documentName || documentName === "noop") {
     throw new RealtimeMintError("documentName is required");
   }
 
+  const identityKey = sessionId === undefined ? documentName : `${documentName}\u0000${sessionId}`;
   const now = Date.now();
-  const cached = cache.get(documentName);
+  const cached = cache.get(identityKey);
   if (cached && cached.expiresAt - now > LEEWAY_MS) {
     return cached.token;
   }
 
-  const existing = inflight.get(documentName);
+  const existing = inflight.get(identityKey);
   if (existing) return existing;
 
-  const promise = mintFresh(documentName)
+  const promise = mintFresh(documentName, sessionId)
     .then((minted) => {
-      cache.set(documentName, minted);
+      cache.set(identityKey, minted);
       return minted.token;
     })
     .finally(() => {
-      inflight.delete(documentName);
+      inflight.delete(identityKey);
     });
 
-  inflight.set(documentName, promise);
+  inflight.set(identityKey, promise);
   return promise;
 }
 
-async function mintFresh(documentName: string): Promise<CachedToken> {
+async function mintFresh(documentName: string, sessionId?: string): Promise<CachedToken> {
   let res: Response;
   try {
     res = await fetch("/api/realtime/token", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ documentName }),
+      body: JSON.stringify(sessionId === undefined ? { documentName } : { documentName, sessionId }),
       credentials: "include",
     });
   } catch (err) {
