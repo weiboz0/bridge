@@ -9,7 +9,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "bunx --bun vitest run && bunx --bun vitest run --config src/lib/whiteboard/vitest.config.ts && bun test server/hocuspocus.canvas.test.ts",
+    "test": "bunx --bun vitest run && bunx --bun vitest run --config src/lib/whiteboard/vitest.config.ts && bun test server/hocuspocus.canvas.test.ts server/canvas-lifecycle.test.ts",
     "test:watch": "vitest",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",

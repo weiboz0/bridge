@@ -965,3 +965,15 @@ _Plan-wide report pending later phases._
 - GREEN: migration parsing normalizes `timestamptz` to PostgreSQL's information-schema name and records lifecycle type/nullability definitions bidirectionally.
   Mutation regressions prove both `uuid` to `text` and nullable to `NOT NULL` migration edits drift from sentinels; independent integration fixtures prove wrong type with correct nullability and correct type with wrong nullability each fail alone.
 - The malformed-pair lifecycle test now registers immediate session cleanup; the Phase 8 class-less lifecycle fixtures were re-audited for cleanup registration.
+
+### Phase 10 — lifecycle, control, admission, and provider RED contracts (2026-08-12; Terra; tests only)
+
+- RED: added `server/canvas-lifecycle.test.ts` before the production module exists.
+  Its 15 contracts currently fail with the intended missing-module error and bind signed advisory-key vectors; strict authenticated control operations; freeze/unfreeze/complete serialization; cached recovery; token-identity expiry; writer settlement; capture limits; eight-admission pre-allocation cap; rollback and cancellation; partial-overlap Yjs handoff; canvas-only parsed-frame limits; and generation/destroy/watchdog cleanup.
+- RED: added four installed-Hocuspocus 3.4.4 hook contracts to `server/hocuspocus.canvas.test.ts`.
+  The existing 19 tests pass; the four new contracts fail only because `createCanvasLifecycleHooks` and `scheduleCanvasJwtExpiry` are absent, covering per-admission current authorization, temporary-freeze retry semantics, JWT-expiry closure, and `MessageReceiver.apply` partial-overlap commit ordering.
+- RED: added four `tests/unit/use-yjs-provider.test.ts` contracts for resettable 20-second `session_freezing` recovery, the two-second fast/30-second jittered outage tail, terminal classification, and attempt/session compatibility.
+  After live validation of the pinned `bridge_test` target, all four fail because `canvasReconnectPolicy` is not yet exported.
+- `CHECK_TEST_DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test node scripts/check-test-database-url.mjs` passed before the database-touching Hocuspocus suite ran.
+  No migration, service, E2E, or live-provider command ran.
+- Updated the normal test script so its Hocuspocus leg will execute both `server/hocuspocus.canvas.test.ts` and `server/canvas-lifecycle.test.ts` once the Phase 10 production slice lands.

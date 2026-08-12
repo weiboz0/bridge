@@ -9,6 +9,7 @@ import * as Y from "yjs";
 import { JwtVerifyError, rechckDocumentAccess, verifyRealtimeJwt } from "./realtime-jwt";
 
 const secret = "canvas-test-secret";
+const phase10CanvasId = "22222222-2222-4222-8222-222222222222";
 
 function signedClaims(claims: Record<string, unknown>): string {
   const header = Buffer.from(JSON.stringify({ alg: "HS256", typ: "JWT" })).toString("base64url");
@@ -506,5 +507,70 @@ describe("canvas realtime JWT compatibility", () => {
   test("fails closed when allowed is not a boolean", async () => {
     globalThis.fetch = async () => new Response(JSON.stringify({ allowed: "true", readOnly: false }), { status: 200 });
     await expect(rechckDocumentAccess({ apiBaseUrl: "http://api.example", secret, documentName: "session:22222222-2222-4222-8222-222222222222:user:11111111-1111-4111-8111-111111111111", sub: "11111111-1111-4111-8111-111111111111" })).rejects.toThrow(JwtVerifyError);
+  });
+});
+
+describe("Phase 10 installed Hocuspocus hook RED contract", () => {
+  test("runs current authorization for every canvas admission, including an already-loaded document", async () => {
+    const runtime = await import("./hocuspocus") as Record<string, unknown>;
+    const install = runtime.createCanvasLifecycleHooks as ((input: Record<string, unknown>) => Record<string, (input: Record<string, unknown>) => Promise<unknown>>) | undefined;
+    expect(install).toBeTypeOf("function");
+    const calls: unknown[] = [];
+    const hooks = install!({ authorize: async (input: unknown) => { calls.push(input); return { allowed: true, readOnly: false }; }, lifecycle: {} });
+    await hooks.onAuthenticate({ documentName: `canvas:${randomUUID()}`, context: { userId: "writer", sessionId: randomUUID() }, connectionConfig: { readOnly: false } });
+    await hooks.onAuthenticate({ documentName: `canvas:${randomUUID()}`, context: { userId: "writer", sessionId: randomUUID() }, connectionConfig: { readOnly: false } });
+    expect(calls).toHaveLength(2);
+  });
+
+  test("turns only permanent ended/viewer admission decisions read-only and returns retryable session_freezing to an established writer", async () => {
+    const runtime = await import("./hocuspocus") as Record<string, unknown>;
+    const install = runtime.createCanvasLifecycleHooks as ((input: Record<string, unknown>) => Record<string, (input: Record<string, unknown>) => Promise<unknown>>) | undefined;
+    expect(install).toBeTypeOf("function");
+    const connection = { readOnly: false, close() {} };
+    const hooks = install!({ authorize: async () => ({ allowed: true, readOnly: false, code: "session_freezing" }), lifecycle: {} });
+    const changed = new Y.Doc();
+    changed.getMap("elements").set("fenced", "shape");
+    const frame = new OutgoingMessage(`canvas:${phase10CanvasId}`).createSyncMessage().writeUpdate(Y.encodeStateAsUpdate(changed)).toUint8Array();
+    await expect(hooks.beforeHandleMessage({ documentName: `canvas:${phase10CanvasId}`, connection, update: frame, context: { userId: "writer", sessionId: randomUUID() } })).rejects.toMatchObject({ code: "session_freezing", retryable: true });
+    expect(connection.readOnly).toBe(false);
+  });
+
+  test("closes writable and read-only canvas sockets at their verified JWT expiry and clears early-close timers", async () => {
+    const runtime = await import("./hocuspocus") as Record<string, unknown>;
+    const schedule = runtime.scheduleCanvasJwtExpiry as ((input: Record<string, unknown>) => { cancel(): void }) | undefined;
+    expect(schedule).toBeTypeOf("function");
+    let writableClosed = 0;
+    let readonlyClosed = 0;
+    const now = Date.now();
+    schedule!({ exp: Math.floor((now - 1) / 1000), now: () => now, connection: { close: () => writableClosed++ } });
+    const early = schedule!({ exp: Math.floor((now + 10_000) / 1000), now: () => now, connection: { readOnly: true, close: () => readonlyClosed++ } });
+    early.cancel();
+    await Bun.sleep(0);
+    expect(writableClosed).toBe(1);
+    expect(readonlyClosed).toBe(0);
+  });
+
+  test("commits the exact pending admission during Hocuspocus 3.4.4 MessageReceiver.apply, including partial overlap", async () => {
+    const runtime = await import("./hocuspocus") as Record<string, unknown>;
+    const install = runtime.createCanvasLifecycleHooks as ((input: Record<string, unknown>) => Record<string, (input: Record<string, unknown>) => Promise<unknown>>) | undefined;
+    expect(install).toBeTypeOf("function");
+    const documentName = `canvas:${phase10CanvasId}`;
+    const target = new Document(documentName);
+    const first = new Y.Doc();
+    first.getMap("elements").set("first", "a");
+    Y.applyUpdate(target, Y.encodeStateAsUpdate(first));
+    const second = new Y.Doc();
+    Y.applyUpdate(second, Y.encodeStateAsUpdate(first));
+    second.getMap("elements").set("second", "b");
+    const frame = new OutgoingMessage(documentName).createSyncMessage().writeUpdate(Y.encodeStateAsUpdate(second)).toUint8Array();
+    const lifecycleCalls: string[] = [];
+    const hooks = install!({ lifecycle: { beginAdmission: () => lifecycleCalls.push("reserve"), commitAdmission: () => lifecycleCalls.push("commit"), rollbackAdmission: () => lifecycleCalls.push("rollback") }, authorize: async () => ({ allowed: true, readOnly: false }) });
+    await hooks.beforeHandleMessage({ documentName, document: target, connection: { readOnly: false }, update: frame, context: { userId: "writer", sessionId: randomUUID() } });
+    const incoming = new IncomingMessage(frame);
+    incoming.readVarString();
+    incoming.writeVarString(documentName);
+    new MessageReceiver(incoming).apply(target, { readOnly: false, send() {}, callbacks: { beforeSync() {} } } as never);
+    expect(target.getMap("elements").toJSON()).toMatchObject({ first: "a", second: "b" });
+    expect(lifecycleCalls).toEqual(["reserve", "commit"]);
   });
 });
