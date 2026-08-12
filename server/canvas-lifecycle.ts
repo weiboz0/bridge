@@ -1,5 +1,7 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import * as Y from "yjs";
+import { IncomingMessage, MessageType } from "@hocuspocus/server";
+import { messageYjsSyncStep2, messageYjsUpdate } from "y-protocols/sync";
 
 /**
  * The public websocket still serves attempt/session documents, so this is a
@@ -40,6 +42,40 @@ export class CanvasLifecycleError extends Error {
     this.retryable = options.retryable ?? false;
     this.closeCode = options.closeCode;
   }
+}
+
+/** Decode the installed Hocuspocus document/sync envelope before enforcing the canvas-only limit. */
+export function decodeCanvasMutationUpdate({ documentName, frame }: { documentName: string; frame: Uint8Array }): Uint8Array {
+  if (!canvasDocumentName(documentName)) throw lifecycleError("not_canvas_mutation", "Frame is not a canvas mutation");
+  try {
+    const message = new IncomingMessage(frame);
+    const framedName = message.readVarString();
+    if (framedName !== documentName) throw lifecycleError("canvas_frame_document_mismatch", "Canvas frame document does not match hook document");
+    const type = message.readVarUint();
+    if (type !== MessageType.Sync && type !== MessageType.SyncReply) throw lifecycleError("not_canvas_mutation", "Frame is not a Yjs sync mutation");
+    const sync = message.readVarUint();
+    if (sync !== messageYjsSyncStep2 && sync !== messageYjsUpdate) throw lifecycleError("not_canvas_mutation", "Frame is not a Yjs update");
+    const update = message.readVarUint8Array();
+    if (update.byteLength > CANVAS_UPDATE_LIMIT) throw lifecycleError("canvas_update_too_large", "Canvas update exceeds 1 MiB");
+    return update;
+  } catch (error) {
+    if (error instanceof CanvasLifecycleError) throw error;
+    throw lifecycleError("invalid_canvas_frame", "Canvas mutation frame is malformed");
+  }
+}
+
+export function decodeCanvasAuthorizationResponse({ status, json }: { status: number; json: unknown }): AuthorizationDecision {
+  if (status === 409 && json !== null && typeof json === "object" && (json as { code?: unknown }).code === "session_freezing") {
+    return { allowed: false, readOnly: false, code: "session_freezing", reason: "Session whiteboards are temporarily freezing", retryable: true } as AuthorizationDecision & { retryable: boolean };
+  }
+  if (status === 409 && json !== null && typeof json === "object" && typeof (json as { code?: unknown }).code === "string") {
+    return { allowed: false, readOnly: true, code: (json as { code: string }).code };
+  }
+  if (json === null || typeof json !== "object" || typeof (json as { allowed?: unknown }).allowed !== "boolean" || typeof (json as { readOnly?: unknown }).readOnly !== "boolean") {
+    throw lifecycleError("invalid_authorization_response", "Canvas authorization response is invalid");
+  }
+  const body = json as { allowed: boolean; readOnly: boolean; code?: unknown; reason?: unknown };
+  return { allowed: body.allowed, readOnly: body.readOnly, code: typeof body.code === "string" ? body.code : undefined, reason: typeof body.reason === "string" ? body.reason : undefined };
 }
 
 function lifecycleError(code: string, message?: string, options?: ConstructorParameters<typeof CanvasLifecycleError>[2]) {
@@ -238,6 +274,7 @@ interface PendingAdmission {
   connection: unknown;
   release: () => void;
   update: Uint8Array;
+  controller: AbortController;
 }
 
 interface ManagedDocument {
@@ -249,8 +286,8 @@ interface ManagedDocument {
   generation: number;
   destroyed: boolean;
   unloading: boolean;
-  pending?: PendingAdmission;
-  admissionController?: AbortController;
+  pending: Map<unknown, PendingAdmission>;
+  admissionControllers: Set<AbortController>;
   cancellationReason?: string;
 }
 
@@ -262,6 +299,7 @@ export interface LeaseDecision {
 export interface AuthorizationDecision {
   allowed: boolean;
   readOnly: boolean;
+  retryable?: boolean;
   code?: string;
   reason?: string;
 }
@@ -279,6 +317,7 @@ export interface CanvasLifecycleOptions {
   authorizationDeadlineMs?: number;
   writerNoProgressMs?: number;
   writerDeadlineMs?: number;
+  limits?: { loadScratchBytes?: number; residentBytes?: number; sessionCaptureBytes?: number; captureReservationBytes?: number };
 }
 
 export interface AdmissionInput {
@@ -297,6 +336,11 @@ export class CanvasLifecycle {
   private readonly authorizationDeadlineMs: number;
   private readonly writerNoProgressMs: number;
   private readonly writerDeadlineMs: number;
+  private readonly loadScratchBytes: number;
+  private readonly residentLimit: number;
+  private readonly captureLimit: number;
+  private readonly captureReservation: number;
+  private readonly completedTokens = new Map<string, string>();
   private readonly operations = new Map<string, Operation>();
   private readonly serializers = new Map<string, Promise<void>>();
   private readonly managed = new Map<string, ManagedDocument>();
@@ -317,6 +361,10 @@ export class CanvasLifecycle {
     this.authorizationDeadlineMs = options.authorizationDeadlineMs ?? DEFAULT_AUTHORIZATION_DEADLINE_MS;
     this.writerNoProgressMs = options.writerNoProgressMs ?? 250;
     this.writerDeadlineMs = options.writerDeadlineMs ?? DEFAULT_FREEZE_BUDGET_MS;
+    this.loadScratchBytes = options.limits?.loadScratchBytes ?? 16 * 1024 * 1024;
+    this.residentLimit = options.limits?.residentBytes ?? RESIDENT_LEDGER_LIMIT;
+    this.captureLimit = options.limits?.sessionCaptureBytes ?? CAPTURE_LEDGER_LIMIT;
+    this.captureReservation = options.limits?.captureReservationBytes ?? CAPTURE_RESERVATION;
   }
 
   accounting() { return { residentBytes: this.residentBytes, captureBytes: this.captureBytes }; }
@@ -335,24 +383,18 @@ export class CanvasLifecycle {
       turnstileLocked: state.turnstile.isLocked,
       shadowMatchesAuthoritative: equalUpdates(Y.encodeStateAsUpdate(state.shadow), Y.encodeStateAsUpdate(state.document)),
       destroyed: state.destroyed,
+      generation: state.generation,
     };
   }
 
   freeze(request: FreezeControlRequest): Promise<FreezeResult> {
     const parsed = parseCanvasControlRequest("freeze", request) as FreezeControlRequest;
     const current = this.operations.get(parsed.sessionId);
+    if (!current && this.completedTokens.get(parsed.sessionId) === parsed.freezeToken) {
+      return Promise.reject(lifecycleError("operation_completed", "Canvas lifecycle operation was completed", { retryable: true }));
+    }
     if (current) {
       if (current.token !== parsed.freezeToken) throw lifecycleError("freeze_token_mismatch", "A different token owns this session", { status: 409, retryable: true });
-      // A zero-canvas validation deliberately allocates no capture cache.  A
-      // retry that supplies the later authoritative list may therefore fill
-      // that empty operation without opening a second token-owned barrier.
-      if (current.result?.snapshots.length === 0 && parsed.canvasIds.length > 0) {
-        this.captureBytes -= current.captureBytes;
-        current.captureBytes = 0;
-        current.result = undefined;
-        current.freezePromise = this.serialize(parsed.sessionId, async () => this.runFreeze(current, parsed));
-        void current.freezePromise.catch(() => undefined);
-      }
       return current.freezePromise;
     }
     const operation = this.newOperation(parsed.sessionId, parsed.freezeToken);
@@ -391,12 +433,15 @@ export class CanvasLifecycle {
 
   async sweepExpired(): Promise<void> {
     const expired = [...this.operations.values()].filter((entry) => entry.deadline <= this.now());
-    await Promise.all(expired.map((entry) => this.serialize(entry.sessionId, async () => {
+    await Promise.all(expired.map(async (entry) => {
       if (this.operations.get(entry.sessionId) !== entry || entry.deadline > this.now()) return;
+      // A validation can be paused inside the serializer and may settle only
+      // after this abort. Never queue cancellation behind that validation.
       entry.active = false;
       entry.controller.abort();
-      await this.cleanup(entry);
-    })));
+      await Promise.allSettled([entry.freezePromise]);
+      await this.serialize(entry.sessionId, async () => this.cleanup(entry));
+    }));
   }
 
   stream(input: {
@@ -450,10 +495,10 @@ export class CanvasLifecycle {
 
   commitAdmission({ documentName, connection }: { documentName: string; connection?: unknown }): void {
     const state = this.managed.get(documentName);
-    const pending = state?.pending;
-    if (!state || !pending || (connection !== undefined && pending.connection !== connection)) return;
-    state.pending = undefined;
-    state.admissionController = undefined;
+    const pending = state && connection !== undefined ? state.pending.get(connection) : undefined;
+    if (!state || !pending) return;
+    state.pending.delete(pending.connection);
+    state.admissionControllers.delete(pending.controller);
     this.replaceShadowFromAuthoritative(state);
     pending.release();
     this.finishAdmission(state);
@@ -461,10 +506,10 @@ export class CanvasLifecycle {
 
   rollbackAdmission({ documentName, connection }: { documentName: string; connection?: unknown }): void {
     const state = this.managed.get(documentName);
-    const pending = state?.pending;
-    if (!state || !pending || (connection !== undefined && pending.connection !== connection)) return;
-    state.pending = undefined;
-    state.admissionController = undefined;
+    const pending = state && connection !== undefined ? state.pending.get(connection) : undefined;
+    if (!state || !pending) return;
+    state.pending.delete(pending.connection);
+    state.admissionControllers.delete(pending.controller);
     this.replaceShadowFromAuthoritative(state);
     pending.release();
     this.finishAdmission(state);
@@ -474,24 +519,37 @@ export class CanvasLifecycle {
     const state = this.managed.get(documentName);
     if (!state) return;
     state.cancellationReason = reason;
-    state.admissionController?.abort();
-    if (state.pending) this.rollbackAdmission({ documentName, connection: state.pending.connection });
+    for (const controller of state.admissionControllers) controller.abort();
+    for (const pending of [...state.pending.values()]) this.rollbackAdmission({ documentName, connection: pending.connection });
   }
 
   async beginLoad({ documentName, document, persistedUpdate = new Uint8Array() }: { documentName: string; document: Y.Doc; persistedUpdate?: Uint8Array }): Promise<number> {
     if (canvasDocumentName(documentName) && persistedUpdate.byteLength > MAX_PERSISTED_UPDATE) {
       throw lifecycleError("persisted_canvas_too_large", "Persisted canvas update exceeds 4 MiB");
     }
+    if (persistedUpdate.byteLength > this.loadScratchBytes) {
+      throw lifecycleError("load_scratch_exhausted", "Canvas load scratch ledger is full", { retryable: true });
+    }
+    if (this.residentBytes + this.loadScratchBytes > this.residentLimit) {
+      throw lifecycleError("resident_ledger_exhausted", "Canvas resident ledger is full", { retryable: true });
+    }
+    this.residentBytes += this.loadScratchBytes;
     try {
       if (persistedUpdate.byteLength > 0) Y.applyUpdate(document, persistedUpdate);
     } catch (error) {
+      this.residentBytes -= this.loadScratchBytes;
       throw lifecycleError("invalid_persisted_canvas", error instanceof Error ? error.message : "Persisted canvas could not be applied");
     }
     const generation = ++this.generation;
     const old = this.managed.get(documentName);
     if (old) this.releaseDocument(documentName, old);
     this.documents.set(documentName, document);
-    const state = this.makeManagedDocument(document, generation);
+    let state: ManagedDocument;
+    try {
+      state = this.makeManagedDocument(document, generation);
+    } finally {
+      this.residentBytes -= this.loadScratchBytes;
+    }
     this.managed.set(documentName, state);
     // This watchdog is generation- and instance-owned. A later successful
     // load replaces the map entry, so an old next-turn cleanup cannot free it.
@@ -547,7 +605,7 @@ export class CanvasLifecycle {
       this.assertOperationActive(operation);
       operation.result = deepFreezeResult(result);
       operation.captureBytes = responseBytes(operation.result);
-      if (operation.captureBytes > MAX_RESPONSE_BYTES || this.captureBytes + operation.captureBytes > CAPTURE_LEDGER_LIMIT) {
+      if (operation.captureBytes > MAX_RESPONSE_BYTES || this.captureBytes + operation.captureBytes > this.captureLimit) {
         throw lifecycleError("capture_ledger_exhausted", "Canvas capture ledger is full", { status: 503, retryable: true });
       }
       this.captureBytes += operation.captureBytes;
@@ -566,12 +624,12 @@ export class CanvasLifecycle {
 
   private async capture(operation: Operation, request: FreezeControlRequest): Promise<FreezeResult> {
     if (request.canvasIds.length === 0) return { snapshots: [], closed: 0 };
-    if (this.captureBytes + CAPTURE_RESERVATION > CAPTURE_LEDGER_LIMIT) {
+    if (this.captureBytes + this.captureReservation > this.captureLimit) {
       throw lifecycleError("capture_ledger_exhausted", "Canvas capture ledger is full", { status: 503, retryable: true });
     }
     // Reserve before any encoder runs; the reservation is converted to the
     // actual immutable response accounting below.
-    this.captureBytes += CAPTURE_RESERVATION;
+    this.captureBytes += this.captureReservation;
     try {
       this.assertOperationActive(operation);
       let result: FreezeResult;
@@ -581,12 +639,34 @@ export class CanvasLifecycle {
         this.testCaptureCache.set(request.sessionId, result);
       } else {
         const snapshots: Snapshot[] = [];
+        const connections: Array<{ close?: () => void }> = [];
         let total = 0;
         for (const canvasId of request.canvasIds) {
           this.assertOperationActive(operation);
-          const document = this.documents.get(`canvas:${canvasId}`);
+          const documentName = `canvas:${canvasId}`;
+          const document = this.documents.get(documentName);
           if (!document) continue;
-          const update = Y.encodeStateAsUpdate(document);
+          const managed = this.documentState(documentName);
+          const releaseTurnstile = await managed.turnstile.acquire(operation.controller.signal);
+          const installed = document as Y.Doc & { saveMutex?: { acquire: () => Promise<() => void> }; connections?: Map<unknown, { connection?: { close?: () => void } }> };
+          // Hocuspocus owns this mutex; acquiring the same turnstile first
+          // prevents an admitted mutation from passing the fence while a
+          // snapshot is being encoded.
+          let releaseSave: (() => void) | undefined;
+          let update: Uint8Array;
+          try {
+            releaseSave = installed.saveMutex
+              ? await acquireOwnedMutex(installed.saveMutex, operation.controller.signal, Math.max(0, operation.deadline - this.now()))
+              : undefined;
+            this.assertOperationActive(operation);
+            update = Y.encodeStateAsUpdate(document);
+            for (const value of installed.connections?.values() ?? []) {
+              if (value.connection) connections.push(value.connection);
+            }
+          } finally {
+            releaseSave?.();
+            releaseTurnstile();
+          }
           if (update.byteLength > MAX_SNAPSHOT) throw lifecycleError("snapshot_too_large", "Canvas snapshot exceeds 8 MiB");
           total += update.byteLength;
           if (total > MAX_SNAPSHOT_TOTAL) throw lifecycleError("snapshot_aggregate_too_large", "Canvas snapshots exceed 32 MiB");
@@ -595,13 +675,22 @@ export class CanvasLifecycle {
             stateBase64: Buffer.from(update).toString("base64"),
             sha256: createHash("sha256").update(update).digest("hex"),
           });
+          // Give the event loop a chance to observe an expiry/fence change
+          // between documents; never close a socket until all captures pass.
+          await new Promise<void>((resolve) => setImmediate(resolve));
         }
-        result = { snapshots, closed: 0 };
+        this.assertOperationActive(operation);
+        let closed = 0;
+        for (const connection of connections) {
+          connection.close?.();
+          closed += 1;
+        }
+        result = { snapshots, closed };
       }
       validateFreezeResult(result, request.canvasIds);
       return result;
     } finally {
-      this.captureBytes -= CAPTURE_RESERVATION;
+      this.captureBytes -= this.captureReservation;
     }
   }
 
@@ -616,7 +705,7 @@ export class CanvasLifecycle {
     }
     state.admissions += 1;
     const controller = new AbortController();
-    state.admissionController = controller;
+    state.admissionControllers.add(controller);
     state.cancellationReason = undefined;
     let release: (() => void) | undefined;
     try {
@@ -645,16 +734,16 @@ export class CanvasLifecycle {
       if (encoded.byteLength > MAX_CURRENT_STATE) throw lifecycleError("canvas_state_too_large", "Canvas state exceeds 4 MiB");
       const candidateBytes = encoded.byteLength * 2;
       const projected = this.residentBytes - state.residentBytes + candidateBytes;
-      if (projected > RESIDENT_LEDGER_LIMIT) throw lifecycleError("resident_ledger_exhausted", "Canvas resident ledger is full", { retryable: true, closeCode: 1013 });
+      if (projected > this.residentLimit) throw lifecycleError("resident_ledger_exhausted", "Canvas resident ledger is full", { retryable: true, closeCode: 1013 });
       state.shadow.destroy();
       state.shadow = candidate;
       this.residentBytes = projected;
       state.residentBytes = candidateBytes;
-      state.pending = { connection: input.connection, release, update: input.update };
+      state.pending.set(input.connection, { connection: input.connection, release, update: input.update, controller });
       return state;
     } catch (error) {
       controller.abort();
-      if (state.admissionController === controller) state.admissionController = undefined;
+      state.admissionControllers.delete(controller);
       if (release) release();
       this.replaceShadowFromAuthoritative(state);
       this.finishAdmission(state);
@@ -682,8 +771,8 @@ export class CanvasLifecycle {
     const shadow = new Y.Doc();
     Y.applyUpdate(shadow, Y.encodeStateAsUpdate(document));
     const bytes = Y.encodeStateAsUpdate(document).byteLength * 2;
-    if (this.residentBytes + bytes > RESIDENT_LEDGER_LIMIT) throw lifecycleError("resident_ledger_exhausted", "Canvas resident ledger is full", { retryable: true });
-    const state: ManagedDocument = { document, shadow, turnstile: new Turnstile(), admissions: 0, residentBytes: bytes, generation, destroyed: false, unloading: false };
+    if (this.residentBytes + bytes > this.residentLimit) throw lifecycleError("resident_ledger_exhausted", "Canvas resident ledger is full", { retryable: true });
+    const state: ManagedDocument = { document, shadow, turnstile: new Turnstile(), admissions: 0, residentBytes: bytes, generation, destroyed: false, unloading: false, pending: new Map(), admissionControllers: new Set() };
     this.residentBytes += bytes;
     document.on("destroy", () => {
       const entry = [...this.managed.entries()].find(([, candidate]) => candidate === state);
@@ -705,10 +794,10 @@ export class CanvasLifecycle {
   private releaseDocument(documentName: string, state: ManagedDocument): void {
     if (state.destroyed) return;
     state.destroyed = true;
-    if (state.pending) {
-      state.pending.release();
-      state.pending = undefined;
-    }
+    for (const pending of state.pending.values()) pending.release();
+    state.pending.clear();
+    for (const controller of state.admissionControllers) controller.abort();
+    state.admissionControllers.clear();
     state.shadow.destroy();
     this.residentBytes -= state.residentBytes;
     this.documents.delete(documentName);
@@ -759,7 +848,10 @@ export class CanvasLifecycle {
     if (operation.readers !== 0) return;
     this.captureBytes -= operation.captureBytes;
     operation.captureBytes = 0;
-    if (this.operations.get(operation.sessionId) === operation) this.operations.delete(operation.sessionId);
+    if (this.operations.get(operation.sessionId) === operation) {
+      this.operations.delete(operation.sessionId);
+      if (operation.terminal === "complete") this.completedTokens.set(operation.sessionId, operation.token);
+    }
   }
 
   private serialize<T>(sessionId: string, task: () => Promise<T>): Promise<T> {
@@ -818,8 +910,8 @@ async function withTimeout<T>(promise: Promise<T>, controller: AbortController, 
       promise,
       new Promise<T>((_, reject) => {
         timer = setTimeout(() => {
-          controller.abort();
           reject(lifecycleError("authorization_timeout", "Canvas authorization timed out", { retryable: true }));
+          controller.abort();
         }, ms);
       }),
       new Promise<T>((_, reject) => {
@@ -830,6 +922,40 @@ async function withTimeout<T>(promise: Promise<T>, controller: AbortController, 
   } finally {
     if (timer) clearTimeout(timer);
     if (abort) controller.signal.removeEventListener("abort", abort);
+  }
+}
+
+/**
+ * Hocuspocus' mutex does not accept AbortSignal.  If its acquisition loses our
+ * lifecycle deadline, release a late grant immediately so it cannot strand a
+ * future capture behind an orphaned lock.
+ */
+async function acquireOwnedMutex(mutex: { acquire: () => Promise<() => void> }, signal: AbortSignal, ms: number): Promise<() => void> {
+  let relinquishLateGrant = false;
+  const acquired = mutex.acquire().then((release) => {
+    if (relinquishLateGrant) release();
+    return release;
+  });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let abort: (() => void) | undefined;
+  try {
+    const release = await Promise.race([
+      acquired,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(lifecycleError("freeze_deadline_expired", "Canvas capture deadline expired", { retryable: true })), ms);
+      }),
+      new Promise<never>((_, reject) => {
+        abort = () => reject(lifecycleError("operation_completed", "Canvas lifecycle operation was completed", { retryable: true }));
+        signal.addEventListener("abort", abort, { once: true });
+      }),
+    ]);
+    return release;
+  } finally {
+    // If the race leaves before mutex acquisition, the continuation above
+    // returns its eventual grant to the Hocuspocus mutex immediately.
+    if (timer || abort) relinquishLateGrant = true;
+    if (timer) clearTimeout(timer);
+    if (abort) signal.removeEventListener("abort", abort);
   }
 }
 

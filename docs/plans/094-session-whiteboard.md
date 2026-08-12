@@ -1012,3 +1012,10 @@ _Plan-wide report pending later phases._
 - `[RED]` Added actual unbound-node-listener request emission for `createCanvasControlListener` (freeze must stream its cached token entry), installed Hocuspocus disconnect/unload hook contracts, exact ledger pre-reservation boundary/rollback, and pending admission fallback identity coverage.
 - `[RED evidence]` After live `_test` URL validation, `bun test server/hocuspocus.canvas.test.ts` recorded 24 pass and 8 expected RED failures, including absent registry/disconnect/startup/stream hooks and the real listener currently calling `freeze` without incremental `stream`.
   No listener was bound, and no service, migration, E2E, non-test database, or live provider was started.
+
+### Phase 10 — lifecycle production remediation evidence (2026-08-12; Terra)
+
+- `[IMPLEMENTED]` The lifecycle now decodes the installed nested canvas update envelope at the exact 1 MiB boundary, preserves retryable Go `409 session_freezing`, aborts expiry outside its active serializer before cleanup, tracks each admission controller, reserves load/capture ledgers before allocation, and captures registered documents behind their admission turnstile and save mutex.
+- `[IMPLEMENTED]` The installed hooks validate the outbound control URL at startup, close canvas sockets at JWT expiry, bind listener startup transactionally, wire disconnect/unload admission cancellation, and use the actual `instance.documents` identity at after-load/before-unload boundaries.
+- `[IMPLEMENTED]` Canvas providers now use one close bridge, force-remint a canvas JWT before the installed CLOSE reauthentication/sync path, and keep attempt/session provider behavior unchanged.
+- `[GREEN evidence]` With `DATABASE_URL` and `TEST_DATABASE_URL` pinned to `postgresql://work@127.0.0.1:5432/bridge_test`: `bun test server/hocuspocus.canvas.test.ts server/canvas-lifecycle.test.ts` passed 56 tests / 170 assertions; `vitest run tests/unit/use-yjs-provider.test.ts` passed 7 tests; `bunx --bun tsc --noEmit`, scoped ESLint, and `git diff --check` passed.

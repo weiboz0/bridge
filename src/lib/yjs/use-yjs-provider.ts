@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect } from "react";
 import * as Y from "yjs";
 import { HocuspocusProvider } from "@hocuspocus/provider";
+import { IncomingMessage, MessageType } from "@hocuspocus/server";
 
 const CANVAS_FAST_RECOVERY_MS = 20_000;
 const CANVAS_FAST_DELAY_MAX_MS = 2_000;
@@ -48,7 +49,7 @@ export function canvasReconnectPolicy({
       compatibility: "legacy",
     };
   }
-  const code = String(event.code ?? event.reason ?? "transport_closed");
+  const code = String(event.reason ?? event.code ?? "transport_closed");
   const terminal = !believedLive || code === "jwt_refresh_failed" || code === "session_ended" || code === "canvas_jwt_expired";
   if (terminal) {
     return { retry: false, terminal: true, manualReload: false, delayMs: 0, fastRecoveryUntil: now, attempt: 0 };
@@ -72,10 +73,58 @@ export function canvasReconnectPolicy({
   return { retry: true, terminal: false, manualReload: false, delayMs: Math.max(CANVAS_FAST_DELAY_MAX_MS + 1, Math.floor(cap * jitter)), fastRecoveryUntil, attempt };
 }
 
+/** Single-close bridge shared by provider callbacks so CLOSE does not advance twice. */
+export function createCanvasProviderEventBridge({ documentName, now = () => Date.now() }: { documentName: string; now?: () => number }) {
+  let current: CanvasReconnectState | undefined;
+  let consumedClose = false;
+  const advance = (event: { code?: string | number; reason?: string }) => {
+    if (consumedClose) return current;
+    consumedClose = true;
+    current = canvasReconnectPolicy({ now: now(), event, previous: current, believedLive: true, documentName });
+    return current;
+  };
+  return {
+    onClose: advance,
+    onDisconnect: advance,
+    onConnect() { consumedClose = false; current = undefined; },
+    state: () => current,
+  };
+}
+
+/** Physical CLOSE recovery refreshes the token before reconnect; no write queue is created. */
+export function bindInstalledCanvasProvider({ provider, refreshToken, reconnect }: {
+  provider: HocuspocusProvider;
+  refreshToken: () => Promise<string>;
+  reconnect: () => void;
+}) {
+  const original = provider.onMessage.bind(provider);
+  let stopped = false;
+  provider.onMessage = ((event: MessageEvent) => {
+    if (stopped || !(event.data instanceof Uint8Array)) return original(event);
+    try {
+      const message = new IncomingMessage(event.data);
+      message.readVarString();
+      if (message.readVarUint() !== MessageType.CLOSE) return original(event);
+      const reason = message.readVarString();
+      if (reason !== "canvas_jwt_expired" && reason !== "session_freezing") return original(event);
+      original(event);
+      void refreshToken().then((token) => {
+        if (stopped) return;
+        provider.setConfiguration({ token });
+        void provider.sendToken();
+        provider.startSync();
+        reconnect();
+      }).catch(() => undefined);
+    } catch { original(event); }
+  }) as typeof provider.onMessage;
+  return () => { stopped = true; provider.onMessage = original; };
+}
+
 interface UseYjsProviderOptions {
   documentName: string;
   token: string;
   serverUrl?: string;
+  refreshToken?: () => Promise<string>;
 }
 
 interface UseYjsProviderReturn {
@@ -88,6 +137,7 @@ interface UseYjsProviderReturn {
 export function useYjsProvider({
   documentName,
   token,
+  refreshToken,
   serverUrl = process.env.NEXT_PUBLIC_HOCUSPOCUS_URL
     || (typeof window !== "undefined" ? `ws://${window.location.hostname}:4000` : "ws://127.0.0.1:4000"),
 }: UseYjsProviderOptions): UseYjsProviderReturn {
@@ -115,15 +165,11 @@ export function useYjsProvider({
     const yText = yDoc.getText("content");
 
     const canvas = documentName.startsWith("canvas:");
+    const eventBridge = canvas ? createCanvasProviderEventBridge({ documentName }) : undefined;
     const updateReconnect = (event: { code?: string | number; reason?: string }) => {
       if (!canvas) return;
-      const next = canvasReconnectPolicy({
-        now: Date.now(),
-        event,
-        previous: reconnectRef.current,
-        believedLive: true,
-        documentName,
-      });
+      const next = eventBridge?.onClose(event);
+      if (!next) return;
       reconnectRef.current = next;
       // Hocuspocus 3.4.4 retains one shared websocket provider. Updating its
       // retry config after each close preserves that provider's lifecycle and
@@ -146,6 +192,7 @@ export function useYjsProvider({
       onConnect: () => {
         console.log(`[yjs] Connected to ${documentName}`);
         setConnected(true);
+        eventBridge?.onConnect();
       },
       onDisconnect: () => {
         console.log(`[yjs] Disconnected from ${documentName}`);
@@ -158,6 +205,9 @@ export function useYjsProvider({
         updateReconnect({ code: "jwt_refresh_failed" });
       },
     });
+    const releaseInstalledRecovery = canvas && refreshToken
+      ? bindInstalledCanvasProvider({ provider, refreshToken, reconnect: () => { void provider.connect(); } })
+      : undefined;
 
     yDocRef.current = yDoc;
     yTextRef.current = yText;
@@ -166,13 +216,14 @@ export function useYjsProvider({
 
     return () => {
       provider.destroy();
+      releaseInstalledRecovery?.();
       reconnectRef.current = undefined;
       yDoc.destroy();
       yDocRef.current = null;
       yTextRef.current = null;
       providerRef.current = null;
     };
-  }, [shouldConnect, documentName, token, serverUrl]);
+  }, [shouldConnect, documentName, token, serverUrl, refreshToken]);
 
   return {
     yDoc: yDocRef.current,

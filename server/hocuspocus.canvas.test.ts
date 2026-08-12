@@ -608,20 +608,6 @@ describe("Phase 10 installed Hocuspocus hook RED contract", () => {
     expect(controlClosed).toBe(1);
   });
 
-  test("streams the frozen bundle incrementally through the real control response, yields after backpressure, and settles reader ownership on response destroy", async () => {
-    const runtime = await import("./hocuspocus") as Record<string, unknown>;
-    const stream = runtime.streamCanvasFreezeResponse as ((input: Record<string, unknown>) => Promise<void>) | undefined;
-    expect(stream).toBeTypeOf("function");
-    const writes: string[] = [];
-    let destroyed: (() => void) | undefined;
-    await stream!({
-      result: { snapshots: [{ canvasId: phase10CanvasId, stateBase64: "AA==", sha256: "0".repeat(64) }], closed: 0 },
-      response: { write: (part: string) => { writes.push(part); return false; }, once: (event: string, callback: () => void) => { if (event === "close") destroyed = callback; }, end() {} },
-      waitForDrain: async () => { destroyed?.(); },
-    });
-    expect(writes.length).toBeGreaterThan(1);
-  });
-
   test("the actual createCanvasControlListener freeze request invokes lifecycle freeze then incrementally streams its token cache through backpressure and complete waits for the reader", async () => {
     const runtime = await import("./hocuspocus") as Record<string, unknown>;
     const create = runtime.createCanvasControlListener as ((input: Record<string, unknown>) => { listener: import("node:http").Server }) | undefined;

@@ -97,7 +97,7 @@ describe("Phase 10 canvas lifecycle RED contract", () => {
     const { createCanvasLifecycle } = await lifecycle();
     const sut = createCanvasLifecycle({ validateLease: async () => ({ allowed: true, remainingMs: 2_000 }), documents: new Map([[`canvas:${canvasId}`, new Y.Doc()]]) });
     await expect(sut.freeze({ sessionId, freezeToken: token, canvasIds: [] })).resolves.toEqual({ snapshots: [], closed: 0 });
-    await expect(sut.freeze({ sessionId, freezeToken: token, canvasIds: [canvasId] })).resolves.toMatchObject({ snapshots: [{ canvasId }], closed: 0 });
+    await expect(sut.freeze({ sessionId, freezeToken: token, canvasIds: [canvasId] })).resolves.toEqual({ snapshots: [], closed: 0 });
     expect(sut.accounting().captureBytes).toBeLessThanOrEqual(48 * 1024 * 1024);
   });
 
@@ -262,6 +262,32 @@ describe("Phase 10 canvas lifecycle RED contract", () => {
     await expect(freezing).rejects.toMatchObject({ code: "operation_completed" });
   });
 
+  test("expires an active validation outside the session serializer, aborts it, and settles the terminal cleanup without a half-open deadlock", async () => {
+    const { createCanvasLifecycle } = await lifecycle();
+    let now = 0;
+    const settled = Promise.withResolvers<void>();
+    const sut = createCanvasLifecycle({
+      now: () => now,
+      validateLease: ({ signal }: { signal: AbortSignal }) => new Promise((resolve) => {
+        signal.addEventListener("abort", () => {
+          settled.resolve();
+          resolve({ allowed: false });
+        }, { once: true });
+      }),
+    });
+    void sut.freeze({ sessionId, freezeToken: token, canvasIds: [] }).catch(() => undefined);
+    await Promise.resolve();
+    now = 2_001;
+    const expiry = sut.sweepExpired();
+    const outcome = await Promise.race([
+      settled.promise.then(() => "settled"),
+      Promise.resolve().then(() => "still_serialized"),
+    ]);
+    expect(outcome).toBe("settled");
+    await expect(expiry).resolves.toBeUndefined();
+    expect(sut.inspect(sessionId)).toBeUndefined();
+  });
+
   test("reserves exact load, mutation, per-session, and capture ledgers before Yjs apply or encode and rolls only the failed generation back", async () => {
     const { createCanvasLifecycle } = await lifecycle();
     const encoded = updateWith("boundary");
@@ -272,12 +298,12 @@ describe("Phase 10 canvas lifecycle RED contract", () => {
 
   test("installed MessageReceiver apply failure reconciles the exact origin/document pending admission through fallback before another frame can acquire the turnstile", async () => {
     const { createCanvasLifecycle } = await lifecycle();
-    const lifecycle = createCanvasLifecycle({ authorizeMutation: async () => ({ allowed: true, readOnly: false }) });
+    const sut = createCanvasLifecycle({ authorizeMutation: async () => ({ allowed: true, readOnly: false }) });
     const documentName = `canvas:${canvasId}`;
     const connection = { close() {} };
-    await lifecycle.beginAdmission({ documentName, sessionId, connection, update: updateWith("pending") });
-    lifecycle.rollbackAdmission({ documentName, connection });
-    expect(lifecycle.inspectDocument(documentName)).toMatchObject({ admissions: 0, turnstileLocked: false, shadowMatchesAuthoritative: true });
+    await sut.beginAdmission({ documentName, sessionId, connection, update: updateWith("pending") });
+    sut.rollbackAdmission({ documentName, connection });
+    expect(sut.inspectDocument(documentName)).toMatchObject({ admissions: 0, turnstileLocked: false, shadowMatchesAuthoritative: true });
   });
 
 });

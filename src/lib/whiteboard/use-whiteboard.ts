@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as Y from "yjs";
+import { getRealtimeToken } from "@/lib/realtime/get-token";
 import { useRealtimeToken } from "@/lib/realtime/use-realtime-token";
 import { useYjsProvider } from "@/lib/yjs/use-yjs-provider";
 import {
@@ -35,7 +36,8 @@ export interface UseWhiteboardResult {
 export function useWhiteboard({ canvasId, sessionId, readOnly }: UseWhiteboardOptions): UseWhiteboardResult {
   const documentName = canvasId ? `canvas:${canvasId}` : "noop";
   const { token, unavailable: realtimeUnavailable } = useRealtimeToken(documentName, canvasId ? sessionId : undefined);
-  const { yDoc, connected } = useYjsProvider({ documentName, token });
+  const refreshToken = useCallback(() => getRealtimeToken(documentName, canvasId ? sessionId : undefined, { forceRefresh: true }), [documentName, canvasId, sessionId]);
+  const { yDoc, connected } = useYjsProvider({ documentName, token, refreshToken: canvasId ? refreshToken : undefined });
   const [scene, setScene] = useState<ExcalidrawScene | null>(null);
   const sceneMapRef = useRef<Y.Map<unknown> | null>(null);
   const localOriginRef = useRef(Symbol("whiteboard-local-change"));

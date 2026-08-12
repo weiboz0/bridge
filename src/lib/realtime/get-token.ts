@@ -35,13 +35,14 @@ export class RealtimeMintError extends Error {
   }
 }
 
-export async function getRealtimeToken(documentName: string, sessionId?: string): Promise<string> {
+export async function getRealtimeToken(documentName: string, sessionId?: string, options: { forceRefresh?: boolean } = {}): Promise<string> {
   if (!documentName || documentName === "noop") {
     throw new RealtimeMintError("documentName is required");
   }
 
   const identityKey = sessionId === undefined ? documentName : `${documentName}\u0000${sessionId}`;
   const now = Date.now();
+  if (options.forceRefresh) cache.delete(identityKey);
   const cached = cache.get(identityKey);
   if (cached && cached.expiresAt - now > LEEWAY_MS) {
     return cached.token;
