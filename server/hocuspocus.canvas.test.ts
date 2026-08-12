@@ -566,18 +566,57 @@ describe("Phase 10 installed Hocuspocus hook RED contract", () => {
     document.destroy();
   });
 
-  test("reclaims a failed installed createDocument before registry insertion and does not let a stale watchdog release its replacement generation", async () => {
+  test("the production load adapter rolls back a registered afterLoad claim-initialization failure before registry insertion", async () => {
     const runtime = await import("./hocuspocus") as Record<string, unknown>;
-    const hooks = runtime.createCanvasLoadLifecycleHooks as ((input: Record<string, unknown>) => Record<string, unknown>) | undefined;
-    expect(hooks).toBeTypeOf("function");
-    const lifecycle = hooks!({ failAfterLoad: true });
-    const instance = new Hocuspocus({ ...lifecycle });
+    const { createCanvasLifecycle } = await import("./canvas-lifecycle");
+    const createAdapter = runtime.createCanvasLoadLifecycleAdapter as ((input: Record<string, unknown>) => {
+      prepare(input: { documentName: string }): Promise<Y.Doc>;
+      afterLoadDocument(input: { documentName: string; document: Y.Doc; instance: Hocuspocus }): Promise<void>;
+    }) | undefined;
+    expect(createAdapter).toBeTypeOf("function");
+    const lifecycle = createCanvasLifecycle({ limits: { residentBytes: 16 * 1024 * 1024 } });
+    const adapter = createAdapter!({ lifecycle });
+    const instance = new Hocuspocus({
+      onLoadDocument: ({ documentName }) => adapter.prepare({ documentName }),
+      afterLoadDocument: (input) => adapter.afterLoadDocument(input as never),
+    });
     const documentName = `canvas:${phase10CanvasId}`;
     await expect(instance.createDocument(documentName, {}, "socket", { readOnly: false }, { userId: "writer", sessionId: randomUUID() })).rejects.toThrow();
     expect(instance.documents.has(documentName)).toBe(false);
+    expect(lifecycle.inspectDocument(documentName)).toBeUndefined();
+    expect(lifecycle.accounting()).toEqual({ residentBytes: 0, captureBytes: 0 });
+  });
+
+  test("the production load adapter rolls back a later afterLoad extension failure and its stale callbacks preserve the replacement generation", async () => {
+    const runtime = await import("./hocuspocus") as Record<string, unknown>;
+    const { createCanvasLifecycle } = await import("./canvas-lifecycle");
+    const createAdapter = runtime.createCanvasLoadLifecycleAdapter as ((input: Record<string, unknown>) => {
+      prepare(input: { documentName: string }): Promise<Y.Doc>;
+      afterLoadDocument(input: { documentName: string; document: Y.Doc; instance: Hocuspocus }): Promise<void>;
+      beforeUnloadDocument(input: { documentName: string; document: Y.Doc; instance: Hocuspocus }): Promise<void>;
+    }) | undefined;
+    const lifecycle = createCanvasLifecycle();
+    let failExtension = true;
+    const adapter = createAdapter!({ lifecycle, afterClaim: () => {
+      if (failExtension) {
+        failExtension = false;
+        throw new Error("later after-load extension failed");
+      }
+    } });
+    const instance = new Hocuspocus({
+      onLoadDocument: ({ documentName }) => adapter.prepare({ documentName }),
+      afterLoadDocument: (input) => adapter.afterLoadDocument(input as never),
+      beforeUnloadDocument: (input) => adapter.beforeUnloadDocument(input as never),
+    });
+    const documentName = `canvas:${phase10CanvasId}`;
+    await expect(instance.createDocument(documentName, {}, "socket", { readOnly: false }, { userId: "writer", sessionId: randomUUID() })).rejects.toThrow("later after-load extension failed");
+    expect(instance.documents.has(documentName)).toBe(false);
+    expect(lifecycle.inspectDocument(documentName)).toBeUndefined();
+    expect(lifecycle.accounting()).toEqual({ residentBytes: 0, captureBytes: 0 });
     const replacement = await instance.createDocument(documentName, {}, "socket-2", { readOnly: false }, { userId: "writer", sessionId: randomUUID() });
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(instance.documents.get(documentName)).toBe(replacement);
+    expect(lifecycle.inspectDocument(documentName)?.destroyed).toBe(false);
     await instance.unloadDocument(replacement);
   });
 
@@ -651,7 +690,36 @@ describe("Phase 10 installed Hocuspocus hook RED contract", () => {
     request.emit("aborted");
     response.emit("drain");
     await new Promise<void>((resolve) => setImmediate(resolve));
-    expect(calls).toEqual(["aborted", "released", "end"]);
+    expect(calls).toEqual(["aborted", "released", "destroy"]);
+  });
+
+  test("the actual control listener remembers an abort while freeze is still pending and never starts its stream", async () => {
+    const runtime = await import("./hocuspocus") as Record<string, unknown>;
+    const create = runtime.createCanvasControlListener as ((input: Record<string, unknown>) => { listener: import("node:http").Server }) | undefined;
+    const calls: string[] = [];
+    const frozen = Promise.withResolvers<{ snapshots: []; closed: number }>();
+    const lifecycle = {
+      freeze: async () => { calls.push("freeze"); return frozen.promise; },
+      stream: async () => { calls.push("stream"); },
+    };
+    const { listener } = create!({ secret: "a".repeat(32), lifecycle: lifecycle as never });
+    const request = Readable.from([JSON.stringify({ sessionId: randomUUID(), freezeToken: randomUUID(), canvasIds: [] })]) as Readable & { method?: string; url?: string; headers?: Record<string, string> };
+    request.method = "POST";
+    request.url = "/internal/canvas-sessions/freeze";
+    request.headers = { authorization: `Bearer ${"a".repeat(32)}` };
+    const response = Object.assign(new (await import("node:events")).EventEmitter(), {
+      writeHead() { calls.push("writeHead"); },
+      write() { calls.push("write"); return false; },
+      end() { calls.push("end"); },
+      destroy() { calls.push("destroy"); },
+    });
+    listener.emit("request", request, response);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(calls).toEqual(["freeze"]);
+    request.emit("aborted");
+    frozen.resolve({ snapshots: [], closed: 0 });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(calls).toEqual(["freeze", "destroy"]);
   });
 
   test("runs current authorization for every canvas admission, including an already-loaded document", async () => {
@@ -752,17 +820,25 @@ describe("Phase 10 installed Hocuspocus hook RED contract", () => {
     const sent: Uint8Array[] = [];
     const socket = { binaryType: "", readyState: 1, send: (frame: Uint8Array, callback: (error?: Error) => void) => { sent.push(frame); callback(); } };
     const connection = new Connection(socket as never, {} as never, document, "ninth", { userId: "writer", sessionId: randomUUID() });
+    const closeEvents: Array<{ code?: number; reason?: string } | undefined> = [];
+    connection.onClose((_document, event) => closeEvents.push(event));
     connection.beforeHandleMessage(async (installed, frame) => hooks.beforeHandleMessage({ documentName, document, connection: installed as never, update: frame, context: { userId: "writer", sessionId: randomUUID() } }));
     const frame = new OutgoingMessage(documentName).createSyncMessage().writeUpdate(Y.encodeStateAsUpdate(new Y.Doc())).toUint8Array();
     const eight = Array.from({ length: 8 }, () => lifecycle.beginAdmission({ documentName, sessionId: randomUUID(), userId: "writer", connection: { close() {} }, update: Y.encodeStateAsUpdate(new Y.Doc()) }));
     await Promise.resolve();
     connection.handleMessage(frame);
     await new Promise<void>((resolve) => setImmediate(resolve));
-    expect(sent).toHaveLength(1);
-    const close = new IncomingMessage(sent[0]);
+    const closeFrame = sent.find((frame) => {
+      const message = new IncomingMessage(frame);
+      message.readVarString();
+      return message.readVarUint() === 7;
+    });
+    expect(closeFrame).toBeDefined();
+    const close = new IncomingMessage(closeFrame!);
     close.readVarString();
     expect(close.readVarUint()).toBe(7);
     expect(close.readVarString()).toBe("canvas_admission_saturated");
+    expect(closeEvents).toEqual([{ code: 1013, reason: "canvas_admission_saturated" }]);
     auth.resolve({ allowed: true, readOnly: false });
     await lifecycle.cancelAdmissions({ documentName, reason: "test_cleanup" });
     await Promise.allSettled(eight);
@@ -779,16 +855,92 @@ describe("Phase 10 installed Hocuspocus hook RED contract", () => {
     const sent: Uint8Array[] = [];
     const socket = { binaryType: "", readyState: 1, send: (frame: Uint8Array, callback: (error?: Error) => void) => { sent.push(frame); callback(); } };
     const connection = new Connection(socket as never, {} as never, document, "resident", { userId: "writer", sessionId: randomUUID() });
+    const closeEvents: Array<{ code?: number; reason?: string } | undefined> = [];
+    connection.onClose((_document, event) => closeEvents.push(event));
     connection.beforeHandleMessage(async (installed, frame) => hooks.beforeHandleMessage({ documentName, document, connection: installed as never, update: frame, context: { userId: "writer", sessionId: randomUUID() } }));
     const source = new Y.Doc();
     source.getMap("elements").set("resident", true);
     connection.handleMessage(new OutgoingMessage(documentName).createSyncMessage().writeUpdate(Y.encodeStateAsUpdate(source)).toUint8Array());
     await new Promise<void>((resolve) => setImmediate(resolve));
-    expect(sent).toHaveLength(1);
-    const close = new IncomingMessage(sent[0]);
+    const closeFrame = sent.find((frame) => {
+      const message = new IncomingMessage(frame);
+      message.readVarString();
+      return message.readVarUint() === 7;
+    });
+    expect(closeFrame).toBeDefined();
+    const close = new IncomingMessage(closeFrame!);
     close.readVarString();
     expect(close.readVarUint()).toBe(7);
     expect(close.readVarString()).toBe("resident_ledger_exhausted");
+    expect(closeEvents).toEqual([{ code: 1013, reason: "resident_ledger_exhausted" }]);
+  });
+
+  test("the installed managed-canvas scratch reservation exhaustion closes once with numeric 1013 and stable resident reason", async () => {
+    const runtime = await import("./hocuspocus") as Record<string, unknown>;
+    const { createCanvasLifecycle } = await import("./canvas-lifecycle");
+    const install = runtime.createCanvasLifecycleHooks as ((input: Record<string, unknown>) => Record<string, (input: Record<string, unknown>) => Promise<unknown>>) | undefined;
+    const documentName = `canvas:${phase10CanvasId}`;
+    const document = new Document(documentName);
+    const fillerA = "11111111-1111-4111-8111-111111111111";
+    const fillerB = "33333333-3333-4333-8333-333333333333";
+    const first = new Document(`canvas:${fillerA}`);
+    const second = new Document(`canvas:${fillerB}`);
+    first.getText("content").insert(0, "a".repeat(4 * 1024 * 1024 - 1));
+    second.getText("content").insert(0, "b".repeat(4 * 1024 * 1024 - 1));
+    const lifecycle = createCanvasLifecycle({
+      documents: new Map([[documentName, document], [first.name, first], [second.name, second]]),
+      limits: { residentBytes: 16 * 1024 * 1024 + 100 },
+      validateLease: async () => ({ allowed: true, remainingMs: 2_000 }),
+    });
+    await lifecycle.freeze({ sessionId: randomUUID(), freezeToken: randomUUID(), canvasIds: [fillerA, fillerB] });
+    const hooks = install!({ lifecycle });
+    const sent: Uint8Array[] = [];
+    const socket = { binaryType: "", readyState: 1, send: (frame: Uint8Array, callback: (error?: Error) => void) => { sent.push(frame); callback(); } };
+    const connection = new Connection(socket as never, {} as never, document, "scratch", { userId: "writer", sessionId: randomUUID() });
+    const closeEvents: Array<{ code?: number; reason?: string } | undefined> = [];
+    connection.onClose((_document, event) => closeEvents.push(event));
+    connection.beforeHandleMessage(async (installed, frame) => hooks.beforeHandleMessage({ documentName, document, connection: installed as never, update: frame, context: { userId: "writer", sessionId: randomUUID() } }));
+    const source = new Y.Doc();
+    source.getMap("elements").set("scratch", true);
+    connection.handleMessage(new OutgoingMessage(documentName).createSyncMessage().writeUpdate(Y.encodeStateAsUpdate(source)).toUint8Array());
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const closeFrame = sent.find((frame) => {
+      const message = new IncomingMessage(frame);
+      message.readVarString();
+      return message.readVarUint() === 7;
+    });
+    expect(closeFrame).toBeDefined();
+    const close = new IncomingMessage(closeFrame!);
+    close.readVarString();
+    expect(close.readVarUint()).toBe(7);
+    expect(close.readVarString()).toBe("resident_ledger_exhausted");
+    expect(closeEvents).toEqual([{ code: 1013, reason: "resident_ledger_exhausted" }]);
+  });
+
+  test("successful capture closes a real installed Connection after cache accounting with numeric 1013 and session_freezing", async () => {
+    const { createCanvasLifecycle } = await import("./canvas-lifecycle");
+    const documentName = `canvas:${phase10CanvasId}`;
+    const document = new Document(documentName);
+    document.getMap("elements").set("captured", true);
+    const sent: Uint8Array[] = [];
+    const socket = { binaryType: "", readyState: 1, send: (frame: Uint8Array, callback: (error?: Error) => void) => { sent.push(frame); callback(); } };
+    const connection = new Connection(socket as never, {} as never, document, "capture", {});
+    const closeEvents: Array<{ code?: number; reason?: string } | undefined> = [];
+    connection.onClose((_document, event) => closeEvents.push(event));
+    const lifecycle = createCanvasLifecycle({ validateLease: async () => ({ allowed: true, remainingMs: 2_000 }), documents: new Map([[documentName, document]]) });
+    const result = await lifecycle.freeze({ sessionId: randomUUID(), freezeToken: randomUUID(), canvasIds: [phase10CanvasId] });
+    expect(result.closed).toBe(1);
+    expect(lifecycle.accounting().captureBytes).toBeGreaterThan(0);
+    expect(closeEvents).toEqual([{ code: 1013, reason: "session_freezing" }]);
+    const closeFrame = sent.find((frame) => {
+      const message = new IncomingMessage(frame);
+      message.readVarString();
+      return message.readVarUint() === 7;
+    });
+    expect(closeFrame).toBeDefined();
+    const close = new IncomingMessage(closeFrame!);
+    close.readVarString(); close.readVarUint();
+    expect(close.readVarString()).toBe("session_freezing");
   });
 
   test("passes the decoded installed nested Yjs update, not the raw websocket frame, into the registered lifecycle admission hook", async () => {

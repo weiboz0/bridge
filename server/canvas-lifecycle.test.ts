@@ -188,8 +188,12 @@ describe("Phase 10 canvas lifecycle RED contract", () => {
     const { createCanvasLifecycle } = await lifecycle();
     const sut = createCanvasLifecycle();
     const document = new Y.Doc();
-    const generation = await sut.beginLoad({ documentName: `canvas:${canvasId}`, document, persistedUpdate: updateWith("loaded") });
-    await sut.beforeUnload({ documentName: `canvas:${canvasId}`, document, generation });
+    const documentName = `canvas:${canvasId}`;
+    await sut.prepareLoad({ documentName, persistedUpdate: updateWith("loaded") });
+    const registry = new Map([[documentName, document]]);
+    sut.claimPreparedLoad({ documentName, document, registry });
+    const generation = sut.inspectDocument(documentName)!.generation;
+    await sut.beforeUnload({ documentName, document, generation, registry });
     expect(sut.inspectDocument(`canvas:${canvasId}`)?.destroyed).toBe(false);
     document.destroy();
     expect(sut.inspectDocument(`canvas:${canvasId}`)).toBeUndefined();
@@ -293,6 +297,26 @@ describe("Phase 10 canvas lifecycle RED contract", () => {
     expect(captures).toBe(0);
   });
 
+  test("evicts idle completion tombstones on their owned timer and an old timer cannot delete a replacement", async () => {
+    const { createCanvasLifecycle } = await lifecycle();
+    const timers: Array<() => void> = [];
+    const sut = createCanvasLifecycle({
+      validateLease: async () => ({ allowed: true, remainingMs: 2_000 }),
+      scheduleTombstoneEviction: (callback: () => void) => { timers.push(callback); return () => undefined; },
+    });
+    await sut.freeze({ sessionId, freezeToken: token, canvasIds: [] });
+    await sut.complete({ sessionId, freezeToken: token });
+    expect(sut.inspectRawTombstonesForTesting()).toBe(1);
+    const stale = timers[0];
+    const replacementToken = randomUUID();
+    await sut.freeze({ sessionId, freezeToken: replacementToken, canvasIds: [] });
+    await sut.complete({ sessionId, freezeToken: replacementToken });
+    stale();
+    expect(sut.inspectRawTombstonesForTesting()).toBe(1);
+    timers[1]();
+    expect(sut.inspectRawTombstonesForTesting()).toBe(0);
+  });
+
   test("starts uncached authorization only after the installed admission turnstile grants, and aborts its exact fetch at the owned deadline", async () => {
     const { createCanvasLifecycle } = await lifecycle();
     const events: string[] = [];
@@ -358,7 +382,7 @@ describe("Phase 10 canvas lifecycle RED contract", () => {
     const { createCanvasLifecycle } = await lifecycle();
     const encoded = updateWith("boundary");
     const sut = createCanvasLifecycle({ limits: { loadScratchBytes: encoded.byteLength - 1, residentBytes: 128 * 1024 * 1024, sessionCaptureBytes: 16 * 1024 * 1024, captureReservationBytes: 64 * 1024 * 1024 } });
-    await expect(sut.beginLoad({ documentName: `canvas:${canvasId}`, document: new Y.Doc(), persistedUpdate: encoded })).rejects.toMatchObject({ code: "load_scratch_exhausted" });
+    await expect(sut.prepareLoad({ documentName: `canvas:${canvasId}`, persistedUpdate: encoded })).rejects.toMatchObject({ code: "load_scratch_exhausted" });
     expect(sut.accounting()).toEqual({ residentBytes: 0, captureBytes: 0 });
   });
 
@@ -387,7 +411,7 @@ describe("Phase 10 canvas lifecycle RED contract", () => {
     const { createCanvasLifecycle } = await lifecycle();
     const sut = createCanvasLifecycle();
     const documentName = `canvas:${canvasId}`;
-    await sut.beginLoad({ documentName, document: new Y.Doc(), persistedUpdate: updateWith("cold") });
+    await sut.prepareLoad({ documentName, persistedUpdate: updateWith("cold") });
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(sut.inspectDocument(documentName)).toBeUndefined();
     expect(sut.accounting()).toEqual({ residentBytes: 0, captureBytes: 0 });
@@ -456,6 +480,18 @@ describe("Phase 10 canvas lifecycle RED contract", () => {
     await sut.stream({ sessionId, freezeToken: token, write: (chunk: string) => { chunks.push(chunk); return true; } });
     expect(chunks.length).toBeGreaterThan(2);
     expect(chunks.some((chunk) => chunk.includes(canvasId) && chunk.includes(secondCanvas))).toBe(false);
+  });
+
+  test("rejects a stream whose response owner was already aborted without registering a reader or writing", async () => {
+    const { createCanvasLifecycle } = await lifecycle();
+    const sut = createCanvasLifecycle({ validateLease: async () => ({ allowed: true, remainingMs: 2_000 }) });
+    await sut.freeze({ sessionId, freezeToken: token, canvasIds: [] });
+    const controller = new AbortController();
+    controller.abort();
+    let writes = 0;
+    await expect(sut.stream({ sessionId, freezeToken: token, signal: controller.signal, write: () => { writes += 1; return false; } })).rejects.toMatchObject({ code: "writer_aborted" });
+    expect(writes).toBe(0);
+    await expect(sut.complete({ sessionId, freezeToken: token })).resolves.toEqual({ released: true });
   });
 
 });

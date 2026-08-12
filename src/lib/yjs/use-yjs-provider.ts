@@ -92,13 +92,14 @@ export function createCanvasProviderEventBridge({ documentName, now = () => Date
 }
 
 /** Physical CLOSE recovery refreshes the token before reconnect; no write queue is created. */
-export function bindInstalledCanvasProvider({ provider, refreshToken, reconnect, onRecovered, now = () => Date.now(), schedule = (callback: () => void, delayMs: number) => setTimeout(callback, delayMs) }: {
+export function bindInstalledCanvasProvider({ provider, refreshToken, reconnect, onRecovered, now = () => Date.now(), schedule = (callback: () => void, delayMs: number) => setTimeout(callback, delayMs), cancelSchedule = (timer: ReturnType<typeof setTimeout>) => clearTimeout(timer) }: {
   provider: HocuspocusProvider;
   refreshToken: () => Promise<string>;
   reconnect?: () => void;
   onRecovered?: () => void;
   now?: () => number;
   schedule?: (callback: () => void, delayMs: number) => ReturnType<typeof setTimeout>;
+  cancelSchedule?: (timer: ReturnType<typeof setTimeout>) => void;
 }) {
   const original = provider.onMessage.bind(provider);
   const originalSend = provider.send.bind(provider);
@@ -107,12 +108,18 @@ export function bindInstalledCanvasProvider({ provider, refreshToken, reconnect,
   let refreshing = false;
   let sendingToken = false;
   let recovery: CanvasReconnectState | undefined;
+  let retryTimer: ReturnType<typeof setTimeout> | undefined;
+  const cancelRetry = () => {
+    if (retryTimer !== undefined) cancelSchedule(retryTimer);
+    retryTimer = undefined;
+  };
   provider.send = ((...args: Parameters<typeof provider.send>) => {
     // sendToken's concrete provider message is the sole emission allowed
     // while fenced.  Sync, awareness, and local Yjs updates remain blocked.
     if (!refreshing || sendingToken) return originalSend(...args);
   }) as typeof provider.send;
   const remintCanvasToken = async () => {
+    if (stopped) return;
     try {
       const token = await refreshToken();
       if (stopped) return;
@@ -127,15 +134,21 @@ export function bindInstalledCanvasProvider({ provider, refreshToken, reconnect,
       }
       if (stopped) return;
       refreshing = false;
+      cancelRetry();
       provider.startSync();
       onRecovered?.();
       reconnect?.();
     } catch (error: unknown) {
       if (!stopped && isRetryableFreeze(error)) {
         recovery = canvasReconnectPolicy({ now: now(), event: { reason: "session_freezing" }, previous: recovery, believedLive: true });
-        schedule(() => { void remintCanvasToken(); }, recovery.delayMs);
+        cancelRetry();
+        retryTimer = schedule(() => {
+          retryTimer = undefined;
+          if (!stopped) void remintCanvasToken();
+        }, recovery.delayMs);
         return;
       }
+      cancelRetry();
       originalAuthenticationFailed({ reason: "canvas_jwt_refresh_failed" });
     }
   };
@@ -176,6 +189,7 @@ export function bindInstalledCanvasProvider({ provider, refreshToken, reconnect,
   provider.on("authenticationFailed", recoverPermissionDenied);
   return () => {
     stopped = true;
+    cancelRetry();
     provider.onMessage = original;
     provider.send = originalSend;
     provider.off("authenticationFailed", recoverPermissionDenied);

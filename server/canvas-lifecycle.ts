@@ -339,6 +339,7 @@ export interface CanvasLifecycleOptions {
   writerNoProgressMs?: number;
   writerDeadlineMs?: number;
   limits?: { loadScratchBytes?: number; residentBytes?: number; sessionCaptureBytes?: number; captureReservationBytes?: number };
+  scheduleTombstoneEviction?: (callback: () => void, delayMs: number) => () => void;
 }
 
 export interface AdmissionInput {
@@ -362,7 +363,8 @@ export class CanvasLifecycle {
   private readonly residentLimit: number;
   private readonly captureLimit: number;
   private readonly captureReservation: number;
-  private readonly completedTokens = new Map<string, { token: string; expiresAt: number }>();
+  private readonly completedTokens = new Map<string, { token: string; expiresAt: number; cancel: () => void }>();
+  private readonly scheduleTombstoneEviction: (callback: () => void, delayMs: number) => () => void;
   private readonly operations = new Map<string, Operation>();
   private readonly serializers = new Map<string, Promise<void>>();
   private readonly managed = new Map<string, ManagedDocument>();
@@ -388,6 +390,11 @@ export class CanvasLifecycle {
     this.residentLimit = options.limits?.residentBytes ?? RESIDENT_LEDGER_LIMIT;
     this.captureLimit = options.limits?.sessionCaptureBytes ?? CAPTURE_LEDGER_LIMIT;
     this.captureReservation = options.limits?.captureReservationBytes ?? CAPTURE_RESERVATION;
+    this.scheduleTombstoneEviction = options.scheduleTombstoneEviction ?? ((callback, delayMs) => {
+      const timer = setTimeout(callback, delayMs);
+      timer.unref?.();
+      return () => clearTimeout(timer);
+    });
   }
 
   accounting() { return { residentBytes: this.residentBytes, captureBytes: this.captureBytes }; }
@@ -397,6 +404,9 @@ export class CanvasLifecycle {
     this.pruneCompletedTokens();
     return this.completedTokens.size;
   }
+
+  /** Raw diagnostic count, intentionally does not opportunistically prune. */
+  inspectRawTombstonesForTesting(): number { return this.completedTokens.size; }
 
   inspect(sessionId: string) {
     const entry = this.operations.get(sessionId);
@@ -488,6 +498,9 @@ export class CanvasLifecycle {
     if (!entry || entry.token !== input.freezeToken || !entry.result) {
       throw lifecycleError("freeze_not_found", "No cached freeze result is available", { status: 409, retryable: true });
     }
+    if (input.signal?.aborted) {
+      return Promise.reject(lifecycleError("writer_aborted", "Response writer was aborted", { retryable: true }));
+    }
     const controller = new AbortController();
     const abort = () => controller.abort();
     input.signal?.addEventListener("abort", abort, { once: true });
@@ -576,44 +589,6 @@ export class CanvasLifecycle {
     await Promise.allSettled(pending.map((entry) => entry.settled));
   }
 
-  async beginLoad({ documentName, document, persistedUpdate = new Uint8Array() }: { documentName: string; document: Y.Doc; persistedUpdate?: Uint8Array }): Promise<number> {
-    if (canvasDocumentName(documentName) && persistedUpdate.byteLength > MAX_PERSISTED_UPDATE) {
-      throw lifecycleError("persisted_canvas_too_large", "Persisted canvas update exceeds 4 MiB");
-    }
-    if (persistedUpdate.byteLength > this.loadScratchBytes) {
-      throw lifecycleError("load_scratch_exhausted", "Canvas load scratch ledger is full", { retryable: true });
-    }
-    if (this.residentBytes + this.loadScratchBytes > this.residentLimit) {
-      throw lifecycleError("resident_ledger_exhausted", "Canvas resident ledger is full", { retryable: true });
-    }
-    this.residentBytes += this.loadScratchBytes;
-    try {
-      if (persistedUpdate.byteLength > 0) Y.applyUpdate(document, persistedUpdate);
-    } catch (error) {
-      this.residentBytes -= this.loadScratchBytes;
-      throw lifecycleError("invalid_persisted_canvas", error instanceof Error ? error.message : "Persisted canvas could not be applied");
-    }
-    const generation = ++this.generation;
-    const old = this.managed.get(documentName);
-    if (old) this.releaseDocument(documentName, old);
-    this.documents.set(documentName, document);
-    let state: ManagedDocument;
-    try {
-      state = this.makeManagedDocument(document, generation);
-    } finally {
-      this.residentBytes -= this.loadScratchBytes;
-    }
-    this.managed.set(documentName, state);
-    // This watchdog is generation- and instance-owned. A later successful
-    // load replaces the map entry, so an old next-turn cleanup cannot free it.
-    setImmediate(() => {
-      const current = this.managed.get(documentName);
-      if (current !== state || state.destroyed) return;
-      if (state.registry?.get(documentName) !== document) this.releaseDocument(documentName, state);
-    });
-    return generation;
-  }
-
   async prepareLoad({ documentName, persistedUpdate = new Uint8Array() }: { documentName: string; persistedUpdate?: Uint8Array }): Promise<Y.Doc> {
     if (canvasDocumentName(documentName) && persistedUpdate.byteLength > MAX_PERSISTED_UPDATE) throw lifecycleError("persisted_canvas_too_large", "Persisted canvas update exceeds 4 MiB");
     if (persistedUpdate.byteLength > this.loadScratchBytes) throw lifecycleError("load_scratch_exhausted", "Canvas load scratch ledger is full", { retryable: true });
@@ -645,7 +620,7 @@ export class CanvasLifecycle {
     return document;
   }
 
-  claimPreparedLoad({ documentName, document, registry }: { documentName: string; document: Y.Doc; registry: Map<string, Y.Doc> }): void {
+  claimPreparedLoad({ documentName, document, registry }: { documentName: string; document: Y.Doc; registry: Map<string, Y.Doc> }): (() => void) | undefined {
     const pending = this.pendingLoads.get(documentName);
     if (!pending || pending.released) return;
     this.pendingLoads.delete(documentName);
@@ -662,6 +637,9 @@ export class CanvasLifecycle {
       setImmediate(() => {
         if (this.managed.get(documentName) === state && registry.get(documentName) !== document) this.releaseDocument(documentName, state);
       });
+      return () => {
+        if (this.managed.get(documentName) === state) this.releaseDocument(documentName, state);
+      };
     } catch (error) {
       // afterLoad is before Hocuspocus publishes the document.  Roll every
       // claim-side effect back here, because its normal destroy path cannot
@@ -849,7 +827,6 @@ export class CanvasLifecycle {
     this.checkParsedFrame(input.documentName, input.update);
     const state = this.documentState(input.documentName);
     if (state.admissions >= MAX_MUTATION_ADMISSIONS) {
-      input.connection.close?.({ code: 1013, reason: "canvas_admission_saturated" });
       throw new CanvasLifecycleError(1013, "Canvas mutation admission is saturated", { retryable: true, closeCode: 1013, reason: "canvas_admission_saturated" });
     }
     state.admissions += 1;
@@ -889,7 +866,9 @@ export class CanvasLifecycle {
         throw lifecycleError(decision.code ?? "canvas_mutation_denied", decision.reason ?? "Canvas mutation is not allowed");
       }
       const scratchBytes = 16 * 1024 * 1024;
-      if (this.residentBytes + scratchBytes > this.residentLimit) throw lifecycleError("resident_ledger_exhausted", "Canvas resident ledger is full", { retryable: true, closeCode: 1013 });
+      if (this.residentBytes + scratchBytes > this.residentLimit) {
+        throw new CanvasLifecycleError(1013, "Canvas resident ledger is full", { retryable: true, closeCode: 1013, reason: "resident_ledger_exhausted" });
+      }
       this.residentBytes += scratchBytes;
       const candidate = new Y.Doc();
       let scratchReserved = true;
@@ -902,7 +881,9 @@ export class CanvasLifecycle {
       if (encoded.byteLength > MAX_CURRENT_STATE) throw lifecycleError("canvas_state_too_large", "Canvas state exceeds 4 MiB");
       const candidateBytes = encoded.byteLength * 2;
       const projected = this.residentBytes - scratchBytes - state.residentBytes + candidateBytes;
-      if (projected > this.residentLimit) throw lifecycleError("resident_ledger_exhausted", "Canvas resident ledger is full", { retryable: true, closeCode: 1013 });
+      if (projected > this.residentLimit) {
+        throw new CanvasLifecycleError(1013, "Canvas resident ledger is full", { retryable: true, closeCode: 1013, reason: "resident_ledger_exhausted" });
+      }
       state.shadow.destroy();
       state.shadow = candidate;
       this.residentBytes = projected;
@@ -1034,7 +1015,13 @@ export class CanvasLifecycle {
     if (this.operations.get(operation.sessionId) === operation) {
       this.operations.delete(operation.sessionId);
       if (operation.terminal === "complete") {
-        this.completedTokens.set(operation.sessionId, { token: operation.token, expiresAt: this.now() + DEFAULT_FREEZE_BUDGET_MS });
+        const prior = this.completedTokens.get(operation.sessionId);
+        prior?.cancel();
+        const entry = { token: operation.token, expiresAt: this.now() + DEFAULT_FREEZE_BUDGET_MS, cancel: () => undefined };
+        entry.cancel = this.scheduleTombstoneEviction(() => {
+          if (this.completedTokens.get(operation.sessionId) === entry) this.completedTokens.delete(operation.sessionId);
+        }, DEFAULT_FREEZE_BUDGET_MS);
+        this.completedTokens.set(operation.sessionId, entry);
       }
     }
   }
@@ -1066,7 +1053,10 @@ export class CanvasLifecycle {
 
   private pruneCompletedTokens(): void {
     for (const [sessionId, entry] of this.completedTokens) {
-      if (entry.expiresAt <= this.now()) this.completedTokens.delete(sessionId);
+      if (entry.expiresAt <= this.now()) {
+        entry.cancel();
+        this.completedTokens.delete(sessionId);
+      }
     }
   }
 }

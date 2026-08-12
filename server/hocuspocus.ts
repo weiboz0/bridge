@@ -299,28 +299,35 @@ export function createCanvasLifecycleHooks({
   };
 }
 
-/** Hooks used by the real createDocument path; failures happen before registry insertion. */
-export function createCanvasLoadLifecycleHooks({ lifecycle = canvasLifecycle, failAfterLoad = false }: { lifecycle?: CanvasLifecycle; failAfterLoad?: boolean } = {}) {
-  let failed = false;
+/**
+ * Production canvas-load adapter for Hocuspocus's pre-registry hook order.
+ * A later after-load extension is part of the same transaction: if it fails,
+ * the exact claimed generation is rolled back because pinned Hocuspocus cannot
+ * destroy a document that it has not inserted into its registry yet.
+ */
+export function createCanvasLoadLifecycleAdapter({ lifecycle = canvasLifecycle, afterClaim }: {
+  lifecycle?: CanvasLifecycle;
+  afterClaim?: (input: { documentName: string; document: Y.Doc }) => Promise<void> | void;
+} = {}) {
   return {
-    async onLoadDocument({ documentName, document }: { documentName: string; document: Y.Doc }) {
-      if (!documentName.startsWith("canvas:")) return document;
-      const prepared = await lifecycle.prepareLoad({ documentName });
-      if (failAfterLoad && !failed) {
-        failed = true;
-        prepared.destroy();
-        throw new Error("after-load failure");
-      }
-      return prepared;
+    async prepare({ documentName, persistedUpdate = new Uint8Array() }: { documentName: string; persistedUpdate?: Uint8Array }) {
+      return lifecycle.prepareLoad({ documentName, persistedUpdate });
     },
     async afterLoadDocument({ documentName, document, instance }: { documentName: string; document: Y.Doc; instance: { documents: Map<string, Y.Doc> } }) {
       if (!documentName.startsWith("canvas:")) return;
-      lifecycle.claimPreparedLoad({ documentName, document, registry: instance.documents });
+      const rollback = lifecycle.claimPreparedLoad({ documentName, document, registry: instance.documents });
+      try {
+        await afterClaim?.({ documentName, document });
+      } catch (error) {
+        rollback?.();
+        throw error;
+      }
     },
-    async beforeUnloadDocument({ documentName, document }: { documentName: string; document: Y.Doc }) {
+    async beforeUnloadDocument({ documentName, document, instance }: { documentName: string; document: Y.Doc; instance: { documents: Map<string, Y.Doc> } }) {
       if (!documentName.startsWith("canvas:")) return;
+      if (instance.documents.get(documentName) !== document) return;
       const state = lifecycle.inspectDocument(documentName);
-      if (state) await lifecycle.beforeUnload({ documentName, document, generation: state.generation });
+      if (state) await lifecycle.beforeUnload({ documentName, document, generation: state.generation, registry: instance.documents });
     },
   };
 }
@@ -390,6 +397,10 @@ const canvasLifecycle = createCanvasLifecycle({
 });
 
 const canvasLifecycleHooks = createCanvasLifecycleHooks({ lifecycle: canvasLifecycle });
+const canvasLoadLifecycle = createCanvasLoadLifecycleAdapter({
+  lifecycle: canvasLifecycle,
+  afterClaim: (input) => canvasLifecycleHooks.afterLoadDocument(input),
+});
 const canvasConnections = new Map<string, unknown>();
 
 export function canvasAuthenticationContext({
@@ -591,13 +602,13 @@ export const hocuspocusHooks = {
       if (yjsState !== null) {
         const update = Buffer.from(yjsState, "base64");
         if (documentName.startsWith("canvas:")) {
-          return await canvasLifecycle.prepareLoad({ documentName, persistedUpdate: update });
+          return await canvasLoadLifecycle.prepare({ documentName, persistedUpdate: update });
         } else {
           Y.applyUpdate(document, update);
         }
         console.log(`[hocuspocus] Loaded state for: ${documentName}`);
       } else if (documentName.startsWith("canvas:")) {
-        return await canvasLifecycle.prepareLoad({ documentName });
+        return await canvasLoadLifecycle.prepare({ documentName });
       }
     } catch (err) {
       console.error(`[hocuspocus] Failed to load state for ${documentName}:`, err);
@@ -660,16 +671,15 @@ export const hocuspocusHooks = {
 
   async afterLoadDocument({ documentName, document, instance }: { documentName: string; document: Y.Doc; instance: { documents: Map<string, Y.Doc> } }) {
     if (documentName.startsWith("canvas:")) {
-      canvasLifecycle.claimPreparedLoad({ documentName, document, registry: instance.documents });
+      await canvasLoadLifecycle.afterLoadDocument({ documentName, document, instance });
+      return;
     }
     await canvasLifecycleHooks.afterLoadDocument({ documentName, document });
   },
 
   async beforeUnloadDocument({ documentName, document, instance }: { documentName: string; document: Y.Doc; instance: { documents: Map<string, Y.Doc> } }) {
     if (documentName.startsWith("canvas:")) {
-      if (instance.documents.get(documentName) !== document) return;
-      const state = canvasLifecycle.inspectDocument(documentName);
-      if (state) await canvasLifecycle.beforeUnload({ documentName, document, generation: state.generation, registry: instance.documents });
+      await canvasLoadLifecycle.beforeUnloadDocument({ documentName, document, instance });
       return;
     }
     await canvasLifecycleHooks.beforeUnloadDocument({ documentName, document });
@@ -725,12 +735,29 @@ export function createCanvasControlListener({
 }) {
   const control = createCanvasControlServer({ secret, lifecycle });
   const handler = async (request: HttpIncomingMessage, response: ServerResponse) => {
+    const writer = new AbortController();
+    let responseFinished = false;
+    const abortWriter = () => writer.abort();
+    const abortIncompleteRequest = () => {
+      if (request.aborted) abortWriter();
+    };
+    const abortOpenResponse = () => {
+      if (!responseFinished) abortWriter();
+    };
+    request.once("aborted", abortWriter);
+    request.once("close", abortIncompleteRequest);
+    response.once("close", abortOpenResponse);
     let json: unknown;
     try {
       json = request.method === "POST" ? await readStrictJson(request) : undefined;
     } catch (error) {
       const known = error instanceof CanvasLifecycleError;
-      writeControlResponse(response, known ? 400 : 500, { code: known ? error.code : "control_failure" });
+      if (writer.signal.aborted) response.destroy?.();
+      else writeControlResponse(response, known ? 400 : 500, { code: known ? error.code : "control_failure" });
+      responseFinished = true;
+      request.off("aborted", abortWriter);
+      request.off("close", abortIncompleteRequest);
+      response.off("close", abortOpenResponse);
       return;
     }
     const path = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
@@ -740,17 +767,17 @@ export function createCanvasControlListener({
       authorization: request.headers.authorization,
       json,
     });
+    if (writer.signal.aborted) {
+      responseFinished = true;
+      response.destroy?.();
+      request.off("aborted", abortWriter);
+      request.off("close", abortIncompleteRequest);
+      response.off("close", abortOpenResponse);
+      return;
+    }
     if (path === "/internal/canvas-sessions/freeze" && result.status === 200 && json !== undefined && lifecycle.stream) {
       const parsed = parseCanvasControlRequest("freeze", json) as { sessionId: string; freezeToken: string };
       response.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
-      const writer = new AbortController();
-      let finished = false;
-      const abortWriter = () => {
-        if (!finished) writer.abort();
-      };
-      request.once("aborted", abortWriter);
-      request.once("close", abortWriter);
-      response.once("close", abortWriter);
       try {
         await lifecycle.stream({
           ...parsed,
@@ -758,19 +785,28 @@ export function createCanvasControlListener({
           onceDrain: () => new Promise<void>((resolve) => response.once("drain", resolve)),
           signal: writer.signal,
         });
-        finished = true;
+        if (writer.signal.aborted) {
+          responseFinished = true;
+          response.destroy();
+          return;
+        }
+        responseFinished = true;
         response.end();
       } catch {
-        finished = true;
+        responseFinished = true;
         response.destroy();
       } finally {
         request.off("aborted", abortWriter);
-        request.off("close", abortWriter);
-        response.off?.("close", abortWriter);
+        request.off("close", abortIncompleteRequest);
+        response.off?.("close", abortOpenResponse);
       }
       return;
     }
+    responseFinished = true;
     writeControlResponse(response, result.status, result.json);
+    request.off("aborted", abortWriter);
+    request.off("close", abortIncompleteRequest);
+    response.off?.("close", abortOpenResponse);
   };
   const listener = tls ? createHttpsServer(tls, handler) : createHttpServer(handler);
   return {

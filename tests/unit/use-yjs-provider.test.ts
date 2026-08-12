@@ -169,6 +169,32 @@ describe("canvas reconnect policy", () => {
     provider.destroy();
   });
 
+  it("cancels a scheduled retry when the installed provider unmounts before its timer fires", async () => {
+    const { bindInstalledCanvasProvider } = await import("@/lib/yjs/use-yjs-provider");
+    const documentName = "canvas:22222222-2222-4222-8222-222222222222";
+    const frame = new OutgoingMessage(documentName).writeCloseMessage("session_freezing").toUint8Array();
+    let callback: (() => void) | undefined;
+    let refreshes = 0;
+    let cancelled = 0;
+    const websocket = { on() {}, off() {}, attach() {}, detach() {}, setConfiguration() {}, send() {} };
+    const provider = new HocuspocusProvider({ name: documentName, document: new Y.Doc(), websocketProvider: websocket as never });
+    const release = bindInstalledCanvasProvider({
+      provider,
+      refreshToken: async () => { refreshes += 1; throw Object.assign(new Error("freeze"), { status: 409, code: "session_freezing" }); },
+      schedule: (next) => { callback = next; return 42 as never; },
+      cancelSchedule: () => { cancelled += 1; },
+    });
+    provider.onMessage({ data: frame } as MessageEvent);
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(refreshes).toBe(1);
+    release();
+    callback!();
+    await Promise.resolve();
+    expect(cancelled).toBe(1);
+    expect(refreshes).toBe(1);
+    provider.destroy();
+  });
+
   it("treats the pinned PermissionDenied session_freezing reason as the same recoverable canvas lifecycle path", async () => {
     const { bindInstalledCanvasProvider } = await import("@/lib/yjs/use-yjs-provider");
     const documentName = "canvas:22222222-2222-4222-8222-222222222222";
@@ -252,4 +278,5 @@ describe("canvas reconnect policy", () => {
     release();
     provider.destroy();
   });
+
 });
