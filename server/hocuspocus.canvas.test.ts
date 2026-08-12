@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { Document, IncomingMessage, MessageReceiver, OutgoingMessage } from "@hocuspocus/server";
+import { Document, Hocuspocus, IncomingMessage, MessageReceiver, OutgoingMessage } from "@hocuspocus/server";
 import { createHmac, randomUUID } from "node:crypto";
 import postgres from "postgres";
 import { Awareness } from "y-protocols/awareness";
@@ -563,6 +563,21 @@ describe("Phase 10 installed Hocuspocus hook RED contract", () => {
     // survive that path until the installed document's destroy event.
     expect(registry.get(document.name)).toBe(document);
     document.destroy();
+  });
+
+  test("reclaims a failed installed createDocument before registry insertion and does not let a stale watchdog release its replacement generation", async () => {
+    const runtime = await import("./hocuspocus") as Record<string, unknown>;
+    const hooks = runtime.createCanvasLoadLifecycleHooks as ((input: Record<string, unknown>) => Record<string, unknown>) | undefined;
+    expect(hooks).toBeTypeOf("function");
+    const lifecycle = hooks!({ failAfterLoad: true });
+    const instance = new Hocuspocus({ ...lifecycle });
+    const documentName = `canvas:${phase10CanvasId}`;
+    await expect(instance.createDocument(documentName, {}, "socket", { readOnly: false }, { userId: "writer", sessionId: randomUUID() })).rejects.toThrow();
+    expect(instance.documents.has(documentName)).toBe(false);
+    const replacement = await instance.createDocument(documentName, {}, "socket-2", { readOnly: false }, { userId: "writer", sessionId: randomUUID() });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(instance.documents.get(documentName)).toBe(replacement);
+    await instance.unloadDocument(replacement);
   });
 
   test("rolls back the authenticated control listener if the installed websocket listener fails after control bind", async () => {

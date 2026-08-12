@@ -1000,3 +1000,9 @@ _Plan-wide report pending later phases._
 - `[RED]` Extended the test-only contract with an installed `Document.saveMutex`/connection-map capture proof, exact turnstile-before-auth deadline/abort ordering, terminal-queue foreign-token rejection, Hocuspocus `instance.documents` after-load/before-unload payload, listener-start rollback, and incremental backpressure/destroy streaming seams.
 - `[OPEN]` These are deliberately RED against the committed production slice: capture returns before closing registered connections; authorization reaches a denial after abort instead of preserving its timeout classification; lifecycle hooks, listener rollback, and incremental streamer are absent.
 - `[RED evidence]` The same pinned focused Bun command reports 16 passes and 6 expected lifecycle RED failures; the full two-file command remains expected RED pending the absent Hocuspocus listener hooks.
+
+### Phase 10 — installed provider and registry RED evidence (2026-08-12; Terra; tests only)
+
+- `[RED]` Added an installed Hocuspocus server `OutgoingMessage.writeCloseMessage` → provider `onMessage` contract requiring token refresh/re-auth/reconnect without an unauthenticated queued write, and an installed `Hocuspocus.createDocument` contract requiring failed pre-registry/after-load generations to release without touching a next-turn replacement.
+- `[OPEN]` Both contracts remain RED until the production hook wires the listener CLOSE reason to the canvas provider recovery producer and supplies generation-owned load hooks to the real `createDocument` path.
+- `[RED evidence]` With both database URLs pinned to `postgresql://work@127.0.0.1:5432/bridge_test`, the focused provider Vitest suite has 5 passing existing contracts and 2 expected RED failures: `createCanvasProviderEventBridge` and `bindInstalledCanvasProvider` are absent.

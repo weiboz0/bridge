@@ -1,5 +1,8 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
+import { HocuspocusProvider } from "@hocuspocus/provider";
+import { OutgoingMessage } from "@hocuspocus/server";
+import * as Y from "yjs";
 import { canvasReconnectPolicy } from "@/lib/yjs/use-yjs-provider";
 
 describe("canvas reconnect policy", () => {
@@ -52,5 +55,24 @@ describe("canvas reconnect policy", () => {
     expect(bridge.state()).toBeUndefined();
     bridge.onClose({ code: 1000, reason: "canvas_jwt_expired" });
     expect(bridge.state()).toMatchObject({ terminal: true, retry: false });
+  });
+
+  it("handles the installed server Connection.close CLOSE frame by refreshing the canvas token and reconnecting without replaying unauthenticated writes", async () => {
+    const { bindInstalledCanvasProvider } = await import("@/lib/yjs/use-yjs-provider");
+    const documentName = "canvas:22222222-2222-4222-8222-222222222222";
+    const frame = new OutgoingMessage(documentName).writeCloseMessage("canvas_jwt_expired").toUint8Array();
+    let refreshes = 0;
+    let reconnects = 0;
+    let queuedWrites = 0;
+    const websocket = { on() {}, off() {}, attach() {}, detach() {}, setConfiguration() {}, send() { queuedWrites += 1; } };
+    const provider = new HocuspocusProvider({ name: documentName, document: new Y.Doc(), websocketProvider: websocket as never });
+    const release = bindInstalledCanvasProvider({ provider, refreshToken: async () => { refreshes += 1; return "new-token"; }, reconnect: () => { reconnects += 1; } });
+    provider.onMessage({ data: frame } as MessageEvent);
+    await Promise.resolve();
+    expect(refreshes).toBe(1);
+    expect(reconnects).toBe(1);
+    expect(queuedWrites).toBe(0);
+    release();
+    provider.destroy();
   });
 });

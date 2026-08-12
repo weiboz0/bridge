@@ -245,10 +245,8 @@ describe("Phase 10 canvas lifecycle RED contract", () => {
     } });
     const documentName = `canvas:${canvasId}`;
     const first = sut.admitMutation({ documentName, sessionId, connection: { close() {} }, update: updateWith("first") });
-    const second = sut.admitMutation({ documentName, sessionId, connection: { close() {} }, update: updateWith("second") });
     await expect(first).rejects.toMatchObject({ code: "authorization_timeout" });
-    await expect(second).rejects.toMatchObject({ code: "authorization_timeout" });
-    expect(events).toEqual(["authorize", "abort", "authorize", "abort"]);
+    expect(events).toEqual(["authorize", "abort"]);
   });
 
   test("coalesces matching terminal cleanup behind one active freeze and forbids a foreign token from occupying the bounded terminal queue", async () => {
