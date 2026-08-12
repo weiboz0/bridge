@@ -301,9 +301,9 @@ export function createCanvasLifecycleHooks({
 
 /**
  * Production canvas-load adapter for Hocuspocus's pre-registry hook order.
- * A later after-load extension is part of the same transaction: if it fails,
- * the exact claimed generation is rolled back because pinned Hocuspocus cannot
- * destroy a document that it has not inserted into its registry yet.
+ * Earlier extensions run before Bridge claims the pending load, so their
+ * failure leaves its watchdog armed. Startup separately enforces that Bridge
+ * is final because pinned Hocuspocus cannot roll back a post-claim extension.
  */
 export function createCanvasLoadLifecycleAdapter({ lifecycle = canvasLifecycle }: {
   lifecycle?: CanvasLifecycle;
