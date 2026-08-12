@@ -554,6 +554,18 @@ The three reviewers that requested changes must confirm the next exact substanti
 All Round-2 responses are author-side `[ADDRESSED]` pending exact-commit confirmation.
 Because Round 3 is the current governance checkpoint, any remaining open material finding triggers the hard-safeguard pause; approval by all three flagging reviewers authorizes Phase 7.
 
+### Spec 013 remediation plan gate — Round 3 checkpoint — commit `579974245ba510ea900a85816bd90ef2796d861f`
+
+- **Verdicts:** `[claude-self]` APPROVE WITH NITS; `[codex]` CHANGES REQUESTED; `[opus]` APPROVE WITH NITS; `[glm]` retained APPROVE WITH NITS from Round 1.
+- `[OPEN]` `[codex]` The same-phase canvas-settings cutover remains internally split: Phase 9 requires and runs the panel/archive client migration, while Phase 11 still claims first creation of `whiteboard-panel.test.tsx` and first implementation of the teacher floor control.
+  A Round-4 response would move creation of the panel test and the complete floor client/control into Phase 9, leaving Phase 11 to extend that existing suite for unrelated scene and warning UX.
+- `[ACCEPTED NIT]` `[claude-self][opus]` Scope HTTP `409 session_end_in_progress` to the four HTTP mutations/concurrent end and map internal-auth freeze rejection to retryable `session_freezing`; clarify that authorization takes no second row lock.
+- `[ACCEPTED NIT]` `[claude-self][opus]` Finish marking Decision 8, Phase 2, and the risk row as superseded for degraded transient fan-in and temporary-freeze handling; remove the contradictory risk-row reference to a numeric checkpoint.
+- `[ACCEPTED NIT]` `[opus]` Name the no-independent-administrator-bypass record in the Phase-13 architecture decisions update.
+
+The current three-round governance therefore requires a user-visible hard-safeguard pause with Phase 7 still unauthorized.
+No implementation, Round-4 plan edit, migration, service, E2E, or remote action followed this checkpoint.
+
 ## Code Review
 
 ### Phase 6 task reviews (2026-08-10)
