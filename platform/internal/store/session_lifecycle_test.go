@@ -277,6 +277,7 @@ func TestSessionLifecycleRejectsMalformedLeasePairs(t *testing.T) {
 	_, teacherID := setupSessionTest(t, db, t.Name()+uuid.NewString())
 	session, err := sessions.CreateSession(ctx, CreateSessionInput{TeacherID: teacherID, Title: "pair"})
 	require.NoError(t, err)
+	t.Cleanup(func() { _, _ = db.ExecContext(context.Background(), `DELETE FROM sessions WHERE id = $1`, session.ID) })
 	_, err = db.ExecContext(ctx, `UPDATE sessions SET canvas_freeze_token = $2::uuid, canvas_freeze_until = NULL WHERE id = $1`, session.ID, uuid.NewString())
 	require.Error(t, err)
 	_, err = db.ExecContext(ctx, `UPDATE sessions SET canvas_freeze_token = NULL, canvas_freeze_until = clock_timestamp() WHERE id = $1`, session.ID)

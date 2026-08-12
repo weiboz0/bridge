@@ -81,10 +81,10 @@ func TestCheckConstraints_InjectsNamedConstraint(t *testing.T) {
 	}))
 }
 
-func TestCheckColumns_RejectsWrongLifecycleTypeAndNullability(t *testing.T) {
+func TestCheckColumns_RejectsWrongLifecycleTypeWithCorrectNullability(t *testing.T) {
 	db := integrationDB(t)
 	ctx := context.Background()
-	_, err := db.ExecContext(ctx, `CREATE TABLE lifecycle_probe_fixture (token text NOT NULL)`)
+	_, err := db.ExecContext(ctx, `CREATE TABLE lifecycle_probe_fixture (token text)`)
 	require.NoError(t, err)
 	t.Cleanup(func() { _, _ = db.ExecContext(context.Background(), `DROP TABLE IF EXISTS lifecycle_probe_fixture`) })
 	err = checkColumns(ctx, db, SchemaSentinels{Tables: []SchemaTableSentinels{{Table: "lifecycle_probe_fixture", ColumnDefinitions: []SchemaColumnSentinel{{Name: "token", DataType: "uuid", Nullable: true}}}}})
@@ -92,6 +92,22 @@ func TestCheckColumns_RejectsWrongLifecycleTypeAndNullability(t *testing.T) {
 	require.Error(t, err)
 	require.True(t, errors.As(err, &mismatch))
 	assert.Equal(t, "uuid", mismatch.Expected.DataType)
+	assert.True(t, mismatch.ActualNullable)
+}
+
+func TestCheckColumns_RejectsWrongLifecycleNullabilityWithCorrectType(t *testing.T) {
+	db := integrationDB(t)
+	ctx := context.Background()
+	_, err := db.ExecContext(ctx, `CREATE TABLE lifecycle_probe_nullability_fixture (token uuid NOT NULL)`)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), `DROP TABLE IF EXISTS lifecycle_probe_nullability_fixture`)
+	})
+	err = checkColumns(ctx, db, SchemaSentinels{Tables: []SchemaTableSentinels{{Table: "lifecycle_probe_nullability_fixture", ColumnDefinitions: []SchemaColumnSentinel{{Name: "token", DataType: "uuid", Nullable: true}}}}})
+	var mismatch *ErrSchemaColumnDefinitionMismatch
+	require.Error(t, err)
+	require.True(t, errors.As(err, &mismatch))
+	assert.Equal(t, "uuid", mismatch.ActualDataType)
 	assert.False(t, mismatch.ActualNullable)
 }
 

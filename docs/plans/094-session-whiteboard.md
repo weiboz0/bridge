@@ -805,3 +805,10 @@ _Plan-wide report pending later phases._
 - GREEN: the lock regression now uses three independent verified test-database pools: holder, waiter, and observer.
   It records both backend PIDs, polls `pg_blocking_pids(waiterPID)` until PostgreSQL reports the exclusive advisory-lock holder, asserts the waiter cannot complete before release, commits the holder, then requires waiter completion under a bounded context.
   Transactions, pools, context cancellation, and goroutine completion paths are cleanup-safe; the proof passed twenty consecutive focused runs.
+
+### Phase 8 physical schema parity (2026-08-11)
+
+- RED: parser parity carried lifecycle ALTER-column names only, so a migration type or `NOT NULL` mutation could pass while runtime probe expectations drifted.
+- GREEN: migration parsing normalizes `timestamptz` to PostgreSQL's information-schema name and records lifecycle type/nullability definitions bidirectionally.
+  Mutation regressions prove both `uuid` to `text` and nullable to `NOT NULL` migration edits drift from sentinels; independent integration fixtures prove wrong type with correct nullability and correct type with wrong nullability each fail alone.
+- The malformed-pair lifecycle test now registers immediate session cleanup; the Phase 8 class-less lifecycle fixtures were re-audited for cleanup registration.
