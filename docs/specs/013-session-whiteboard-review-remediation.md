@@ -1093,3 +1093,24 @@ The user approved moving final snapshot persistence into Go.
 **Round 11 verdicts:** `[sol]` CHANGES REQUESTED; `[fable]` CHANGES REQUESTED.
 
 **Round 11 responses await Sol and Fable confirmation on commit `4a2848d`.**
+
+### Round 12 — 2026-08-11 — commit `555a663`
+
+- `[OPEN]` `[sol]` Failed authoritative initial load could not rely on document destruction because pinned Hocuspocus never registers or destroys that failed document.
+  → Response in `62840cf`: the hook releases its own temporary apply failures and registers a generation-keyed pending reservation whose `setImmediate` watchdog releases it unless successful `afterLoadDocument` claims it.
+- `[OPEN]` `[sol]` Mutation authorization became load-bearing under the turnstile without an owned timeout, cancellation, or cancelled-grant settlement rule.
+  → Response in `62840cf`: mutation auth uses an owned 500-millisecond `AbortController`; close, unload, deadline, and cancellation abort and await settlement; both mutation and freeze waiters release a late cancelled grant synchronously.
+- `[OPEN]` `[sol]` Unload did not serialize with pending admission, so a stale authorization could resume after listener/accounting removal or document replacement.
+  → Response in `62840cf`: unload marks the exact generation, aborts and settles authorization/admission under the turnstile, rechecks registry identity, removes exact listener/accounting, and cannot touch a reload generation.
+- `[OPEN]` `[sol][fable]` The canvas-derived global `ws.maxPayload` applied to every shared realtime namespace and would reject existing non-canvas documents above 1 MiB.
+  → Response in `62840cf`: the listener preserves its 100 MiB compatibility cap and the parsed canvas hook alone enforces exactly 1,048,576 decoded update bytes before shadow apply, with explicit cross-namespace regression coverage and no pre-buffer claim.
+- `[OPEN]` `[fable]` Legacy Next.js and Drizzle session writers remained potential status-ending producers outside the protocol.
+  → Response in `62840cf`: the remediation deletes the shadow PATCH route and unused TypeScript create/end helpers, updates the inventory, and proves no TypeScript end writer remains rather than relying on proxy reachability.
+- `[OPEN]` `[sol][fable]` Replacement ends omitted scheduled-session completion work.
+  → Response in `62840cf`: every replaced session runs the same scheduled completion step as explicit end before event emission and token cleanup.
+- `[OPEN]` `[fable]` Replacement lock sorting, actual schedule-store method naming, and non-teacher archive settings behavior needed precision.
+  → Response in `62840cf`: locks sort by derived signed key plus UUID, the method is `StartScheduledSession`, and a non-teacher 403 produces no completeness claim or archive error.
+
+**Round 12 verdicts:** `[sol]` CHANGES REQUESTED; `[fable]` CHANGES REQUESTED.
+
+**Round 12 responses await Sol and Fable confirmation on commit `62840cf`.**
