@@ -1,4 +1,8 @@
 import { IncomingMessage, MessageType, Server } from "@hocuspocus/server";
+import { createServer as createHttpServer, type IncomingMessage as HttpIncomingMessage, type ServerResponse } from "node:http";
+import { createServer as createHttpsServer } from "node:https";
+import { readFileSync } from "node:fs";
+import { isIP } from "node:net";
 import { sql } from "drizzle-orm";
 import { messageYjsSyncStep2, messageYjsUpdate } from "y-protocols/sync";
 import * as Y from "yjs";
@@ -9,6 +13,13 @@ import {
   storeAttemptYjsState,
 } from "./attempts";
 import { rechckDocumentAccess, verifyRealtimeJwt } from "./realtime-jwt";
+import {
+  CanvasLifecycle,
+  CanvasLifecycleError,
+  createCanvasControlServer,
+  createCanvasLifecycle,
+  HOCUSPOCUS_SHARED_MAX_PAYLOAD,
+} from "./canvas-lifecycle";
 
 // Plan 072 phase 2 config (legacy path fully removed):
 // - HOCUSPOCUS_TOKEN_SECRET: shared HMAC secret with the Go API.
@@ -25,7 +36,7 @@ const BRIDGE_HOST_EXPOSURE = (process.env.BRIDGE_HOST_EXPOSURE ?? "").toLowerCas
 // For local dev the Go port alone (PLATFORM_PORT, default 8002) is enough — the
 // internal URL is derived from it. Set GO_INTERNAL_API_URL explicitly to reach
 // a non-localhost Go API (e.g. when Hocuspocus runs on a different host).
-const GO_DEFAULT_INTERNAL_URL = `http://localhost:${process.env.PLATFORM_PORT ?? "8002"}`;
+const GO_DEFAULT_INTERNAL_URL = `http://127.0.0.1:${process.env.PLATFORM_PORT ?? "8002"}`;
 const GO_INTERNAL_API_URL = process.env.GO_INTERNAL_API_URL ?? GO_DEFAULT_INTERNAL_URL;
 
 // HOCUSPOCUS_PORT: TCP port the collaboration server listens on. Defaults to
@@ -38,14 +49,43 @@ function parseHocuspocusPort(raw: string | undefined): number {
   }
   const port = Number(raw);
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    console.error(
-      `[hocuspocus] refusing to start: HOCUSPOCUS_PORT=${JSON.stringify(raw)} is not a valid TCP port (1-65535).`
-    );
-    process.exit(1);
+    throw new Error(`HOCUSPOCUS_PORT=${JSON.stringify(raw)} is not a valid TCP port (1-65535)`);
   }
   return port;
 }
 const HOCUSPOCUS_PORT = parseHocuspocusPort(process.env.HOCUSPOCUS_PORT);
+const HOCUSPOCUS_CONTROL_PORT = parseHocuspocusPort(process.env.HOCUSPOCUS_CONTROL_PORT ?? "4001");
+const HOCUSPOCUS_CONTROL_HOST = process.env.HOCUSPOCUS_CONTROL_HOST ?? "127.0.0.1";
+const HOCUSPOCUS_CONTROL_SECRET = process.env.HOCUSPOCUS_CONTROL_SECRET ?? "";
+
+function isLoopbackControlHost(host: string): boolean {
+  const family = isIP(host);
+  if (family === 4) return host.startsWith("127.");
+  return family === 6 && host === "::1";
+}
+
+function validateControlEnv(): { host: string; port: number; secret: string; tls?: { key: Buffer; cert: Buffer } } {
+  if (!/^[0-9a-f]{64}$/.test(HOCUSPOCUS_CONTROL_SECRET)) {
+    throw new Error("HOCUSPOCUS_CONTROL_SECRET must be 64 lowercase hexadecimal characters");
+  }
+  if (HOCUSPOCUS_CONTROL_SECRET === TOKEN_SECRET) {
+    throw new Error("HOCUSPOCUS_CONTROL_SECRET must differ from HOCUSPOCUS_TOKEN_SECRET");
+  }
+  if (isLoopbackControlHost(HOCUSPOCUS_CONTROL_HOST)) {
+    return { host: HOCUSPOCUS_CONTROL_HOST, port: HOCUSPOCUS_CONTROL_PORT, secret: HOCUSPOCUS_CONTROL_SECRET };
+  }
+  const keyPath = process.env.HOCUSPOCUS_CONTROL_TLS_KEY_FILE;
+  const certPath = process.env.HOCUSPOCUS_CONTROL_TLS_CERT_FILE;
+  if (!keyPath || !certPath) {
+    throw new Error("A non-loopback Hocuspocus control listener requires verified TLS key and certificate paths");
+  }
+  return {
+    host: HOCUSPOCUS_CONTROL_HOST,
+    port: HOCUSPOCUS_CONTROL_PORT,
+    secret: HOCUSPOCUS_CONTROL_SECRET,
+    tls: { key: readFileSync(keyPath), cert: readFileSync(certPath) },
+  };
+}
 
 function validateRealtimeAuthEnv(): void {
   // Plan 072 phase 2 — JWT-only boot check. TOKEN_SECRET is required; no
@@ -72,6 +112,7 @@ function validateRealtimeAuthEnv(): void {
     );
     process.exit(1);
   }
+  validateControlEnv();
 
   // Operational warning: GO_INTERNAL_API_URL default localhost in an
   // exposed environment will make every onLoadDocument recheck fail.
@@ -96,7 +137,175 @@ interface AuthContext {
   canvasId?: string;
   sessionId?: string;
   readOnly?: boolean;
+  jwtExpiry?: number;
 }
+
+type CanvasAuthorization = (input: {
+  documentName: string;
+  sub: string;
+  sessionId: string;
+}) => Promise<{ allowed: boolean; readOnly: boolean; code?: string; reason?: string }>;
+
+type CanvasConnection = {
+  readOnly: boolean;
+  close?: (event?: { code?: number; reason?: string }) => void;
+};
+
+function retryableFreezeError(): CanvasLifecycleError {
+  return new CanvasLifecycleError("session_freezing", "Session whiteboards are temporarily freezing", { retryable: true });
+}
+
+function lifecycleErrorFromDecision(decision: { code?: string; reason?: string }): CanvasLifecycleError {
+  if (decision.code === "session_freezing") return retryableFreezeError();
+  return new CanvasLifecycleError(decision.code ?? "canvas_access_denied", decision.reason ?? "Canvas access was denied");
+}
+
+async function currentCanvasAuthorization({ documentName, sub, sessionId }: { documentName: string; sub: string; sessionId: string }) {
+  const decision = await rechckDocumentAccess({
+    apiBaseUrl: GO_INTERNAL_API_URL,
+    secret: TOKEN_SECRET,
+    documentName,
+    sub,
+    sessionId,
+  });
+  if (typeof decision.readOnly !== "boolean") throw new Error("Canvas authorization omitted readOnly");
+  return { allowed: decision.allowed, readOnly: decision.readOnly, reason: decision.reason };
+}
+
+/**
+ * Canvas-only hooks are deliberately separate from the legacy document hooks.
+ * onAuthenticate is the per-connection authorization path; onLoadDocument is
+ * only persistence and cannot authorize a second socket joining a hot doc.
+ */
+export function createCanvasLifecycleHooks({
+  lifecycle = createCanvasLifecycle(),
+  authorize = currentCanvasAuthorization,
+}: {
+  lifecycle?: Partial<Pick<CanvasLifecycle, "beginAdmission" | "commitAdmission" | "rollbackAdmission">>;
+  authorize?: CanvasAuthorization;
+} = {}) {
+  async function authorizeConnection({ documentName, context, connectionConfig, connection }: {
+    documentName: string;
+    context: { userId?: string; sessionId?: string };
+    connectionConfig: { readOnly: boolean };
+    connection?: CanvasConnection;
+  }) {
+    if (!documentName.startsWith("canvas:")) return;
+    if (!context.userId || !context.sessionId) {
+      throw new CanvasLifecycleError("missing_authenticated_context", "Canvas connection is missing authenticated context");
+    }
+    const decision = await authorize({ documentName, sub: context.userId, sessionId: context.sessionId });
+    if (decision.code === "session_freezing") throw retryableFreezeError();
+    if (!decision.allowed) throw lifecycleErrorFromDecision(decision);
+    if (decision.readOnly) {
+      connectionConfig.readOnly = true;
+      if (connection) connection.readOnly = true;
+    }
+  }
+
+  return {
+    async onAuthenticate(input: {
+      documentName: string;
+      context: { userId?: string; sessionId?: string };
+      connectionConfig: { readOnly: boolean };
+    }) {
+      await authorizeConnection(input);
+    },
+
+    async beforeHandleMessage(input: {
+      documentName: string;
+      document?: Y.Doc;
+      connection: CanvasConnection;
+      update: Uint8Array;
+      context: { userId?: string; sessionId?: string };
+    }) {
+      if (!input.documentName.startsWith("canvas:") || input.connection.readOnly || !isYjsMutationFrame(input.update)) return;
+      const config = { readOnly: input.connection.readOnly };
+      await authorizeConnection({ ...input, connectionConfig: config });
+      if (input.connection.readOnly) return;
+      if (!input.context.sessionId) throw new CanvasLifecycleError("missing_authenticated_context", "Canvas connection is missing authenticated session context");
+      await lifecycle.beginAdmission?.({
+        documentName: input.documentName,
+        sessionId: input.context.sessionId,
+        connection: input.connection,
+        update: input.update,
+      } as never);
+
+      if (!input.document || !lifecycle.commitAdmission) return;
+      let settled = false;
+      const commit = () => {
+        // Hocuspocus passes the Connection instance as Yjs origin.  The
+        // installed 3.4.4 apply seam can wrap that object, so the pending
+        // admission is correlated to this exact document/turnstile rather
+        // than a byte digest or a fragile wrapper identity.
+        if (settled) return;
+        settled = true;
+        input.document?.off("update", commit);
+        lifecycle.commitAdmission?.({ documentName: input.documentName, connection: input.connection });
+      };
+      input.document.on("update", commit);
+      setImmediate(() => {
+        if (settled) return;
+        settled = true;
+        input.document?.off("update", commit);
+        lifecycle.rollbackAdmission?.({ documentName: input.documentName, connection: input.connection });
+      });
+    },
+  };
+}
+
+/** Close both reader and writer sockets when their signed canvas JWT expires. */
+export function scheduleCanvasJwtExpiry({
+  exp,
+  connection,
+  now = () => Date.now(),
+}: {
+  exp: number;
+  connection: { close: (event?: { code?: number; reason?: string }) => void };
+  now?: () => number;
+}) {
+  let cancelled = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const check = () => {
+    if (cancelled) return;
+    const remaining = exp * 1_000 - now();
+    if (remaining <= 0) {
+      connection.close({ code: 4001, reason: "canvas_jwt_expired" });
+      return;
+    }
+    timer = setTimeout(check, Math.min(remaining, 2_147_483_647));
+  };
+  if (exp * 1_000 <= now()) {
+    check();
+  } else {
+    timer = setTimeout(check, Math.min(exp * 1_000 - now(), 2_147_483_647));
+  }
+  return {
+    cancel() {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    },
+  };
+}
+
+const canvasLifecycle = createCanvasLifecycle({
+  validateLease: async ({ sessionId, freezeToken, signal }) => {
+    const response = await fetch(`${GO_INTERNAL_API_URL}/api/internal/canvas-sessions/freeze-auth`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${HOCUSPOCUS_CONTROL_SECRET}` },
+      body: JSON.stringify({ sessionId, freezeToken }),
+      signal,
+    });
+    if (response.status !== 200) return { allowed: false };
+    const body = await response.json() as { allowed?: unknown; remainingMs?: unknown };
+    return {
+      allowed: body.allowed === true && Number.isInteger(body.remainingMs) && Number(body.remainingMs) > 0,
+      remainingMs: typeof body.remainingMs === "number" ? body.remainingMs : undefined,
+    };
+  },
+});
+
+const canvasLifecycleHooks = createCanvasLifecycleHooks({ lifecycle: canvasLifecycle });
 
 export function canvasAuthenticationContext({
   documentName,
@@ -104,7 +313,7 @@ export function canvasAuthenticationContext({
   connectionConfig,
 }: {
   documentName: string;
-  claims: { sub: string; role: string; readOnly: boolean; sessionId?: string };
+  claims: { sub: string; role: string; readOnly: boolean; sessionId?: string; exp?: number };
   connectionConfig: { readOnly: boolean };
 }): AuthContext {
   if (!documentName.startsWith("canvas:")) {
@@ -120,6 +329,7 @@ export function canvasAuthenticationContext({
     canvasId: documentName.slice("canvas:".length),
     sessionId: claims.sessionId,
     readOnly: claims.readOnly,
+    jwtExpiry: claims.exp,
   };
 }
 
@@ -232,7 +442,9 @@ export const hocuspocusHooks = {
       throw new Error("JWT scope does not match documentName");
     }
     if (documentName.startsWith("canvas:")) {
-      return canvasAuthenticationContext({ documentName, claims, connectionConfig });
+      const context = canvasAuthenticationContext({ documentName, claims, connectionConfig });
+      await canvasLifecycleHooks.onAuthenticate({ documentName, context, connectionConfig });
+      return context;
     }
     const ctx: AuthContext = {
       userId: claims.sub,
@@ -293,8 +505,14 @@ export const hocuspocusHooks = {
       }
       if (yjsState !== null) {
         const update = Buffer.from(yjsState, "base64");
-        Y.applyUpdate(document, update);
+        if (documentName.startsWith("canvas:")) {
+          await canvasLifecycle.beginLoad({ documentName, document, persistedUpdate: update });
+        } else {
+          Y.applyUpdate(document, update);
+        }
         console.log(`[hocuspocus] Loaded state for: ${documentName}`);
+      } else if (documentName.startsWith("canvas:")) {
+        await canvasLifecycle.beginLoad({ documentName, document });
       }
     } catch (err) {
       console.error(`[hocuspocus] Failed to load state for ${documentName}:`, err);
@@ -306,13 +524,13 @@ export const hocuspocusHooks = {
     return document;
   },
 
-  async beforeHandleMessage({ documentName, connection, update, context }) {
-    await guardCanvasMutationFrame({
+  async beforeHandleMessage({ documentName, document, connection, update, context }) {
+    await canvasLifecycleHooks.beforeHandleMessage({
       documentName,
+      document,
       connection,
       update,
-      userId: (context as AuthContext | undefined)?.userId ?? "",
-      sessionId: (context as AuthContext | undefined)?.sessionId,
+      context: context as AuthContext,
     });
   },
 
@@ -351,12 +569,104 @@ export const hocuspocusHooks = {
   async onDisconnect({ documentName }: { documentName: string }) {
     console.log(`[hocuspocus] Client disconnected from: ${documentName}`);
   },
+
+  async connected({ documentName, context, connection }: { documentName: string; context: AuthContext; connection: { onClose: (callback: () => void) => unknown; close: (event?: { code?: number; reason?: string }) => void } }) {
+    if (!documentName.startsWith("canvas:") || !context.jwtExpiry) return;
+    const expiry = scheduleCanvasJwtExpiry({ exp: context.jwtExpiry, connection });
+    connection.onClose(() => expiry.cancel());
+  },
 };
 
-const server = new Server(hocuspocusHooks);
+const server = new Server(hocuspocusHooks, { maxPayload: HOCUSPOCUS_SHARED_MAX_PAYLOAD });
+
+function writeControlResponse(response: ServerResponse, status: number, body: Record<string, unknown>): void {
+  response.writeHead(status, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+  response.end(JSON.stringify(body));
+}
+
+async function readStrictJson(request: HttpIncomingMessage): Promise<unknown> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of request) {
+    const data = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    size += data.length;
+    if (size > 64 * 1024) throw new CanvasLifecycleError("control_body_too_large", "Control request body is too large");
+    chunks.push(data);
+  }
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  } catch {
+    throw new CanvasLifecycleError("invalid_control_request", "Control request JSON is invalid");
+  }
+}
+
+/**
+ * This listener is intentionally not a Hocuspocus hook: the browser websocket
+ * server has no control routes and never receives the control bearer.
+ */
+export function createCanvasControlListener({
+  secret,
+  lifecycle = canvasLifecycle,
+  host = HOCUSPOCUS_CONTROL_HOST,
+  port = HOCUSPOCUS_CONTROL_PORT,
+  tls,
+}: {
+  secret: string;
+  lifecycle?: CanvasLifecycle;
+  host?: string;
+  port?: number;
+  tls?: { key: Buffer; cert: Buffer };
+}) {
+  const control = createCanvasControlServer({ secret, lifecycle });
+  const handler = async (request: HttpIncomingMessage, response: ServerResponse) => {
+    let json: unknown;
+    try {
+      json = request.method === "POST" ? await readStrictJson(request) : undefined;
+    } catch (error) {
+      const known = error instanceof CanvasLifecycleError;
+      writeControlResponse(response, known ? 400 : 500, { code: known ? error.code : "control_failure" });
+      return;
+    }
+    const result = await control.dispatch({
+      method: request.method ?? "",
+      path: new URL(request.url ?? "/", "http://127.0.0.1").pathname,
+      authorization: request.headers.authorization,
+      json,
+    });
+    writeControlResponse(response, result.status, result.json);
+  };
+  const listener = tls ? createHttpsServer(tls, handler) : createHttpServer(handler);
+  return {
+    listener,
+    listen() {
+      return new Promise<void>((resolve, reject) => {
+        const onError = (error: Error) => {
+          listener.off("listening", onListening);
+          reject(error);
+        };
+        const onListening = () => {
+          listener.off("error", onError);
+          resolve();
+        };
+        listener.once("error", onError);
+        listener.once("listening", onListening);
+        listener.listen({ host, port });
+      });
+    },
+  };
+}
 
 if (import.meta.main) {
-  server.listen().then(() => {
+  try {
+    validateRealtimeAuthEnv();
+    const config = validateControlEnv();
+    const control = createCanvasControlListener({ secret: config.secret, host: config.host, port: config.port, tls: config.tls });
+    await control.listen();
+    await server.listen();
     console.log(`[hocuspocus] WebSocket server running on ws://127.0.0.1:${HOCUSPOCUS_PORT}`);
-  });
+    console.log(`[hocuspocus] Canvas control listener running on ${config.tls ? "https" : "http"}://${config.host}:${config.port}`);
+  } catch (error) {
+    console.error("[hocuspocus] refusing to start:", error);
+    process.exitCode = 1;
+  }
 }

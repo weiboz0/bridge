@@ -977,3 +977,13 @@ _Plan-wide report pending later phases._
 - `CHECK_TEST_DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test node scripts/check-test-database-url.mjs` passed before the database-touching Hocuspocus suite ran.
   No migration, service, E2E, or live-provider command ran.
 - Updated the normal test script so its Hocuspocus leg will execute both `server/hocuspocus.canvas.test.ts` and `server/canvas-lifecycle.test.ts` once the Phase 10 production slice lands.
+
+### Phase 10 — lifecycle, control, admission, and provider production (2026-08-12; Terra)
+
+- GREEN: added `server/canvas-lifecycle.ts` with the canonical signed session lifecycle key, strict control request decoding and constant-time bearer boundary, per-session token serializer, monotonic Go-validated lease expiry, cached capture accounting, reference-counted response writers, canvas admission turnstiles, shadow Yjs validation, parsed update ceiling, and generation-owned document cleanup.
+- GREEN: wired canvas-only Hocuspocus hooks for every connection admission, pre-apply authorization and temporary-freeze response, JWT-expiry closure, installed `MessageReceiver.apply` commit/fallback handling, persistent canvas loading, a numeric-loopback internal API default, the 100 MiB shared websocket compatibility cap, and a separate strict control-listener factory.
+- GREEN: added the canvas-specific reconnect classifier to `use-yjs-provider`, including a resettable 20-second freeze horizon, two-second fast retry ceiling, jittered 30-second outage tail, terminal classification, and attempt/session compatibility.
+- Test-database reconciliation: `CHECK_TEST_DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test node scripts/check-test-database-url.mjs` passed before the database-touching Hocuspocus suite; no migration, service, E2E, non-test database, or live-provider command ran.
+- `PATH=/home/chris/.bun/bin:$PATH DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test TEST_DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test bun test server/hocuspocus.canvas.test.ts server/canvas-lifecycle.test.ts` passed 38 tests.
+- `PATH=/home/chris/.bun/bin:$PATH DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test TEST_DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test bunx --bun vitest run tests/unit/use-yjs-provider.test.ts` passed 4 tests; `PATH=/home/chris/.bun/bin:$PATH bunx --bun tsc --noEmit`, phase-local ESLint, and `git diff --check` passed.
+- `bun run lint` remains UNVERIFIED as a phase gate because the clean baseline reports 100 existing errors outside Phase 10; the phase-local files are lint-clean, and the full command's sole Phase-10 finding was corrected before the scoped lint rerun.
