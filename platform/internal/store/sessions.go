@@ -35,7 +35,7 @@ type LiveSession struct {
 	StartedAt        time.Time         `json:"startedAt"`
 	EndedAt          *time.Time        `json:"endedAt"`
 	Visibility       string            `json:"visibility"`
-	ReplacedSessions []ReplacedSession `json:"replacedSessions,omitempty"`
+	ReplacedSessions []ReplacedSession `json:"replacedSessions"`
 }
 
 type SessionParticipant struct {
@@ -227,6 +227,9 @@ func (s *SessionStore) CreateSession(ctx context.Context, input CreateSessionInp
 		return nil, err
 	}
 	session.ReplacedSessions = replaced
+	if session.ReplacedSessions == nil {
+		session.ReplacedSessions = []ReplacedSession{}
+	}
 
 	// Plan 048 phase 1: snapshot the class's focus areas into
 	// session_topics inside the same transaction as the session row.

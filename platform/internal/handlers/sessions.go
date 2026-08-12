@@ -574,19 +574,20 @@ func (h *SessionHandler) EndSession(w http.ResponseWriter, r *http.Request) {
 
 	confirmed := false
 	durablyEnded := false
+	completeAfterCommit := false
 	if h.CanvasControl != nil {
 		bundle, freezeErr := h.CanvasControl.Freeze(r.Context(), realtime.FreezeRequest{
-			SessionID: sessionID, Token: prep.Token, CanvasIDs: prep.CanvasIDs,
+			SessionID: sessionID, FreezeToken: prep.Token, CanvasIDs: prep.CanvasIDs,
 		})
 		if freezeErr == nil {
-			snapshots := make([]store.CanvasSnapshot, 0, len(bundle.Entries))
-			for _, entry := range bundle.Entries {
+			snapshots := make([]store.CanvasSnapshot, 0, len(bundle.Snapshots))
+			for _, entry := range bundle.Snapshots {
 				snapshots = append(snapshots, store.CanvasSnapshot{CanvasID: entry.CanvasID, YjsState: base64.StdEncoding.EncodeToString(entry.State)})
 			}
 			if completeErr := h.Sessions.CompleteSessionConfirmed(r.Context(), sessionID, prep.Token, snapshots); completeErr == nil {
 				confirmed = true
 				durablyEnded = true
-				h.CanvasControl.Complete(r.Context(), sessionID, prep.Token)
+				completeAfterCommit = true
 			} else if errors.Is(completeErr, store.ErrSessionSnapshotCountMismatch) || errors.Is(completeErr, store.ErrSessionEndInProgress) {
 				// The confirmed transaction rolled back. A separate transaction may
 				// safely record the honest false/no-snapshot result.
@@ -596,7 +597,7 @@ func (h *SessionHandler) EndSession(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 				durablyEnded = true
-				h.CanvasControl.Complete(r.Context(), sessionID, prep.Token)
+				completeAfterCommit = true
 			} else {
 				// An infrastructure failure is not evidence that an end committed.
 				// Keep the session live, clear only our own lease, and release the
@@ -617,7 +618,7 @@ func (h *SessionHandler) EndSession(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if h.CanvasControl != nil {
-			h.CanvasControl.Complete(r.Context(), sessionID, prep.Token)
+			completeAfterCommit = true
 		}
 	}
 
@@ -631,16 +632,24 @@ func (h *SessionHandler) EndSession(w http.ResponseWriter, r *http.Request) {
 	if h.Broadcaster != nil {
 		h.Broadcaster.Emit(sessionID, "session_ended", nil)
 	}
-	ended, err := h.Sessions.GetSession(r.Context(), sessionID)
-	if err != nil || ended == nil {
-		writeError(w, http.StatusInternalServerError, "Database error")
-		return
+	if completeAfterCommit && h.CanvasControl != nil {
+		// Terminal cleanup has no authority over the durable result. Keep it out
+		// of the request path so a half-open Hocuspocus socket cannot delay the
+		// schedule/event handoff or turn an ended session into a timeout.
+		go h.CanvasControl.Complete(context.Background(), sessionID, prep.Token)
 	}
+	// Do not re-read after commit: that read can fail after clients have already
+	// received an event, incorrectly turning a durable end into a 500. Shape the
+	// compatible session fields from the authorized pre-commit representation.
+	ended := *session
+	ended.Status = "ended"
+	now := time.Now()
+	ended.EndedAt = &now
 	archiveComplete := confirmed
-	response := map[string]any{"session": ended, "whiteboardServerArchiveComplete": archiveComplete}
+	response := map[string]any{"whiteboardServerArchiveComplete": archiveComplete}
 	// Preserve the established top-level session representation for callers
 	// while adding stable Phase-9 metadata.
-	forEnd := *ended
+	forEnd := ended
 	forEnd.Status = "ended"
 	response["id"] = forEnd.ID
 	response["classId"] = forEnd.ClassID
@@ -653,6 +662,7 @@ func (h *SessionHandler) EndSession(w http.ResponseWriter, r *http.Request) {
 	response["visibility"] = forEnd.Visibility
 	if !confirmed {
 		response["warning"] = incompleteWhiteboardArchiveWarning
+		response["warningCode"] = "whiteboard_server_archive_incomplete"
 	}
 	writeJSON(w, http.StatusOK, response)
 }
@@ -668,11 +678,12 @@ func settleReplacedSessions(ctx context.Context, replaced []store.ReplacedSessio
 				slog.Warn("failed to complete replaced scheduled session", "sessionId", prior.ID, "error", err)
 			}
 		}
-		if control != nil && prior.ClearedFreezeToken != nil {
-			control.Complete(ctx, prior.ID, *prior.ClearedFreezeToken)
-		}
 		if broadcaster != nil {
 			broadcaster.Emit(prior.ID, "session_ended", nil)
+		}
+		if control != nil && prior.ClearedFreezeToken != nil {
+			id, token := prior.ID, *prior.ClearedFreezeToken
+			go control.Complete(context.Background(), id, token)
 		}
 	}
 }

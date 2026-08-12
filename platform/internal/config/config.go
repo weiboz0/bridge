@@ -53,11 +53,11 @@ type SandboxConfig struct {
 // HOCUSPOCUS_TOKEN_SECRET; never lives in the TOML config file.
 type RealtimeConfig struct {
 	HocuspocusTokenSecret string `toml:"-"`
-	// HocuspocusControlURL is server-to-server only. HTTP is accepted only
+	// HocuspocusInternalURL is server-to-server only. HTTP is accepted only
 	// for a numeric IPv4 loopback origin; non-loopback deployments use normal
 	// verified HTTPS. The listener port defaults to 4001 when no URL override
 	// is supplied.
-	HocuspocusControlURL    string `toml:"-"`
+	HocuspocusInternalURL   string `toml:"-"`
 	HocuspocusControlSecret string `toml:"-"`
 }
 
@@ -65,8 +65,8 @@ type RealtimeConfig struct {
 // route registration. The control bearer is intentionally distinct from the
 // websocket JWT signing key: either credential alone must not grant both jobs.
 func (r RealtimeConfig) ValidateControl() error {
-	if strings.TrimSpace(r.HocuspocusControlSecret) == "" {
-		return fmt.Errorf("HOCUSPOCUS_CONTROL_SECRET is required")
+	if err := realtime.ValidateControlSecret(r.HocuspocusControlSecret); err != nil {
+		return err
 	}
 	if strings.TrimSpace(r.HocuspocusTokenSecret) == "" {
 		return fmt.Errorf("HOCUSPOCUS_TOKEN_SECRET is required")
@@ -74,8 +74,8 @@ func (r RealtimeConfig) ValidateControl() error {
 	if r.HocuspocusControlSecret == r.HocuspocusTokenSecret {
 		return fmt.Errorf("HOCUSPOCUS_CONTROL_SECRET must differ from HOCUSPOCUS_TOKEN_SECRET")
 	}
-	if err := realtime.ValidateControlURL(r.HocuspocusControlURL); err != nil {
-		return fmt.Errorf("invalid HOCUSPOCUS_CONTROL_URL: %w", err)
+	if err := realtime.ValidateControlURL(r.HocuspocusInternalURL); err != nil {
+		return fmt.Errorf("invalid HOCUSPOCUS_INTERNAL_URL: %w", err)
 	}
 	return nil
 }
@@ -157,14 +157,14 @@ func Load(path string) (*Config, error) {
 		} else {
 			// Preserve an invalid value in the derived URL so startup's strict
 			// validator refuses it rather than silently listening elsewhere.
-			cfg.Realtime.HocuspocusControlURL = "http://127.0.0.1:" + v
+			cfg.Realtime.HocuspocusInternalURL = "http://127.0.0.1:" + v
 		}
 	}
-	if cfg.Realtime.HocuspocusControlURL == "" {
-		cfg.Realtime.HocuspocusControlURL = fmt.Sprintf("http://127.0.0.1:%d", controlPort)
+	if cfg.Realtime.HocuspocusInternalURL == "" {
+		cfg.Realtime.HocuspocusInternalURL = fmt.Sprintf("http://127.0.0.1:%d", controlPort)
 	}
-	if v := os.Getenv("HOCUSPOCUS_CONTROL_URL"); v != "" {
-		cfg.Realtime.HocuspocusControlURL = v
+	if v := os.Getenv("HOCUSPOCUS_INTERNAL_URL"); v != "" {
+		cfg.Realtime.HocuspocusInternalURL = v
 	}
 	if v := os.Getenv("HOCUSPOCUS_CONTROL_SECRET"); v != "" {
 		cfg.Realtime.HocuspocusControlSecret = v

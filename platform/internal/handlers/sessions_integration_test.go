@@ -17,8 +17,22 @@ import (
 
 	"github.com/weiboz0/bridge/platform/internal/auth"
 	"github.com/weiboz0/bridge/platform/internal/events"
+	"github.com/weiboz0/bridge/platform/internal/realtime"
 	"github.com/weiboz0/bridge/platform/internal/store"
 )
+
+type fakeCanvasControl struct {
+	bundle                     realtime.FreezeBundle
+	err                        error
+	freeze, complete, unfreeze int
+}
+
+func (f *fakeCanvasControl) Freeze(_ context.Context, _ realtime.FreezeRequest) (realtime.FreezeBundle, error) {
+	f.freeze++
+	return f.bundle, f.err
+}
+func (f *fakeCanvasControl) Complete(context.Context, string, string) { f.complete++ }
+func (f *fakeCanvasControl) Unfreeze(context.Context, string, string) { f.unfreeze++ }
 
 // sessionFixture is the world a session integration test runs against.
 type sessionFixture struct {
@@ -955,10 +969,30 @@ func TestEndSession_DegradedResponseWarnsAndEmitsOnlyAfterDurableCommit(t *testi
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
 	require.Equal(t, false, body["whiteboardServerArchiveComplete"])
 	require.Equal(t, "Session ended, but the latest whiteboard changes may not have been archived.", body["warning"])
+	require.Equal(t, "whiteboard_server_archive_incomplete", body["warningCode"])
 
 	var status string
 	require.NoError(t, fx.db.QueryRowContext(context.Background(), `SELECT status FROM sessions WHERE id = $1`, fx.sessionID).Scan(&status))
 	require.Equal(t, "ended", status)
+}
+
+func TestEndSession_ConfirmedSubsetPersistsSnapshotsWithoutWarning(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	canvases := store.NewCanvasStore(fx.db)
+	canvas, err := canvases.CreateCanvas(context.Background(), store.CreateCanvasInput{SessionID: fx.sessionID, OwnerID: fx.teacher.ID, Title: "captured", Visibility: "private"})
+	require.NoError(t, err)
+	control := &fakeCanvasControl{bundle: realtime.FreezeBundle{Snapshots: []realtime.CanvasSnapshot{{CanvasID: canvas.ID, State: []byte("final")}}}}
+	fx.h.CanvasControl = control
+	w := fx.doRequest(t, http.MethodPost, "/api/sessions/"+fx.sessionID+"/end", nil, fx.claims(fx.teacher, false))
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	require.Equal(t, true, body["whiteboardServerArchiveComplete"])
+	_, warned := body["warning"]
+	require.False(t, warned)
+	var state string
+	require.NoError(t, fx.db.QueryRowContext(context.Background(), `SELECT yjs_state FROM session_canvases WHERE id=$1`, canvas.ID).Scan(&state))
+	require.Equal(t, "ZmluYWw=", state)
 }
 
 func TestSessionHandler_EndSession_NonTeacher403(t *testing.T) {

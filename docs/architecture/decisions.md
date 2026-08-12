@@ -120,7 +120,7 @@ The database result is authoritative; terminal complete/unfreeze calls are best 
 
 `HOCUSPOCUS_CONTROL_SECRET` is distinct from `HOCUSPOCUS_TOKEN_SECRET` and is required on both server processes.
 The Go API derives `http://127.0.0.1:4001` from `HOCUSPOCUS_CONTROL_PORT` by default.
-Plain HTTP is limited to numeric IPv4 loopback; every non-loopback control endpoint requires verified HTTPS and redirects are refused.
+Plain HTTP is limited to canonical numeric 127/8 or `::1` loopback; every non-loopback control endpoint requires verified HTTPS and redirects are refused.
 
 ---
 

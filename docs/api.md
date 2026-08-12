@@ -90,6 +90,12 @@ platform-administrator or impersonator bypass); GET returns `canvasFloor` and,
 after an end, an optional durable `whiteboardServerArchiveComplete` boolean.
 PATCH accepts exactly `{ "canvasFloor": "private" | "host" | "participants" }`.
 The older `/settings` route has no compatibility alias.
+
+An explicit successful end has the ordinary top-level session fields plus
+`whiteboardServerArchiveComplete`.
+When that value is `false`, it also has stable
+`warningCode: "whiteboard_server_archive_incomplete"` and a teacher-facing warning.
+It has no nested session wrapper.
 Canvas documents are read through the existing realtime-token mint endpoint using the `canvas:{canvasId}` scope; a token's `readOnly` claim is enforced by Hocuspocus, not merely by the browser UI.
 
 Live access follows the visibility ladder: owner at `private`; teacher at `host` and wider; a `present` participant at `participants` and wider; and any caller allowed into the live session at `session`.

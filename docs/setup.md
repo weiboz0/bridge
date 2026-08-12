@@ -208,10 +208,11 @@ starts and calls `process.exit(1)` on any misconfig — mirrors the Go API's
   shared only by the Go API and Hocuspocus's canvas lifecycle listener.
   It must differ from `HOCUSPOCUS_TOKEN_SECRET`; the Go API refuses startup if
   either is missing, equal, or paired with an unsafe control URL.
-  Generate it with `openssl rand -hex 32`.
+  Generate it with `openssl rand -hex 32`; the value must be exactly 64
+  lowercase hexadecimal characters.
   The default listener target is `http://127.0.0.1:4001`, derived from
   `HOCUSPOCUS_CONTROL_PORT` (default `4001`).
-  Set `HOCUSPOCUS_CONTROL_URL` only for an explicit override: HTTP is allowed
+  Set `HOCUSPOCUS_INTERNAL_URL` only for an explicit override: HTTP is allowed
   only on a numeric IPv4 loopback host, while remote listeners require verified HTTPS.
   This URL and secret are server-only; do not put either in `NEXT_PUBLIC_*`.
 - `BRIDGE_HOST_EXPOSURE` — same semantics as the Go API (see "Host Exposure

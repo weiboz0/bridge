@@ -26,7 +26,7 @@ import (
 
 const canvasHandlerTestDatabaseURL = "postgresql://work@127.0.0.1:5432/bridge_test"
 const canvasHandlerDBTimeout = 5 * time.Second
-const canvasControlTestSecret = "phase9-separate-control-test-secret"
+const canvasControlTestSecret = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
 type canvasHandlerFixture struct {
 	db       *sql.DB
@@ -360,9 +360,28 @@ func TestCanvasSettings_EndedTeacherReadsDurableTrueFalseAndNull(t *testing.T) {
 	}
 }
 
+func TestCanvasSettings_ExactAuthorizationAndMissingEndedMatrix(t *testing.T) {
+	fx := newCanvasHandlerFixture(t)
+	path := "/api/sessions/" + fx.session.ID + "/canvas-settings"
+	missing := "/api/sessions/00000000-0000-4000-8000-000000000000/canvas-settings"
+	require.Equal(t, http.StatusNotFound, fx.request(t, http.MethodGet, missing, nil, fx.claims(fx.teacher)).Code)
+	require.Equal(t, http.StatusNotFound, fx.request(t, http.MethodPatch, missing, map[string]string{"canvasFloor": "host"}, fx.claims(fx.teacher)).Code)
+	admin := fx.claims(fx.outsider)
+	admin.IsPlatformAdmin = true
+	require.Equal(t, http.StatusForbidden, fx.request(t, http.MethodGet, path, nil, admin).Code)
+	require.Equal(t, http.StatusForbidden, fx.request(t, http.MethodPatch, path, map[string]string{"canvasFloor": "host"}, admin).Code)
+	impersonatingTeacher := fx.claims(fx.teacher)
+	impersonatingTeacher.ImpersonatedBy = fx.outsider.ID
+	require.Equal(t, http.StatusOK, fx.request(t, http.MethodGet, path, nil, impersonatingTeacher).Code)
+	_, err := fx.db.ExecContext(context.Background(), `UPDATE sessions SET status='ended' WHERE id=$1`, fx.session.ID)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusForbidden, fx.request(t, http.MethodPatch, path, map[string]string{"canvasFloor": "host"}, fx.claims(fx.student)).Code)
+	require.Equal(t, http.StatusConflict, fx.request(t, http.MethodPatch, path, map[string]string{"canvasFloor": "host"}, fx.claims(fx.teacher)).Code)
+}
+
 func TestCanvasHandler_CreateCanvas_DeniesInvitedAndUnrepresentedAdministrator(t *testing.T) {
 	fx := newCanvasHandlerFixture(t)
-	invitee := fx.addUser(t, "invitee")
+	invitee := fx.addUser(t, fmt.Sprintf("invitee-%d", time.Now().UnixNano()))
 	require.NoError(t, func() error {
 		_, err := fx.h.Sessions.AddParticipant(context.Background(), fx.session.ID, invitee.ID, fx.teacher.ID)
 		return err
@@ -377,4 +396,12 @@ func TestCanvasHandler_CreateCanvas_DeniesInvitedAndUnrepresentedAdministrator(t
 	admin := fx.claims(fx.outsider)
 	admin.IsPlatformAdmin = true
 	require.Equal(t, http.StatusForbidden, create(admin).Code, "platform admin has no independent creator bypass")
+	_, err := fx.h.Sessions.JoinSession(context.Background(), fx.session.ID, invitee.ID)
+	require.NoError(t, err)
+	_, err = fx.h.Sessions.LeaveSession(context.Background(), fx.session.ID, invitee.ID)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusForbidden, create(fx.claims(invitee)).Code, "left participant is not currently present")
+	impersonatingOutsider := fx.claims(fx.outsider)
+	impersonatingOutsider.ImpersonatedBy = fx.teacher.ID
+	require.Equal(t, http.StatusForbidden, create(impersonatingOutsider).Code, "impersonation does not create a separate creator bypass")
 }

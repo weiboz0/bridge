@@ -290,6 +290,9 @@ func (s *ScheduleStore) StartScheduledSession(ctx context.Context, scheduleID, t
 		return nil, err
 	}
 	session.ReplacedSessions = replaced
+	if session.ReplacedSessions == nil {
+		session.ReplacedSessions = []ReplacedSession{}
+	}
 
 	// Link planned topics to session
 	for _, topicID := range sched.TopicIDs {

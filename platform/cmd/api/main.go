@@ -56,7 +56,7 @@ func main() {
 		os.Exit(1)
 	}
 	canvasControl, err := realtime.NewCanvasControlClient(realtime.CanvasControlConfig{
-		URL: cfg.Realtime.HocuspocusControlURL, Secret: cfg.Realtime.HocuspocusControlSecret,
+		URL: cfg.Realtime.HocuspocusInternalURL, Secret: cfg.Realtime.HocuspocusControlSecret,
 	})
 	if err != nil {
 		slog.Error("Invalid canvas control client", "error", err)

@@ -2,9 +2,9 @@ package handlers
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/weiboz0/bridge/platform/internal/auth"
+	"github.com/weiboz0/bridge/platform/internal/realtime"
 	"github.com/weiboz0/bridge/platform/internal/store"
 )
 
@@ -198,6 +199,7 @@ func (h *RealtimeHandler) MintToken(w http.ResponseWriter, r *http.Request) {
 	const ttl = 25 * time.Minute
 	token, err := auth.SignRealtimeTokenWithReadOnly(h.HocuspocusTokenSecret, claims.UserID, access.Role, body.DocumentName, access.ReadOnly, ttl)
 	if err != nil {
+		slog.Error("canvas authorization state query failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "Token sign failed")
 		return
 	}
@@ -313,13 +315,13 @@ func (h *RealtimeHandler) FreezeAuth(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "Canvas control not configured")
 		return
 	}
-	if r.Header.Get("Authorization") != "Bearer "+h.HocuspocusControlSecret {
+	if !realtime.ConstantTimeBearerMatch(r.Header.Get("Authorization"), h.HocuspocusControlSecret) {
 		writeError(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 	var body struct {
-		SessionID string `json:"sessionId"`
-		Token     string `json:"token"`
+		SessionID   string `json:"sessionId"`
+		FreezeToken string `json:"freezeToken"`
 	}
 	if !decodeJSONStrict(w, r, &body) {
 		return
@@ -328,11 +330,11 @@ func (h *RealtimeHandler) FreezeAuth(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "sessionId must be a canonical UUID")
 		return
 	}
-	if parsed, err := uuid.Parse(body.Token); err != nil || parsed.String() != body.Token {
-		writeError(w, http.StatusBadRequest, "token must be a canonical UUID")
+	if parsed, err := uuid.Parse(body.FreezeToken); err != nil || parsed.String() != body.FreezeToken {
+		writeError(w, http.StatusBadRequest, "freezeToken must be a canonical UUID")
 		return
 	}
-	allowed, remaining, err := h.Sessions.ValidateSessionFreezeLease(r.Context(), body.SessionID, body.Token)
+	allowed, remaining, err := h.Sessions.ValidateSessionFreezeLease(r.Context(), body.SessionID, body.FreezeToken)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
@@ -377,62 +379,37 @@ func (h *RealtimeHandler) authorizeCanvasDoc(ctx context.Context, claims *auth.C
 	if _, err := uuid.Parse(canvasID); err != nil {
 		return documentAuthorization{}, &authDecision{Status: http.StatusBadRequest, Message: "canvas doc-name must be canvas:{uuid}"}
 	}
-	canvas, err := h.Canvases.GetCanvasByID(ctx, canvasID)
-	if err != nil {
-		return documentAuthorization{}, &authDecision{Status: http.StatusInternalServerError, Message: "Database error"}
-	}
-	if canvas == nil {
-		return documentAuthorization{}, &authDecision{Status: http.StatusNotFound, Message: "Canvas not found"}
-	}
-	session, err := h.Sessions.GetSession(ctx, canvas.SessionID)
-	if err != nil {
-		return documentAuthorization{}, &authDecision{Status: http.StatusInternalServerError, Message: "Database error"}
-	}
-	if session == nil {
-		return documentAuthorization{}, &authDecision{Status: http.StatusNotFound, Message: "Session not found"}
-	}
-	// The advisory-lock read is intentionally after the canvas lookup but
-	// before any access result is produced. An end lease therefore excludes
-	// mutation authorization without turning this temporary state into a
-	// permanent read-only token decision.
-	lifecycle, err := h.Sessions.CanvasLifecycleState(ctx, session.ID)
-	if err == sql.ErrNoRows {
-		return documentAuthorization{}, &authDecision{Status: http.StatusNotFound, Message: "Session not found"}
-	}
-	if err != nil {
-		return documentAuthorization{}, &authDecision{Status: http.StatusInternalServerError, Message: "Database error"}
-	}
-	if lifecycle.FreezeActive {
+	state, err := h.Canvases.AuthorizeCanvasDocument(ctx, canvasID, claims.UserID)
+	if errors.Is(err, store.ErrSessionEndInProgress) {
 		return documentAuthorization{}, &authDecision{Status: http.StatusConflict, Message: "session_freezing"}
 	}
-	session.Status = lifecycle.Status
-	if canvas.OwnerID == claims.UserID {
-		return documentAuthorization{Role: "user", ReadOnly: session.Status == "ended"}, nil
-	}
-	participant, err := h.Sessions.GetSessionParticipant(ctx, session.ID, claims.UserID)
 	if err != nil {
+		slog.Error("canvas authorization state query failed", "error", err)
 		return documentAuthorization{}, &authDecision{Status: http.StatusInternalServerError, Message: "Database error"}
 	}
-	if session.Status == "ended" {
-		if session.TeacherID == claims.UserID && canvas.Visibility != "private" {
+	if state == nil {
+		return documentAuthorization{}, &authDecision{Status: http.StatusNotFound, Message: "Canvas not found"}
+	}
+	canvas := state.Canvas
+	if canvas.OwnerID == claims.UserID {
+		return documentAuthorization{Role: "user", ReadOnly: state.SessionStatus == "ended"}, nil
+	}
+	if state.SessionStatus == "ended" {
+		if state.TeacherID == claims.UserID && canvas.Visibility != "private" {
 			return documentAuthorization{Role: "teacher", ReadOnly: true}, nil
 		}
-		if participant != nil && (participant.Status == "present" || participant.Status == "left") && (canvas.Visibility == "participants" || canvas.Visibility == "session") {
+		if state.ParticipantStatus != nil && (*state.ParticipantStatus == "present" || *state.ParticipantStatus == "left") && (canvas.Visibility == "participants" || canvas.Visibility == "session") {
 			return documentAuthorization{Role: "user", ReadOnly: true}, nil
 		}
 		return documentAuthorization{}, &authDecision{Status: http.StatusForbidden, Message: "Not authorized"}
 	}
-	if session.TeacherID == claims.UserID && canvas.Visibility != "private" {
+	if state.TeacherID == claims.UserID && canvas.Visibility != "private" {
 		return documentAuthorization{Role: "teacher", ReadOnly: true}, nil
 	}
-	if participant != nil && participant.Status == "present" && (canvas.Visibility == "participants" || canvas.Visibility == "session") {
+	if state.ParticipantStatus != nil && *state.ParticipantStatus == "present" && (canvas.Visibility == "participants" || canvas.Visibility == "session") {
 		return documentAuthorization{Role: "user", ReadOnly: true}, nil
 	}
-	allowed, _, err := h.Sessions.CanAccessSession(ctx, session.ID, claims.UserID)
-	if err != nil {
-		return documentAuthorization{}, &authDecision{Status: http.StatusInternalServerError, Message: "Database error"}
-	}
-	if canvas.Visibility == "session" && allowed {
+	if canvas.Visibility == "session" && state.SessionAccess {
 		return documentAuthorization{Role: "user", ReadOnly: true}, nil
 	}
 	return documentAuthorization{}, &authDecision{Status: http.StatusForbidden, Message: "Not authorized"}

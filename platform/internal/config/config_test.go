@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -119,14 +120,14 @@ func TestLoad_LLMAPIKeyResolved(t *testing.T) {
 
 func TestLoad_RealtimeControlUsesNumericLoopbackDefaultAndSeparateSecret(t *testing.T) {
 	t.Setenv("HOCUSPOCUS_TOKEN_SECRET", "jwt-signing-secret")
-	t.Setenv("HOCUSPOCUS_CONTROL_SECRET", "control-bearer-secret")
-	t.Setenv("HOCUSPOCUS_CONTROL_URL", "")
+	t.Setenv("HOCUSPOCUS_CONTROL_SECRET", strings.Repeat("a", 64))
+	t.Setenv("HOCUSPOCUS_INTERNAL_URL", "")
 	t.Setenv("HOCUSPOCUS_CONTROL_PORT", "")
 
 	cfg, err := Load("")
 	require.NoError(t, err)
-	require.Equal(t, "http://127.0.0.1:4001", cfg.Realtime.HocuspocusControlURL)
-	require.Equal(t, "control-bearer-secret", cfg.Realtime.HocuspocusControlSecret)
+	require.Equal(t, "http://127.0.0.1:4001", cfg.Realtime.HocuspocusInternalURL)
+	require.Equal(t, strings.Repeat("a", 64), cfg.Realtime.HocuspocusControlSecret)
 	require.NotEqual(t, cfg.Realtime.HocuspocusTokenSecret, cfg.Realtime.HocuspocusControlSecret)
 }
 
@@ -135,15 +136,15 @@ func TestRealtimeControlConfig_FailsClosedForMissingSharedSecretAndUnsafeOverrid
 		name, controlURL, controlSecret, signingSecret string
 	}{
 		{"missing control secret", "http://127.0.0.1:4001", "", "jwt-signing-secret"},
-		{"reused signing secret", "http://127.0.0.1:4001", "same-secret", "same-secret"},
-		{"dns plaintext", "http://hocuspocus.internal:4001", "control-bearer-secret", "jwt-signing-secret"},
-		{"loopback hostname plaintext", "http://localhost:4001", "control-bearer-secret", "jwt-signing-secret"},
-		{"redirect-shaped override", "http://127.0.0.1:4001/path", "control-bearer-secret", "jwt-signing-secret"},
+		{"reused signing secret", "http://127.0.0.1:4001", strings.Repeat("a", 64), strings.Repeat("a", 64)},
+		{"dns plaintext", "http://hocuspocus.internal:4001", strings.Repeat("a", 64), "jwt-signing-secret"},
+		{"loopback hostname plaintext", "http://localhost:4001", strings.Repeat("a", 64), "jwt-signing-secret"},
+		{"redirect-shaped override", "http://127.0.0.1:4001/path", strings.Repeat("a", 64), "jwt-signing-secret"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := RealtimeConfig{
 				HocuspocusTokenSecret:   tc.signingSecret,
-				HocuspocusControlURL:    tc.controlURL,
+				HocuspocusInternalURL:   tc.controlURL,
 				HocuspocusControlSecret: tc.controlSecret,
 			}
 			require.Error(t, cfg.ValidateControl())

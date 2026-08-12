@@ -54,9 +54,6 @@ func (h *CanvasHandler) CreateCanvas(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
-	if _, ok := h.sessionForMutation(w, r); !ok {
-		return
-	}
 	var body struct {
 		Title      string `json:"title"`
 		Visibility string `json:"visibility"`
@@ -66,31 +63,6 @@ func (h *CanvasHandler) CreateCanvas(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.Title == "" || !canvasVisibility(body.Visibility) {
 		writeError(w, http.StatusBadRequest, "title and supported visibility are required")
-		return
-	}
-	// Creation is intentionally narrower than session admission: only the
-	// represented teacher or a currently-present participant may produce a
-	// durable canvas. Platform-admin and impersonation claims add no bypass.
-	session, err := h.Sessions.GetSession(r.Context(), chi.URLParam(r, "id"))
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "Database error")
-		return
-	}
-	if session == nil {
-		writeError(w, http.StatusNotFound, "Session not found")
-		return
-	}
-	allowed := session.TeacherID == claims.UserID
-	if !allowed {
-		participant, err := h.Sessions.GetSessionParticipant(r.Context(), session.ID, claims.UserID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "Database error")
-			return
-		}
-		allowed = participant != nil && participant.Status == "present"
-	}
-	if !allowed {
-		writeError(w, http.StatusForbidden, "Not authorized")
 		return
 	}
 	canvas, err := h.Canvases.CreateCanvas(r.Context(), store.CreateCanvasInput{SessionID: chi.URLParam(r, "id"), OwnerID: claims.UserID, Title: body.Title, Visibility: body.Visibility})
@@ -313,6 +285,8 @@ func (h *CanvasHandler) writeCanvasMutationError(w http.ResponseWriter, err erro
 	case errors.Is(err, store.ErrCanvasVisibilityTighten), errors.Is(err, store.ErrCanvasBelowFloor), errors.Is(err, store.ErrCanvasFloorTooLoose), errors.Is(err, store.ErrCanvasTitleRequired), errors.Is(err, store.ErrCanvasTitleTooLong):
 		writeError(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, store.ErrCanvasFloorUnauthorized):
+		writeError(w, http.StatusForbidden, "Not authorized")
+	case errors.Is(err, store.ErrCanvasCreatorUnauthorized):
 		writeError(w, http.StatusForbidden, "Not authorized")
 	default:
 		writeError(w, http.StatusInternalServerError, "Database error")

@@ -309,6 +309,17 @@ That recheck is now defense in depth: the confirmed path gains the lifecycle lea
 - `[GREEN]` With both `DATABASE_URL` and `TEST_DATABASE_URL` pinned to `postgresql://work@127.0.0.1:5432/bridge_test`: `go test ./internal/realtime ./internal/config ./internal/handlers ./internal/store -run 'Test(CanvasControl|EndSession|CreateSessionReplacement|ScheduleStartReplacement|FreezeAuth|RealtimeAuthLifecycle|CanvasSettings|CanvasCreate|RealtimeControl)' -count=1 -timeout 120s`; then the full `go test ./internal/handlers -count=1 -timeout 120s`, `go test ./internal/store -count=1 -timeout 120s`, `go vet ./internal/realtime ./internal/config ./internal/handlers ./internal/store`, and `git diff --check`.
 - `[PENDING]` Phase 9 is not complete: the frontend settings producer/consumer cutover and its required Vitest/typecheck evidence remain owned by the frontend slice.
 
+#### Phase 9 backend review remediation (2026-08-11; partial backend evidence)
+
+- `[backend]` The control client now uses the exact `freezeToken` wire and
+  `/internal/canvas-sessions/{freeze,complete,unfreeze}` endpoints.
+  It validates a sorted unique requested set of at most 50 IDs, a sorted subset snapshot response, per-snapshot and aggregate decoded-size limits, bounded body reads, no redirects, and an original two-second retry budget for transport and retryable-conflict failures.
+- `[backend]` Control configuration now derives `HOCUSPOCUS_INTERNAL_URL` from the control port and requires a separate fixed-size hex bearer.
+  Plain HTTP is restricted to canonical numeric loopback; HTTPS retains certificate verification; the freeze-auth bearer comparison is constant-time.
+- `[backend]` Canvas document authorization and creation move current-state decisions under the lifecycle lock, with creator teacher/present eligibility checked in the creation transaction.
+  Explicit end responses are top-level, include the durable completion flag, and use stable `whiteboard_server_archive_incomplete` warning metadata without a post-commit database reread.
+- `[PENDING]` Phase 10's control listener and the Phase-9 frontend consumer remain out of scope for this backend remediation.
+
 ### Phase 10 — Hocuspocus fence, admission, capture, and control listener *(Terra backend; tests by Terra)*
 
 - Move the new lifecycle machinery into focused `server/canvas-lifecycle.ts`; `server/hocuspocus.ts` wires its hooks and starts a separate authenticated control listener.

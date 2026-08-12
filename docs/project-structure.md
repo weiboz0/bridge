@@ -44,7 +44,7 @@ set the explicit URL vars: `GO_API_URL` / `GO_INTERNAL_API_URL` (Go host) and
 
 The canvas lifecycle listener is separate from the WebSocket port.
 `HOCUSPOCUS_CONTROL_SECRET` is required and must differ from `HOCUSPOCUS_TOKEN_SECRET`.
-The Go API uses the numeric-loopback URL derived from `HOCUSPOCUS_CONTROL_PORT` unless `HOCUSPOCUS_CONTROL_URL` overrides it.
+The Go API uses the numeric-loopback URL derived from `HOCUSPOCUS_CONTROL_PORT` unless `HOCUSPOCUS_INTERNAL_URL` overrides it.
 An override may use HTTP only on a numeric IPv4 loopback address; non-loopback deployments require normally verified HTTPS.
 This control URL and bearer are server-only and must never be exposed through Next.js or a browser configuration variable.
 

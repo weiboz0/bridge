@@ -18,13 +18,14 @@ const (
 )
 
 var (
-	ErrCanvasCapReached        = errors.New("session canvas cap reached")
-	ErrCanvasTitleRequired     = errors.New("canvas title is required")
-	ErrCanvasTitleTooLong      = errors.New("canvas title exceeds 255 characters")
-	ErrCanvasVisibilityTighten = errors.New("canvas visibility may only be loosened")
-	ErrCanvasBelowFloor        = errors.New("canvas visibility is below the session floor")
-	ErrCanvasFloorTooLoose     = errors.New("session canvas floor may not be session")
-	ErrCanvasFloorUnauthorized = errors.New("only the session host may set the canvas floor")
+	ErrCanvasCapReached          = errors.New("session canvas cap reached")
+	ErrCanvasTitleRequired       = errors.New("canvas title is required")
+	ErrCanvasTitleTooLong        = errors.New("canvas title exceeds 255 characters")
+	ErrCanvasVisibilityTighten   = errors.New("canvas visibility may only be loosened")
+	ErrCanvasBelowFloor          = errors.New("canvas visibility is below the session floor")
+	ErrCanvasFloorTooLoose       = errors.New("session canvas floor may not be session")
+	ErrCanvasFloorUnauthorized   = errors.New("only the session host may set the canvas floor")
+	ErrCanvasCreatorUnauthorized = errors.New("only the session teacher or present participant may create a canvas")
 )
 
 // Canvas is a persisted whiteboard owned by one user within a session.
@@ -43,6 +44,75 @@ type Canvas struct {
 type CanvasSettings struct {
 	CanvasFloor                     string
 	WhiteboardServerArchiveComplete *bool
+}
+
+// CanvasDocumentAccess is a single shared-lifecycle-lock current-state
+// decision. Keeping every canvas/session/participant/class query on this
+// transaction prevents an end lease from interleaving halfway through auth.
+type CanvasDocumentAccess struct {
+	Canvas                   Canvas
+	SessionStatus, TeacherID string
+	ParticipantStatus        *string
+	SessionAccess            bool
+}
+
+func (s *CanvasStore) AuthorizeCanvasDocument(ctx context.Context, canvasID, userID string) (*CanvasDocumentAccess, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	var result CanvasDocumentAccess
+	var classID *string
+	var visibility string
+	var freezing bool
+	err = tx.QueryRowContext(ctx, `SELECT c.id, c.session_id, c.owner_id, c.title, c.visibility, c.created_at, c.updated_at, se.status, se.teacher_id, se.class_id, se.visibility, COALESCE(se.canvas_freeze_until>clock_timestamp(),false)
+		FROM session_canvases c JOIN sessions se ON se.id=c.session_id WHERE c.id=$1`, canvasID).
+		Scan(&result.Canvas.ID, &result.Canvas.SessionID, &result.Canvas.OwnerID, &result.Canvas.Title, &result.Canvas.Visibility, &result.Canvas.CreatedAt, &result.Canvas.UpdatedAt, &result.SessionStatus, &result.TeacherID, &classID, &visibility, &freezing)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := lockSessionLifecycle(ctx, tx, result.Canvas.SessionID, true); err != nil {
+		return nil, err
+	}
+	// Re-read after acquiring the lock; the first join only identifies its key.
+	err = tx.QueryRowContext(ctx, `SELECT status, teacher_id, class_id, visibility, COALESCE(canvas_freeze_until>clock_timestamp(),false) FROM sessions WHERE id=$1`, result.Canvas.SessionID).Scan(&result.SessionStatus, &result.TeacherID, &classID, &visibility, &freezing)
+	if err != nil {
+		return nil, err
+	}
+	if freezing {
+		return nil, ErrSessionEndInProgress
+	}
+	var participant sql.NullString
+	if err := tx.QueryRowContext(ctx, `SELECT status FROM session_participants WHERE session_id=$1 AND user_id=$2`, result.Canvas.SessionID, userID).Scan(&participant); err != nil && err != sql.ErrNoRows {
+		return nil, err
+	}
+	if participant.Valid {
+		result.ParticipantStatus = &participant.String
+	}
+	result.SessionAccess = result.TeacherID == userID
+	if !result.SessionAccess && result.SessionStatus == "live" {
+		if classID != nil {
+			var member bool
+			if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM class_memberships WHERE class_id=$1 AND user_id=$2)`, *classID, userID).Scan(&member); err != nil {
+				return nil, err
+			}
+			result.SessionAccess = member
+		}
+		if !result.SessionAccess && result.ParticipantStatus != nil && (*result.ParticipantStatus == "invited" || *result.ParticipantStatus == "present") {
+			result.SessionAccess = true
+		}
+		if !result.SessionAccess && classID == nil && visibility == "public" {
+			result.SessionAccess = true
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return &result, nil
 }
 
 type CreateCanvasInput struct {
@@ -146,11 +216,11 @@ func (s *CanvasStore) CreateCanvas(ctx context.Context, input CreateCanvasInput)
 		return nil, err
 	}
 
-	var floor, status string
+	var floor, status, teacherID string
 	var freezing bool
 	if err := tx.QueryRowContext(ctx,
-		`SELECT canvas_floor, status, COALESCE(canvas_freeze_until > clock_timestamp(), false) FROM sessions WHERE id = $1 FOR UPDATE`, input.SessionID,
-	).Scan(&floor, &status, &freezing); err == sql.ErrNoRows {
+		`SELECT canvas_floor, status, teacher_id, COALESCE(canvas_freeze_until > clock_timestamp(), false) FROM sessions WHERE id = $1 FOR UPDATE`, input.SessionID,
+	).Scan(&floor, &status, &teacherID, &freezing); err == sql.ErrNoRows {
 		return nil, nil
 	} else if err != nil {
 		return nil, err
@@ -161,6 +231,15 @@ func (s *CanvasStore) CreateCanvas(ctx context.Context, input CreateCanvasInput)
 	}
 	if freezing {
 		return nil, ErrSessionEndInProgress
+	}
+	if teacherID != input.OwnerID {
+		var present bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM session_participants WHERE session_id=$1 AND user_id=$2 AND status='present')`, input.SessionID, input.OwnerID).Scan(&present); err != nil {
+			return nil, err
+		}
+		if !present {
+			return nil, ErrCanvasCreatorUnauthorized
+		}
 	}
 
 	var count int
