@@ -39,6 +39,7 @@ Phases 7 through 13 remain blocked until this revised Tier-A plan reaches consen
 **`src/app/(portal)/sessions/[id]/whiteboards/page.tsx`** (new, dedicated read-only archive route) ·
 **`src/app/(portal)/teacher/page.tsx`** · **`src/app/(portal)/teacher/sessions/page.tsx`** · **`src/app/(portal)/teacher/classes/[id]/page.tsx`** · **`src/app/(portal)/student/classes/[id]/page.tsx`** (link ended-session history rows to the archive) ·
 **`tests/unit/teacher-session-row.test.tsx`** · **`tests/unit/ended-sessions-non-link.test.ts`** · **`tests/unit/sessions-room-page.test.tsx`** (update ended-session expectations) · **`tests/unit/whiteboard-archive.test.tsx`** (new archive interaction regression) ·
+**`tests/unit/whiteboard-panel.test.tsx`** (new live-panel create/list/floor/visibility and scene-UX regression) ·
 **`tests/unit/zod-vitest-interop.test.ts`** (new Bun/Vitest named-export and error-identity regression) ·
 **`tests/unit/excalidraw-yjs.test.ts`** (custom-binding regression) · `package.json` + **`bun.lock`** (add `@excalidraw/excalidraw`; no `y-excalidraw`) ·
 **`vitest.config.ts`** (Bun/Vitest Zod interop — scope-widened local-gate fix) ·
@@ -61,7 +62,7 @@ Phases 7 through 13 remain blocked until this revised Tier-A plan reaches consen
 **`src/components/teacher/start-session-button.tsx`** + **`tests/unit/start-session-button.test.tsx`** (new replacement warning regression) ·
 **`src/components/teacher/scheduled-session-list.tsx`** + **`tests/unit/scheduled-session-list.test.tsx`** (new rendered scheduled-start consumer and replacement warning regression) ·
 **`tests/unit/shadow-routes.test.ts`** · **`TODO.md`** ·
-**`e2e/session-whiteboard.spec.ts`** + **`e2e/helpers/**`** + **`e2e/seed.setup.ts`** (new lifecycle flow, fixtures, and controlled failure seam; explicit pinned-stack execution only) ·
+**`e2e/session-whiteboard.spec.ts`** + **`e2e/helpers.ts`** + **`e2e/helpers/**`** + **`e2e/seed.setup.ts`** (new lifecycle flow, fixtures, and controlled failure seam; explicit pinned-stack execution only) ·
 **`.env.example`** · **`docs/setup.md`** · **`docs/project-structure.md`** (server-only control configuration and ports) ·
 **`docs/reviewers.md`** + **`docs/development-workflow.md`** + **`docs/coding-agent.md`** (permanent review-gate and dispatch contracts).
 
@@ -135,7 +136,8 @@ A canvas is `documentName = canvas:{canvasId}`. Permission is enforced **server-
 
 **Mint matrix — ended session** (Decision 8): **everyone `readOnly=true`, including the owner** (archive). Reads: owner; teacher if visibility ≥ `host`; former participant (`session_participants` status `present`/`left`) if visibility ≥ `participants`. `session` and `participants` collapse to "former participant" in the archive (no live session to be public to).
 
-**Ended = no writes, enforced server-side before apply/relay (R2 blockers 1–2; R3–R4 hardening).** Mint alone is insufficient (a 25-min write token outlives `ended`), and `onStoreDocument` alone is insufficient too (Hocuspocus applies a writable connection's update in-memory and broadcasts it to peers *before* storage). Hocuspocus 3.4.4 provides the exact pre-apply boundary: `beforeHandleMessage` runs before `MessageReceiver` applies a Yjs frame, `connection.readOnly` is mutable, and `MessageReceiver` rejects sync updates from a read-only connection. For each mutation-bearing Yjs sync frame on an already-writable `canvas:` connection, `beforeHandleMessage` calls the existing Go `POST /api/internal/realtime/auth` recheck. The internal response is extended with the caller's **current `readOnly` decision**. If the session is now ended, Hocuspocus sets `connection.readOnly=true` before allowing `MessageReceiver` to continue, so that very update is rejected and never applied or broadcast; a deny or recheck failure closes the connection (fail-closed). A small frame classifier distinguishes mutation-bearing sync step 2/update messages from awareness/query traffic so cursor motion does not create a DB round-trip. This pre-apply recheck is the load-bearing transition mechanism — no cross-process force-close race or fallback window. `onStoreDocument` still rejects ended-session storage as a durable backstop; every mutating endpoint 409s when ended; mint issues only `readOnly=true` for ended sessions.
+**Historical pre-remediation boundary (superseded by Spec 013 and Phases 8–10).** Mint alone and `onStoreDocument` alone are insufficient, so the branch added a `beforeHandleMessage` current-state recheck before `MessageReceiver.apply` and kept storage rejection as a durable backstop.
+That recheck is now defense in depth: the confirmed path gains the lifecycle lease/fence/lock protocol, while the degraded path honestly permits only the finite already-authorized transient fan-in defined by Spec 013 rather than claiming cross-process apply-and-relay atomicity.
 
 **Session floor is capped at `participants` (R3 Opus — trust-model guard).** The host may set the floor to `private`/`host`/`participants`, never `session`. A `session`-visibility canvas is therefore *only ever an owner's per-canvas choice* (Decision 11), never imposed on students by a floor raise — otherwise a host could make every private student board world-readable in a public room without consent. Supervision needs (`participants`/`host`) are fully served; publishing a whole room is not a floor power.
 
@@ -148,9 +150,9 @@ A canvas is `documentName = canvas:{canvasId}`. Permission is enforced **server-
 - `store/canvases.go`: create (locks session row; `visibility = GREATEST(requested, floor)`; per-session cap under the lock), get, `list-visible-to-user` (owner/host/participant/session branches, scoped to path `session_id`, reusing the Decision-9 helpers; **special-case ended sessions the same way mint does** (R3 GLM) — for `ended`, use the archive rules, since `CanAccessSession` returns `ended→no_access` and would otherwise hide the archive from former participants), set-visibility (**locks session row**; loosen-only: reject target ≤ current or < floor), set-session-floor (host-only; **rejects `session` — floor capped at `participants`, R3**; locks session row; bumps `visibility < floor` up to floor in-txn; **lowering the floor is allowed** and leaves existing canvases as-is). DELETE purges the canvas row **and its persisted Yjs doc** (no orphan).
 - `store/canvases_test.go`: floor default + backfill; `GREATEST` at create; **concurrent create-vs-raise AND set-visibility-vs-raise leave nothing below floor**; loosen accepted, tighten rejected; raise-floor bumps; list-by-role across all 4 levels; per-session cap; cross-org isolation; an enum-ordinal assertion (`private<host<participants<session`) so a future reorder can't invert the floor compare.
 
-### Phase 1b — Backend: handlers + token mint + JWT claim *(Codex)*
+### Phase 1b — Backend: handlers + token mint + JWT claim *(Codex; historical contract superseded where Phases 8–12 say otherwise)*
 - `auth/realtime_jwt.go` + `server/realtime-jwt.ts`: add `readOnly` claim (both must stay byte-compatible — same field name/JSON tag).
-- `handlers/canvases.go`: `POST /api/sessions/{id}/canvases` (member; owner; starts at floor; cap-checked); `GET …/canvases` (visible-to-caller); `PATCH …/canvases/{cid}` (owner-only; loosen-only visibility, title); `DELETE …/canvases/{cid}` (owner-only; lifecycle); host-only `PATCH …/settings` for `canvas_floor`. **Every mutating endpoint 409s when the session `status=ended`** (R2 blocker 2 — no post-end loosening that would widen the archive).
+- `handlers/canvases.go`: the branch initially added member creation and host-only `PATCH …/settings`; Decision 14 and Phase 9 supersede those two contracts with represented-teacher/present creation and the atomic dedicated canvas-settings GET/PATCH cutover. The remaining list, owner loosen/title, delete, and ended-session rejection behavior carries forward.
 - `realtime_token.go`: add `canvas:{cid}` to the scope resolver implementing the live/ended mint matrix; set the `readOnly` claim. Refactor the shared document authorization result to carry `{role, readOnly}` so `POST /api/internal/realtime/auth` returns the same current `readOnly` decision to Hocuspocus (existing scopes default to `false`; canvas owners become `true` when ended).
 - `main.go`: wire `CanvasStore` + handler.
 - `canvases_integration_test.go` + `realtime_token_test.go`: the mint matrix (below), incl. ended-session archive.
@@ -245,10 +247,10 @@ A canvas is `documentName = canvas:{canvasId}`. Permission is enforced **server-
 - Preserve the existing risk-tiered plan/code roster unless the user explicitly changes it; remove the current `max_review_rounds = 3` cap and apply the same consensus/no-open-blocker rule.
 - Replace `AGENTS.md`'s obsolete “unresolved findings at the round-cap” safeguard with an unresolved-review-finding safeguard that remains independent of elapsed rounds.
   Mirror the design roster and define that a temporarily unavailable required reviewer pauses the gate rather than being silently replaced or waived.
-- Update `docs/coding-agent.md` to retain domain dispatch while documenting that an explicit user model pin overrides the default.
-  Mirror that override in `AGENTS.md`; for this remediation, all new or changed tests are delegated to Terra per the user's instruction, while reviewers remain independent and read-only.
-- Static governance checks must prove the design roster names exactly Sol + Fable 5, review approvals bind to an exact commit, all three review gates are uncapped consensus loops, and no text retains a conflicting numeric cap.
-- Run `bash scripts/tests/test-guards.sh`, `bash scripts/check-plan-uniqueness.sh`, `bash scripts/check-spec-uniqueness.sh`, and `git diff --check` before committing this phase.
+- Update `docs/coding-agent.md` to mirror the complete canonical design-gate rule as well as retaining domain dispatch and documenting that an explicit user model pin overrides the default.
+  Mirror the override in `AGENTS.md`; for this remediation, all new or changed tests are delegated to Terra per the user's instruction, while reviewers remain independent and read-only.
+- Extend `scripts/tests/test-guards.sh` with static governance checks proving the design roster names exactly Sol + Fable 5, review approvals bind to an exact commit, all three review gates are uncapped consensus loops, all four canonical documents mirror the rule, and no text retains a conflicting numeric cap.
+- Run `DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test TEST_DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test bash scripts/tests/test-guards.sh`, `bash scripts/check-plan-uniqueness.sh`, `bash scripts/check-spec-uniqueness.sh`, and `git diff --check` before committing this phase.
 
 ### Phase 8 — Durable lifecycle schema, locks, and replacement transitions *(Terra backend; tests by Terra)*
 
@@ -259,7 +261,8 @@ A canvas is `documentName = canvas:{canvasId}`. Permission is enforced **server-
 - Reconcile the already-used local `bridge_test` schema through an explicit approved test-database-only SQL step after both the decoded URL and live `current_database()` end in `_test`.
   Apply only the exact 0028 delta needed by the stale local test schema, record the SQL and before/after probe evidence, and never connect to or alter a non-test database.
 - Implement `platform/internal/store/session_lifecycle.go` as the single owner of lifecycle advisory-key derivation, lock helpers, lease acquisition/validation/cleanup, conditional true end followed by atomic bundle persistence, and separate degraded transition.
-  Canvas create, visibility, delete, and floor mutations take the shared lifecycle lock before their existing row lock.
+  Canvas create, visibility, delete, floor mutation, and canvas authorization take the shared lifecycle lock before their existing row/read lock and reject an unexpired lease with stable `409 session_end_in_progress` before writing or admitting a mutation.
+  A concurrent end request also returns that stable conflict, never clears another token, and a stale request follows the exact different-token expired/unexpired rules from Spec 013.
 - Refactor `SessionStore.CreateSession` and `ScheduleStore.StartScheduledSession` to take the class-replacement guard, acquire lifecycle locks in derived-key/UUID order, mark replaced live sessions archive-incomplete, clear leases, return replacement metadata, and preserve the newly created session atomically.
   Scheduled start re-reads the still-planned row after acquiring the class guard.
 - Focused GREEN commands use only a parsed and live-verified `_test` database:
@@ -272,7 +275,7 @@ A canvas is `documentName = canvas:{canvasId}`. Permission is enforced **server-
 - Tests first define `platform/internal/realtime/canvas_control_test.go` for strict URL/startup validation, loopback-only HTTP, verified non-loopback HTTPS, redirect refusal, bounded same-token retries, response-size/schema/base64/digest validation, transport-loss recovery, freeze/complete/unfreeze calls, and credential-safe errors.
 - Implement `platform/internal/realtime/canvas_control.go` with injected `http.Client`, one overall two-second freeze budget, bounded jitter, strict 48 MiB response reading, exact bundle validation, and best-effort terminal calls.
   Add server-only configuration to `platform/internal/config/config.go`, startup validation/wiring in `platform/cmd/api/main.go`, and no reuse of the realtime signing secret.
-  Require an explicit collision-free control port and a separately generated control secret; missing/invalid values fail startup rather than falling back to a dev-machine literal.
+  Preserve Spec 013's production `HOCUSPOCUS_CONTROL_PORT=4001` default and derive the numeric-loopback internal URL from it; require a separately generated control secret, and fail startup on a missing/invalid secret or invalid explicit override.
 - Extend `RealtimeHandler` with the control-bearer-protected `POST /api/internal/canvas-sessions/freeze-auth` callback.
   It takes the shared lifecycle advisory lock and returns positive integer `remainingMs` only for the exact live unexpired token.
 - Refactor the existing ordinary `POST /api/internal/realtime/auth` canvas authorization path to take the same shared lifecycle lock around its current-state decision; a freeze therefore cannot pass validation while an ordinary mutation authorization is outstanding.
@@ -280,29 +283,36 @@ A canvas is `documentName = canvas:{canvasId}`. Permission is enforced **server-
   GET returns exactly the floor plus the optional durable archive-complete boolean; PATCH accepts only the floor schema and rejects `session`.
   Both return 404 for a missing session and 403 for every non-teacher, including a platform administrator not impersonating the teacher.
   Migrate every whiteboard-panel and archive consumer plus their strict response-schema tests in this same phase and commit the producer/consumer cutover atomically.
+  Before removal, record repository and `main`-history evidence that no deployed caller used the feature-branch-only old route.
 - Tighten canvas creation to Decision 14's represented-teacher-or-currently-present matrix with no independent admin/impersonation bypass, and keep create plus every other canvas mutation behind the shared lifecycle lock.
 - Refactor explicit `SessionHandler.EndSession` to authorize the teacher, acquire and commit the lease/list transaction before HTTP, retry the same freeze token, strictly validate the bundle, run the confirmed transaction or the separate degraded transaction, emit/schedule only after commit, and expose durable `whiteboardServerArchiveComplete` plus the stable warning.
 - Update session-create and scheduled-start handlers to perform the same scheduled-session completion and event work for every replaced session, best-effort complete cleared tokens, and return `replacedSessions` without making replacement depend on Hocuspocus.
-- Remove the canvas-list duplicate session lookup, preserve the existing canvas-owner foreign-key retention behavior unless repository user-deletion evidence requires otherwise, and narrow the broadened blank-attempt load log while their owning store/handler files are already under review.
+- Remove the canvas-list duplicate session lookup and preserve the existing canvas-owner foreign-key retention behavior unless repository user-deletion evidence requires otherwise.
+- Update `.env.example`, `docs/setup.md`, and `docs/project-structure.md` in the same phase for the server-only internal URL, listener binding, default/override port, distinct secret, and loopback-or-verified-HTTPS rules.
 - Focused GREEN commands:
   `DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test TEST_DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test go test ./internal/realtime ./internal/handlers -run 'Test(CanvasControl|EndSession|CreateSessionReplacement|ScheduleStartReplacement|FreezeAuth|RealtimeAuthLifecycle|CanvasSettings|CanvasCreate)' -count=1 -timeout 120s`,
-  `DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test TEST_DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test go test ./... -count=1 -timeout 120s`, and `go vet ./internal/realtime ./internal/handlers` from `platform/`.
+  `DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test TEST_DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test go test ./... -count=1 -timeout 120s`, `go vet ./internal/realtime ./internal/handlers` from `platform/`,
+  and `DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test TEST_DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test bunx --bun vitest run tests/unit/whiteboard-panel.test.tsx tests/unit/whiteboard-archive.test.tsx` plus `bunx tsc --noEmit` from the repository root.
 
 ### Phase 10 — Hocuspocus fence, admission, capture, and control listener *(Terra backend; tests by Terra)*
 
 - Move the new lifecycle machinery into focused `server/canvas-lifecycle.ts`; `server/hocuspocus.ts` wires its hooks and starts a separate authenticated control listener.
   Preserve the shared websocket listener's 100 MiB compatibility cap; enforce the exact 1,048,576-byte decoded-update limit only after parsing a `canvas:` message.
 - Validate both control directions with the same transport rule and replace the current plain-HTTP `localhost` default with an explicit numeric loopback address; document that non-loopback endpoints require verified HTTPS.
-  Hocuspocus must fail startup if the control listener cannot bind or the explicit secret/port/TLS configuration is invalid.
+  Hocuspocus must fail startup if the control listener cannot bind or the explicit secret or TLS/port override is invalid; an omitted port uses Spec 013's 4001 default.
+- Implement the exact signed advisory-key derivation fixture in `server/canvas-lifecycle.ts` and prove its five boundary UUID vectors match Go and PostgreSQL, even though Node reaches the database lock only through the Go callback.
 - Implement the spec's per-session freeze/unfreeze/complete serializer, database-validated monotonic lease deadline, immutable cached bundles, reference-counted deadline-owned response writers, token/entry identity cleanup, 256 MiB capture ledger, and shared admission turnstile with an eight-operation pre-allocation cap.
 - Implement the per-document shadow Y.Doc admission contract, 128 MiB resident ledger, owned 500-millisecond authorization fetch, local-fence rechecks after every yield, pending-struct rejection, synchronous update-listener commit, actual-state fallback, generation-keyed load watchdog, and destroy-only irreversible cleanup.
   Freeze installs the fence and acquires the same turnstile before save mutex and capture.
-- Preserve current authorization on every load and mutation: a stale writable claim that now resolves ended/viewer becomes permanently read-only for that connection, a temporary freeze returns the retryable outcome without permanent downgrade, and every established canvas socket closes at the JWT expiry under a controlled Bun timer.
-- Update the shared Yjs provider with an explicit retry classification: `session_freezing` uses a reset-on-each-rejection recovery horizon of at least 20 seconds with a two-second per-attempt ceiling, uncategorized closes retain a jittered 30-second long tail, and no retryable freeze becomes a manual-reload terminal state.
+- Run the current internal authorization check in the per-connection admission hook, including connections joining an already-loaded document; do not rely on `onLoadDocument` for admission.
+  A stale writable claim that now resolves ended/viewer becomes permanently read-only for that connection, a temporary freeze returns the retryable outcome without permanent downgrade, and every established canvas socket closes at the JWT expiry under a controlled Bun timer.
+- Update the shared Yjs provider with an explicit retry classification: `session_freezing` uses a reset-on-each-rejection recovery horizon of at least 20 seconds with a two-second per-attempt ceiling.
+  An uncategorized close while believed live also stays at the two-second ceiling for the first 20 seconds, then grows with jitter toward a 30-second ceiling while retrying indefinitely until a terminal condition; no retryable freeze or ordinary outage becomes a manual-reload terminal state.
   Add compatibility tests proving attempt/session documents retain their existing behavior.
 - Add the three strict control endpoints on the separate listener: freeze, unfreeze, complete.
   Capture every loaded authoritative canvas under its save mutex, reserve before encode, yield between documents, cache before 200, stream with backpressure, close connections only after complete capture, and never write PostgreSQL from the freeze path.
 - Extend `server/hocuspocus.canvas.test.ts` and new `server/canvas-lifecycle.test.ts` with the complete Spec 013 Hocuspocus matrix, including installed-hook `MessageReceiver.apply` cases, partial-overlap Yjs updates, every pre-handoff rejection, saturated admission, half-open writers, same-token recovery, complete races, failed/unregistered load, reconnect-aborted unload, actual destroy, empty canvas lists, expiry, and all non-canvas namespace compatibility.
+- Narrow the broadened blank-attempt load log in `server/hocuspocus.ts` so expected missing state does not masquerade as an operational failure while real non-canvas load errors remain visible.
 - GREEN commands under Bun:
   `DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test TEST_DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test bun test server/hocuspocus.canvas.test.ts server/canvas-lifecycle.test.ts`,
   `bunx --bun tsc --noEmit`, and `git diff --check`.
@@ -310,7 +320,7 @@ A canvas is `documentName = canvas:{canvasId}`. Permission is enforced **server-
 
 ### Phase 11 — Teacher controls, durable warnings, and legacy-writer removal *(Sonnet frontend; tests by Terra)*
 
-- Tests first extend the whiteboard component suites for dedicated `canvas-settings` GET/PATCH, old-route absence, owner-versus-viewer controls, confirmation before irreversible visibility raises, image/paste/drop rejection, 100-millisecond trailing scene writes, remote-update echo suppression, allowlisted durable app state, and stable local UI state.
+- Tests first create `tests/unit/whiteboard-panel.test.tsx` and extend the binding suites for dedicated `canvas-settings` GET/PATCH, old-route absence, live create/list-by-role, owner-versus-viewer controls, confirmation before irreversible visibility raises, image/paste/drop rejection, identical serialized-scene skipping, 100-millisecond trailing scene writes, remote-update echo suppression, `viewBackgroundColor` plus the exact durable allowlist, and stable local viewport/zoom/selection/tool/collaborator/view-mode state.
 - Update the live whiteboard panel to expose the teacher's `private`/`host`/`participants` floor and the settled error/confirmation UX.
   Keep all archive boards read-only and make a teacher-only settings 403 invisible to non-teacher archive visitors.
 - Update the teacher dashboard end flow to decode the durable completion/warning response, render a failed-end error without navigating, and write a one-shot session warning before a successful archive redirect when completion is false.
@@ -320,26 +330,26 @@ A canvas is `documentName = canvas:{canvasId}`. Permission is enforced **server-
 - Fix the neutral session page to redirect only an existing ended-session former participant to the archive while preserving 404 for a missing session; correct the stale `student-session.tsx` effect dependencies.
 - Remove the shadow `PATCH` export from `src/app/api/sessions/[id]/route.ts`, remove the live `endSession` and dead `createSession` helpers from `src/lib/sessions.ts`, update `tests/unit/shadow-routes.test.ts` and `TODO.md`, and add a production-source scan proving no TypeScript session-status writer remains.
 - GREEN commands:
-  `bunx --bun vitest run tests/unit/start-session-button.test.tsx tests/unit/scheduled-session-list.test.tsx tests/unit/whiteboard-archive.test.tsx tests/unit/sessions-room-page.test.tsx tests/unit/shadow-routes.test.ts tests/unit/excalidraw-yjs.test.ts tests/unit/use-yjs-provider.test.ts`,
+  `DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test TEST_DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test bunx --bun vitest run tests/unit/whiteboard-panel.test.tsx tests/unit/start-session-button.test.tsx tests/unit/scheduled-session-list.test.tsx tests/unit/whiteboard-archive.test.tsx tests/unit/sessions-room-page.test.tsx tests/unit/shadow-routes.test.ts tests/unit/excalidraw-yjs.test.ts tests/unit/use-yjs-provider.test.ts`,
   the source-local whiteboard Vitest configuration, `bun run lint`, and `bunx tsc --noEmit`.
 
 ### Phase 12 — Integration tests (NAMED: lifecycle + realtime + API + persistence) *(Terra tests)*
 
 - **Fixtures:** `_test`-guarded host, present/left/invited participants, outsider, other-org user, live class and class-less sessions, scheduled session, 0/1/50 loaded canvases, controlled Hocuspocus server, fake clock, half-open control transport, and two concurrent database connections.
-- **Fast integration acceptance:** implement the exhaustive Spec 013 matrix, including the exact named tests `TestEndSession_ConfirmedBundlePersistsBeforeCommit`, `TestEndSession_DegradedWhenHocuspocusUnavailableWarnsTeacher`, `TestEndSession_TransportLossRecoversSameTokenBundle`, `TestEndSession_BatchFailureRollsBackTrueAndSnapshots`, `TestEndSession_DatabaseFailureLeavesLiveClearsLeaseAndEmitsNoEvent`, `TestEndSession_LeaseExpiryUsesSeparateDegradedTransaction`, `TestEndSession_OverlappingRequestsCannotClearForeignLease`, `TestEndSession_LateFreezeResponseCannotReinstallLease`, `TestEndSession_StaleTokenCannotClearDifferentExpiredToken`, `TestCreateSession_ReplacementEndsIncompleteAndWarns`, `TestStartScheduledSession_ReplacementCompletesScheduleAndWarns`, `TestReplacementRacePreservesExplicitConfirmedResult`, `TestFreezeAuth_SharedLockAndExactToken`, `TestRealtimeAuth_BlocksBehindFreezeLifecycleLock`, and `TestCanvasMutations_BlockBehindEndLifecycleLock`.
-- **API integration acceptance:** add named happy/auth/error/cross-user tests for freeze-auth; the complete teacher/present/invited/left/public-outsider/platform-admin/impersonator/ended/cap-race canvas-creation matrix; all four active-freeze canvas mutations; strict canvas-settings GET/PATCH schemas, missing-session 404s, non-teacher 403s, ended-teacher true/false/null reads, and old `/settings` absence.
+- **Fast integration acceptance:** implement the exhaustive Spec 013 matrix, including the exact named tests `TestEndSession_ConfirmedBundlePersistsBeforeCommit`, `TestEndSession_DegradedWhenHocuspocusUnavailableWarnsTeacher`, `TestEndSession_TransportLossRecoversSameTokenBundle`, `TestEndSession_BatchFailureRollsBackTrueAndSnapshots`, `TestEndSession_DatabaseFailureLeavesLiveClearsLeaseAndEmitsNoEvent`, `TestEndSession_LeaseExpiryUsesSeparateDegradedTransaction`, `TestEndSession_OverlappingRequestsCannotClearForeignLease`, `TestEndSession_LateFreezeResponseCannotReinstallLease`, `TestEndSession_DifferentExpiredTokenEndsDegradedClearsLeaseWithoutReusingFreeze`, `TestCreateSession_ReplacementEndsIncompleteAndWarns`, `TestStartScheduledSession_ReplacementCompletesScheduleAndWarns`, `TestReplacementRacePreservesExplicitConfirmedResult`, `TestFreezeAuth_SharedLockAndExactToken`, `TestRealtimeAuth_BlocksBehindFreezeLifecycleLock`, and `TestCanvasMutations_BlockBehindEndLifecycleLock`.
+- **API integration acceptance:** add named happy/auth/error/cross-user tests for freeze-auth; the complete teacher/present/invited/left/public-outsider/platform-admin/impersonator/ended/cap-race canvas-creation matrix; all four active-freeze canvas mutations returning `409 session_end_in_progress`; concurrent/stale end conflicts; strict canvas-settings GET/PATCH schemas, missing-session 404s, non-teacher 403s, ended-teacher true/false/null reads, and old `/settings` absence.
   Include cross-language Go/TypeScript/PostgreSQL advisory-key fixture vectors and the exact Phase-4 mint/store test names already listed above.
-- **Realtime acceptance:** the Bun suite must include `freeze complete serializes terminal cleanup`, `half-open writer permits same-token retry`, `admission cap rejects ninth before allocation`, `denied auth releases turnstile and accounting`, `partial-overlap update commits exact state`, `failed unregistered load releases reservation`, `reconnect-aborted unload retains instrumentation`, `destroy releases generation exactly once`, and `jwt expiry closes established reader`.
+- **Realtime acceptance:** the Bun suite must include `freeze complete serializes terminal cleanup`, `half-open writer permits same-token retry`, `admission cap rejects ninth before allocation`, `denied auth releases turnstile and accounting`, `partial-overlap update commits exact state`, `failed unregistered load releases reservation`, `reconnect-aborted unload retains instrumentation`, `destroy releases generation exactly once`, `jwt expiry closes established reader`, and exact fake-clock scheduling for resettable 20-second freeze recovery plus the uncategorized 20-second fast window and jittered 30-second long tail.
 - **Frontend warning acceptance:** name tests for explicit-end error/no-navigation, session fallback write-before-redirect, durable 200 override/consume, non-200 retention, once-per-visit display, ordinary-create replacement warning, scheduled-start replacement warning, and missing-session 404 preservation.
 - **Live-stack acceptance:** create `e2e/session-whiteboard.spec.ts` and minimal helpers/fixtures for teacher create → floor/visibility raise → participant view → public-outsider creation denial → scene sync → explicit end → read-only archive.
   Exercise incomplete-archive warning through a named Go control-client failure injection that startup accepts only when both the parsed and live database names end in `_test` and an explicit E2E-only flag is set; the seam is otherwise rejected and never kills or disrupts a service.
-  Before the stack can start, pause for the user to provision `HOCUSPOCUS_CONTROL_SECRET` and a collision-free `HOCUSPOCUS_CONTROL_PORT` in the safeguarded local environment; do not read or edit `.env`.
+  Before the stack can start, pause for the user to provision `HOCUSPOCUS_CONTROL_SECRET` and, only when default 4001 is occupied, a collision-free `HOCUSPOCUS_CONTROL_PORT` override in the safeguarded local environment; do not read or edit `.env`.
   Run only against that separately started Bridge stack with explicit `E2E_BASE_URL`; without those prerequisites record E2E as `UNVERIFIED`, do not claim the phase or merge gate complete, and pause before shipping.
 - Happy, auth-denial, malformed/timeout, cross-user, cross-session, and cross-org paths are mandatory; no broad green count substitutes for the named tests.
 
 ### Phase 13 — Documentation, cross-phase verification, and shipping evidence *(orchestrator)*
 
-- Update `docs/api.md`, `docs/architecture/decisions.md`, `docs/testing.md`, and `README.md` for status-first lifecycle semantics, confirmed/degraded guarantees, control transport/config, replacement warnings, admission bounds, single-Hocuspocus limitation, and operator behavior.
+- Update `docs/api.md`, `docs/architecture/decisions.md`, `docs/testing.md`, `docs/setup.md`, `docs/project-structure.md`, `.env.example`, and `README.md` for status-first lifecycle semantics, confirmed/degraded guarantees, control transport/config, replacement warnings, admission bounds, single-Hocuspocus limitation, and operator behavior; verify the Phase-9 config docs remain synchronized with the final implementation.
 - Audit Spec 013 requirement-to-test coverage, scan the frozen scope and production session-status writers, and reconcile the plan's historical `[OPEN]` code-review findings only with verified implementation evidence.
 - Run focused TypeScript/Bun and Go suites first, then the complete `bash scripts/ci-local.sh` on the exact commit intended for review.
   The merge gate remains incomplete until the full command—including explicitly pinned E2E—is green and its attestation names that commit.
@@ -524,6 +534,25 @@ All accepted nits are incorporated in this revision, every Tier-A reviewer has n
 
 All Round-1 responses are author-side `[ADDRESSED]`, not self-certified `[FIXED]`.
 The three reviewers that requested changes must confirm the next exact substantive commit; GLM has no blocker and is not redispatched under the current gate's reviewer-response rule.
+
+### Spec 013 remediation plan gate — Round 2 — commit `49770ddc556b9f83caf6ba2247229e708994dd9b`
+
+- **Verdicts:** `[claude-self]` CHANGES REQUESTED; `[codex]` CHANGES REQUESTED; `[opus]` CHANGES REQUESTED; `[glm]` retained APPROVE WITH NITS from Round 1 and was not redispatched.
+- `[ADDRESSED]` `[claude-self]` Name and scope `tests/unit/whiteboard-panel.test.tsx`, run it in Phases 9 and 11, and enumerate the complete live-panel/binding contract.
+- `[ADDRESSED]` `[codex][claude-self]` Restore the approved production port 4001 default and require only an E2E collision override when that default is occupied.
+- `[ADDRESSED]` `[codex]` Rename the different-expired-token test to require degraded end, exact expired-token cleanup, and no freeze-result reuse.
+- `[ADDRESSED]` `[codex]` Specify the uncategorized reconnect schedule's first 20-second two-second ceiling, subsequent jittered growth toward 30 seconds, indefinite retry, and fake-clock proof.
+- `[ADDRESSED]` `[codex]` Make the Phase-9 producer/consumer route cutover executable with the panel/archive Vitest suite and typecheck in the same phase.
+- `[ADDRESSED]` `[opus]` Require every mutation, canvas authorization, and concurrent end path to reject an unexpired lease with stable `409 session_end_in_progress`, including the exact token-ownership rules.
+- `[ADDRESSED]` `[claude-self][opus]` Assign the TypeScript advisory-key derivation and five-vector parity proof to `server/canvas-lifecycle.ts`.
+- `[ADDRESSED]` `[opus]` Name the per-connection admission hook for current authorization and explicitly forbid relying on `onLoadDocument` for an already-loaded document.
+- `[ADDRESSED]` `[claude-self][opus]` Assign `.env.example`, setup/project-structure docs, old-route `main`-history evidence, and the exact control-config contract to implementation phases.
+- `[ADDRESSED]` `[opus]` Name identical-scene skipping and `viewBackgroundColor`, pin both database URLs for the focused governance/frontend commands, and move the blank-attempt log correction into Phase 10 with its exact file.
+- `[ADDRESSED]` `[claude-self][opus]` Mark the pre-Spec lifecycle and Phase-1b settings/creator prose as historical and superseded.
+- `[ADDRESSED]` `[claude-self]` Mirror the complete design-gate rule in `docs/coding-agent.md`, assign the static checks to `scripts/tests/test-guards.sh`, and include both existing E2E helper locations in scope.
+
+All Round-2 responses are author-side `[ADDRESSED]` pending exact-commit confirmation.
+Because Round 3 is the current governance checkpoint, any remaining open material finding triggers the hard-safeguard pause; approval by all three flagging reviewers authorizes Phase 7.
 
 ## Code Review
 
