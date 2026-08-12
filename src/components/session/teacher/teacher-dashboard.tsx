@@ -297,7 +297,7 @@ export function TeacherDashboard({
 
   function renderMainArea() {
     if (showWhiteboard) {
-      return <WhiteboardPanel sessionId={sessionId} />;
+      return <WhiteboardPanel sessionId={sessionId} teacherControls />;
     }
     switch (mode) {
       case "presentation": {

@@ -15,6 +15,29 @@ const ExcalidrawBoard = dynamic(
 const VISIBILITY_LEVELS = ["private", "host", "participants", "session"] as const;
 type Visibility = (typeof VISIBILITY_LEVELS)[number];
 
+const CANVAS_FLOORS = ["private", "host", "participants"] as const;
+type CanvasFloor = (typeof CANVAS_FLOORS)[number];
+
+interface CanvasSettings {
+  canvasFloor: CanvasFloor;
+  whiteboardServerArchiveComplete?: boolean;
+}
+
+/** Strict parse of the dedicated canvas-settings response; malformed shapes fail closed. */
+function parseCanvasSettings(payload: unknown): CanvasSettings | null {
+  if (typeof payload !== "object" || payload === null) return null;
+  const record = payload as Record<string, unknown>;
+  if (Object.keys(record).some((key) => key !== "canvasFloor" && key !== "whiteboardServerArchiveComplete")) {
+    return null;
+  }
+  const { canvasFloor, whiteboardServerArchiveComplete } = record;
+  if (typeof canvasFloor !== "string" || !CANVAS_FLOORS.includes(canvasFloor as CanvasFloor)) return null;
+  if (whiteboardServerArchiveComplete !== undefined && typeof whiteboardServerArchiveComplete !== "boolean") {
+    return null;
+  }
+  return { canvasFloor: canvasFloor as CanvasFloor, whiteboardServerArchiveComplete };
+}
+
 export interface WhiteboardCanvas {
   id: string;
   sessionId: string;
@@ -27,13 +50,19 @@ interface WhiteboardPanelProps {
   sessionId: string;
   /** The archive route is intentionally view-only even during a live session. */
   archive?: boolean;
+  /** Renders the live teacher floor control; the server still authorizes every read/write. */
+  teacherControls?: boolean;
 }
 
 function visibilityRank(value: Visibility): number {
   return VISIBILITY_LEVELS.indexOf(value);
 }
 
-export function WhiteboardPanel({ sessionId, archive = false }: WhiteboardPanelProps) {
+export function WhiteboardPanel({
+  sessionId,
+  archive = false,
+  teacherControls = false,
+}: WhiteboardPanelProps) {
   const { data: authSession } = useSession();
   const currentUserId = authSession?.user?.id ?? "";
   const [canvases, setCanvases] = useState<WhiteboardCanvas[]>([]);
@@ -41,6 +70,9 @@ export function WhiteboardPanel({ sessionId, archive = false }: WhiteboardPanelP
   const [title, setTitle] = useState("Untitled whiteboard");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [floor, setFloor] = useState<CanvasFloor | null>(null);
+  const [archiveComplete, setArchiveComplete] = useState<boolean | undefined>(undefined);
+  const [settingsError, setSettingsError] = useState<string | null>(null);
 
   const loadCanvases = useCallback(async () => {
     setLoading(true);
@@ -63,6 +95,62 @@ export function WhiteboardPanel({ sessionId, archive = false }: WhiteboardPanelP
   useEffect(() => {
     void loadCanvases();
   }, [loadCanvases]);
+
+  // The dedicated settings route is only fetched when this surface can use it:
+  // the archive needs the durable completeness status, the live teacher panel needs the floor.
+  const loadSettings = useCallback(async () => {
+    if (!archive && !teacherControls) return;
+    setSettingsError(null);
+    try {
+      const response = await fetch(`/api/sessions/${sessionId}/canvas-settings`);
+      if (response.status === 403) {
+        // A 403 here means no teacher controls, not a broken panel.
+        setFloor(null);
+        setArchiveComplete(undefined);
+        return;
+      }
+      if (!response.ok) {
+        setSettingsError("Unable to load whiteboard settings");
+        return;
+      }
+      const parsed = parseCanvasSettings(await response.json());
+      if (!parsed) {
+        setSettingsError("Unable to load whiteboard settings");
+        return;
+      }
+      setFloor(parsed.canvasFloor);
+      setArchiveComplete(parsed.whiteboardServerArchiveComplete);
+    } catch (cause) {
+      setSettingsError(cause instanceof Error ? cause.message : "Unable to load whiteboard settings");
+    }
+  }, [archive, teacherControls, sessionId]);
+
+  useEffect(() => {
+    void loadSettings();
+  }, [loadSettings]);
+
+  const updateFloor = async (nextFloor: CanvasFloor) => {
+    setSettingsError(null);
+    try {
+      const response = await fetch(`/api/sessions/${sessionId}/canvas-settings`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ canvasFloor: nextFloor }),
+      });
+      if (!response.ok) {
+        setSettingsError("Unable to update the canvas floor");
+        return;
+      }
+      const parsed = parseCanvasSettings(await response.json());
+      if (!parsed) {
+        setSettingsError("Unable to update the canvas floor");
+        return;
+      }
+      setFloor(parsed.canvasFloor);
+    } catch {
+      setSettingsError("Unable to update the canvas floor");
+    }
+  };
 
   const selected = canvases.find((canvas) => canvas.id === selectedId) ?? null;
   // Archive mode wins even for a live-session owner with a write-capable JWT.
@@ -109,6 +197,30 @@ export function WhiteboardPanel({ sessionId, archive = false }: WhiteboardPanelP
         <div className="border-b px-3 py-3">
           <h2 className="font-semibold">{archive ? "Whiteboard archive" : "Whiteboards"}</h2>
           {archive && <p className="mt-1 text-xs text-muted-foreground">Read-only session archive</p>}
+          {archive && archiveComplete === true && (
+            <p className="mt-1 text-xs text-muted-foreground">Whiteboard archive confirmed</p>
+          )}
+          {archive && archiveComplete === false && (
+            <p className="mt-1 text-xs text-destructive">Latest whiteboard changes may not have been archived</p>
+          )}
+          {settingsError && (
+            <p className="mt-1 text-xs text-destructive" role="alert">{settingsError}</p>
+          )}
+          {teacherControls && !archive && floor && (
+            <label className="mt-2 block text-xs">
+              Canvas floor
+              <select
+                aria-label="Canvas floor"
+                className="ml-2 rounded border bg-background px-2 py-1 text-sm"
+                value={floor}
+                onChange={(event) => void updateFloor(event.target.value as CanvasFloor)}
+              >
+                {CANVAS_FLOORS.map((level) => (
+                  <option key={level} value={level}>{level}</option>
+                ))}
+              </select>
+            </label>
+          )}
         </div>
         {!archive && (
           <div className="space-y-2 border-b p-3">

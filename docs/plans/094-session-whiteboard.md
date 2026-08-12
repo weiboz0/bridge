@@ -395,6 +395,15 @@ That recheck is now defense in depth: the confirmed path gains the lifecycle lea
 - `[GREEN]` With configured and live database identity verified as `bridge_test`, the four focused review regressions passed in the handler and realtime packages.
   Terra also corrected the Phase 9 panel test fetch typings and the archive's approved `sessionId` option expectation; root TypeScript compilation passed before production remediation.
 
+#### Phase 9 frontend settings cutover (2026-08-12)
+
+- `[frontend]` The live teacher dashboard now explicitly enables whiteboard teacher controls.
+  `WhiteboardPanel` fetches only the dedicated `/api/sessions/{sessionId}/canvas-settings` route when live teacher controls or archive status need it, treats 403 as absent controls/status, and strictly rejects malformed or extra successful response fields.
+- `[frontend]` The live selector exposes only `private`, `host`, and `participants` and PATCHes exactly `{canvasFloor}` to the dedicated route.
+  Archive mode renders the durable confirmed or incomplete message for authorized teachers, treats an omitted legacy value as no completeness claim, and never renders mutation controls.
+- `[GREEN]` With both test database URLs pinned to `bridge_test`, the focused whiteboard panel/archive Vitest command passed 13 tests.
+  Forced-Bun `tsc --noEmit`, exact changed-production ESLint, and `git diff --check` passed.
+
 #### Phase 9 review-remediation RED proofs (2026-08-12; tests only)
 
 - `[GREEN]` The real Go control-client/`httptest` wire now proves an empty authoritative canvas list serializes exactly as `"canvasIds":[]`, never `null`, while the listener accepts the exact empty snapshots bundle.
