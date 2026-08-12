@@ -5,6 +5,8 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -25,6 +27,8 @@ type fakeCanvasControl struct {
 	bundle                     realtime.FreezeBundle
 	err                        error
 	onFreeze                   func(realtime.FreezeRequest)
+	onComplete                 func(string, string)
+	onUnfreeze                 func(string, string)
 	freeze, complete, unfreeze int
 }
 
@@ -35,8 +39,18 @@ func (f *fakeCanvasControl) Freeze(_ context.Context, request realtime.FreezeReq
 	}
 	return f.bundle, f.err
 }
-func (f *fakeCanvasControl) Complete(context.Context, string, string) { f.complete++ }
-func (f *fakeCanvasControl) Unfreeze(context.Context, string, string) { f.unfreeze++ }
+func (f *fakeCanvasControl) Complete(_ context.Context, sessionID, token string) {
+	f.complete++
+	if f.onComplete != nil {
+		f.onComplete(sessionID, token)
+	}
+}
+func (f *fakeCanvasControl) Unfreeze(_ context.Context, sessionID, token string) {
+	f.unfreeze++
+	if f.onUnfreeze != nil {
+		f.onUnfreeze(sessionID, token)
+	}
+}
 
 // sessionFixture is the world a session integration test runs against.
 type sessionFixture struct {
@@ -998,6 +1012,93 @@ func TestEndSession_ConfirmedSubsetPersistsSnapshotsWithoutWarning(t *testing.T)
 	var state string
 	require.NoError(t, fx.db.QueryRowContext(context.Background(), `SELECT yjs_state FROM session_canvases WHERE id=$1`, canvas.ID).Scan(&state))
 	require.Equal(t, "ZmluYWw=", state)
+}
+
+func TestEndSession_ControlFailuresAreDurablyDegradedAndTerminalized(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"timeout", context.DeadlineExceeded},
+		{"transport", errors.New("connection reset by peer")},
+		{"non-2xx", errors.New("control returned HTTP 503")},
+		{"malformed bundle", errors.New("invalid canvas control bundle")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fx := newSessionFixture(t, t.Name())
+			completed := make(chan error, 1)
+			fx.h.CanvasControl = &fakeCanvasControl{
+				err: tc.err,
+				onComplete: func(sessionID, _ string) {
+					if sessionID != fx.sessionID {
+						completed <- fmt.Errorf("completed unexpected session %q", sessionID)
+						return
+					}
+					var status string
+					if err := fx.db.QueryRowContext(context.Background(), `SELECT status FROM sessions WHERE id=$1`, sessionID).Scan(&status); err != nil {
+						completed <- err
+						return
+					}
+					if status != "ended" {
+						completed <- fmt.Errorf("terminal cleanup observed status %q before durable end", status)
+						return
+					}
+					completed <- nil
+				},
+			}
+			w := fx.doRequest(t, http.MethodPost, "/api/sessions/"+fx.sessionID+"/end", nil, fx.claims(fx.teacher, false))
+			require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+			var body map[string]any
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+			require.Equal(t, false, body["whiteboardServerArchiveComplete"])
+			require.Equal(t, "whiteboard_server_archive_incomplete", body["warning"])
+			select {
+			case err := <-completed:
+				require.NoError(t, err)
+			case <-time.After(time.Second):
+				t.Fatal("durable degraded end did not asynchronously complete its matching control token")
+			}
+		})
+	}
+}
+
+func TestEndSession_ResponseUsesDurableEndedAtAndTopLevelContract(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	completed := make(chan error, 1)
+	fx.h.CanvasControl = &fakeCanvasControl{onComplete: func(sessionID, _ string) {
+		var status string
+		if err := fx.db.QueryRowContext(context.Background(), `SELECT status FROM sessions WHERE id=$1`, sessionID).Scan(&status); err != nil {
+			completed <- err
+			return
+		}
+		if status != "ended" {
+			completed <- fmt.Errorf("terminal complete observed status %q", status)
+			return
+		}
+		completed <- nil
+	}}
+	w := fx.doRequest(t, http.MethodPost, "/api/sessions/"+fx.sessionID+"/end", nil, fx.claims(fx.teacher, false))
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	var response struct {
+		ID                              string     `json:"id"`
+		Status                          string     `json:"status"`
+		EndedAt                         *time.Time `json:"endedAt"`
+		WhiteboardServerArchiveComplete bool       `json:"whiteboardServerArchiveComplete"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	require.Equal(t, fx.sessionID, response.ID)
+	require.Equal(t, "ended", response.Status)
+	require.NotNil(t, response.EndedAt)
+	require.True(t, response.WhiteboardServerArchiveComplete, "an exact empty freeze bundle is a confirmed archive")
+	var stored time.Time
+	require.NoError(t, fx.db.QueryRowContext(context.Background(), `SELECT ended_at FROM sessions WHERE id=$1`, fx.sessionID).Scan(&stored))
+	require.True(t, response.EndedAt.Equal(stored), "response must use the durable transaction timestamp")
+	select {
+	case err := <-completed:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("terminal complete did not run asynchronously after the durable response handoff")
+	}
 }
 
 func TestEndSession_ConflictingLiveFreezeAfterCaptureReturnsStable409(t *testing.T) {

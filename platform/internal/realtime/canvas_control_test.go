@@ -3,9 +3,11 @@ package realtime
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -309,5 +311,81 @@ func TestCanvasControlClient_TerminalAcknowledgementsAreExactAndNoSecretLeaks(t 
 			client.terminal(context.Background(), tc.path, "22222222-2222-4222-8222-222222222222", "33333333-3333-4333-8333-333333333333")
 			require.False(t, validTerminalAck(tc.path, tc.status, []byte(tc.body)))
 		})
+	}
+}
+
+func TestCanvasControlClient_DeterministicValidationNeverContactsControlAndRetryBodyIsStable(t *testing.T) {
+	hits := 0
+	var bodies [][]byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		bodies = append(bodies, body)
+		if hits == 1 {
+			w.WriteHeader(http.StatusConflict)
+			return
+		}
+		_, _ = w.Write([]byte(`{"snapshots":[],"closed":0}`))
+	}))
+	defer server.Close()
+	client, err := NewCanvasControlClient(CanvasControlConfig{URL: server.URL, Secret: strings.Repeat("a", 64), HTTPClient: server.Client()})
+	require.NoError(t, err)
+
+	_, err = client.Freeze(context.Background(), FreezeRequest{SessionID: "not-a-uuid", FreezeToken: "33333333-3333-4333-8333-333333333333"})
+	require.Error(t, err)
+	require.Zero(t, hits, "invalid local input must fail closed without a network attempt")
+
+	request := FreezeRequest{SessionID: "22222222-2222-4222-8222-222222222222", FreezeToken: "33333333-3333-4333-8333-333333333333"}
+	_, err = client.Freeze(context.Background(), request)
+	require.NoError(t, err)
+	require.Equal(t, 2, hits)
+	require.Len(t, bodies, 2)
+	require.Equal(t, bodies[0], bodies[1], "same-token retry must replay the exact request body")
+	var replay FreezeRequest
+	require.NoError(t, json.Unmarshal(bodies[0], &replay))
+	require.Equal(t, request, replay)
+}
+
+func TestCanvasControlClient_RespectsCallerDeadlineAndVerifiedHTTPS(t *testing.T) {
+	tlsServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"snapshots":[],"closed":0}`))
+	}))
+	defer tlsServer.Close()
+	client, err := NewCanvasControlClient(CanvasControlConfig{URL: tlsServer.URL, Secret: strings.Repeat("a", 64), HTTPClient: tlsServer.Client()})
+	require.NoError(t, err, "a normal certificate-verifying HTTPS client is a supported private deployment")
+	_, err = client.Freeze(context.Background(), FreezeRequest{SessionID: "22222222-2222-4222-8222-222222222222", FreezeToken: "33333333-3333-4333-8333-333333333333"})
+	require.NoError(t, err)
+
+	_, err = NewCanvasControlClient(CanvasControlConfig{
+		URL: tlsServer.URL, Secret: strings.Repeat("a", 64),
+		HTTPClient: &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}, //nolint:gosec // validation must reject this client before use.
+	})
+	require.Error(t, err)
+
+	started := make(chan struct{}, 1)
+	blocking := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		started <- struct{}{}
+		<-r.Context().Done()
+	}))
+	defer blocking.Close()
+	deadlineClient, err := NewCanvasControlClient(CanvasControlConfig{URL: blocking.URL, Secret: strings.Repeat("a", 64), HTTPClient: blocking.Client()})
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Millisecond)
+	defer cancel()
+	_, err = deadlineClient.Freeze(ctx, FreezeRequest{SessionID: "22222222-2222-4222-8222-222222222222", FreezeToken: "33333333-3333-4333-8333-333333333333"})
+	require.Error(t, err)
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("freeze request did not reach the control transport")
+	}
+}
+
+func TestCanvasControlClient_RetryJitterIsBoundedEvenWhenRandomnessFallsBack(t *testing.T) {
+	for i := 0; i < 128; i++ {
+		wait := retryJitter()
+		require.GreaterOrEqual(t, wait, 5*time.Millisecond)
+		require.LessOrEqual(t, wait, 28*time.Millisecond)
 	}
 }

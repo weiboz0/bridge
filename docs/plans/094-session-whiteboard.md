@@ -343,6 +343,14 @@ That recheck is now defense in depth: the confirmed path gains the lifecycle lea
   The focused end command independently fails because a different unexpired lease installed after capture reaches the degraded completion branch as a generic `500 {"error":"Database error"}` rather than `409 {"code":"session_end_in_progress"}`.
 - `[RED]` No production file changed in this matrix commit.
 
+#### Phase 9 additional test-only protocol coverage (2026-08-12)
+
+- `[GREEN]` Added direct end degradation coverage for timeout, transport loss, non-2xx, and malformed control outcomes; every case proves the durable false warning plus post-commit terminal cleanup.
+  The response proof binds top-level `endedAt` to the stored transaction timestamp, while the terminal callback observes `ended` only after the durable transition.
+- `[GREEN]` Added control-client proofs for local validation without a network attempt, byte-identical same-token retry bodies, caller deadline cancellation, verified HTTPS acceptance, rejected `InsecureSkipVerify`, bounded jitter, exact terminal negative acknowledgements, and settings/creator public-session/cap races.
+  The handler-focused command passed with both configured and live database names verified as `bridge_test`.
+- `[RED]` The preceding invalid-port and stale-live-token failures remain unresolved; this test-only update did not change production behavior.
+
 ### Phase 10 — Hocuspocus fence, admission, capture, and control listener *(Terra backend; tests by Terra)*
 
 - Move the new lifecycle machinery into focused `server/canvas-lifecycle.ts`; `server/hocuspocus.ts` wires its hooks and starts a separate authenticated control listener.

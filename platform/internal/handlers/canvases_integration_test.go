@@ -339,6 +339,58 @@ func TestCanvasSettings_GetAndPatchUseExactTeacherOnlySchemas(t *testing.T) {
 	}
 }
 
+func TestCanvasSettings_AllAllowedFloorsAndTrailingJSONAreExact(t *testing.T) {
+	fx := newCanvasHandlerFixture(t)
+	path := "/api/sessions/" + fx.session.ID + "/canvas-settings"
+	for _, floor := range []string{"private", "host", "participants"} {
+		w := fx.request(t, http.MethodPatch, path, map[string]string{"canvasFloor": floor}, fx.claims(fx.teacher))
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+		require.JSONEq(t, `{"canvasFloor":"`+floor+`"}`, w.Body.String())
+	}
+	request := httptest.NewRequest(http.MethodPatch, path, strings.NewReader(`{"canvasFloor":"host"}{}`))
+	request.Header.Set("Content-Type", "application/json")
+	request = request.WithContext(auth.ContextWithClaims(request.Context(), fx.claims(fx.teacher)))
+	w := httptest.NewRecorder()
+	fx.router.ServeHTTP(w, request)
+	require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+}
+
+func TestCanvasHandler_PublicClasslessOutsiderAndConcurrentCapCannotCreate(t *testing.T) {
+	fx := newCanvasHandlerFixture(t)
+	_, err := fx.db.ExecContext(context.Background(), `UPDATE sessions SET visibility='public' WHERE id=$1`, fx.session.ID)
+	require.NoError(t, err)
+	path := "/api/sessions/" + fx.session.ID + "/canvases"
+	require.Equal(t, http.StatusForbidden, fx.request(t, http.MethodPost, path, map[string]string{"title": "outsider", "visibility": "private"}, fx.claims(fx.outsider)).Code)
+
+	// Put the session immediately below its cap.  The two simultaneous creator
+	// requests must serialize under the lifecycle/session lock: exactly one may
+	// receive the final slot, even on a public class-less session.
+	for i := 0; i < store.MaxSessionCanvases-1; i++ {
+		_, err := fx.h.Canvases.CreateCanvas(context.Background(), store.CreateCanvasInput{SessionID: fx.session.ID, OwnerID: fx.student.ID, Title: fmt.Sprintf("seed-%d", i), Visibility: "private"})
+		require.NoError(t, err)
+	}
+	start := make(chan struct{})
+	results := make(chan int, 2)
+	for i := 0; i < 2; i++ {
+		go func(i int) {
+			<-start
+			payload, _ := json.Marshal(map[string]string{"title": fmt.Sprintf("race-%d", i), "visibility": "private"})
+			req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(payload))
+			req.Header.Set("Content-Type", "application/json")
+			req = req.WithContext(auth.ContextWithClaims(req.Context(), fx.claims(fx.student)))
+			w := httptest.NewRecorder()
+			fx.router.ServeHTTP(w, req)
+			results <- w.Code
+		}(i)
+	}
+	close(start)
+	first, second := <-results, <-results
+	require.ElementsMatch(t, []int{http.StatusCreated, http.StatusConflict}, []int{first, second})
+	var count int
+	require.NoError(t, fx.db.QueryRowContext(context.Background(), `SELECT count(*) FROM session_canvases WHERE session_id=$1`, fx.session.ID).Scan(&count))
+	require.Equal(t, store.MaxSessionCanvases, count)
+}
+
 func TestCanvasSettings_EndedTeacherReadsDurableTrueFalseAndNull(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
