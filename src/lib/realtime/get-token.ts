@@ -29,7 +29,7 @@ const inflight = new Map<string, Promise<string>>();
 const LEEWAY_MS = 60_000;
 
 export class RealtimeMintError extends Error {
-  constructor(message: string, public status?: number) {
+  constructor(message: string, public status?: number, public code?: string) {
     super(message);
     this.name = "RealtimeMintError";
   }
@@ -86,13 +86,16 @@ async function mintFresh(documentName: string, sessionId?: string): Promise<Cach
   }
   if (!res.ok) {
     let detail = `${res.status}`;
+    let code: string | undefined;
     try {
-      const body = (await res.json()) as { error?: string };
+      const body = parseMintFailure(await res.json(), res.status);
       if (body.error) detail = `${res.status} ${body.error}`;
-    } catch {
+      code = body.code;
+    } catch (error) {
+      if (error instanceof RealtimeMintError) throw error;
       /* body not JSON — keep status alone */
     }
-    throw new RealtimeMintError(`Realtime token mint failed: ${detail}`, res.status);
+    throw new RealtimeMintError(`Realtime token mint failed: ${detail}`, res.status, code);
   }
 
   const body = (await res.json()) as { token: string; expiresAt: string };
@@ -104,6 +107,19 @@ async function mintFresh(documentName: string, sessionId?: string): Promise<Cach
     throw new RealtimeMintError("Realtime token expiresAt is unparseable");
   }
   return { token: body.token, expiresAt };
+}
+
+function parseMintFailure(value: unknown, status: number): { error?: string; code?: string } {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new RealtimeMintError("Realtime token mint error response is invalid", status);
+  }
+  const body = value as Record<string, unknown>;
+  if (Object.keys(body).some((key) => key !== "error" && key !== "code")
+    || (body.error !== undefined && typeof body.error !== "string")
+    || (body.code !== undefined && typeof body.code !== "string")) {
+    throw new RealtimeMintError("Realtime token mint error response is invalid", status);
+  }
+  return { error: body.error as string | undefined, code: body.code as string | undefined };
 }
 
 // Test-only — drop the cache + in-flight maps so unit tests don't

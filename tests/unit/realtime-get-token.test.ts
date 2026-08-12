@@ -167,6 +167,30 @@ describe("getRealtimeToken", () => {
     });
   });
 
+  it("preserves the strict retryable session_freezing code from the real 409 mint response", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: "Session is freezing", code: "session_freezing" }), {
+      status: 409,
+      headers: { "content-type": "application/json" },
+    })));
+    await expect(getRealtimeToken("canvas:22222222-2222-4222-8222-222222222222", "11111111-1111-4111-8111-111111111111", { forceRefresh: true })).rejects.toMatchObject({
+      name: "RealtimeMintError",
+      status: 409,
+      code: "session_freezing",
+    });
+  });
+
+  it("rejects malformed or trailing mint-error fields instead of synthesizing a retryable code", async () => {
+    for (const body of [{ error: "freezing", code: 409 }, { error: "freezing", code: "session_freezing", extra: true }]) {
+      __resetRealtimeTokenCacheForTesting();
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(body), { status: 409, headers: { "content-type": "application/json" } })));
+      await expect(getRealtimeToken("canvas:22222222-2222-4222-8222-222222222222", "11111111-1111-4111-8111-111111111111", { forceRefresh: true })).rejects.toMatchObject({
+        status: 409,
+        code: undefined,
+        message: expect.stringContaining("invalid"),
+      });
+    }
+  });
+
   it("translates network errors into RealtimeMintError", async () => {
     vi.stubGlobal(
       "fetch",
@@ -222,8 +246,9 @@ describe("getRealtimeToken", () => {
   });
 
   it("RealtimeMintError class is exported and named", () => {
-    const err = new RealtimeMintError("test", 400);
+    const err = new RealtimeMintError("test", 400, "test_code");
     expect(err.name).toBe("RealtimeMintError");
     expect(err.status).toBe(400);
+    expect(err.code).toBe("test_code");
   });
 });

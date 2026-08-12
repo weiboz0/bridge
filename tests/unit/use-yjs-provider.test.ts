@@ -1,9 +1,15 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { HocuspocusProvider } from "@hocuspocus/provider";
 import { OutgoingMessage } from "@hocuspocus/server";
 import * as Y from "yjs";
 import { canvasReconnectPolicy } from "@/lib/yjs/use-yjs-provider";
+import { __resetRealtimeTokenCacheForTesting, getRealtimeToken } from "@/lib/realtime/get-token";
+
+afterEach(() => {
+  __resetRealtimeTokenCacheForTesting();
+  vi.unstubAllGlobals();
+});
 
 describe("canvas reconnect policy", () => {
   it("resets a twenty-second recovery horizon on every session_freezing rejection", () => {
@@ -133,6 +139,32 @@ describe("canvas reconnect policy", () => {
     expect(remints).toBe(2);
     expect(writes).toBe(0);
     expect(authFailures).toBe(0);
+    release();
+    provider.destroy();
+  });
+
+  it("routes the real getRealtimeToken 409 session_freezing error into the installed provider retry loop", async () => {
+    const { bindInstalledCanvasProvider } = await import("@/lib/yjs/use-yjs-provider");
+    const documentName = "canvas:22222222-2222-4222-8222-222222222222";
+    const frame = new OutgoingMessage(documentName).writeCloseMessage("session_freezing").toUint8Array();
+    let retry: (() => void) | undefined;
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: "freezing", code: "session_freezing" }), { status: 409, headers: { "content-type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ token: "recovered", expiresAt: new Date(Date.now() + 25 * 60_000).toISOString() }), { status: 200, headers: { "content-type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const websocket = { on() {}, off() {}, attach() {}, detach() {}, setConfiguration() {}, send() {} };
+    const provider = new HocuspocusProvider({ name: documentName, document: new Y.Doc(), websocketProvider: websocket as never });
+    const release = bindInstalledCanvasProvider({
+      provider,
+      refreshToken: () => getRealtimeToken(documentName, "11111111-1111-4111-8111-111111111111", { forceRefresh: true }),
+      schedule: (callback, delayMs) => { expect(delayMs).toBeLessThanOrEqual(2_000); retry = callback; return 0 as never; },
+    });
+    provider.onMessage({ data: frame } as MessageEvent);
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    retry!();
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     release();
     provider.destroy();
   });
