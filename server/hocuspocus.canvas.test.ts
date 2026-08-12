@@ -234,6 +234,46 @@ describe("hocuspocus canvas hook test seam", () => {
     expect(context.canvasId).toBe("22222222-2222-4222-8222-222222222222");
   });
 
+  test("retains verified canvas sessionId in context and propagates it to admission and mutation rechecks", async () => {
+    const runtime = await import("./hocuspocus") as Record<string, unknown>;
+    const authenticate = runtime.canvasAuthenticationContext as ((input: unknown) => { sessionId?: string }) | undefined;
+    expect(authenticate).toBeTypeOf("function");
+    const documentName = "canvas:22222222-2222-4222-8222-222222222222";
+    const sessionId = "11111111-1111-4111-8111-111111111111";
+    const context = authenticate!({ documentName, claims: { sub: "user", role: "user", readOnly: false, sessionId }, connectionConfig: { readOnly: false } });
+    expect(context.sessionId).toBe(sessionId);
+
+    const calls: unknown[] = [];
+    globalThis.fetch = async (_url, init) => {
+      calls.push(JSON.parse(String(init?.body)));
+      return new Response(JSON.stringify({ allowed: true, readOnly: false }));
+    };
+    const hooks = registeredCanvasHooks(runtime);
+    await hooks.onLoadDocument({ document: new Y.Doc(), documentName, context: context as { userId: string } });
+    expect(calls.at(-1)).toMatchObject({ documentName, sub: "user", sessionId });
+
+    const changed = new Y.Doc();
+    changed.getMap("elements").set("shape", { type: "rectangle" });
+    const update = new OutgoingMessage(documentName)
+      .createSyncMessage()
+      .writeUpdate(Y.encodeStateAsUpdate(changed))
+      .toUint8Array();
+    const recheckCalls: unknown[] = [];
+    const guard = runtime.guardCanvasMutationFrame as ((input: Record<string, unknown>) => Promise<void>) | undefined;
+    await guard!({
+      documentName,
+      update,
+      connection: { readOnly: false },
+      userId: "user",
+      sessionId,
+      recheck: async (input: unknown) => {
+        recheckCalls.push(input);
+        return { allowed: true, readOnly: false };
+      },
+    });
+    expect(recheckCalls.at(-1)).toMatchObject({ documentName, sub: "user", sessionId });
+  });
+
   test("a read-only canvas connection cannot apply or relay an update", async () => {
     const runtime = await import("./hocuspocus") as Record<string, unknown>;
     const authenticate = runtime.canvasAuthenticationContext;

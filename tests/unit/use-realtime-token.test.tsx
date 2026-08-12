@@ -11,8 +11,9 @@ function mintResponse(token: string, expiresInMs = 25 * 60 * 1000): Response {
   );
 }
 
-function HookHarness({ docName, onToken, onUnavailable }: { docName: string; onToken: (t: string) => void; onUnavailable?: (u: boolean) => void }) {
-  const { token, unavailable } = useRealtimeToken(docName);
+function HookHarness({ docName, sessionId, onToken, onUnavailable }: { docName: string; sessionId?: string; onToken: (t: string) => void; onUnavailable?: (u: boolean) => void }) {
+  const useCanvasToken = useRealtimeToken as (documentName: string, sessionId?: string) => ReturnType<typeof useRealtimeToken>;
+  const { token, unavailable } = useCanvasToken(docName, sessionId);
   onToken(token);
   onUnavailable?.(unavailable);
   return null;
@@ -91,6 +92,24 @@ describe("useRealtimeToken", () => {
       rerender(<HookHarness docName="chapter:B" onToken={(t) => tokens.push(t)} />);
     });
     expect(tokens.at(-1), "stale tok-A must be cleared during B's mint window").toBe("");
+  });
+
+  it("clears the retained canvas token and remints when only sessionId changes", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(mintResponse("canvas-A"))
+      .mockImplementationOnce(() => new Promise<Response>(() => {}));
+    vi.stubGlobal("fetch", fetchMock);
+    const tokens: string[] = [];
+    const { rerender } = render(<HookHarness docName="canvas:22222222-2222-4222-8222-222222222222" sessionId="11111111-1111-4111-8111-111111111111" onToken={(t) => tokens.push(t)} />);
+    await act(async () => { await Promise.resolve(); });
+    await act(async () => { await Promise.resolve(); });
+    expect(tokens.at(-1)).toBe("canvas-A");
+    await act(async () => {
+      rerender(<HookHarness docName="canvas:22222222-2222-4222-8222-222222222222" sessionId="33333333-3333-4333-8333-333333333333" onToken={(t) => tokens.push(t)} />);
+    });
+    expect(tokens.at(-1)).toBe("");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("plan 068 phase 4: surfaces unavailable=true when mint returns 503", async () => {

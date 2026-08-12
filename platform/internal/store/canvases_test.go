@@ -278,6 +278,82 @@ func TestCanvasMutationsRejectUnexpiredSessionFreezeLease(t *testing.T) {
 	assert.ErrorIs(t, err, ErrSessionEndInProgress)
 }
 
+func TestCanvasAuthorization_TakesSharedLifecycleLockBeforeEveryAuthorizationRead(t *testing.T) {
+	// This precise canvas/session API prevents the old canvas-ID discovery query
+	// from reading before the lock key is known.  It is a deliberate RED
+	// signature assertion as well as a real blocking proof once implemented.
+	type sessionBoundAuthorizer interface {
+		AuthorizeCanvasDocument(context.Context, string, string, string) (*CanvasDocumentAccess, error)
+	}
+	db := canvasTestDB(t)
+	observer := canvasTestDB(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	canvases := NewCanvasStore(db)
+	sessions := NewSessionStore(db)
+	_, teacherID := setupSessionTest(t, db, t.Name())
+	session, err := sessions.CreateSession(ctx, CreateSessionInput{TeacherID: teacherID, Title: "locked canvas authorization"})
+	require.NoError(t, err)
+	t.Cleanup(func() { _, _ = db.ExecContext(context.Background(), "DELETE FROM sessions WHERE id = $1", session.ID) })
+	canvas, err := canvases.CreateCanvas(ctx, CreateCanvasInput{SessionID: session.ID, OwnerID: teacherID, Title: "Board", Visibility: "private"})
+	require.NoError(t, err)
+
+	authorizer, ok := any(canvases).(sessionBoundAuthorizer)
+	require.True(t, ok, "canvas authorization must require the supplied session ID before it can issue any authorization read")
+
+	holder, err := observer.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = holder.Rollback() })
+	require.NoError(t, lockSessionLifecycle(ctx, holder, session.ID, false))
+	key, err := sessionLifecycleAdvisoryKey(session.ID)
+	require.NoError(t, err)
+
+	completed := make(chan error, 1)
+	go func() {
+		_, err := authorizer.AuthorizeCanvasDocument(ctx, canvas.ID, session.ID, teacherID)
+		completed <- err
+	}()
+
+	var waiterPID int
+	deadline := time.NewTimer(3 * time.Second)
+	defer deadline.Stop()
+	for waiterPID == 0 {
+		err = observer.QueryRowContext(ctx, `SELECT pid FROM pg_locks
+			WHERE locktype = 'advisory' AND classid = $1::oid AND objid = $2::oid AND NOT granted
+			LIMIT 1`, sessionLifecycleLockClass, int64(uint32(key))).Scan(&waiterPID)
+		if err == nil {
+			break
+		}
+		if err != sql.ErrNoRows {
+			require.NoError(t, err)
+		}
+		select {
+		case <-deadline.C:
+			t.Fatal("canvas authorization did not block on the shared lifecycle lock")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+
+	var authorizationReads int
+	require.NoError(t, observer.QueryRowContext(ctx, `SELECT count(*)
+		FROM pg_locks locks JOIN pg_class relation ON relation.oid = locks.relation
+		WHERE locks.pid = $1 AND locks.granted
+		  AND relation.relname = ANY(ARRAY['session_canvases', 'sessions', 'users', 'session_participants', 'classes', 'class_memberships'])`, waiterPID).Scan(&authorizationReads))
+	assert.Zero(t, authorizationReads, "no canvas, session, user, participant, class, or membership read may complete before lifecycle-lock release")
+	select {
+	case err := <-completed:
+		t.Fatalf("canvas authorization bypassed the exclusive lifecycle lock: %v", err)
+	default:
+	}
+	require.NoError(t, holder.Commit())
+	select {
+	case err := <-completed:
+		require.NoError(t, err)
+	case <-ctx.Done():
+		t.Fatal("canvas authorization did not complete after lifecycle-lock release")
+	}
+}
+
 func TestCanvasStore_GetCanvasScopesToSession(t *testing.T) {
 	db := canvasTestDB(t)
 	ctx := context.Background()

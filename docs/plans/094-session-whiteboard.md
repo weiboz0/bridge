@@ -82,6 +82,15 @@ This substantive Spec 013 revision must clear the uncapped Sol + Fable 5 design 
 The scoped `src/lib/whiteboard/**` tests must exercise the real `useWhiteboard` producer with the selected `(canvas:{canvasId}, sessionId)` pair and prove a changed hint clears the retained token before reminting.
 The lock-key correction passed its exact-commit Round 16 design gate on `e91598fb8b177063a8afd2bc0fd9f791c9c76a0a`: Sol APPROVE and Fable 5 APPROVE, with no open findings.
 
+#### Phase 10a — canvas lock identity RED tests (2026-08-12; Terra; tests only)
+
+
+- `[RED]` Added focused contract tests for canvas mint and internal recheck missing, malformed, and mismatched session IDs; authoritative JWT payload identity; canvas-only Go/TypeScript JWT claim validation; a store-level exclusive-lock proof that fails unless the supplied session ID is locked before every authorization read; Hocuspocus authenticated context plus admission/mutation propagation; browser mint cache identity; and the real `useWhiteboard` producer pair.
+  The tests intentionally remain RED until the approved Round 16 production changes make the session-ID hint required, acquire the lifecycle lock before canvas authorization reads, sign/verify/propagate the claim, and key browser state by the pair.
+- `[UNVERIFIED]` The deterministic exclusive-lock ordering proof is intentionally RED because the current store method does not yet require a session ID; it will assert no authorization-table relation lock exists while an exclusive lifecycle lock is held once the approved transaction seam exists.
+- `[RED evidence]` With both database variables pinned to `postgresql://work@127.0.0.1:5432/bridge_test`, the focused Go run fails as expected: canvas mint and internal auth return 200 for missing, malformed, and mismatched hints; the minted JWT payload omits `sessionId`; canvas JWT verification accepts missing/malformed claims and a non-canvas claim; and the store lacks the required session-bound authorization method.
+  The focused Bun/Vitest runs fail as expected because TypeScript accepts canvas JWTs without the claim, browser cache and in-flight state reuse across distinct hints, the hook retains `canvas-A` on a hint-only change, the real whiteboard producer omits the second argument, and Hocuspocus context omits the verified ID.
+
 Governance provenance: before this revision the user explicitly directed that “all plan reviews” and then “all review” pursue consensus rather than stop at a numeric cap; the later design-gate direction separately fixed the permanent design roster to Sol + Fable 5 and removed its round cap.
 Phase 7 materializes both directions without retroactively changing the gate governing this committed plan revision.
 

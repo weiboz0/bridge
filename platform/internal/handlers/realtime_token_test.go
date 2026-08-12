@@ -3,6 +3,7 @@ package handlers
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -84,6 +85,76 @@ func TestCanvasMint_OwnerWrite(t *testing.T) {
 	claims, err := auth.VerifyRealtimeToken(rtSecret, response.Token)
 	require.NoError(t, err)
 	assert.False(t, claims.ReadOnly)
+}
+
+func TestCanvasMint_RequiresMatchingSessionIDAndSignsAuthoritativeBinding(t *testing.T) {
+	fx := newCanvasHandlerFixture(t)
+	canvas, err := fx.h.Canvases.CreateCanvas(context.Background(), store.CreateCanvasInput{SessionID: fx.session.ID, OwnerID: fx.student.ID, Title: "Identity board", Visibility: "private"})
+	require.NoError(t, err)
+	h := newRealtimeHandlerForCanvasFixture(fx)
+
+	call := func(body map[string]any) *httptest.ResponseRecorder {
+		body["documentName"] = "canvas:" + canvas.ID
+		encoded, err := json.Marshal(body)
+		require.NoError(t, err)
+		req := withClaims(httptest.NewRequest(http.MethodPost, "/api/realtime/token", bytes.NewReader(encoded)), fx.claims(fx.student))
+		w := httptest.NewRecorder()
+		h.MintToken(w, req)
+		return w
+	}
+	for _, tc := range []struct {
+		name string
+		body map[string]any
+		want int
+	}{
+		{"missing", map[string]any{}, http.StatusBadRequest},
+		{"malformed", map[string]any{"sessionId": "not-a-uuid"}, http.StatusBadRequest},
+		{"mismatched", map[string]any{"sessionId": "11111111-1111-4111-8111-111111111111"}, http.StatusForbidden},
+	} {
+		t.Run(tc.name, func(t *testing.T) { require.Equal(t, tc.want, call(tc.body).Code) })
+	}
+	w := call(map[string]any{"sessionId": fx.session.ID})
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	var response mintResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	parts := strings.Split(response.Token, ".")
+	require.Len(t, parts, 3)
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	require.NoError(t, err)
+	var claims map[string]any
+	require.NoError(t, json.Unmarshal(payload, &claims))
+	assert.Equal(t, fx.session.ID, claims["sessionId"])
+	verified, err := auth.VerifyRealtimeToken(rtSecret, response.Token)
+	require.NoError(t, err)
+	assert.Equal(t, "canvas:"+canvas.ID, verified.Scope)
+}
+
+func TestInternalCanvasAuth_RequiresSessionIDBeforeAnyAuthorizationRead(t *testing.T) {
+	fx := newCanvasHandlerFixture(t)
+	canvas, err := fx.h.Canvases.CreateCanvas(context.Background(), store.CreateCanvasInput{SessionID: fx.session.ID, OwnerID: fx.student.ID, Title: "Locked board", Visibility: "private"})
+	require.NoError(t, err)
+	h := newRealtimeHandlerForCanvasFixture(fx)
+	for _, tc := range []struct {
+		name string
+		body map[string]any
+		want int
+	}{
+		{"missing", map[string]any{}, http.StatusBadRequest},
+		{"malformed", map[string]any{"sessionId": "not-a-uuid"}, http.StatusBadRequest},
+		{"mismatched", map[string]any{"sessionId": "11111111-1111-4111-8111-111111111111"}, http.StatusForbidden},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.body["documentName"] = "canvas:" + canvas.ID
+			tc.body["sub"] = fx.student.ID
+			body, err := json.Marshal(tc.body)
+			require.NoError(t, err)
+			req := httptest.NewRequest(http.MethodPost, "/api/internal/realtime/auth", bytes.NewReader(body))
+			req.Header.Set("Authorization", "Bearer "+rtSecret)
+			w := httptest.NewRecorder()
+			h.InternalAuth(w, req)
+			require.Equal(t, tc.want, w.Code, w.Body.String())
+		})
+	}
 }
 
 func TestCanvasMint_HostReadWhenHostVisible(t *testing.T) {

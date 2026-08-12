@@ -11,17 +11,23 @@ const state = vi.hoisted(() => ({
   observeScene: vi.fn(() => () => {}),
   readScene: vi.fn(() => null),
   writeScene: vi.fn(),
+  realtimeCalls: [] as unknown[][],
+  providerCalls: [] as unknown[],
+  tokenBySessionId: new Map<string | undefined, string>(),
 }));
 
 vi.mock("@/lib/realtime/use-realtime-token", () => ({
-  useRealtimeToken: () => ({ token: "canvas-token", unavailable: false }),
+  useRealtimeToken: (...args: unknown[]) => {
+    state.realtimeCalls.push(args);
+    return { token: state.tokenBySessionId.get(args[1] as string | undefined) ?? "canvas-token", unavailable: false };
+  },
 }));
 
 vi.mock("@/lib/yjs/use-yjs-provider", () => ({
-  useYjsProvider: () => ({
-    yDoc: state.yDoc,
-    connected: true,
-  }),
+  useYjsProvider: (args: unknown) => {
+    state.providerCalls.push(args);
+    return { yDoc: state.yDoc, connected: true };
+  },
 }));
 
 vi.mock("./excalidraw-yjs", () => ({
@@ -43,6 +49,9 @@ describe("useWhiteboard", () => {
     state.observeScene.mockClear();
     state.readScene.mockClear();
     state.writeScene.mockClear();
+    state.realtimeCalls.length = 0;
+    state.providerCalls.length = 0;
+    state.tokenBySessionId.clear();
   });
 
   afterEach(() => {
@@ -77,6 +86,21 @@ describe("useWhiteboard", () => {
       scene,
       expect.any(Symbol),
     );
+  });
+
+  it("passes the selected canvas sessionId to the real token producer before mounting a provider", async () => {
+    const canvasId = "22222222-2222-4222-8222-222222222222";
+    const firstSessionId = "11111111-1111-4111-8111-111111111111";
+    const secondSessionId = "33333333-3333-4333-8333-333333333333";
+    const opts = (sessionId: string) => ({ canvasId, sessionId, readOnly: false }) as unknown as Parameters<typeof useWhiteboard>[0];
+    state.tokenBySessionId.set(firstSessionId, "canvas-A");
+    state.tokenBySessionId.set(secondSessionId, "");
+    const { rerender } = renderHook(({ sessionId }) => useWhiteboard(opts(sessionId)), { initialProps: { sessionId: firstSessionId } });
+    expect(state.realtimeCalls.at(-1)).toEqual([`canvas:${canvasId}`, firstSessionId]);
+    expect(state.providerCalls.at(-1)).toMatchObject({ documentName: `canvas:${canvasId}`, token: "canvas-A" });
+    rerender({ sessionId: secondSessionId });
+    expect(state.realtimeCalls.at(-1)).toEqual([`canvas:${canvasId}`, secondSessionId]);
+    expect(state.providerCalls.at(-1)).toMatchObject({ documentName: `canvas:${canvasId}`, token: "" });
   });
 
   it("keeps Zod root validation errors compatible with zod/v4", () => {

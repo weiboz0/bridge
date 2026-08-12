@@ -25,6 +25,7 @@ interface MintArgs {
   exp?: number;
   signWith?: string;
   signingPayload?: string; // override the bytes the HMAC covers (for tamper tests)
+  sessionId?: unknown;
 }
 
 function mint(args: MintArgs = {}): string {
@@ -44,6 +45,7 @@ function mint(args: MintArgs = {}): string {
   else payload.role = "user";
   if (args.scope !== undefined) payload.scope = args.scope;
   else payload.scope = "chapter:abc";
+  if (args.sessionId !== undefined) payload.sessionId = args.sessionId;
 
   const encHeader = b64url(JSON.stringify(header));
   const encPayload = b64url(JSON.stringify(payload));
@@ -129,6 +131,18 @@ describe("verifyRealtimeJwt", () => {
     const sig = createHmac("sha256", SECRET).update(`${encH}.${encP}`).digest("base64url");
     const tok = `${encH}.${encP}.${sig}`;
     expect(() => verifyRealtimeJwt(tok, SECRET)).toThrow(JwtVerifyError);
+  });
+
+  it("requires a canonical sessionId on canvas JWTs and rejects it on every other scope", () => {
+    expect(() => verifyRealtimeJwt(mint({ scope: "canvas:22222222-2222-4222-8222-222222222222" }), SECRET)).toThrow(/sessionId/i);
+    expect(() => verifyRealtimeJwt(mint({ scope: "canvas:22222222-2222-4222-8222-222222222222", sessionId: "not-a-uuid" }), SECRET)).toThrow(/sessionId/i);
+    expect(() => verifyRealtimeJwt(mint({ scope: "chapter:abc", sessionId: "11111111-1111-4111-8111-111111111111" }), SECRET)).toThrow(/sessionId/i);
+  });
+
+  it("round-trips the verified canvas sessionId", () => {
+    const sessionId = "11111111-1111-4111-8111-111111111111";
+    const claims = verifyRealtimeJwt(mint({ scope: "canvas:22222222-2222-4222-8222-222222222222", sessionId }), SECRET) as { sessionId?: unknown };
+    expect(claims.sessionId).toBe(sessionId);
   });
 });
 

@@ -1,6 +1,8 @@
 package auth
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -34,6 +36,45 @@ func TestSignAndVerifyRealtimeToken_ReadOnlyClaim(t *testing.T) {
 	claims, err := VerifyRealtimeToken(realtimeTestSecret, tok)
 	require.NoError(t, err)
 	assert.True(t, claims.ReadOnly)
+}
+
+func TestSignRealtimeToken_NonCanvasWireContractOmitsSessionID(t *testing.T) {
+	tok, err := SignRealtimeToken(realtimeTestSecret, "user-123", "teacher", "chapter:abc-123", 5*time.Minute)
+	require.NoError(t, err)
+	parts := strings.Split(tok, ".")
+	require.Len(t, parts, 3)
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	require.NoError(t, err)
+	var claims map[string]any
+	require.NoError(t, json.Unmarshal(payload, &claims))
+	assert.NotContains(t, claims, "sessionId")
+}
+
+func TestVerifyRealtimeToken_EnforcesCanvasOnlySessionIDClaim(t *testing.T) {
+	now := time.Now()
+	for _, tc := range []struct {
+		name, scope string
+		sessionID   any
+	}{
+		{"canvas missing claim", "canvas:22222222-2222-4222-8222-222222222222", nil},
+		{"canvas malformed claim", "canvas:22222222-2222-4222-8222-222222222222", "not-a-uuid"},
+		{"non-canvas carries claim", "chapter:abc", "11111111-1111-4111-8111-111111111111"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			claims := map[string]any{
+				"sub": "u", "role": "user", "scope": tc.scope, "iss": RealtimeIssuer,
+				"iat": now.Unix(), "exp": now.Add(time.Minute).Unix(),
+			}
+			if tc.sessionID != nil {
+				claims["sessionId"] = tc.sessionID
+			}
+			token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims(claims))
+			signed, err := token.SignedString([]byte(realtimeTestSecret))
+			require.NoError(t, err)
+			_, err = VerifyRealtimeToken(realtimeTestSecret, signed)
+			require.Error(t, err)
+		})
+	}
 }
 
 func TestSignRealtimeToken_RejectsEmptySecret(t *testing.T) {
