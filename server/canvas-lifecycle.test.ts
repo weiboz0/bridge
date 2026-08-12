@@ -235,4 +235,32 @@ describe("Phase 10 canvas lifecycle RED contract", () => {
     await sut.complete({ sessionId, freezeToken: token });
     await expect(sut.freeze({ sessionId, freezeToken: token, canvasIds: [] })).rejects.toMatchObject({ code: "operation_completed" });
   });
+
+  test("starts uncached authorization only after the installed admission turnstile grants, and aborts its exact fetch at the owned deadline", async () => {
+    const { createCanvasLifecycle } = await lifecycle();
+    const events: string[] = [];
+    const sut = createCanvasLifecycle({ authorizationDeadlineMs: 1, authorizeMutation: ({ signal }: { signal: AbortSignal }) => {
+      events.push("authorize");
+      return new Promise((resolve) => signal.addEventListener("abort", () => { events.push("abort"); resolve({ allowed: false, readOnly: false }); }, { once: true }));
+    } });
+    const documentName = `canvas:${canvasId}`;
+    const first = sut.admitMutation({ documentName, sessionId, connection: { close() {} }, update: updateWith("first") });
+    const second = sut.admitMutation({ documentName, sessionId, connection: { close() {} }, update: updateWith("second") });
+    await expect(first).rejects.toMatchObject({ code: "authorization_timeout" });
+    await expect(second).rejects.toMatchObject({ code: "authorization_timeout" });
+    expect(events).toEqual(["authorize", "abort", "authorize", "abort"]);
+  });
+
+  test("coalesces matching terminal cleanup behind one active freeze and forbids a foreign token from occupying the bounded terminal queue", async () => {
+    const { createCanvasLifecycle } = await lifecycle();
+    const validation = Promise.withResolvers<{ allowed: boolean; remainingMs: number }>();
+    const sut = createCanvasLifecycle({ validateLease: async () => validation.promise });
+    const freezing = sut.freeze({ sessionId, freezeToken: token, canvasIds: [] });
+    const completeA = sut.complete({ sessionId, freezeToken: token });
+    const completeB = sut.complete({ sessionId, freezeToken: token });
+    await expect(sut.complete({ sessionId, freezeToken: randomUUID() })).rejects.toMatchObject({ code: "freeze_token_mismatch", status: 409 });
+    validation.resolve({ allowed: true, remainingMs: 2_000 });
+    await expect(Promise.all([completeA, completeB])).resolves.toEqual([{ released: true }, { released: true }]);
+    await expect(freezing).rejects.toMatchObject({ code: "operation_completed" });
+  });
 });

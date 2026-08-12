@@ -565,6 +565,32 @@ describe("Phase 10 installed Hocuspocus hook RED contract", () => {
     document.destroy();
   });
 
+  test("rolls back the authenticated control listener if the installed websocket listener fails after control bind", async () => {
+    const runtime = await import("./hocuspocus") as Record<string, unknown>;
+    const start = runtime.startHocuspocusListeners as ((input: Record<string, unknown>) => Promise<void>) | undefined;
+    expect(start).toBeTypeOf("function");
+    let controlClosed = 0;
+    await expect(start!({
+      control: { listen: async () => undefined, close: async () => { controlClosed += 1; } },
+      websocket: { listen: async () => { throw new Error("websocket bind failed"); } },
+    })).rejects.toThrow("websocket bind failed");
+    expect(controlClosed).toBe(1);
+  });
+
+  test("streams the frozen bundle incrementally through the real control response, yields after backpressure, and settles reader ownership on response destroy", async () => {
+    const runtime = await import("./hocuspocus") as Record<string, unknown>;
+    const stream = runtime.streamCanvasFreezeResponse as ((input: Record<string, unknown>) => Promise<void>) | undefined;
+    expect(stream).toBeTypeOf("function");
+    const writes: string[] = [];
+    let destroyed: (() => void) | undefined;
+    await stream!({
+      result: { snapshots: [{ canvasId: phase10CanvasId, stateBase64: "AA==", sha256: "0".repeat(64) }], closed: 0 },
+      response: { write: (part: string) => { writes.push(part); return false; }, once: (event: string, callback: () => void) => { if (event === "close") destroyed = callback; }, end() {} },
+      waitForDrain: async () => { destroyed?.(); },
+    });
+    expect(writes.length).toBeGreaterThan(1);
+  });
+
   test("runs current authorization for every canvas admission, including an already-loaded document", async () => {
     const runtime = await import("./hocuspocus") as Record<string, unknown>;
     const install = runtime.createCanvasLifecycleHooks as ((input: Record<string, unknown>) => Record<string, (input: Record<string, unknown>) => Promise<unknown>>) | undefined;
