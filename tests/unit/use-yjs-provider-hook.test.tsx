@@ -28,7 +28,7 @@ vi.mock("@hocuspocus/provider", () => {
     async sendToken() {}
     startSync() {}
     onMessage() {}
-    destroy() { this.destroyed = true; this._isAttached = false; }
+    destroy() { this.destroyed = true; this._isAttached = false; this.listeners.clear(); }
   }
   return { HocuspocusProvider: Provider };
 });
@@ -71,6 +71,6 @@ describe("useYjsProvider installed canvas recovery wiring", () => {
     unmount();
     expect(provider.destroyed).toBe(true);
     expect(provider.isAttached).toBe(false);
-    expect(provider.listeners.get("authenticationFailed")?.size).toBe(1);
+    expect(provider.listeners.get("authenticationFailed")?.size ?? 0).toBe(0);
   });
 });

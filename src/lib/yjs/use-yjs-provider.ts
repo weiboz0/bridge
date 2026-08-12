@@ -298,8 +298,8 @@ export function useYjsProvider({
     forceUpdate((n) => n + 1);
 
     return () => {
-      provider.destroy();
       releaseInstalledRecovery?.();
+      provider.destroy();
       reconnectRef.current = undefined;
       yDoc.destroy();
       yDocRef.current = null;

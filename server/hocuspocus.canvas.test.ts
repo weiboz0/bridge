@@ -587,7 +587,7 @@ describe("Phase 10 installed Hocuspocus hook RED contract", () => {
     expect(lifecycle.accounting()).toEqual({ residentBytes: 0, captureBytes: 0 });
   });
 
-  test("the production load adapter rolls back a later afterLoad extension failure and its stale callbacks preserve the replacement generation", async () => {
+  test("a distinct earlier afterLoad extension failure leaves the pending watchdog armed and startup rejects any extension after Bridge", async () => {
     const runtime = await import("./hocuspocus") as Record<string, unknown>;
     const { createCanvasLifecycle } = await import("./canvas-lifecycle");
     const createAdapter = runtime.createCanvasLoadLifecycleAdapter as ((input: Record<string, unknown>) => {
@@ -596,28 +596,25 @@ describe("Phase 10 installed Hocuspocus hook RED contract", () => {
       beforeUnloadDocument(input: { documentName: string; document: Y.Doc; instance: Hocuspocus }): Promise<void>;
     }) | undefined;
     const lifecycle = createCanvasLifecycle();
-    let failExtension = true;
-    const adapter = createAdapter!({ lifecycle, afterClaim: () => {
-      if (failExtension) {
-        failExtension = false;
-        throw new Error("later after-load extension failed");
-      }
-    } });
+    const adapter = createAdapter!({ lifecycle });
+    const bridgeAfterLoad = (input: Record<string, unknown>) => adapter.afterLoadDocument(input as never);
+    const failingExtension = { afterLoadDocument: () => { throw new Error("separate after-load extension failed"); } };
     const instance = new Hocuspocus({
+      extensions: [failingExtension],
       onLoadDocument: ({ documentName }) => adapter.prepare({ documentName }),
-      afterLoadDocument: (input) => adapter.afterLoadDocument(input as never),
+      afterLoadDocument: bridgeAfterLoad,
       beforeUnloadDocument: (input) => adapter.beforeUnloadDocument(input as never),
     });
     const documentName = `canvas:${phase10CanvasId}`;
-    await expect(instance.createDocument(documentName, {}, "socket", { readOnly: false }, { userId: "writer", sessionId: randomUUID() })).rejects.toThrow("later after-load extension failed");
+    await expect(instance.createDocument(documentName, {}, "socket", { readOnly: false }, { userId: "writer", sessionId: randomUUID() })).rejects.toThrow("separate after-load extension failed");
     expect(instance.documents.has(documentName)).toBe(false);
+    await new Promise<void>((resolve) => setImmediate(resolve));
     expect(lifecycle.inspectDocument(documentName)).toBeUndefined();
     expect(lifecycle.accounting()).toEqual({ residentBytes: 0, captureBytes: 0 });
-    const replacement = await instance.createDocument(documentName, {}, "socket-2", { readOnly: false }, { userId: "writer", sessionId: randomUUID() });
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    expect(instance.documents.get(documentName)).toBe(replacement);
-    expect(lifecycle.inspectDocument(documentName)?.destroyed).toBe(false);
-    await instance.unloadDocument(replacement);
+    const assertFinal = runtime.assertCanvasAfterLoadIsFinal as ((extensions: Array<{ afterLoadDocument?: unknown }>, hook: unknown) => void) | undefined;
+    expect(assertFinal).toBeTypeOf("function");
+    expect(() => assertFinal!([{ afterLoadDocument: bridgeAfterLoad }, { afterLoadDocument: () => undefined }], bridgeAfterLoad)).toThrow(/final after-load extension/);
+    expect(() => assertFinal!([{ afterLoadDocument: () => undefined }, { afterLoadDocument: bridgeAfterLoad }], bridgeAfterLoad)).not.toThrow();
   });
 
   test("registered onDisconnect and beforeUnload abort and settle all eight half-open admissions while reconnect-aborted unload preserves the exact document generation", async () => {

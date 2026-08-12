@@ -653,12 +653,6 @@ export class CanvasLifecycle {
     }
   }
 
-  afterLoad({ documentName, document, registry }: { documentName: string; document: Y.Doc; registry: Map<string, Y.Doc> }): void {
-    const state = this.managed.get(documentName);
-    if (!state || state.document !== document) return;
-    state.registry = registry;
-  }
-
   async beforeUnload({ documentName, document, generation, registry }: { documentName: string; document: Y.Doc; generation: number; registry?: Map<string, Y.Doc> }): Promise<void> {
     const state = this.managed.get(documentName);
     if (!state || state.document !== document || state.generation !== generation) return;

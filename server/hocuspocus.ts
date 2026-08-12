@@ -305,9 +305,8 @@ export function createCanvasLifecycleHooks({
  * the exact claimed generation is rolled back because pinned Hocuspocus cannot
  * destroy a document that it has not inserted into its registry yet.
  */
-export function createCanvasLoadLifecycleAdapter({ lifecycle = canvasLifecycle, afterClaim }: {
+export function createCanvasLoadLifecycleAdapter({ lifecycle = canvasLifecycle }: {
   lifecycle?: CanvasLifecycle;
-  afterClaim?: (input: { documentName: string; document: Y.Doc }) => Promise<void> | void;
 } = {}) {
   return {
     async prepare({ documentName, persistedUpdate = new Uint8Array() }: { documentName: string; persistedUpdate?: Uint8Array }) {
@@ -315,13 +314,7 @@ export function createCanvasLoadLifecycleAdapter({ lifecycle = canvasLifecycle, 
     },
     async afterLoadDocument({ documentName, document, instance }: { documentName: string; document: Y.Doc; instance: { documents: Map<string, Y.Doc> } }) {
       if (!documentName.startsWith("canvas:")) return;
-      const rollback = lifecycle.claimPreparedLoad({ documentName, document, registry: instance.documents });
-      try {
-        await afterClaim?.({ documentName, document });
-      } catch (error) {
-        rollback?.();
-        throw error;
-      }
+      lifecycle.claimPreparedLoad({ documentName, document, registry: instance.documents });
     },
     async beforeUnloadDocument({ documentName, document, instance }: { documentName: string; document: Y.Doc; instance: { documents: Map<string, Y.Doc> } }) {
       if (!documentName.startsWith("canvas:")) return;
@@ -399,7 +392,6 @@ const canvasLifecycle = createCanvasLifecycle({
 const canvasLifecycleHooks = createCanvasLifecycleHooks({ lifecycle: canvasLifecycle });
 const canvasLoadLifecycle = createCanvasLoadLifecycleAdapter({
   lifecycle: canvasLifecycle,
-  afterClaim: (input) => canvasLifecycleHooks.afterLoadDocument(input),
 });
 const canvasConnections = new Map<string, unknown>();
 
@@ -693,7 +685,16 @@ export const hocuspocusHooks = {
   },
 };
 
+/** Spec 013 relies on Bridge owning the final pre-registry after-load step. */
+export function assertCanvasAfterLoadIsFinal(extensions: Array<{ afterLoadDocument?: unknown }>, finalHook: unknown): void {
+  const afterLoadExtensions = extensions.filter((extension) => typeof extension.afterLoadDocument === "function");
+  if (afterLoadExtensions.at(-1)?.afterLoadDocument !== finalHook) {
+    throw new Error("Bridge canvas afterLoadDocument must be the final after-load extension");
+  }
+}
+
 const server = new Server(hocuspocusHooks, { maxPayload: HOCUSPOCUS_SHARED_MAX_PAYLOAD });
+assertCanvasAfterLoadIsFinal(server.hocuspocus.configuration.extensions, hocuspocusHooks.afterLoadDocument);
 
 function writeControlResponse(response: ServerResponse, status: number, body: Record<string, unknown>): void {
   response.writeHead(status, { "Content-Type": "application/json", "Cache-Control": "no-store" });
