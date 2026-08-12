@@ -1134,3 +1134,18 @@ The user approved moving final snapshot persistence into Go.
 **Round 12 verdicts:** `[sol]` CHANGES REQUESTED; `[fable]` CHANGES REQUESTED.
 
 **Round 12 responses await Sol and Fable confirmation on commit `62840cf`.**
+
+### Round 13 — 2026-08-11 — commit `24087c5`
+
+- `[OPEN]` `[sol][fable]` The pending-load watchdog was cancelled inside `afterLoadDocument` before shadow/listener initialization and before pinned Hocuspocus registry insertion, so later failure could leak an unregistered generation.
+  → Response in `18df349`: after-load initialization is caught while the watchdog remains armed; the next-turn watchdog alone finalizes an exact initialized instance after registry insertion or removes every partial resource otherwise, with the final-extension/no-macrotask invariant enforced at startup.
+- `[OPEN]` `[sol]` Individual admission waits were bounded but an authenticated burst could allocate an unbounded waiter, timer, abort, and listener population before the turnstile.
+  → Response in `18df349`: a synchronous per-document counter admits at most eight active-plus-queued mutations before any waiter allocation, the ninth closes retryably, and saturated freeze/unload tests prove exact settlement.
+- `[OPEN]` `[fable]` Irreversible cleanup in `beforeUnloadDocument` was unsafe because pinned Hocuspocus can abort unload after that hook when a reconnect arrives.
+  → Response in `18df349`: the hook only cancels and settles pending admission, clears its transient flag, and retains instrumentation; exact Yjs destruction alone removes listeners and accounting, so an aborted unload remains operational.
+- `[OPEN]` `[fable]` The production-writer scan and TypeScript helper wording were insufficiently scoped.
+  → Response in `18df349`: the deletion distinguishes the live end helper from dead create helper, names the allowlist and `TODO.md`, and limits the scan to production while excluding fixtures.
+
+**Round 13 verdicts:** `[sol]` CHANGES REQUESTED; `[fable]` CHANGES REQUESTED.
+
+**Round 13 responses await Sol and Fable confirmation on commit `18df349`.**
