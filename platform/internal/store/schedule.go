@@ -43,7 +43,12 @@ type UpdateScheduleInput struct {
 }
 
 type ScheduleStore struct {
-	db *sql.DB
+	db        *sql.DB
+	testHooks *scheduleStoreTestHooks
+}
+
+type scheduleStoreTestHooks struct {
+	afterClassGuard func()
 }
 
 func NewScheduleStore(db *sql.DB) *ScheduleStore {
@@ -227,9 +232,11 @@ func (s *ScheduleStore) StartScheduledSession(ctx context.Context, scheduleID, t
 	// The replacement guard comes before every lifecycle lock. Re-read the
 	// planned row only after it is held, so a concurrent starter cannot turn a
 	// stale read into a second live session.
-	replaced, err := replaceClassLiveSessions(ctx, tx, classID)
-	if err != nil {
+	if err := lockClassReplacement(ctx, tx, classID); err != nil {
 		return nil, err
+	}
+	if s.testHooks != nil && s.testHooks.afterClassGuard != nil {
+		s.testHooks.afterClassGuard()
 	}
 
 	// Get the schedule entry after the class guard, then lock it for the
@@ -248,6 +255,10 @@ func (s *ScheduleStore) StartScheduledSession(ctx context.Context, scheduleID, t
 		return nil, err
 	}
 	sched.TopicIDs = parseUUIDArray(topicIDs)
+	replaced, err := replaceLockedClassLiveSessions(ctx, tx, sched.ClassID)
+	if err != nil {
+		return nil, err
+	}
 
 	now := time.Now()
 

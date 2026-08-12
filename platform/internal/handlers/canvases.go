@@ -227,6 +227,8 @@ func canvasVisibility(visibility string) bool {
 
 func (h *CanvasHandler) writeCanvasMutationError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, store.ErrSessionEndInProgress):
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "Session end in progress", "code": "session_end_in_progress"})
 	case errors.Is(err, store.ErrSessionEnded):
 		writeError(w, http.StatusConflict, "Session has ended")
 	case errors.Is(err, store.ErrCanvasCapReached):

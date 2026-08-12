@@ -16,6 +16,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/weiboz0/bridge/platform/internal/auth"
@@ -201,6 +202,35 @@ func TestCanvasHandler_MutationAuthAndEndedArchive(t *testing.T) {
 		w := fx.request(t, tc.method, tc.path, tc.body, fx.claims(fx.student))
 		require.Equal(t, http.StatusConflict, w.Code, w.Body.String())
 	}
+}
+
+func TestCanvasHandler_ActiveFreezeReturnsStable409WithoutWrites(t *testing.T) {
+	fx := newCanvasHandlerFixture(t)
+	canvas, err := fx.h.Canvases.CreateCanvas(context.Background(), store.CreateCanvasInput{SessionID: fx.session.ID, OwnerID: fx.student.ID, Title: "unchanged", Visibility: "private"})
+	require.NoError(t, err)
+	_, err = fx.db.ExecContext(context.Background(), `UPDATE sessions SET canvas_freeze_token = '11111111-1111-1111-1111-111111111111', canvas_freeze_until = clock_timestamp() + interval '15 seconds' WHERE id = $1`, fx.session.ID)
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		method, path string
+		body         any
+		claims       *auth.Claims
+	}{
+		{http.MethodPost, "/api/sessions/" + fx.session.ID + "/canvases", map[string]string{"title": "blocked", "visibility": "private"}, fx.claims(fx.student)},
+		{http.MethodPatch, "/api/sessions/" + fx.session.ID + "/canvases/" + canvas.ID, map[string]string{"title": "changed"}, fx.claims(fx.student)},
+		{http.MethodDelete, "/api/sessions/" + fx.session.ID + "/canvases/" + canvas.ID, nil, fx.claims(fx.student)},
+		{http.MethodPatch, "/api/sessions/" + fx.session.ID + "/settings", map[string]string{"canvasFloor": "host"}, fx.claims(fx.teacher)},
+	} {
+		w := fx.request(t, tc.method, tc.path, tc.body, tc.claims)
+		require.Equal(t, http.StatusConflict, w.Code, w.Body.String())
+		var body map[string]string
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+		require.Equal(t, "session_end_in_progress", body["code"])
+	}
+	var title, floor string
+	require.NoError(t, fx.db.QueryRowContext(context.Background(), `SELECT title FROM session_canvases WHERE id = $1`, canvas.ID).Scan(&title))
+	require.NoError(t, fx.db.QueryRowContext(context.Background(), `SELECT canvas_floor FROM sessions WHERE id = $1`, fx.session.ID).Scan(&floor))
+	assert.Equal(t, "unchanged", title)
+	assert.Equal(t, "private", floor)
 }
 
 func TestCanvasHandler_DeleteOwnerOnly(t *testing.T) {

@@ -131,15 +131,16 @@ psql postgresql://work@127.0.0.1:5432/bridge -c 'select 1' 2>&1
 psql postgresql://work@127.0.0.1:5432/bridge_test -c 'select 1' 2>&1
 
 # Schema probe — current contract from drizzle/0028_session_canvases.sql:
-# public.session_canvases; all nine named canvas columns; both named indexes
-# on that table; public.sessions.canvas_floor; and ordered public.canvas_visibility.
+# public.session_canvases; all eight named canvas columns; both named indexes
+# on that table; public.sessions.canvas_floor and the three nullable lifecycle
+# columns with exact types; and ordered public.canvas_visibility.
 psql postgresql://work@127.0.0.1:5432/bridge -tAc \
   "SELECT to_regclass('public.session_canvases') IS NOT NULL
      AND (SELECT count(DISTINCT column_name)
             FROM information_schema.columns
            WHERE table_schema='public'
              AND table_name='session_canvases'
-             AND column_name = ANY (ARRAY['id','session_id','owner_id','title','visibility','yjs_state','plain_text','created_at','updated_at'])) = 9
+             AND column_name = ANY (ARRAY['id','session_id','owner_id','title','visibility','yjs_state','created_at','updated_at'])) = 8
      AND (SELECT count(DISTINCT indexname)
             FROM pg_indexes
            WHERE schemaname='public'
@@ -150,6 +151,14 @@ psql postgresql://work@127.0.0.1:5432/bridge -tAc \
                   WHERE table_schema='public'
                     AND table_name='sessions'
                     AND column_name='canvas_floor')
+     AND (SELECT count(*)
+            FROM information_schema.columns
+           WHERE table_schema='public' AND table_name='sessions'
+             AND (column_name, data_type, is_nullable) IN (
+               ('canvas_freeze_token','uuid','YES'),
+               ('canvas_freeze_until','timestamp with time zone','YES'),
+               ('whiteboard_server_archive_complete','boolean','YES')
+             )) = 3
      AND ARRAY(SELECT e.enumlabel::text
                  FROM pg_type t
                  JOIN pg_namespace n ON n.oid=t.typnamespace
@@ -166,7 +175,7 @@ ls /home/chris/workshop/bridge/drizzle/*.sql 2>/dev/null | \
 
 Tag rules:
 - Postgres `bridge` unreachable → `[BLOCKER]` if platform is running (misconfigured or DB down), `[INFO]` if nothing is running.
-- `session_canvases`, any of its nine named columns, either named canvas index, `sessions.canvas_floor`, or ordered `canvas_visibility` missing/mismatched in `bridge` DB → `[BLOCKER]` "Schema probe would fail — migration 0028 is partially or wholly unapplied. Do not blindly rerun it: inspect and reconcile `drizzle/0028_session_canvases.sql` through the approved database-change workflow."
+- `session_canvases`, any of its eight named columns, either named canvas index, `sessions.canvas_floor`, any lifecycle column/type/nullability, or ordered `canvas_visibility` missing/mismatched in `bridge` DB → `[BLOCKER]` "Schema probe would fail — migration 0028 is partially or wholly unapplied. Do not blindly rerun it: inspect and reconcile `drizzle/0028_session_canvases.sql` through the approved database-change workflow."
 - `bridge_test` unreachable → `[WARNING]` "Test DB unreachable — Go integration tests and Vitest API tests will fail."
 - Both reachable, complete schema contract present → `[OK]`.
 

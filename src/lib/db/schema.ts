@@ -345,7 +345,6 @@ export const sessionCanvases = pgTable(
     title: varchar("title", { length: 255 }).notNull(),
     visibility: canvasVisibilityEnum("visibility").notNull(),
     yjsState: text("yjs_state"),
-    plainText: text("plain_text").notNull().default(""),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },

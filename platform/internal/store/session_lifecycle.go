@@ -34,6 +34,10 @@ type freezeLeaseValidation struct {
 	Remaining time.Duration
 }
 
+type sessionEndResult struct {
+	WhiteboardServerArchiveComplete bool
+}
+
 // CanvasSnapshot is one persisted state from an already fenced canvas bundle.
 type CanvasSnapshot struct {
 	CanvasID string
@@ -178,7 +182,9 @@ func completeSessionConfirmed(ctx context.Context, db *sql.DB, sessionID, token 
 	return tx.Commit()
 }
 
-func completeSessionDegraded(ctx context.Context, db *sql.DB, sessionID, token string) error {
+// abortSessionFreezeLease only releases the still-live operation that owns
+// token. A stale callback must never tear down another request's fence.
+func abortSessionFreezeLease(ctx context.Context, db *sql.DB, sessionID, token string) error {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -187,33 +193,74 @@ func completeSessionDegraded(ctx context.Context, db *sql.DB, sessionID, token s
 	if err := lockSessionLifecycle(ctx, tx, sessionID, false); err != nil {
 		return err
 	}
-	var existing sql.NullString
-	var active bool
-	err = tx.QueryRowContext(ctx, `SELECT canvas_freeze_token, COALESCE(canvas_freeze_until > clock_timestamp(), false)
-		FROM sessions WHERE id = $1 AND status = 'live'`, sessionID).Scan(&existing, &active)
-	if err == sql.ErrNoRows {
-		return ErrSessionEndInProgress
-	}
+	_, err = tx.ExecContext(ctx, `UPDATE sessions SET canvas_freeze_token = NULL, canvas_freeze_until = NULL
+		WHERE id = $1 AND status = 'live' AND canvas_freeze_token = $2::uuid`, sessionID, token)
 	if err != nil {
 		return err
 	}
+	return tx.Commit()
+}
+
+func completeSessionDegraded(ctx context.Context, db *sql.DB, sessionID, token string) error {
+	_, err := completeSessionDegradedResult(ctx, db, sessionID, token)
+	return err
+}
+
+func completeSessionDegradedResult(ctx context.Context, db *sql.DB, sessionID, token string) (sessionEndResult, error) {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return sessionEndResult{}, err
+	}
+	defer tx.Rollback()
+	if err := lockSessionLifecycle(ctx, tx, sessionID, false); err != nil {
+		return sessionEndResult{}, err
+	}
+	var existing sql.NullString
+	var active bool
+	var status string
+	var archiveComplete sql.NullBool
+	err = tx.QueryRowContext(ctx, `SELECT status, whiteboard_server_archive_complete, canvas_freeze_token,
+		COALESCE(canvas_freeze_until > clock_timestamp(), false) FROM sessions WHERE id = $1`, sessionID).
+		Scan(&status, &archiveComplete, &existing, &active)
+	if err == sql.ErrNoRows {
+		return sessionEndResult{}, ErrSessionEndInProgress
+	}
+	if err != nil {
+		return sessionEndResult{}, err
+	}
+	if status == "ended" {
+		if existing.Valid && (existing.String == token || !active) {
+			_, err = tx.ExecContext(ctx, `UPDATE sessions SET canvas_freeze_token = NULL, canvas_freeze_until = NULL
+				WHERE id = $1 AND status = 'ended' AND (canvas_freeze_token = $2::uuid OR canvas_freeze_until <= clock_timestamp())`, sessionID, token)
+			if err != nil {
+				return sessionEndResult{}, err
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			return sessionEndResult{}, err
+		}
+		return sessionEndResult{WhiteboardServerArchiveComplete: archiveComplete.Valid && archiveComplete.Bool}, nil
+	}
 	if active && (!existing.Valid || existing.String != token) {
-		return ErrSessionEndInProgress
+		return sessionEndResult{}, ErrSessionEndInProgress
 	}
 	result, err := tx.ExecContext(ctx, `UPDATE sessions SET status = 'ended', ended_at = clock_timestamp(),
 		whiteboard_server_archive_complete = false, canvas_freeze_token = NULL, canvas_freeze_until = NULL
 		WHERE id = $1 AND status = 'live'`, sessionID)
 	if err != nil {
-		return err
+		return sessionEndResult{}, err
 	}
 	affected, err := result.RowsAffected()
 	if err != nil {
-		return err
+		return sessionEndResult{}, err
 	}
 	if affected != 1 {
-		return ErrSessionEndInProgress
+		return sessionEndResult{}, ErrSessionEndInProgress
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return sessionEndResult{}, err
+	}
+	return sessionEndResult{WhiteboardServerArchiveComplete: false}, nil
 }
 
 // replaceClassLiveSessions obeys the global class-guard then lifecycle-lock order.
@@ -221,6 +268,12 @@ func replaceClassLiveSessions(ctx context.Context, tx *sql.Tx, classID string) (
 	if err := lockClassReplacement(ctx, tx, classID); err != nil {
 		return nil, err
 	}
+	return replaceLockedClassLiveSessions(ctx, tx, classID)
+}
+
+// replaceLockedClassLiveSessions discovers sessions only after its caller has
+// acquired the class guard and revalidated any producer-specific row state.
+func replaceLockedClassLiveSessions(ctx context.Context, tx *sql.Tx, classID string) ([]ReplacedSession, error) {
 	rows, err := tx.QueryContext(ctx, `SELECT id FROM sessions WHERE class_id = $1 AND status = 'live'
 		ORDER BY (('x' || substr(replace(lower(id::text), '-', ''), 1, 8))::bit(32))::int4, id`, classID)
 	if err != nil {
