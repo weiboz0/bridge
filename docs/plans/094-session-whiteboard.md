@@ -2,7 +2,8 @@
 
 **Branch:** `feat/094-session-whiteboard`
 **Status:** Phases 1a through 6 are complete.
-Plan-wide code review Round 1 requested changes; its open findings require a reviewed scope/trust-model decision before implementation.
+Spec 013 passed its exact-commit Sol + Fable 5 design gate; the user approved the remediation scope widening on 2026-08-11.
+Phases 7 through 13 remain blocked until this revised Tier-A plan reaches consensus.
 
 ## File scope
 
@@ -44,6 +45,29 @@ Plan-wide code review Round 1 requested changes; its open findings require a rev
 **`scripts/check-test-database-url.mjs`** (new) · **`scripts/ci-local.sh`** · **`scripts/tests/test-guards.sh`** (parsed/pinned local-gate database guard — provisional Round-10 governance scope) ·
 **`AGENTS.md`** (classify the validator and its executable guard proof as governance; correct the LLM-isolation contract) ·
 `docs/api.md` · `docs/architecture/decisions.md` · **`docs/testing.md`** · `README.md` · **`.claude/skills/br-system-review/SKILL.md`** (operator probe guidance) · this plan file.
+
+**DESIGN-REMEDIATION SCOPE (approved by the user 2026-08-11 after Spec 013 consensus):**
+**`docs/specs/013-session-whiteboard-review-remediation.md`** ·
+**`platform/internal/realtime/canvas_control.go`** + **`platform/internal/realtime/canvas_control_test.go`** (new bounded Go control client) ·
+**`platform/internal/store/session_lifecycle.go`** + **`platform/internal/store/session_lifecycle_test.go`** (new advisory keys, leases, confirmed/degraded persistence helpers) ·
+**`platform/internal/store/sessions.go`** + **`platform/internal/store/sessions_test.go`** ·
+**`platform/internal/store/schedule.go`** + **`platform/internal/store/schedule_test.go`** ·
+**`platform/internal/handlers/sessions.go`** + **`platform/internal/handlers/sessions_test.go`** + **`platform/internal/handlers/sessions_integration_test.go`** ·
+**`platform/internal/handlers/schedule.go`** + **`platform/internal/handlers/schedule_test.go`** + **`platform/internal/handlers/schedule_auth_integration_test.go`** ·
+**`platform/internal/config/config.go`** + **`platform/internal/config/config_test.go`** ·
+**`server/canvas-lifecycle.ts`** + **`server/canvas-lifecycle.test.ts`** (new freeze serializer, admission, accounting, and control listener) ·
+**`src/app/api/sessions/[id]/route.ts`** (remove the shadow PATCH producer; retain GET only) ·
+**`src/lib/sessions.ts`** (remove the TypeScript create/end writers) ·
+**`src/components/teacher/start-session-button.tsx`** + **`tests/unit/start-session-button.test.tsx`** (new replacement warning regression) ·
+**`tests/unit/shadow-routes.test.ts`** · **`TODO.md`** ·
+**`e2e/session-whiteboard.spec.ts`** (new; explicit pinned-stack execution only) ·
+**`.env.example`** · **`docs/setup.md`** · **`docs/project-structure.md`** (server-only control configuration and ports) ·
+**`docs/reviewers.md`** + **`docs/development-workflow.md`** + **`docs/coding-agent.md`** (permanent review-gate and dispatch contracts).
+
+The existing broad entries for `drizzle/**`, `src/lib/db/schema.ts`, `platform/cmd/api/main.go`, `platform/internal/handlers/realtime_token*`, `server/hocuspocus*`, whiteboard frontend files, schema-probe files, documentation, and tests remain authoritative for remediation changes in those paths.
+
+Scope-widening (Spec 013 remediation) authorized by the user 2026-08-11 via “approved” after the Sol + Fable 5 design gate passed.
+This approval covers the exact additions above, including the governance files; database migrations remain subject to the non-test-database hard safeguard, and E2E remains forbidden without a separately started Bridge stack plus explicit pinned `E2E_BASE_URL`.
 
 Scope-widening (R1 blocker 1 / concern C1) authorized by the user 2026-08-06: the read-only viewer boundary cannot be built without a `readOnly` claim in both JWT files, and `CanvasStore` must be wired in `main.go`.
 
@@ -207,6 +231,88 @@ A canvas is `documentName = canvas:{canvasId}`. Permission is enforced **server-
   GREEN commands are the pinned `go test ./internal/handlers -count=1 -timeout 120s` and `go test ./internal/store -count=1 -timeout 120s`, each with a reported duration at or below 60 seconds; full pinned `go test ./... -count=1 -timeout 120s`, whose handler and store package durations also remain at or below 60 seconds under package contention; both Vitest configurations; the Hocuspocus suite; and `bash scripts/ci-local.sh --fast` with Bun pinned in `PATH` and provider keys empty.
   The fast gate is phase-local evidence only; Phase 5's full `bash scripts/ci-local.sh` plus attestation remains the merge gate, still requires a user-pinned `E2E_BASE_URL`, and must run last so a later fast attestation cannot be mistaken for merge evidence.
 
+### Phase 7 — Governance: permanent consensus review gates *(orchestrator; governance)*
+
+- Update `AGENTS.md`, `docs/reviewers.md`, and `docs/development-workflow.md` so every new design spec has an exact-commit, read-only two-reviewer gate: Codex `gpt-5.6-sol` at high reasoning plus Claude Code `claude-fable-5`.
+- Design, plan, and code-review gates iterate to consensus without a numeric round cap.
+  Every three non-converged rounds produces a user-visible checkpoint; genuine repeated non-convergence or a judgment fork pauses for the user, but elapsed rounds alone never convert an open blocker into approval.
+- Preserve the existing risk-tiered plan/code roster unless the user explicitly changes it; remove the current `max_review_rounds = 3` cap and apply the same consensus/no-open-blocker rule.
+- Update `docs/coding-agent.md` to retain domain dispatch while documenting that an explicit user model pin overrides the default.
+  For this remediation, all new or changed tests are delegated to Terra per the user's instruction, while reviewers remain independent and read-only.
+- Static governance checks must prove the design roster names exactly Sol + Fable 5, review approvals bind to an exact commit, all three review gates are uncapped consensus loops, and no text retains a conflicting numeric cap.
+- Run `bash scripts/tests/test-guards.sh`, `bash scripts/check-plan-uniqueness.sh`, `bash scripts/check-spec-uniqueness.sh`, and `git diff --check` before committing this phase.
+
+### Phase 8 — Durable lifecycle schema, locks, and replacement transitions *(Terra backend; tests by Terra)*
+
+- Tests first extend `platform/internal/store/session_lifecycle_test.go`, `sessions_test.go`, and `schedule_test.go` for the exact signed advisory-key vectors, transaction-scoped lock order, 15-second database-clock lease, conditional confirmed end, false/no-snapshot degraded end, token cleanup, affected-count rollback, sorted collision-safe replacement locking, and explicit-end-versus-replacement races.
+- Rewrite the still-unshipped `drizzle/0028_session_canvases.sql` and matching `src/lib/db/schema.ts` state with nullable `canvas_freeze_token`, `canvas_freeze_until`, and `whiteboard_server_archive_complete` columns; remove the dead `plain_text` column in the same pre-ship migration.
+  Update the multi-object schema probe and parity tests to require the complete revised 0028 end state.
+- Implement `platform/internal/store/session_lifecycle.go` as the single owner of lifecycle advisory-key derivation, lock helpers, lease acquisition/validation/cleanup, conditional true end followed by atomic bundle persistence, and separate degraded transition.
+  Canvas create, visibility, delete, and floor mutations take the shared lifecycle lock before their existing row lock.
+- Refactor `SessionStore.CreateSession` and `ScheduleStore.StartScheduledSession` to take the class-replacement guard, acquire lifecycle locks in derived-key/UUID order, mark replaced live sessions archive-incomplete, clear leases, return replacement metadata, and preserve the newly created session atomically.
+  Scheduled start re-reads the still-planned row after acquiring the class guard.
+- Focused GREEN commands use only a parsed and live-verified `_test` database:
+  `go test ./internal/store -run 'Test(SessionLifecycle|CreateSessionReplacement|StartScheduledSessionReplacement)' -count=1`,
+  `go test ./internal/db -count=1`, and `go vet ./internal/store ./internal/db` from `platform/`.
+  This phase does not apply a migration to any database.
+
+### Phase 9 — Go control client and every end producer *(Terra backend; tests by Terra)*
+
+- Tests first define `platform/internal/realtime/canvas_control_test.go` for strict URL/startup validation, loopback-only HTTP, verified non-loopback HTTPS, redirect refusal, bounded same-token retries, response-size/schema/base64/digest validation, transport-loss recovery, freeze/complete/unfreeze calls, and credential-safe errors.
+- Implement `platform/internal/realtime/canvas_control.go` with injected `http.Client`, one overall two-second freeze budget, bounded jitter, strict 48 MiB response reading, exact bundle validation, and best-effort terminal calls.
+  Add server-only configuration to `platform/internal/config/config.go`, startup validation/wiring in `platform/cmd/api/main.go`, and no reuse of the realtime signing secret.
+- Extend `RealtimeHandler` with the control-bearer-protected `POST /api/internal/canvas-sessions/freeze-auth` callback.
+  It takes the shared lifecycle advisory lock and returns positive integer `remainingMs` only for the exact live unexpired token.
+- Extend the dedicated canvas-settings GET to expose the nullable durable archive-complete result and stable warning to an authorized teacher without weakening non-teacher archive access.
+- Refactor explicit `SessionHandler.EndSession` to authorize the teacher, acquire and commit the lease/list transaction before HTTP, retry the same freeze token, strictly validate the bundle, run the confirmed transaction or the separate degraded transaction, emit/schedule only after commit, and expose durable `whiteboardServerArchiveComplete` plus the stable warning.
+- Update session-create and scheduled-start handlers to perform the same scheduled-session completion and event work for every replaced session, best-effort complete cleared tokens, and return `replacedSessions` without making replacement depend on Hocuspocus.
+- Focused GREEN commands:
+  `go test ./internal/realtime ./internal/handlers -run 'Test(CanvasControl|EndSession|CreateSessionReplacement|ScheduleStartReplacement|FreezeAuth)' -count=1 -timeout 120s`,
+  `go test ./... -count=1 -timeout 120s`, and `go vet ./internal/realtime ./internal/handlers` from `platform/` against the pinned `_test` database.
+
+### Phase 10 — Hocuspocus fence, admission, capture, and control listener *(Terra backend; tests by Terra)*
+
+- Move the new lifecycle machinery into focused `server/canvas-lifecycle.ts`; `server/hocuspocus.ts` wires its hooks and starts a separate authenticated control listener.
+  Preserve the shared websocket listener's 100 MiB compatibility cap; enforce the exact 1,048,576-byte decoded-update limit only after parsing a `canvas:` message.
+- Implement the spec's per-session freeze/unfreeze/complete serializer, database-validated monotonic lease deadline, immutable cached bundles, reference-counted deadline-owned response writers, token/entry identity cleanup, 256 MiB capture ledger, and shared admission turnstile with an eight-operation pre-allocation cap.
+- Implement the per-document shadow Y.Doc admission contract, 128 MiB resident ledger, owned 500-millisecond authorization fetch, local-fence rechecks after every yield, pending-struct rejection, synchronous update-listener commit, actual-state fallback, generation-keyed load watchdog, and destroy-only irreversible cleanup.
+  Freeze installs the fence and acquires the same turnstile before save mutex and capture.
+- Preserve current authorization on every load and mutation: a stale writable claim that now resolves ended/viewer becomes permanently read-only for that connection, a temporary freeze returns the retryable outcome without permanent downgrade, and every established canvas socket closes at the JWT expiry under a controlled Bun timer.
+- Add the three strict control endpoints on the separate listener: freeze, unfreeze, complete.
+  Capture every loaded authoritative canvas under its save mutex, reserve before encode, yield between documents, cache before 200, stream with backpressure, close connections only after complete capture, and never write PostgreSQL from the freeze path.
+- Extend `server/hocuspocus.canvas.test.ts` and new `server/canvas-lifecycle.test.ts` with the complete Spec 013 Hocuspocus matrix, including installed-hook `MessageReceiver.apply` cases, partial-overlap Yjs updates, every pre-handoff rejection, saturated admission, half-open writers, same-token recovery, complete races, failed/unregistered load, reconnect-aborted unload, actual destroy, empty canvas lists, expiry, and all non-canvas namespace compatibility.
+- GREEN commands under Bun:
+  `bun test server/hocuspocus.canvas.test.ts server/canvas-lifecycle.test.ts`,
+  `bunx --bun tsc --noEmit`, and `git diff --check`.
+
+### Phase 11 — Teacher controls, durable warnings, and legacy-writer removal *(Sonnet frontend; tests by Terra)*
+
+- Tests first extend the whiteboard component suites for floor GET/PATCH, owner-versus-viewer controls, confirmation before irreversible visibility raises, image/paste/drop rejection, 100-millisecond trailing scene writes, remote-update echo suppression, allowlisted durable app state, and stable local UI state.
+- Update the live whiteboard panel to expose the teacher's `private`/`host`/`participants` floor and the settled error/confirmation UX.
+  Keep all archive boards read-only and make a teacher-only settings 403 invisible to non-teacher archive visitors.
+- Update `src/components/teacher/start-session-button.tsx` to decode the successful top-level session plus `replacedSessions`, show the exact prior-session archive warning once before navigation, and preserve the existing 422 unlinked-topic confirmation flow.
+- Remove the shadow `PATCH` export from `src/app/api/sessions/[id]/route.ts`, remove the live `endSession` and dead `createSession` helpers from `src/lib/sessions.ts`, update `tests/unit/shadow-routes.test.ts` and `TODO.md`, and add a production-source scan proving no TypeScript session-status writer remains.
+- GREEN commands:
+  `bunx --bun vitest run tests/unit/start-session-button.test.tsx tests/unit/whiteboard-archive.test.tsx tests/unit/shadow-routes.test.ts tests/unit/excalidraw-yjs.test.ts`,
+  the source-local whiteboard Vitest configuration, `bun run lint`, and `bunx tsc --noEmit`.
+
+### Phase 12 — Integration tests (NAMED: lifecycle + realtime + API + persistence) *(Terra tests)*
+
+- **Fixtures:** `_test`-guarded host, present/left/invited participants, outsider, other-org user, live class and class-less sessions, scheduled session, 0/1/50 loaded canvases, controlled Hocuspocus server, fake clock, half-open control transport, and two concurrent database connections.
+- **Fast integration acceptance:** exact named tests include `TestEndSession_ConfirmedBundlePersistsBeforeCommit`, `TestEndSession_DegradedWhenHocuspocusUnavailableWarnsTeacher`, `TestEndSession_TransportLossRecoversSameTokenBundle`, `TestEndSession_BatchFailureRollsBackTrueAndSnapshots`, `TestEndSession_LeaseExpiryUsesSeparateDegradedTransaction`, `TestCreateSession_ReplacementEndsIncompleteAndWarns`, `TestStartScheduledSession_ReplacementCompletesScheduleAndWarns`, `TestReplacementRacePreservesExplicitConfirmedResult`, `TestFreezeAuth_SharedLockAndExactToken`, `TestCanvasMutations_BlockBehindEndLifecycleLock`, and the exact Phase-4 mint/store test names already listed above.
+- **Realtime acceptance:** the Bun suite must include `freeze complete serializes terminal cleanup`, `half-open writer permits same-token retry`, `admission cap rejects ninth before allocation`, `denied auth releases turnstile and accounting`, `partial-overlap update commits exact state`, `failed unregistered load releases reservation`, `reconnect-aborted unload retains instrumentation`, `destroy releases generation exactly once`, and `jwt expiry closes established reader`.
+- **Live-stack acceptance:** create `e2e/session-whiteboard.spec.ts` for teacher create → floor/visibility raise → participant view → scene sync → explicit end → read-only archive, plus the controlled incomplete-archive warning.
+  Run only against a separately started Bridge stack with explicit `E2E_BASE_URL`; if no such stack is authorized and pinned, record E2E as `UNVERIFIED` and do not run it or claim the phase complete.
+- Happy, auth-denial, malformed/timeout, cross-user, cross-session, and cross-org paths are mandatory; no broad green count substitutes for the named tests.
+
+### Phase 13 — Documentation, cross-phase verification, and shipping evidence *(orchestrator)*
+
+- Update `docs/api.md`, `docs/architecture/decisions.md`, `docs/testing.md`, and `README.md` for status-first lifecycle semantics, confirmed/degraded guarantees, control transport/config, replacement warnings, admission bounds, single-Hocuspocus limitation, and operator behavior.
+- Audit Spec 013 requirement-to-test coverage, scan the frozen scope and production session-status writers, and reconcile the plan's historical `[OPEN]` code-review findings only with verified implementation evidence.
+- Run focused TypeScript/Bun and Go suites first, then the complete `bash scripts/ci-local.sh` on the exact commit intended for review.
+  The merge gate remains incomplete until the full command—including explicitly pinned E2E—is green and its attestation names that commit.
+- Run the Tier-A code-review gate against the consolidated exact commit, resolve every `[OPEN]` finding to reviewer confirmation, write the post-execution report, update `TODO.md`, rerun `bash scripts/pre-merge-guard.sh --pr <number>`, create the PR, and squash-merge without `--admin` only after all local evidence is current.
+
 ## Risks
 
 | Risk | Mitigation |
@@ -223,6 +329,11 @@ A canvas is `documentName = canvas:{canvasId}`. Permission is enforced **server-
 | A test-only cost-4 fixture accidentally replaces real registration coverage. | Restrict the helper to audited setup inputs, preserve producer/auth registration tests at production cost, compare persisted shape against one real registration, and guard against future direct handler-test copies. |
 | The local-gate rewrite weakens database or LLM-billing safeguards. | Validate parsed and live database names before every runner, pin both database variables, preserve all five empty provider keys, and enforce those properties in executable governance self-tests. |
 | Activating formerly skipped Go integration tiers mutates the wrong database or overruns the package timeout. | Guard every shared opener before mutation, remove the contract cleanup fallback, inventory DDL/DML consumers, and require isolated plus full-run duration evidence on the validated test database. |
+| A final snapshot is reported complete while a mutation applies after capture or bundle persistence partially fails. | Durable lease plus shared/exclusive advisory locks, the shared admission turnstile, conditional true-first transaction with full rollback, and a separate durable false degraded transaction. |
+| A half-open control request, response writer, mutation authorization, or cancelled waiter strands a fence or leaks memory. | Owned deadlines and abort settlement, eight-admission pre-allocation cap, reader references, token/generation identity cleanup, and controlled half-open/saturation tests. |
+| Replacement session creation silently ends a whiteboard session without archive status or scheduled cleanup. | Class guard plus sorted lifecycle locks, durable incomplete result, same scheduled completion/events, returned replacement metadata, and teacher warning without a realtime dependency. |
+| Canvas-specific transport hardening breaks existing attempt/chapter/session documents. | Preserve the shared 100 MiB websocket cap and enforce the 1 MiB limit only after parsing a canvas mutation; test every supported namespace. |
+| Governance edits weaken or ambiguously cap review gates. | Executable text checks require exact Sol + Fable design roster, exact-commit binding, uncapped consensus for all gates, three-round checkpoints, and no contradictory numeric cap. |
 
 ## Out of scope
 - Per-recipient/group sharing; **tightening / un-share** and per-canvas host moderation (Decisions 6, 7 — follow-up); export/import; templates; image/file embeds beyond Excalidraw defaults; laser-pointer; canvas comments; post-end *editing* (archive is read-only, Decision 8).
@@ -352,6 +463,14 @@ Fresh independent confirmation is pending; no Phase-6 implementation is authoriz
 GLM's reported 30-call census is rejected: `rg -n '\.RegisterUser\(' platform/internal/handlers/*_test.go` returns 31 distinct source lines across the 22 enumerated files.
 Its Zod RED concern is also closed by the exact current gate evidence recorded above; regardless, the new interop regression and complete root suite are the acceptance boundary rather than an assumed diagnosis.
 All accepted nits are incorporated in this revision, every Tier-A reviewer has no open blocker, and Phase 6 is authorized for implementation.
+
+### Spec 013 remediation revision — plan gate pending (2026-08-11)
+
+- The user approved widening the frozen scope after Spec 013 reached exact-commit consensus at `aa34784e1e51596bf1b6779176a86187fe3306ab` (`[sol]` APPROVE; `[fable]` APPROVE WITH NITS).
+- Phases 7–13 translate that approved design into governance, durable lifecycle storage, Go control/end ownership, Hocuspocus admission/capture, teacher UX, named integration tests, and final verification.
+- This revision is Tier A because it touches stores, Hocuspocus, migration state, tests, and governance.
+- No Phase-7+ implementation is authorized until the current four-slot Tier-A plan roster returns APPROVE or APPROVE WITH NITS on the same committed revision with no open blocker.
+- The current governance's three-round cap remains authoritative for this plan gate; the uncapped consensus rule becomes effective only after the approved Phase-7 governance change ships.
 
 ## Code Review
 
