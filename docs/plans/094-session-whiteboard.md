@@ -80,6 +80,7 @@ The hint and claim select a lock and constrain the authoritative query; neither 
 Missing, malformed, or mismatched canvas session IDs fail closed, while non-canvas request and JWT contracts remain compatible.
 This substantive Spec 013 revision must clear the uncapped Sol + Fable 5 design gate before implementation.
 The scoped `src/lib/whiteboard/**` tests must exercise the real `useWhiteboard` producer with the selected `(canvas:{canvasId}, sessionId)` pair and prove a changed hint clears the retained token before reminting.
+The lock-key correction passed its exact-commit Round 16 design gate on `e91598fb8b177063a8afd2bc0fd9f791c9c76a0a`: Sol APPROVE and Fable 5 APPROVE, with no open findings.
 
 Governance provenance: before this revision the user explicitly directed that “all plan reviews” and then “all review” pursue consensus rather than stop at a numeric cap; the later design-gate direction separately fixed the permanent design roster to Sol + Fable 5 and removed its round cap.
 Phase 7 materializes both directions without retroactively changing the gate governing this committed plan revision.

@@ -1223,8 +1223,11 @@ Every canvas authorization path now has an implementable lock key before its fir
 
 Round 16 narrows the lifecycle invariant to the canvas-authorization transaction after normal request authentication, adds the production-callsite/rerender proof, and records the deliberate-hint availability behavior without weakening the authoritative post-lock binding.
 
-**Round 16 verdicts await Sol and Fable 5 on the next exact substantive commit.**
+**Round 16 verdicts on exact substantive commit `e91598fb8b177063a8afd2bc0fd9f791c9c76a0a`:** `[sol]` APPROVE; `[fable]` APPROVE.
 
-**Design-review gate result:** PENDING consensus on the lock-key correction.
+- `[sol]` Confirmed the lifecycle invariant is correctly bounded to the canvas-authorization transaction after ordinary request authentication and the real producer/rerender boundary is explicit and falsifiable.
+- `[fable]` Confirmed both Sol findings and the deliberate-hint availability concern are resolved, with no remaining blocker or concern.
+
+**Design-review gate result:** PASSED by consensus with no open findings.
 
 Following the gate rule, every historical finding above is mechanically transitioned from `[OPEN]` to `[FIXED]`; response prose did not self-certify resolution before both reviewers approved the same substantive commit.
