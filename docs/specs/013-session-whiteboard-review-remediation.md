@@ -1048,3 +1048,24 @@ The user approved moving final snapshot persistence into Go.
 **Round 10 verdicts:** `[sol]` CHANGES REQUESTED; `[fable]` CHANGES REQUESTED.
 
 **Round 10 responses await Sol and Fable confirmation on commit `5933b14`.**
+
+### Round 11 — 2026-08-11 — commit `0af5bd0`
+
+- `[OPEN]` `[sol][fable]` Class-session creation and scheduled-session start directly ended existing live sessions outside the lifecycle protocol, silently losing unflushed state and leaving archive completeness null.
+  → Response in `4a2848d`: both producers use a class guard plus sorted session lifecycle locks, durably record an intentionally degraded false result, clear and complete tokens, emit ended events, return replacement metadata, and show the initiating teacher a warning without depending on Hocuspocus.
+- `[OPEN]` `[sol][fable]` Turnstile acquisition was not ordered relative to authorization and the second fence check, so a waiting accepted frame could apply after confirmed capture.
+  → Response in `4a2848d`: the mutation path acquires the turnstile before uncached authorization and rechecks after every yield, while freeze installs its fence and then acquires the same turnstile before save mutex and capture.
+- `[OPEN]` `[sol][fable]` Digest correlation assumed Yjs emitted the incoming update bytes and fallback assumed an unchanged authoritative document, both false for partial overlap and pending structs.
+  → Response in `4a2848d`: the unique pending admission correlates by identity, origin, and document; fallback reconciles actual authoritative state; partially overlapping updates are covered; and shadow results with pinned-Yjs pending structs or deletes are rejected before handoff.
+- `[OPEN]` `[sol]` Pre-handoff authorization denial, timeout, cancellation, or frozen recheck had no explicit shadow, accounting, and turnstile rollback.
+  → Response in `4a2848d`: every pre-handoff exit synchronously restores shadow and accounting and releases the turnstile before rejecting, with an exhaustive rejection-path test matrix.
+- `[OPEN]` `[sol]` The `ws.maxPayload` envelope allowance was unspecified, so the exact boundary test was not falsifiable.
+  → Response in `4a2848d`: the pinned constructor receives exactly 1,048,625 bytes with its byte-level derivation, and fragmented boundary tests accept that value and reject 1,048,626 with code 1009.
+- `[OPEN]` `[fable]` Initial load could fail before `afterLoadDocument` installed cleanup, leaking its reservation.
+  → Response in `4a2848d`: `onLoadDocument` installs document-destroy cleanup before returning state, and tests distinguish apply failure from successful after-load, unload, and reload identities.
+- `[OPEN]` `[fable]` Cached retry writer deadlines, retryable ledger exhaustion, writer wording, and mutable-readOnly rationale were ambiguous.
+  → Response in `4a2848d`: each writer gets a fresh deadline bounded by remaining lease, transient ledger exhaustion uses retryable 1013, retries use a new writer over the immutable entry, and one-way read-only is stated as a Bridge concurrency invariant rather than a library limitation.
+
+**Round 11 verdicts:** `[sol]` CHANGES REQUESTED; `[fable]` CHANGES REQUESTED.
+
+**Round 11 responses await Sol and Fable confirmation on commit `4a2848d`.**
