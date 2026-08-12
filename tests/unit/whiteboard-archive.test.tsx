@@ -9,7 +9,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
-const whiteboardOptions: Array<{ canvasId: string | null; readOnly: boolean }> = [];
+const whiteboardOptions: Array<{ canvasId: string | null; sessionId: string; readOnly: boolean }> = [];
 const bindingWritePath = vi.fn();
 const boardProps: Array<{
   readOnly: boolean;
@@ -86,7 +86,7 @@ vi.mock("@/components/ai/ai-chat-panel", () => ({ AiChatPanel: () => null }));
 vi.mock("@/components/help-queue/raise-hand-button", () => ({ RaiseHandButton: () => null }));
 
 vi.mock("@/lib/whiteboard/use-whiteboard", () => ({
-  useWhiteboard: vi.fn((options: { canvasId: string | null; readOnly: boolean }) => {
+  useWhiteboard: vi.fn((options: { canvasId: string | null; sessionId: string; readOnly: boolean }) => {
     whiteboardOptions.push(options);
     return {
       scene: null,
@@ -166,6 +166,7 @@ describe("WhiteboardArchive — plan 094 phase 3", () => {
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(whiteboardOptions.filter(({ canvasId }) => canvasId !== null)).toEqual([]);
+    expect(whiteboardOptions).toContainEqual({ canvasId: null, sessionId: SESSION_ID, readOnly: true });
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
       `/api/sessions/${SESSION_ID}/canvases`,
     ]);

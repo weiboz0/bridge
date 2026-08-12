@@ -383,6 +383,20 @@ That recheck is now defense in depth: the confirmed path gains the lifecycle lea
   The focused Vitest suites passed 43 tests across JWT/cache/hook files and four source-local whiteboard tests; the Hocuspocus canvas suite passed 19 tests; exact changed-file ESLint and `git diff --check` passed.
 - `[UNVERIFIED]` Root `tsc --noEmit` remains red only in the pre-existing Phase 9 `whiteboard-panel.test.tsx` RED contract (`teacherControls` and strict fetch mock signatures), which the pending frontend slice owns.
 
+#### Phase 9 review-remediation RED proofs (2026-08-12; tests only)
+
+- `[GREEN]` The real Go control-client/`httptest` wire now proves an empty authoritative canvas list serializes exactly as `"canvasIds":[]`, never `null`, while the listener accepts the exact empty snapshots bundle.
+- `[RED]` A missing UUID session canvas `POST` returns `201` with `null` instead of the required `404`.
+  A successful fake freeze that expires its own matching lease before completion returns `409 session_end_in_progress` instead of ending the session with durable `whiteboardServerArchiveComplete: false` and the incomplete-archive warning.
+- `[RED]` Explicit and replacement post-commit settlement tests cancel the request context at the handoff boundary and prove the current schedule completion still uses it.
+  The explicit path emits only after the durable end, then leaves the linked schedule `in_progress` before asynchronous terminal complete; the replacement path emits before a cancelled-context schedule transition and likewise leaves the schedule `in_progress`.
+- Both `DATABASE_URL` and `TEST_DATABASE_URL` were explicitly set to `postgresql://work@127.0.0.1:5432/bridge_test`, and `CHECK_TEST_DATABASE_URL=... node scripts/check-test-database-url.mjs` live-verified the target before the focused database test.
+  `go test ./internal/realtime ./internal/handlers -run 'Test(CanvasControlClient_FreezeZeroCanvasIDsSendsAnEmptyArray|CanvasHandler_CreateCanvasMissingSessionReturns404|EndSession_MatchingLeaseExpiresAfterFreezeEndsDegraded|PostCommitSettlementUsesFreshContextForExplicitAndReplacementEnds)' -count=1 -timeout 120s` recorded the three expected RED mechanisms and the control-wire GREEN result.
+- The archive regression now requires `sessionId` in `UseWhiteboardOptions` while preserving the no-unselected-token and no-settings-fetch boundary.
+  The panel test's fetch mocks now use the real `fetch` parameter types only; `node_modules/.bin/tsc --noEmit` passed.
+  Focused Vitest remains `[UNVERIFIED]` in this shell because Bun is unavailable and the Node 18 fallback cannot load Vitest's required `node:util.styleText` export.
+- No production file was edited by this test-only remediation; the pre-existing frontend production edits remain unstaged for their owner.
+
 ### Phase 10 — Hocuspocus fence, admission, capture, and control listener *(Terra backend; tests by Terra)*
 
 - Move the new lifecycle machinery into focused `server/canvas-lifecycle.ts`; `server/hocuspocus.ts` wires its hooks and starts a separate authenticated control listener.

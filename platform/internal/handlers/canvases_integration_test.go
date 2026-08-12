@@ -138,6 +138,15 @@ func TestCanvasHandler_CreateCanvas_MemberOwnsCanvas(t *testing.T) {
 	require.Equal(t, "private", canvas.Visibility)
 }
 
+func TestCanvasHandler_CreateCanvasMissingSessionReturns404(t *testing.T) {
+	fx := newCanvasHandlerFixture(t)
+	w := fx.request(t, http.MethodPost, "/api/sessions/00000000-0000-4000-8000-000000000000/canvases", map[string]string{
+		"title": "Missing session board", "visibility": "private",
+	}, fx.claims(fx.teacher))
+	require.Equal(t, http.StatusNotFound, w.Code, w.Body.String())
+	require.NotEqual(t, "null\n", w.Body.String(), "a missing session must not serialize as a created null canvas")
+}
+
 func TestCanvasRoutes_ComposeWithSessionRoutes(t *testing.T) {
 	fx := newCanvasHandlerFixture(t)
 	r := chi.NewRouter()

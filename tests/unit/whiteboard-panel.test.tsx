@@ -23,13 +23,18 @@ function json(payload: unknown, status = 200): Response {
   return new Response(JSON.stringify(payload), { status, headers: { "content-type": "application/json" } });
 }
 
+function requestURL(input: RequestInfo | URL): string {
+  return typeof input === "string" ? input : input.toString();
+}
+
 describe("WhiteboardPanel — plan 094 phase 9 settings cutover", () => {
   beforeEach(() => vi.stubGlobal("fetch", vi.fn()));
   afterEach(() => vi.unstubAllGlobals());
 
   it("loads the strict dedicated settings schema and renders the teacher floor control", async () => {
     const fetchMock = vi.mocked(fetch);
-    fetchMock.mockImplementation((url: string) => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = requestURL(input);
       if (url.endsWith("/canvases")) return Promise.resolve(json({ items: [] }));
       if (url.endsWith("/canvas-settings")) return Promise.resolve(json({ canvasFloor: "host", whiteboardServerArchiveComplete: true }));
       throw new Error(`unexpected endpoint ${url}`);
@@ -44,7 +49,8 @@ describe("WhiteboardPanel — plan 094 phase 9 settings cutover", () => {
 
   it("updates only a strict canvasFloor payload through the dedicated PATCH route", async () => {
     const fetchMock = vi.mocked(fetch);
-    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = requestURL(input);
       if (url.endsWith("/canvases")) return Promise.resolve(json({ items: [] }));
       if (url.endsWith("/canvas-settings") && init?.method === "PATCH") return Promise.resolve(json({ canvasFloor: "participants" }));
       if (url.endsWith("/canvas-settings")) return Promise.resolve(json({ canvasFloor: "host" }));
@@ -62,7 +68,8 @@ describe("WhiteboardPanel — plan 094 phase 9 settings cutover", () => {
 
   it("does not show teacher settings controls when archive or nonteacher settings receives 403", async () => {
     const fetchMock = vi.mocked(fetch);
-    fetchMock.mockImplementation((url: string) => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = requestURL(input);
       if (url.endsWith("/canvases")) return Promise.resolve(json({ items: [] }));
       if (url.endsWith("/canvas-settings")) return Promise.resolve(new Response(null, { status: 403 }));
       throw new Error(`unexpected endpoint ${url}`);
@@ -84,7 +91,8 @@ describe("WhiteboardPanel — plan 094 phase 9 settings cutover", () => {
     ] as const) {
       const fetchMock = vi.mocked(fetch);
       fetchMock.mockReset();
-      fetchMock.mockImplementation((url: string) => {
+      fetchMock.mockImplementation((input: RequestInfo | URL) => {
+        const url = requestURL(input);
         if (url.endsWith("/canvases")) return Promise.resolve(json({ items: [] }));
         if (url.endsWith("/canvas-settings")) return Promise.resolve(json(payload));
         throw new Error(`unexpected endpoint ${url}`);

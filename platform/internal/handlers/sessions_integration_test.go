@@ -1014,6 +1014,150 @@ func TestEndSession_ConfirmedSubsetPersistsSnapshotsWithoutWarning(t *testing.T)
 	require.Equal(t, "ZmluYWw=", state)
 }
 
+func TestEndSession_MatchingLeaseExpiresAfterFreezeEndsDegraded(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	fx.h.CanvasControl = &fakeCanvasControl{onFreeze: func(request realtime.FreezeRequest) {
+		_, err := fx.db.ExecContext(context.Background(), `
+			UPDATE sessions
+			SET canvas_freeze_until = clock_timestamp() - interval '1 millisecond'
+			WHERE id = $1 AND canvas_freeze_token = $2::uuid`, request.SessionID, request.FreezeToken)
+		require.NoError(t, err)
+	}}
+
+	w := fx.doRequest(t, http.MethodPost, "/api/sessions/"+fx.sessionID+"/end", nil, fx.claims(fx.teacher, false))
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	require.Equal(t, false, body["whiteboardServerArchiveComplete"])
+	require.Equal(t, "whiteboard_server_archive_incomplete", body["warning"])
+
+	var status string
+	var archiveComplete bool
+	require.NoError(t, fx.db.QueryRowContext(context.Background(), `SELECT status, whiteboard_server_archive_complete FROM sessions WHERE id = $1`, fx.sessionID).Scan(&status, &archiveComplete))
+	require.Equal(t, "ended", status)
+	require.False(t, archiveComplete)
+}
+
+func TestPostCommitSettlementUsesFreshContextForExplicitAndReplacementEnds(t *testing.T) {
+	t.Run("explicit end", func(t *testing.T) {
+		fx := newSessionFixture(t, t.Name())
+		schedules := store.NewScheduleStore(fx.db)
+		fx.h.Schedules = schedules
+		schedule, err := schedules.CreateSchedule(context.Background(), store.CreateScheduleInput{
+			ClassID: fx.classID, TeacherID: fx.teacher.ID,
+			ScheduledStart: time.Now().Add(time.Hour), ScheduledEnd: time.Now().Add(2 * time.Hour),
+		})
+		require.NoError(t, err)
+		_, err = fx.db.ExecContext(context.Background(), `UPDATE scheduled_sessions SET status = 'in_progress' WHERE id = $1`, schedule.ID)
+		require.NoError(t, err)
+		_, err = fx.db.ExecContext(context.Background(), `UPDATE sessions SET scheduled_session_id = $2 WHERE id = $1`, fx.sessionID, schedule.ID)
+		require.NoError(t, err)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		unsubscribe := fx.h.Broadcaster.Subscribe(fx.sessionID, func(event string, _ interface{}) {
+			require.Equal(t, "session_ended", event)
+			var status string
+			require.NoError(t, fx.db.QueryRowContext(context.Background(), `SELECT status FROM sessions WHERE id = $1`, fx.sessionID).Scan(&status))
+			require.Equal(t, "ended", status, "event must follow the durable transition")
+			cancel()
+		})
+		defer unsubscribe()
+		completed := make(chan error, 1)
+		fx.h.CanvasControl = &fakeCanvasControl{onComplete: func(sessionID, _ string) {
+			completedSchedule, err := schedules.GetSchedule(context.Background(), schedule.ID)
+			if err != nil {
+				completed <- err
+				return
+			}
+			if sessionID != fx.sessionID || completedSchedule.Status != "completed" {
+				completed <- fmt.Errorf("complete ran before schedule settlement: session=%s schedule=%s", sessionID, completedSchedule.Status)
+				return
+			}
+			completed <- nil
+		}}
+
+		req := httptest.NewRequest(http.MethodPost, "/api/sessions/"+fx.sessionID+"/end", nil)
+		req = req.WithContext(auth.ContextWithClaims(ctx, fx.claims(fx.teacher, false)))
+		w := httptest.NewRecorder()
+		fx.router.ServeHTTP(w, req)
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+		select {
+		case err := <-completed:
+			require.NoError(t, err)
+		case <-time.After(time.Second):
+			t.Fatal("post-commit terminal completion did not run")
+		}
+	})
+
+	t.Run("replacement end", func(t *testing.T) {
+		fx := newSessionFixture(t, t.Name())
+		schedules := store.NewScheduleStore(fx.db)
+		schedule, err := schedules.CreateSchedule(context.Background(), store.CreateScheduleInput{
+			ClassID: fx.classID, TeacherID: fx.teacher.ID,
+			ScheduledStart: time.Now().Add(time.Hour), ScheduledEnd: time.Now().Add(2 * time.Hour),
+		})
+		require.NoError(t, err)
+		_, err = fx.db.ExecContext(context.Background(), `UPDATE scheduled_sessions SET status = 'in_progress' WHERE id = $1`, schedule.ID)
+		require.NoError(t, err)
+		_, err = fx.db.ExecContext(context.Background(), `UPDATE sessions SET scheduled_session_id = $2, canvas_freeze_token = $3::uuid, canvas_freeze_until = clock_timestamp() + interval '15 seconds' WHERE id = $1`, fx.sessionID, schedule.ID, "11111111-1111-4111-8111-111111111111")
+		require.NoError(t, err)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		broadcaster := events.NewBroadcaster()
+		eventDelivered := make(chan error, 1)
+		unsubscribe := broadcaster.Subscribe(fx.sessionID, func(event string, _ interface{}) {
+			if event != "session_ended" {
+				eventDelivered <- fmt.Errorf("unexpected replacement event %q", event)
+				return
+			}
+			settled, err := schedules.GetSchedule(context.Background(), schedule.ID)
+			if err != nil {
+				eventDelivered <- err
+				return
+			}
+			if settled.Status != "completed" {
+				eventDelivered <- fmt.Errorf("replacement event preceded schedule settlement: %s", settled.Status)
+				return
+			}
+			eventDelivered <- nil
+		})
+		defer unsubscribe()
+		completed := make(chan error, 1)
+		control := &fakeCanvasControl{onComplete: func(sessionID, _ string) {
+			settled, err := schedules.GetSchedule(context.Background(), schedule.ID)
+			if err != nil {
+				completed <- err
+				return
+			}
+			select {
+			case err := <-eventDelivered:
+				if err != nil {
+					completed <- err
+					return
+				}
+			default:
+				completed <- fmt.Errorf("replacement complete ran before event delivery")
+				return
+			}
+			if sessionID != fx.sessionID || settled.Status != "completed" {
+				completed <- fmt.Errorf("replacement complete ran before schedule settlement: session=%s schedule=%s", sessionID, settled.Status)
+				return
+			}
+			completed <- nil
+		}}
+
+		settleReplacedSessions(ctx, []store.ReplacedSession{{ID: fx.sessionID, ClearedFreezeToken: ptr("11111111-1111-4111-8111-111111111111")}}, schedules, broadcaster, control)
+		select {
+		case err := <-completed:
+			require.NoError(t, err)
+		case <-time.After(time.Second):
+			t.Fatal("replacement terminal completion did not run")
+		}
+	})
+}
+
 func TestEndSession_ControlFailuresAreDurablyDegradedAndTerminalized(t *testing.T) {
 	for _, tc := range []struct {
 		name string

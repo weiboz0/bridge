@@ -61,6 +61,30 @@ func TestCanvasControlClient_FreezeUsesStrictLocalTransportAndExactBundle(t *tes
 	require.Equal(t, []CanvasSnapshot{{CanvasID: gotBody.CanvasIDs[0], State: state, SHA256: hex.EncodeToString(digest[:])}}, bundle.Snapshots)
 }
 
+func TestCanvasControlClient_FreezeZeroCanvasIDsSendsAnEmptyArray(t *testing.T) {
+	const (
+		sessionID = "22222222-2222-4222-8222-222222222222"
+		token     = "33333333-3333-4333-8333-333333333333"
+	)
+	var body []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/internal/canvas-sessions/freeze", r.URL.Path)
+		var err error
+		body, err = io.ReadAll(r.Body)
+		require.NoError(t, err)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"snapshots":[],"closed":0}`))
+	}))
+	defer server.Close()
+
+	client, err := NewCanvasControlClient(CanvasControlConfig{URL: server.URL, Secret: strings.Repeat("a", 64), HTTPClient: server.Client()})
+	require.NoError(t, err)
+	_, err = client.Freeze(context.Background(), FreezeRequest{SessionID: sessionID, FreezeToken: token, CanvasIDs: []string{}})
+	require.NoError(t, err)
+	require.JSONEq(t, `{"sessionId":"`+sessionID+`","freezeToken":"`+token+`","canvasIds":[]}`, string(body))
+	require.NotContains(t, string(body), `"canvasIds":null`)
+}
+
 func TestCanvasControlClient_RejectsUnsafeURLsRedirectsAndMalformedBundles(t *testing.T) {
 	for _, rawURL := range []string{
 		"http://localhost:4001", "http://control.internal:4001", "http://[::ffff:127.0.0.1]:4001",
