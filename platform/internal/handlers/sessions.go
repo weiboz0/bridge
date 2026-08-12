@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/weiboz0/bridge/platform/internal/auth"
 	"github.com/weiboz0/bridge/platform/internal/events"
+	"github.com/weiboz0/bridge/platform/internal/realtime"
 	"github.com/weiboz0/bridge/platform/internal/store"
 )
 
@@ -26,16 +28,28 @@ import (
 // docs/plans/075-require-org-authority.md §Out of scope, Bucket 1.
 
 type SessionHandler struct {
-	Sessions    *store.SessionStore
-	Schedules   *store.ScheduleStore
-	Classes     *store.ClassStore
-	Courses     *store.CourseStore
-	Topics      *store.TopicStore
-	Chapters    *store.ChapterStore // Plan 044: per-topic Unit refs.
-	Orgs        *store.OrgStore
-	ParentLinks *store.ParentLinkStore // Plan 064: parent-of-participant gate for GetSessionTopics.
-	Broadcaster *events.Broadcaster
+	Sessions      *store.SessionStore
+	Schedules     *store.ScheduleStore
+	Classes       *store.ClassStore
+	Courses       *store.CourseStore
+	Topics        *store.TopicStore
+	Chapters      *store.ChapterStore // Plan 044: per-topic Unit refs.
+	Orgs          *store.OrgStore
+	ParentLinks   *store.ParentLinkStore // Plan 064: parent-of-participant gate for GetSessionTopics.
+	Broadcaster   *events.Broadcaster
+	CanvasControl CanvasControl
 }
+
+// CanvasControl is kept at the handler boundary so production can use the
+// strict HTTP client while tests can exercise durable lifecycle behavior
+// without standing up Hocuspocus.
+type CanvasControl interface {
+	Freeze(context.Context, realtime.FreezeRequest) (realtime.FreezeBundle, error)
+	Complete(context.Context, string, string)
+	Unfreeze(context.Context, string, string)
+}
+
+const incompleteWhiteboardArchiveWarning = "Session ended, but the latest whiteboard changes may not have been archived."
 
 const maxConcurrentLiveSessionsPerHost = 5
 
@@ -194,6 +208,7 @@ func (h *SessionHandler) CreateSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "Failed to create session")
 		return
 	}
+	h.settleReplacedSessions(r.Context(), session.ReplacedSessions)
 	writeJSON(w, http.StatusCreated, session)
 }
 
@@ -542,26 +557,124 @@ func (h *SessionHandler) EndSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "Not found")
 		return
 	}
-	if !claims.IsPlatformAdmin && session.TeacherID != claims.UserID {
+	if session.TeacherID != claims.UserID {
 		writeError(w, http.StatusForbidden, "Only the session teacher can end the session")
 		return
 	}
 
-	ended, err := h.Sessions.EndSession(r.Context(), sessionID)
+	prep, err := h.Sessions.PrepareSessionEnd(r.Context(), sessionID)
 	if err != nil {
+		if errors.Is(err, store.ErrSessionEndInProgress) {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "Session end in progress", "code": "session_end_in_progress"})
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
 	}
 
-	// Complete any linked scheduled session
+	confirmed := false
+	durablyEnded := false
+	if h.CanvasControl != nil {
+		bundle, freezeErr := h.CanvasControl.Freeze(r.Context(), realtime.FreezeRequest{
+			SessionID: sessionID, Token: prep.Token, CanvasIDs: prep.CanvasIDs,
+		})
+		if freezeErr == nil {
+			snapshots := make([]store.CanvasSnapshot, 0, len(bundle.Entries))
+			for _, entry := range bundle.Entries {
+				snapshots = append(snapshots, store.CanvasSnapshot{CanvasID: entry.CanvasID, YjsState: base64.StdEncoding.EncodeToString(entry.State)})
+			}
+			if completeErr := h.Sessions.CompleteSessionConfirmed(r.Context(), sessionID, prep.Token, snapshots); completeErr == nil {
+				confirmed = true
+				durablyEnded = true
+				h.CanvasControl.Complete(r.Context(), sessionID, prep.Token)
+			} else if errors.Is(completeErr, store.ErrSessionSnapshotCountMismatch) || errors.Is(completeErr, store.ErrSessionEndInProgress) {
+				// The confirmed transaction rolled back. A separate transaction may
+				// safely record the honest false/no-snapshot result.
+				if _, degradedErr := h.Sessions.CompleteSessionDegraded(r.Context(), sessionID, prep.Token); degradedErr != nil {
+					h.CanvasControl.Unfreeze(r.Context(), sessionID, prep.Token)
+					writeError(w, http.StatusInternalServerError, "Database error")
+					return
+				}
+				durablyEnded = true
+				h.CanvasControl.Complete(r.Context(), sessionID, prep.Token)
+			} else {
+				// An infrastructure failure is not evidence that an end committed.
+				// Keep the session live, clear only our own lease, and release the
+				// realtime fence best-effort.
+				_ = h.Sessions.AbortSessionFreezeLease(r.Context(), sessionID, prep.Token)
+				h.CanvasControl.Unfreeze(r.Context(), sessionID, prep.Token)
+				writeError(w, http.StatusInternalServerError, "Database error")
+				return
+			}
+		}
+	}
+	if !durablyEnded {
+		if _, err := h.Sessions.CompleteSessionDegraded(r.Context(), sessionID, prep.Token); err != nil {
+			if h.CanvasControl != nil {
+				h.CanvasControl.Unfreeze(r.Context(), sessionID, prep.Token)
+			}
+			writeError(w, http.StatusInternalServerError, "Database error")
+			return
+		}
+		if h.CanvasControl != nil {
+			h.CanvasControl.Complete(r.Context(), sessionID, prep.Token)
+		}
+	}
+
+	// Durable status is the handoff boundary. Only after it succeeds may this
+	// producer complete a schedule or tell connected clients the session ended.
 	if h.Schedules != nil {
 		if err := h.Schedules.CompleteScheduledSession(r.Context(), sessionID); err != nil {
 			slog.Warn("failed to complete scheduled session", "sessionId", sessionID, "error", err)
 		}
 	}
+	if h.Broadcaster != nil {
+		h.Broadcaster.Emit(sessionID, "session_ended", nil)
+	}
+	ended, err := h.Sessions.GetSession(r.Context(), sessionID)
+	if err != nil || ended == nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	archiveComplete := confirmed
+	response := map[string]any{"session": ended, "whiteboardServerArchiveComplete": archiveComplete}
+	// Preserve the established top-level session representation for callers
+	// while adding stable Phase-9 metadata.
+	forEnd := *ended
+	forEnd.Status = "ended"
+	response["id"] = forEnd.ID
+	response["classId"] = forEnd.ClassID
+	response["teacherId"] = forEnd.TeacherID
+	response["title"] = forEnd.Title
+	response["status"] = forEnd.Status
+	response["settings"] = forEnd.Settings
+	response["startedAt"] = forEnd.StartedAt
+	response["endedAt"] = forEnd.EndedAt
+	response["visibility"] = forEnd.Visibility
+	if !confirmed {
+		response["warning"] = incompleteWhiteboardArchiveWarning
+	}
+	writeJSON(w, http.StatusOK, response)
+}
 
-	h.Broadcaster.Emit(sessionID, "session_ended", nil)
-	writeJSON(w, http.StatusOK, ended)
+func (h *SessionHandler) settleReplacedSessions(ctx context.Context, replaced []store.ReplacedSession) {
+	settleReplacedSessions(ctx, replaced, h.Schedules, h.Broadcaster, h.CanvasControl)
+}
+
+func settleReplacedSessions(ctx context.Context, replaced []store.ReplacedSession, schedules *store.ScheduleStore, broadcaster *events.Broadcaster, control CanvasControl) {
+	for _, prior := range replaced {
+		if schedules != nil {
+			if err := schedules.CompleteScheduledSession(ctx, prior.ID); err != nil {
+				slog.Warn("failed to complete replaced scheduled session", "sessionId", prior.ID, "error", err)
+			}
+		}
+		if control != nil && prior.ClearedFreezeToken != nil {
+			control.Complete(ctx, prior.ID, *prior.ClearedFreezeToken)
+		}
+		if broadcaster != nil {
+			broadcaster.Emit(prior.ID, "session_ended", nil)
+		}
+	}
 }
 
 // canJoinSession reports whether the caller may join, stream events for, or

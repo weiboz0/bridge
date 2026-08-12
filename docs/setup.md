@@ -203,6 +203,17 @@ starts and calls `process.exit(1)` on any misconfig — mirrors the Go API's
   causes a boot failure with no escape hatch — plan 072 phase 2 made this
   unconditional. Generate with `openssl rand -hex 32` and set the same value
   on both the Go API and the Hocuspocus process.
+
+- `HOCUSPOCUS_CONTROL_SECRET` — **required.** A separately generated bearer
+  shared only by the Go API and Hocuspocus's canvas lifecycle listener.
+  It must differ from `HOCUSPOCUS_TOKEN_SECRET`; the Go API refuses startup if
+  either is missing, equal, or paired with an unsafe control URL.
+  Generate it with `openssl rand -hex 32`.
+  The default listener target is `http://127.0.0.1:4001`, derived from
+  `HOCUSPOCUS_CONTROL_PORT` (default `4001`).
+  Set `HOCUSPOCUS_CONTROL_URL` only for an explicit override: HTTP is allowed
+  only on a numeric IPv4 loopback host, while remote listeners require verified HTTPS.
+  This URL and secret are server-only; do not put either in `NEXT_PUBLIC_*`.
 - `BRIDGE_HOST_EXPOSURE` — same semantics as the Go API (see "Host Exposure
   Declaration" above). Allowed values: `""` / `"localhost"` (default) and
   `"exposed"`. Unrecognized values fail loud at boot.

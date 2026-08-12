@@ -21,6 +21,7 @@ import (
 	"github.com/weiboz0/bridge/platform/internal/events"
 	"github.com/weiboz0/bridge/platform/internal/handlers"
 	"github.com/weiboz0/bridge/platform/internal/llm"
+	"github.com/weiboz0/bridge/platform/internal/realtime"
 	"github.com/weiboz0/bridge/platform/internal/sandbox"
 	"github.com/weiboz0/bridge/platform/internal/skills"
 	"github.com/weiboz0/bridge/platform/internal/store"
@@ -48,6 +49,17 @@ func main() {
 	// notice than a refused boot.
 	if err := validateBridgeSessionEnv(cfg); err != nil {
 		slog.Error(err.Error())
+		os.Exit(1)
+	}
+	if err := cfg.Realtime.ValidateControl(); err != nil {
+		slog.Error("Invalid canvas control configuration", "error", err)
+		os.Exit(1)
+	}
+	canvasControl, err := realtime.NewCanvasControlClient(realtime.CanvasControlConfig{
+		URL: cfg.Realtime.HocuspocusControlURL, Secret: cfg.Realtime.HocuspocusControlSecret,
+	})
+	if err != nil {
+		slog.Error("Invalid canvas control client", "error", err)
 		os.Exit(1)
 	}
 
@@ -179,6 +191,7 @@ func main() {
 		ParentLinks:                 stores.ParentLinks, // plan 053b phase 4
 		Canvases:                    store.NewCanvasStore(database),
 		HocuspocusTokenSecret:       cfg.Realtime.HocuspocusTokenSecret,
+		HocuspocusControlSecret:     cfg.Realtime.HocuspocusControlSecret,
 		BridgeSessionSecrets:        cfg.BridgeSession.Secrets,
 		BridgeSessionInternalBearer: cfg.BridgeSession.InternalBearer,
 		BridgeSessionAuthFlag:       cfg.BridgeSession.AuthFlag,
@@ -256,7 +269,7 @@ func main() {
 		classH := &handlers.ClassHandler{Classes: stores.Classes, Orgs: stores.Orgs, Users: stores.Users}
 		classH.Routes(r)
 
-		sessionH := &handlers.SessionHandler{Sessions: stores.Sessions, Schedules: stores.Schedules, Classes: stores.Classes, Courses: stores.Courses, Topics: stores.Topics, Chapters: stores.Chapters, Orgs: stores.Orgs, ParentLinks: stores.ParentLinks, Broadcaster: broadcaster}
+		sessionH := &handlers.SessionHandler{Sessions: stores.Sessions, Schedules: stores.Schedules, Classes: stores.Classes, Courses: stores.Courses, Topics: stores.Topics, Chapters: stores.Chapters, Orgs: stores.Orgs, ParentLinks: stores.ParentLinks, Broadcaster: broadcaster, CanvasControl: canvasControl}
 		sessionH.Routes(r)
 
 		canvasH := &handlers.CanvasHandler{Sessions: stores.Sessions, Canvases: realtimeH.Canvases}
@@ -264,7 +277,7 @@ func main() {
 
 		scheduleH := &handlers.ScheduleHandler{
 			Schedules: stores.Schedules, Sessions: stores.Sessions, Classes: stores.Classes,
-			Orgs: stores.Orgs, Broadcaster: broadcaster,
+			Orgs: stores.Orgs, Broadcaster: broadcaster, CanvasControl: canvasControl,
 		}
 		scheduleH.Routes(r)
 

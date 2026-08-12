@@ -3,10 +3,12 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/BurntSushi/toml"
 	"github.com/joho/godotenv"
+	"github.com/weiboz0/bridge/platform/internal/realtime"
 )
 
 type Config struct {
@@ -51,6 +53,31 @@ type SandboxConfig struct {
 // HOCUSPOCUS_TOKEN_SECRET; never lives in the TOML config file.
 type RealtimeConfig struct {
 	HocuspocusTokenSecret string `toml:"-"`
+	// HocuspocusControlURL is server-to-server only. HTTP is accepted only
+	// for a numeric IPv4 loopback origin; non-loopback deployments use normal
+	// verified HTTPS. The listener port defaults to 4001 when no URL override
+	// is supplied.
+	HocuspocusControlURL    string `toml:"-"`
+	HocuspocusControlSecret string `toml:"-"`
+}
+
+// ValidateControl is called at API startup, before any database connection or
+// route registration. The control bearer is intentionally distinct from the
+// websocket JWT signing key: either credential alone must not grant both jobs.
+func (r RealtimeConfig) ValidateControl() error {
+	if strings.TrimSpace(r.HocuspocusControlSecret) == "" {
+		return fmt.Errorf("HOCUSPOCUS_CONTROL_SECRET is required")
+	}
+	if strings.TrimSpace(r.HocuspocusTokenSecret) == "" {
+		return fmt.Errorf("HOCUSPOCUS_TOKEN_SECRET is required")
+	}
+	if r.HocuspocusControlSecret == r.HocuspocusTokenSecret {
+		return fmt.Errorf("HOCUSPOCUS_CONTROL_SECRET must differ from HOCUSPOCUS_TOKEN_SECRET")
+	}
+	if err := realtime.ValidateControlURL(r.HocuspocusControlURL); err != nil {
+		return fmt.Errorf("invalid HOCUSPOCUS_CONTROL_URL: %w", err)
+	}
+	return nil
 }
 
 // BridgeSessionConfig — plan 065. Bridge-issued HS256 session
@@ -121,6 +148,26 @@ func Load(path string) (*Config, error) {
 
 	if v := os.Getenv("HOCUSPOCUS_TOKEN_SECRET"); v != "" {
 		cfg.Realtime.HocuspocusTokenSecret = v
+	}
+	controlPort := 4001
+	if v := os.Getenv("HOCUSPOCUS_CONTROL_PORT"); v != "" {
+		parsed, err := strconv.Atoi(v)
+		if err == nil && parsed >= 1 && parsed <= 65535 {
+			controlPort = parsed
+		} else {
+			// Preserve an invalid value in the derived URL so startup's strict
+			// validator refuses it rather than silently listening elsewhere.
+			cfg.Realtime.HocuspocusControlURL = "http://127.0.0.1:" + v
+		}
+	}
+	if cfg.Realtime.HocuspocusControlURL == "" {
+		cfg.Realtime.HocuspocusControlURL = fmt.Sprintf("http://127.0.0.1:%d", controlPort)
+	}
+	if v := os.Getenv("HOCUSPOCUS_CONTROL_URL"); v != "" {
+		cfg.Realtime.HocuspocusControlURL = v
+	}
+	if v := os.Getenv("HOCUSPOCUS_CONTROL_SECRET"); v != "" {
+		cfg.Realtime.HocuspocusControlSecret = v
 	}
 
 	// Plan 065 — Bridge session secrets. Prefer the plural

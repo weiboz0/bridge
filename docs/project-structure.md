@@ -21,6 +21,7 @@
 | Next.js | 3003 | `NEXTJS_PORT` | Frontend; proxies Go routes via `next.config.ts` rewrites (`GO_PROXY_ROUTES`) |
 | Go platform | 8002 | `PLATFORM_PORT` | API server |
 | Hocuspocus | 4000 | `HOCUSPOCUS_PORT` | Yjs collaboration |
+| Hocuspocus control | 4001 | `HOCUSPOCUS_CONTROL_PORT` | Server-only canvas freeze listener; Go derives `http://127.0.0.1:4001` by default |
 
 > **The code defaults are not what any given machine runs — read `.env`, don't assume.**
 > On the primary dev machine the stack is relocated (`NEXTJS_PORT=3101`, `PLATFORM_PORT=8100`,
@@ -40,6 +41,12 @@ hand for local dev is `NEXTAUTH_URL` (it carries the full host:port and feeds
 the OAuth redirect). For non-localhost setups (staging, tunnel, separate host)
 set the explicit URL vars: `GO_API_URL` / `GO_INTERNAL_API_URL` (Go host) and
 `NEXT_PUBLIC_HOCUSPOCUS_URL` (browser-reachable Hocuspocus host).
+
+The canvas lifecycle listener is separate from the WebSocket port.
+`HOCUSPOCUS_CONTROL_SECRET` is required and must differ from `HOCUSPOCUS_TOKEN_SECRET`.
+The Go API uses the numeric-loopback URL derived from `HOCUSPOCUS_CONTROL_PORT` unless `HOCUSPOCUS_CONTROL_URL` overrides it.
+An override may use HTTP only on a numeric IPv4 loopback address; non-loopback deployments require normally verified HTTPS.
+This control URL and bearer are server-only and must never be exposed through Next.js or a browser configuration variable.
 
 ## Running the Services
 

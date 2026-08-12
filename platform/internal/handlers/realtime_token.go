@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -43,6 +44,9 @@ type RealtimeHandler struct {
 	// and the Hocuspocus Node process. Empty = realtime endpoints
 	// return 503 (server misconfigured).
 	HocuspocusTokenSecret string
+	// HocuspocusControlSecret is the distinct bearer accepted only by the
+	// freeze-validation callback. It must never fall back to the JWT signer.
+	HocuspocusControlSecret string
 	// Bridge session health flags are reported for operators only.
 	// Values are never exposed; the health response only reports
 	// set/missing and whether the cutover flag is on.
@@ -98,6 +102,7 @@ func (h *RealtimeHandler) InternalRoutes(r chi.Router) {
 	r.Route("/api/internal/realtime", func(r chi.Router) {
 		r.Post("/auth", h.InternalAuth)
 	})
+	r.Post("/api/internal/canvas-sessions/freeze-auth", h.FreezeAuth)
 }
 
 // Health reports realtime configuration state for operators.
@@ -182,6 +187,10 @@ func (h *RealtimeHandler) MintToken(w http.ResponseWriter, r *http.Request) {
 
 	access, decision := h.authorizeDocumentResult(r.Context(), claims, body.DocumentName)
 	if decision != nil {
+		if decision.Status == http.StatusConflict && decision.Message == "session_freezing" {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "Session end in progress", "code": "session_freezing"})
+			return
+		}
 		writeError(w, decision.Status, decision.Message)
 		return
 	}
@@ -277,6 +286,10 @@ func (h *RealtimeHandler) InternalAuth(w http.ResponseWriter, r *http.Request) {
 	}
 	access, decision := h.authorizeDocumentResult(r.Context(), rehydratedClaims, body.DocumentName)
 	if decision != nil {
+		if decision.Status == http.StatusConflict && decision.Message == "session_freezing" {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "Session end in progress", "code": "session_freezing"})
+			return
+		}
 		// Only forbid-decisions become {allowed: false}. Anything
 		// else (400 malformed doc-name, 404 missing session/unit/
 		// attempt, 500 DB error) surfaces as a real HTTP error so
@@ -290,6 +303,46 @@ func (h *RealtimeHandler) InternalAuth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, internalAuthResponse{Allowed: true, ReadOnly: access.ReadOnly})
+}
+
+// FreezeAuth is the private Go callback Hocuspocus uses before installing a
+// freeze fence. It returns success only for the exact current lease under the
+// same shared advisory lock used by ordinary canvas authorization.
+func (h *RealtimeHandler) FreezeAuth(w http.ResponseWriter, r *http.Request) {
+	if h.Sessions == nil || h.HocuspocusControlSecret == "" {
+		writeError(w, http.StatusServiceUnavailable, "Canvas control not configured")
+		return
+	}
+	if r.Header.Get("Authorization") != "Bearer "+h.HocuspocusControlSecret {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	var body struct {
+		SessionID string `json:"sessionId"`
+		Token     string `json:"token"`
+	}
+	if !decodeJSONStrict(w, r, &body) {
+		return
+	}
+	if parsed, err := uuid.Parse(body.SessionID); err != nil || parsed.String() != body.SessionID {
+		writeError(w, http.StatusBadRequest, "sessionId must be a canonical UUID")
+		return
+	}
+	if parsed, err := uuid.Parse(body.Token); err != nil || parsed.String() != body.Token {
+		writeError(w, http.StatusBadRequest, "token must be a canonical UUID")
+		return
+	}
+	allowed, remaining, err := h.Sessions.ValidateSessionFreezeLease(r.Context(), body.SessionID, body.Token)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	remainingMS := int(remaining / time.Millisecond)
+	if !allowed || remainingMS <= 0 {
+		writeJSON(w, http.StatusOK, map[string]bool{"allowed": false})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"allowed": true, "remainingMs": remainingMS})
 }
 
 // authDecision carries a non-200 result for either endpoint.
@@ -338,6 +391,21 @@ func (h *RealtimeHandler) authorizeCanvasDoc(ctx context.Context, claims *auth.C
 	if session == nil {
 		return documentAuthorization{}, &authDecision{Status: http.StatusNotFound, Message: "Session not found"}
 	}
+	// The advisory-lock read is intentionally after the canvas lookup but
+	// before any access result is produced. An end lease therefore excludes
+	// mutation authorization without turning this temporary state into a
+	// permanent read-only token decision.
+	lifecycle, err := h.Sessions.CanvasLifecycleState(ctx, session.ID)
+	if err == sql.ErrNoRows {
+		return documentAuthorization{}, &authDecision{Status: http.StatusNotFound, Message: "Session not found"}
+	}
+	if err != nil {
+		return documentAuthorization{}, &authDecision{Status: http.StatusInternalServerError, Message: "Database error"}
+	}
+	if lifecycle.FreezeActive {
+		return documentAuthorization{}, &authDecision{Status: http.StatusConflict, Message: "session_freezing"}
+	}
+	session.Status = lifecycle.Status
 	if canvas.OwnerID == claims.UserID {
 		return documentAuthorization{Role: "user", ReadOnly: session.Status == "ended"}, nil
 	}

@@ -298,6 +298,17 @@ That recheck is now defense in depth: the confirmed path gains the lifecycle lea
   `DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test TEST_DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test go test ./... -count=1 -timeout 120s`, `go vet ./internal/realtime ./internal/handlers` from `platform/`,
   and `DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test TEST_DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test bunx --bun vitest run tests/unit/whiteboard-panel.test.tsx tests/unit/whiteboard-archive.test.tsx` plus `bunx tsc --noEmit` from the repository root.
 
+#### Phase 9 backend execution evidence (2026-08-11; frontend remains pending)
+
+- `[backend]` Added the strict Go control client with an overall two-second same-token retry budget, redirect refusal, 48 MiB bounded reads, exact response/base64/digest/ID validation, and best-effort terminal cleanup.
+  API startup validates the separately generated control bearer and a numeric-loopback HTTP or verified-HTTPS origin before constructing that client.
+- `[backend]` Added the freeze-auth callback and shared lifecycle authorization read; active leases now return retryable `409 session_freezing` rather than downgrading a writer to read-only.
+  The exact route cutover, represented-teacher/present creation check, and archive-completeness settings response are covered in the Go handler suite.
+- `[backend]` Reworked explicit end to commit the lease/list handoff before control HTTP, persist confirmed snapshots or a separate durable degraded result, and only then emit events/complete schedules.
+  Create and scheduled-start settle every replacement after their already-durable transaction without requiring Hocuspocus.
+- `[GREEN]` With both `DATABASE_URL` and `TEST_DATABASE_URL` pinned to `postgresql://work@127.0.0.1:5432/bridge_test`: `go test ./internal/realtime ./internal/config ./internal/handlers ./internal/store -run 'Test(CanvasControl|EndSession|CreateSessionReplacement|ScheduleStartReplacement|FreezeAuth|RealtimeAuthLifecycle|CanvasSettings|CanvasCreate|RealtimeControl)' -count=1 -timeout 120s`; then the full `go test ./internal/handlers -count=1 -timeout 120s`, `go test ./internal/store -count=1 -timeout 120s`, `go vet ./internal/realtime ./internal/config ./internal/handlers ./internal/store`, and `git diff --check`.
+- `[PENDING]` Phase 9 is not complete: the frontend settings producer/consumer cutover and its required Vitest/typecheck evidence remain owned by the frontend slice.
+
 ### Phase 10 — Hocuspocus fence, admission, capture, and control listener *(Terra backend; tests by Terra)*
 
 - Move the new lifecycle machinery into focused `server/canvas-lifecycle.ts`; `server/hocuspocus.ts` wires its hooks and starts a separate authenticated control listener.

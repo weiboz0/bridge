@@ -77,10 +77,19 @@ The canvas metadata endpoints require authentication and a session UUID.
 - **`PATCH /api/sessions/{id}/canvases/{canvasId}`** changes an owner canvas title and/or loosens its visibility.
   Equal or tighter visibility is rejected.
 - **`DELETE /api/sessions/{id}/canvases/{canvasId}`** deletes an owner canvas and its persisted document while live.
-- **`PATCH /api/sessions/{id}/settings`** lets the session host set `{ "canvasFloor": "private" | "host" | "participants" }`.
-  Raising a floor raises affected canvases in the same transaction; `session` is not a permitted floor.
 
 All canvas mutations return `409` after the session ends.
+While an end lease is live, canvas mutations return `409` with
+`code: "session_end_in_progress"`; the internal realtime recheck instead
+returns retryable `409` with `code: "session_freezing"` and does not convert a
+writable connection to a permanent reader.
+
+`GET` and `PATCH /api/sessions/{id}/canvas-settings` are the sole canvas-floor
+settings routes. Both require the represented session teacher (no independent
+platform-administrator or impersonator bypass); GET returns `canvasFloor` and,
+after an end, an optional durable `whiteboardServerArchiveComplete` boolean.
+PATCH accepts exactly `{ "canvasFloor": "private" | "host" | "participants" }`.
+The older `/settings` route has no compatibility alias.
 Canvas documents are read through the existing realtime-token mint endpoint using the `canvas:{canvasId}` scope; a token's `readOnly` claim is enforced by Hocuspocus, not merely by the browser UI.
 
 Live access follows the visibility ladder: owner at `private`; teacher at `host` and wider; a `present` participant at `participants` and wider; and any caller allowed into the live session at `session`.

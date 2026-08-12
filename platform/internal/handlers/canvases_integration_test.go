@@ -26,6 +26,7 @@ import (
 
 const canvasHandlerTestDatabaseURL = "postgresql://work@127.0.0.1:5432/bridge_test"
 const canvasHandlerDBTimeout = 5 * time.Second
+const canvasControlTestSecret = "phase9-separate-control-test-secret"
 
 type canvasHandlerFixture struct {
 	db       *sql.DB
@@ -90,10 +91,11 @@ func (fx *canvasHandlerFixture) claims(user *store.RegisteredUser) *auth.Claims 
 
 func newRealtimeHandlerForCanvasFixture(fx *canvasHandlerFixture) *RealtimeHandler {
 	return &RealtimeHandler{
-		Sessions:              fx.h.Sessions,
-		Canvases:              fx.h.Canvases,
-		Users:                 store.NewUserStore(fx.db),
-		HocuspocusTokenSecret: rtSecret,
+		Sessions:                fx.h.Sessions,
+		Canvases:                fx.h.Canvases,
+		Users:                   store.NewUserStore(fx.db),
+		HocuspocusTokenSecret:   rtSecret,
+		HocuspocusControlSecret: canvasControlTestSecret,
 	}
 }
 
@@ -179,8 +181,8 @@ func TestCanvasHandler_MutationAuthAndEndedArchive(t *testing.T) {
 		{"non-owner patch", http.MethodPatch, "/api/sessions/" + fx.session.ID + "/canvases/" + canvas.ID, map[string]string{"title": "No"}, fx.claims(fx.teacher), http.StatusForbidden},
 		{"owner title", http.MethodPatch, "/api/sessions/" + fx.session.ID + "/canvases/" + canvas.ID, map[string]string{"title": "Renamed"}, fx.claims(fx.student), http.StatusOK},
 		{"equal visibility rejected", http.MethodPatch, "/api/sessions/" + fx.session.ID + "/canvases/" + canvas.ID, map[string]string{"visibility": "private"}, fx.claims(fx.student), http.StatusBadRequest},
-		{"host floor", http.MethodPatch, "/api/sessions/" + fx.session.ID + "/settings", map[string]string{"canvasFloor": "host"}, fx.claims(fx.teacher), http.StatusOK},
-		{"non-host floor", http.MethodPatch, "/api/sessions/" + fx.session.ID + "/settings", map[string]string{"canvasFloor": "participants"}, fx.claims(fx.student), http.StatusForbidden},
+		{"host floor", http.MethodPatch, "/api/sessions/" + fx.session.ID + "/canvas-settings", map[string]string{"canvasFloor": "host"}, fx.claims(fx.teacher), http.StatusOK},
+		{"non-host floor", http.MethodPatch, "/api/sessions/" + fx.session.ID + "/canvas-settings", map[string]string{"canvasFloor": "participants"}, fx.claims(fx.student), http.StatusForbidden},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := fx.request(t, tc.method, tc.path, tc.body, tc.claims)
@@ -197,7 +199,7 @@ func TestCanvasHandler_MutationAuthAndEndedArchive(t *testing.T) {
 		{http.MethodPost, "/api/sessions/" + fx.session.ID + "/canvases", map[string]string{"title": "Late", "visibility": "host"}},
 		{http.MethodPatch, "/api/sessions/" + fx.session.ID + "/canvases/" + canvas.ID, map[string]string{"title": "Late"}},
 		{http.MethodDelete, "/api/sessions/" + fx.session.ID + "/canvases/" + canvas.ID, nil},
-		{http.MethodPatch, "/api/sessions/" + fx.session.ID + "/settings", map[string]string{"canvasFloor": "participants"}},
+		{http.MethodPatch, "/api/sessions/" + fx.session.ID + "/canvas-settings", map[string]string{"canvasFloor": "participants"}},
 	} {
 		w := fx.request(t, tc.method, tc.path, tc.body, fx.claims(fx.student))
 		require.Equal(t, http.StatusConflict, w.Code, w.Body.String())
@@ -218,7 +220,7 @@ func TestCanvasHandler_ActiveFreezeReturnsStable409WithoutWrites(t *testing.T) {
 		{http.MethodPost, "/api/sessions/" + fx.session.ID + "/canvases", map[string]string{"title": "blocked", "visibility": "private"}, fx.claims(fx.student)},
 		{http.MethodPatch, "/api/sessions/" + fx.session.ID + "/canvases/" + canvas.ID, map[string]string{"title": "changed"}, fx.claims(fx.student)},
 		{http.MethodDelete, "/api/sessions/" + fx.session.ID + "/canvases/" + canvas.ID, nil, fx.claims(fx.student)},
-		{http.MethodPatch, "/api/sessions/" + fx.session.ID + "/settings", map[string]string{"canvasFloor": "host"}, fx.claims(fx.teacher)},
+		{http.MethodPatch, "/api/sessions/" + fx.session.ID + "/canvas-settings", map[string]string{"canvasFloor": "host"}, fx.claims(fx.teacher)},
 	} {
 		w := fx.request(t, tc.method, tc.path, tc.body, tc.claims)
 		require.Equal(t, http.StatusConflict, w.Code, w.Body.String())
@@ -260,7 +262,7 @@ func TestCanvasHandler_ValidationErrorsAreBadRequest(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
 	w = fx.request(t, http.MethodPatch, "/api/sessions/"+fx.session.ID+"/canvases/"+canvas.ID, map[string]string{"title": strings.Repeat("x", store.MaxCanvasTitleRunes+1)}, fx.claims(fx.student))
 	require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
-	w = fx.request(t, http.MethodPatch, "/api/sessions/"+fx.session.ID+"/settings", map[string]string{"canvasFloor": "session"}, fx.claims(fx.teacher))
+	w = fx.request(t, http.MethodPatch, "/api/sessions/"+fx.session.ID+"/canvas-settings", map[string]string{"canvasFloor": "session"}, fx.claims(fx.teacher))
 	require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
 }
 

@@ -39,6 +39,19 @@ type sessionEndResult struct {
 	WhiteboardServerArchiveComplete *bool
 }
 
+// SessionEndPreparation is the short durable handoff between the Go lifecycle
+// lease transaction and the Hocuspocus control request. It intentionally owns
+// no database lock while the HTTP request is in flight.
+type SessionEndPreparation struct {
+	Token     string
+	CanvasIDs []string
+}
+
+// SessionEndResult exposes only durable state needed by API producers.
+type SessionEndResult struct {
+	WhiteboardServerArchiveComplete *bool
+}
+
 // CanvasSnapshot is one persisted state from an already fenced canvas bundle.
 type CanvasSnapshot struct {
 	CanvasID string
@@ -160,6 +173,105 @@ func validateSessionFreezeLease(ctx context.Context, db *sql.DB, sessionID, toke
 		return freezeLeaseValidation{}, err
 	}
 	return freezeLeaseValidation{Allowed: true, Remaining: time.Duration(remaining.Float64 * float64(time.Second))}, nil
+}
+
+// ValidateSessionFreezeLease holds the shared lifecycle lock while checking
+// the exact database-clock lease. It is used by the private Node callback.
+func (s *SessionStore) ValidateSessionFreezeLease(ctx context.Context, sessionID, token string) (bool, time.Duration, error) {
+	result, err := validateSessionFreezeLease(ctx, s.db, sessionID, token)
+	return result.Allowed, result.Remaining, err
+}
+
+// CanvasLifecycleState is a current-state read protected by the shared
+// advisory lock. Authorization uses this instead of racing a plain session
+// lookup with an in-flight end lease.
+type CanvasLifecycleState struct {
+	Status       string
+	FreezeActive bool
+}
+
+func (s *SessionStore) CanvasLifecycleState(ctx context.Context, sessionID string) (CanvasLifecycleState, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return CanvasLifecycleState{}, err
+	}
+	defer tx.Rollback()
+	if err := lockSessionLifecycle(ctx, tx, sessionID, true); err != nil {
+		return CanvasLifecycleState{}, err
+	}
+	var result CanvasLifecycleState
+	err = tx.QueryRowContext(ctx, `SELECT status, COALESCE(canvas_freeze_until > clock_timestamp(), false)
+		FROM sessions WHERE id = $1`, sessionID).Scan(&result.Status, &result.FreezeActive)
+	if err == sql.ErrNoRows {
+		return CanvasLifecycleState{}, sql.ErrNoRows
+	}
+	if err != nil {
+		return CanvasLifecycleState{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return CanvasLifecycleState{}, err
+	}
+	return result, nil
+}
+
+// PrepareSessionEnd obtains the exclusive lease and lists the authoritative
+// canvas set in one transaction. The transaction commits before Hocuspocus is
+// called, avoiding a self-deadlock with its shared-lock callback.
+func (s *SessionStore) PrepareSessionEnd(ctx context.Context, sessionID string) (SessionEndPreparation, error) {
+	token := uuid.NewString()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return SessionEndPreparation{}, err
+	}
+	defer tx.Rollback()
+	if err := lockSessionLifecycle(ctx, tx, sessionID, false); err != nil {
+		return SessionEndPreparation{}, err
+	}
+	var remaining float64
+	err = tx.QueryRowContext(ctx, `UPDATE sessions SET canvas_freeze_token = $2::uuid,
+		canvas_freeze_until = clock_timestamp() + ($3::bigint * interval '1 second')
+		WHERE id = $1 AND status = 'live'
+		  AND (canvas_freeze_until IS NULL OR canvas_freeze_until <= clock_timestamp() OR canvas_freeze_token = $2::uuid)
+		RETURNING EXTRACT(epoch FROM canvas_freeze_until - clock_timestamp())`, sessionID, token, int64(sessionFreezeLeaseDuration/time.Second)).Scan(&remaining)
+	if err == sql.ErrNoRows {
+		return SessionEndPreparation{}, ErrSessionEndInProgress
+	}
+	if err != nil {
+		return SessionEndPreparation{}, err
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT id FROM session_canvases WHERE session_id = $1 ORDER BY id`, sessionID)
+	if err != nil {
+		return SessionEndPreparation{}, err
+	}
+	defer rows.Close()
+	prep := SessionEndPreparation{Token: token}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return SessionEndPreparation{}, err
+		}
+		prep.CanvasIDs = append(prep.CanvasIDs, id)
+	}
+	if err := rows.Err(); err != nil {
+		return SessionEndPreparation{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return SessionEndPreparation{}, err
+	}
+	return prep, nil
+}
+
+func (s *SessionStore) CompleteSessionConfirmed(ctx context.Context, sessionID, token string, snapshots []CanvasSnapshot) error {
+	return completeSessionConfirmed(ctx, s.db, sessionID, token, snapshots)
+}
+
+func (s *SessionStore) CompleteSessionDegraded(ctx context.Context, sessionID, token string) (SessionEndResult, error) {
+	result, err := completeSessionDegradedResult(ctx, s.db, sessionID, token)
+	return SessionEndResult{WhiteboardServerArchiveComplete: result.WhiteboardServerArchiveComplete}, err
+}
+
+func (s *SessionStore) AbortSessionFreezeLease(ctx context.Context, sessionID, token string) error {
+	return abortSessionFreezeLease(ctx, s.db, sessionID, token)
 }
 
 func completeSessionConfirmed(ctx context.Context, db *sql.DB, sessionID, token string, snapshots []CanvasSnapshot) error {

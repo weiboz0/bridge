@@ -38,6 +38,13 @@ type Canvas struct {
 	UpdatedAt  time.Time `json:"updatedAt"`
 }
 
+// CanvasSettings is deliberately smaller than LiveSession: this is the
+// teacher-only whiteboard control surface, not a generic session settings API.
+type CanvasSettings struct {
+	CanvasFloor                     string
+	WhiteboardServerArchiveComplete *bool
+}
+
 type CreateCanvasInput struct {
 	SessionID  string `json:"sessionId"`
 	OwnerID    string `json:"ownerId"`
@@ -195,6 +202,24 @@ func (s *CanvasStore) GetCanvasByID(ctx context.Context, canvasID string) (*Canv
 	return scanCanvas(s.db.QueryRowContext(ctx,
 		`SELECT `+canvasColumns+` FROM session_canvases WHERE id = $1`, canvasID,
 	))
+}
+
+func (s *CanvasStore) GetCanvasSettings(ctx context.Context, sessionID string) (*CanvasSettings, error) {
+	var settings CanvasSettings
+	var complete sql.NullBool
+	err := s.db.QueryRowContext(ctx, `SELECT canvas_floor, whiteboard_server_archive_complete
+		FROM sessions WHERE id = $1`, sessionID).Scan(&settings.CanvasFloor, &complete)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if complete.Valid {
+		settings.WhiteboardServerArchiveComplete = new(bool)
+		*settings.WhiteboardServerArchiveComplete = complete.Bool
+	}
+	return &settings, nil
 }
 
 // SetCanvasVisibility may only loosen a canvas and never cross below its

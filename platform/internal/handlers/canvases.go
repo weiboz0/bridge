@@ -21,7 +21,8 @@ type CanvasHandler struct {
 func (h *CanvasHandler) Routes(r chi.Router) {
 	r.With(ValidateUUIDParam("id")).Get("/api/sessions/{id}/canvases", h.ListCanvases)
 	r.With(ValidateUUIDParam("id")).Post("/api/sessions/{id}/canvases", h.CreateCanvas)
-	r.With(ValidateUUIDParam("id")).Patch("/api/sessions/{id}/settings", h.PatchCanvasSettings)
+	r.With(ValidateUUIDParam("id")).Get("/api/sessions/{id}/canvas-settings", h.GetCanvasSettings)
+	r.With(ValidateUUIDParam("id")).Patch("/api/sessions/{id}/canvas-settings", h.PatchCanvasSettings)
 	r.With(ValidateUUIDParam("id"), ValidateUUIDParam("canvasID")).Patch("/api/sessions/{id}/canvases/{canvasID}", h.UpdateCanvas)
 	r.With(ValidateUUIDParam("id"), ValidateUUIDParam("canvasID")).Delete("/api/sessions/{id}/canvases/{canvasID}", h.DeleteCanvas)
 }
@@ -67,10 +68,26 @@ func (h *CanvasHandler) CreateCanvas(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "title and supported visibility are required")
 		return
 	}
-	allowed, _, err := h.Sessions.CanAccessSession(r.Context(), chi.URLParam(r, "id"), claims.UserID)
+	// Creation is intentionally narrower than session admission: only the
+	// represented teacher or a currently-present participant may produce a
+	// durable canvas. Platform-admin and impersonation claims add no bypass.
+	session, err := h.Sessions.GetSession(r.Context(), chi.URLParam(r, "id"))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
+	}
+	if session == nil {
+		writeError(w, http.StatusNotFound, "Session not found")
+		return
+	}
+	allowed := session.TeacherID == claims.UserID
+	if !allowed {
+		participant, err := h.Sessions.GetSessionParticipant(r.Context(), session.ID, claims.UserID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "Database error")
+			return
+		}
+		allowed = participant != nil && participant.Status == "present"
 	}
 	if !allowed {
 		writeError(w, http.StatusForbidden, "Not authorized")
@@ -82,6 +99,48 @@ func (h *CanvasHandler) CreateCanvas(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, canvas)
+}
+
+// GetCanvasSettings has an intentionally exact, teacher-only response. It is
+// available after end so the archive can display the durable completeness
+// outcome, but never grants a non-teacher an archive-status oracle.
+func (h *CanvasHandler) GetCanvasSettings(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	if h.Sessions == nil || h.Canvases == nil {
+		writeError(w, http.StatusInternalServerError, "Canvas handler misconfigured")
+		return
+	}
+	session, err := h.Sessions.GetSession(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if session == nil {
+		writeError(w, http.StatusNotFound, "Session not found")
+		return
+	}
+	if session.TeacherID != claims.UserID {
+		writeError(w, http.StatusForbidden, "Not authorized")
+		return
+	}
+	settings, err := h.Canvases.GetCanvasSettings(r.Context(), session.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if settings == nil {
+		writeError(w, http.StatusNotFound, "Session not found")
+		return
+	}
+	response := map[string]any{"canvasFloor": settings.CanvasFloor}
+	if settings.WhiteboardServerArchiveComplete != nil {
+		response["whiteboardServerArchiveComplete"] = *settings.WhiteboardServerArchiveComplete
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 func (h *CanvasHandler) ListCanvases(w http.ResponseWriter, r *http.Request) {
@@ -191,13 +250,31 @@ func (h *CanvasHandler) PatchCanvasSettings(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
-	if _, ok := h.sessionForMutation(w, r); !ok {
+	if h.Sessions == nil || h.Canvases == nil {
+		writeError(w, http.StatusInternalServerError, "Canvas handler misconfigured")
+		return
+	}
+	session, err := h.Sessions.GetSession(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
+	if session == nil {
+		writeError(w, http.StatusNotFound, "Session not found")
+		return
+	}
+	if session.TeacherID != claims.UserID {
+		writeError(w, http.StatusForbidden, "Not authorized")
+		return
+	}
+	if session.Status == "ended" {
+		writeError(w, http.StatusConflict, "Session has ended")
 		return
 	}
 	var body struct {
 		CanvasFloor string `json:"canvasFloor"`
 	}
-	if !decodeJSON(w, r, &body) {
+	if !decodeJSONStrict(w, r, &body) {
 		return
 	}
 	if body.CanvasFloor != "private" && body.CanvasFloor != "host" && body.CanvasFloor != "participants" {

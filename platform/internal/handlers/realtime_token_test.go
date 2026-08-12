@@ -1012,7 +1012,7 @@ func TestFreezeAuth_ExactBearerBodyAndLiveLeaseFailClosed(t *testing.T) {
 		return w
 	}
 
-	valid := call(t, rtSecret, map[string]string{"sessionId": fx.session.ID, "token": token})
+	valid := call(t, canvasControlTestSecret, map[string]string{"sessionId": fx.session.ID, "token": token})
 	require.Equal(t, http.StatusOK, valid.Code, valid.Body.String())
 	var response struct {
 		Allowed     bool `json:"allowed"`
@@ -1022,11 +1022,11 @@ func TestFreezeAuth_ExactBearerBodyAndLiveLeaseFailClosed(t *testing.T) {
 	require.True(t, response.Allowed)
 	require.Positive(t, response.RemainingMS)
 
-	denied := call(t, rtSecret, map[string]string{"sessionId": fx.session.ID, "token": "22222222-2222-4222-8222-222222222222"})
+	denied := call(t, canvasControlTestSecret, map[string]string{"sessionId": fx.session.ID, "token": "22222222-2222-4222-8222-222222222222"})
 	require.Equal(t, http.StatusOK, denied.Code, denied.Body.String())
 	require.JSONEq(t, `{"allowed":false}`, denied.Body.String())
 	require.Equal(t, http.StatusUnauthorized, call(t, "wrong-control-bearer", map[string]string{"sessionId": fx.session.ID, "token": token}).Code)
-	require.Equal(t, http.StatusBadRequest, call(t, rtSecret, map[string]string{"sessionId": fx.session.ID}).Code)
+	require.Equal(t, http.StatusBadRequest, call(t, canvasControlTestSecret, map[string]string{"sessionId": fx.session.ID}).Code)
 }
 
 func TestRealtimeAuthLifecycle_ActiveFreezeIsRetryableNotPermanentReadOnly(t *testing.T) {

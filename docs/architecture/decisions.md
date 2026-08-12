@@ -113,6 +113,15 @@ The Hocuspocus connection receives that signed `readOnly` claim and rechecks mut
 The neutral `/sessions/{id}/whiteboards` archive is deliberately client-read-only even while the session remains live: it suppresses local binding writes and mutation controls, while the Go mint and Hocuspocus checks remain authoritative.
 The accepted MVP limitations are that an owner cannot tighten an accidental share, a departed live viewer can retain a read token until its short TTL, and the host has no per-canvas takedown control.
 
+## §11 — Canvas lifecycle control uses a separate bearer and private transport
+
+The Go API ends a session status-first: it durably leases and lists canvases, requests a same-token Hocuspocus freeze, then records either an atomic confirmed snapshot/end or a separate degraded false/no-snapshot end.
+The database result is authoritative; terminal complete/unfreeze calls are best effort and events or schedule completion occur only after a durable end.
+
+`HOCUSPOCUS_CONTROL_SECRET` is distinct from `HOCUSPOCUS_TOKEN_SECRET` and is required on both server processes.
+The Go API derives `http://127.0.0.1:4001` from `HOCUSPOCUS_CONTROL_PORT` by default.
+Plain HTTP is limited to numeric IPv4 loopback; every non-loopback control endpoint requires verified HTTPS and redirects are refused.
+
 ---
 
 ## Adding an entry
