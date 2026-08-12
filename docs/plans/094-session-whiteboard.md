@@ -1071,3 +1071,10 @@ _Plan-wide report pending later phases._
 - `[ADDRESSED]` `[sol]` Provider recovery teardown now releases its bridge before destroying the provider, so destruction removes every restored listener; the hook regression requires zero authentication listeners after unmount.
 - `[ADDRESSED]` `[sol]` Bridge asserts that its canvas `afterLoadDocument` hook is the final installed after-load extension. A distinct earlier Hocuspocus extension failure leaves the pending watchdog armed for exact next-turn release, any extension configured after Bridge is rejected, and the remaining dead `afterLoad` façade is removed.
 - `[OPEN]` `[sol]` These Round 5 review corrections remain author-side addressed until Sol approves their exact commit.
+
+### Phase 10 — gate pause: required reviewer unavailable (2026-08-12)
+
+- The Sol Round-6 confirmation dispatch against exact commit `a9f1c3b` failed: Codex quota exhausted, resets **2026-08-17 16:59**.
+- Per the permanent review-gate contract (`AGENTS.md`), an unavailable required reviewer **pauses the gate**; Sol is not substituted or waived. All Round 4/5 `[OPEN]` items remain open.
+- State verified green at `a9f1c3b` before the dispatch attempt: `bun test server/hocuspocus.canvas.test.ts server/canvas-lifecycle.test.ts` 82/82 (246 assertions); `vitest run tests/unit/use-yjs-provider.test.ts` 14/14; `bunx --bun tsc --noEmit` clean. Both database URLs pinned to `bridge_test`; no service, migration, or provider ran.
+- **Resume action:** re-dispatch the Sol confirmation review (prompt: verify each Round 4/5 remediation against the exact commit) once quota resets or credits are added. No author-side work is pending; the loop is waiting on the reviewer only.
