@@ -798,3 +798,10 @@ _Plan-wide report pending later phases._
   In one transaction, the exact prerequisite repair cleared both lease fields on that malformed row and added `sessions_canvas_freeze_lease_pair`; afterward the constraint existed and the malformed-pair count was zero.
   No migration runner or non-test database was used.
 - New class-less lifecycle tests register cleanup immediately after session creation, including subtests, so fixture users and sessions do not accumulate.
+
+### Phase 8 deterministic advisory-lock proof (2026-08-11)
+
+- RED: the first replacement of the timing-only assertion used the same one-connection test pool for waiter and observer, so the observer could not query PostgreSQL wait state and the proof timed out.
+- GREEN: the lock regression now uses three independent verified test-database pools: holder, waiter, and observer.
+  It records both backend PIDs, polls `pg_blocking_pids(waiterPID)` until PostgreSQL reports the exclusive advisory-lock holder, asserts the waiter cannot complete before release, commits the holder, then requires waiter completion under a bounded context.
+  Transactions, pools, context cancellation, and goroutine completion paths are cleanup-safe; the proof passed twenty consecutive focused runs.

@@ -34,6 +34,7 @@ func TestSessionLifecycleAdvisoryKeyVectors(t *testing.T) {
 func TestSessionLifecycleUsesSharedAndExclusiveTransactionLocks(t *testing.T) {
 	db := testDB(t)
 	observer := testDB(t)
+	probe := testDB(t)
 	ctx := context.Background()
 	id := "12345678-0000-0000-0000-000000000000"
 	sharedOne, err := db.BeginTx(ctx, nil)
@@ -48,24 +49,49 @@ func TestSessionLifecycleUsesSharedAndExclusiveTransactionLocks(t *testing.T) {
 
 	exclusive, err := db.BeginTx(ctx, nil)
 	require.NoError(t, err)
-	defer exclusive.Rollback()
+	t.Cleanup(func() { _ = exclusive.Rollback() })
 	require.NoError(t, lockSessionLifecycle(ctx, exclusive, id, false))
-	blocked := make(chan error, 1)
+	var holderPID int
+	require.NoError(t, exclusive.QueryRowContext(ctx, `SELECT pg_backend_pid()`).Scan(&holderPID))
+	timeoutCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	t.Cleanup(cancel)
+	waiterPID := make(chan int, 1)
+	completed := make(chan error, 1)
 	go func() {
-		tx, err := observer.BeginTx(ctx, nil)
+		tx, err := observer.BeginTx(timeoutCtx, nil)
 		if err == nil {
-			err = lockSessionLifecycle(ctx, tx, id, true)
+			defer tx.Rollback()
+			var pid int
+			err = tx.QueryRowContext(timeoutCtx, `SELECT pg_backend_pid()`).Scan(&pid)
+			if err == nil {
+				waiterPID <- pid
+			}
+			if err == nil {
+				err = lockSessionLifecycle(timeoutCtx, tx, id, true)
+			}
 			_ = tx.Rollback()
 		}
-		blocked <- err
+		completed <- err
 	}()
+	var waiter int
 	select {
-	case err := <-blocked:
+	case waiter = <-waiterPID:
+	case <-timeoutCtx.Done():
+		t.Fatal("waiter did not publish backend PID")
+	}
+	require.NoError(t, waitForCanvasSessionLock(timeoutCtx, probe, waiter, holderPID), "waiter must be blocked on holder's advisory lock")
+	select {
+	case err := <-completed:
 		t.Fatalf("shared lock unexpectedly bypassed exclusive lock: %v", err)
-	case <-time.After(100 * time.Millisecond):
+	default:
 	}
 	require.NoError(t, exclusive.Commit())
-	require.NoError(t, <-blocked)
+	select {
+	case err := <-completed:
+		require.NoError(t, err)
+	case <-timeoutCtx.Done():
+		t.Fatal("waiter did not complete after advisory-lock release")
+	}
 }
 
 func TestSessionLifecycleReplacementOrderUsesDerivedKeyThenUUID(t *testing.T) {
