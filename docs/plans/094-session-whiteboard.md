@@ -404,9 +404,11 @@ That recheck is now defense in depth: the confirmed path gains the lifecycle lea
   The explicit path emits only after the durable end, then leaves the linked schedule `in_progress` before asynchronous terminal complete; the replacement path emits before a cancelled-context schedule transition and likewise leaves the schedule `in_progress`.
 - Both `DATABASE_URL` and `TEST_DATABASE_URL` were explicitly set to `postgresql://work@127.0.0.1:5432/bridge_test`, and `CHECK_TEST_DATABASE_URL=... node scripts/check-test-database-url.mjs` live-verified the target before the focused database test.
   `go test ./internal/realtime ./internal/handlers -run 'Test(CanvasControlClient_FreezeZeroCanvasIDsSendsAnEmptyArray|CanvasHandler_CreateCanvasMissingSessionReturns404|EndSession_MatchingLeaseExpiresAfterFreezeEndsDegraded|PostCommitSettlementUsesFreshContextForExplicitAndReplacementEnds)' -count=1 -timeout 120s` recorded the three expected RED mechanisms and the control-wire GREEN result.
-- The archive regression now requires `sessionId` in `UseWhiteboardOptions` while preserving the no-unselected-token and no-settings-fetch boundary.
+- The archive regression now requires `sessionId` in `UseWhiteboardOptions` while preserving the no-unselected-token boundary and requiring the dedicated archive settings fetch.
   The panel test's fetch mocks now use the real `fetch` parameter types only; `node_modules/.bin/tsc --noEmit` passed.
-  Focused Vitest remains `[UNVERIFIED]` in this shell because Bun is unavailable and the Node 18 fallback cannot load Vitest's required `node:util.styleText` export.
+- `[GREEN]` The real `WhiteboardArchive` consumer makes exactly its canvas-list and dedicated `canvas-settings` GETs on mount, never the old generic settings route, without minting a selected-document token.
+  It renders the durable archive result as distinct confirmed, incomplete, and legacy-omitted states while retaining the archive's existing read-only interaction behavior.
+  After `CHECK_TEST_DATABASE_URL=... node scripts/check-test-database-url.mjs` live-verified `bridge_test`, `PATH=/home/chris/.bun/bin:$PATH DATABASE_URL=... TEST_DATABASE_URL=... bunx --bun vitest run tests/unit/whiteboard-archive.test.tsx --config vitest.config.ts` passed 9 tests; `PATH=/home/chris/.bun/bin:$PATH bunx --bun tsc --noEmit` also passed.
 - No production file was edited by this test-only remediation; the pre-existing frontend production edits remain unstaged for their owner.
 
 ### Phase 10 — Hocuspocus fence, admission, capture, and control listener *(Terra backend; tests by Terra)*

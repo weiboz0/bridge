@@ -131,6 +131,23 @@ function canvasList(items: unknown[]): Response {
   });
 }
 
+function canvasSettings(archiveComplete?: boolean): Response {
+  const payload: Record<string, unknown> = { canvasFloor: "private" };
+  if (archiveComplete !== undefined) payload.whiteboardServerArchiveComplete = archiveComplete;
+  return new Response(JSON.stringify(payload), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+function archiveFetch(items: unknown[], archiveComplete?: boolean) {
+  return vi.fn((url: string) => {
+    if (url === `/api/sessions/${SESSION_ID}/canvases`) return Promise.resolve(canvasList(items));
+    if (url === `/api/sessions/${SESSION_ID}/canvas-settings`) return Promise.resolve(canvasSettings(archiveComplete));
+    return Promise.reject(new Error(`unexpected archive endpoint ${url}`));
+  });
+}
+
 describe("WhiteboardArchive — plan 094 phase 3", () => {
   beforeEach(() => {
     whiteboardOptions.length = 0;
@@ -155,8 +172,8 @@ describe("WhiteboardArchive — plan 094 phase 3", () => {
     vi.unstubAllGlobals();
   });
 
-  it("initially fetches only visible canvas metadata and never mints a document token", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(canvasList([]));
+  it("loads visible canvas metadata and the dedicated archive status without minting a document token", async () => {
+    const fetchMock = archiveFetch([]);
     vi.stubGlobal("fetch", fetchMock);
 
     render(<WhiteboardArchive sessionId={SESSION_ID} />);
@@ -164,16 +181,21 @@ describe("WhiteboardArchive — plan 094 phase 3", () => {
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(`/api/sessions/${SESSION_ID}/canvases`);
     });
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(`/api/sessions/${SESSION_ID}/canvas-settings`);
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(whiteboardOptions.filter(({ canvasId }) => canvasId !== null)).toEqual([]);
     expect(whiteboardOptions).toContainEqual({ canvasId: null, sessionId: SESSION_ID, readOnly: true });
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
       `/api/sessions/${SESSION_ID}/canvases`,
+      `/api/sessions/${SESSION_ID}/canvas-settings`,
     ]);
+    expect(fetchMock.mock.calls.map(([url]) => url)).not.toContain(`/api/sessions/${SESSION_ID}/settings`);
   });
 
   it("shows a generic empty state without archive mutation controls or a token mint", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(canvasList([])));
+    vi.stubGlobal("fetch", archiveFetch([]));
 
     render(<WhiteboardArchive sessionId={SESSION_ID} />);
 
@@ -183,20 +205,15 @@ describe("WhiteboardArchive — plan 094 phase 3", () => {
   });
 
   it("mints one selected canvas token and keeps the archive board read-only with an inert change callback", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(
-        canvasList([
-          {
-            id: CANVAS_ID,
-            sessionId: SESSION_ID,
-            ownerId: "33333333-3333-4333-8333-333333333333",
-            title: "Visible board",
-            visibility: "participants",
-          },
-        ]),
-      ),
-    );
+    vi.stubGlobal("fetch", archiveFetch([
+      {
+        id: CANVAS_ID,
+        sessionId: SESSION_ID,
+        ownerId: "33333333-3333-4333-8333-333333333333",
+        title: "Visible board",
+        visibility: "participants",
+      },
+    ]));
 
     render(<WhiteboardArchive sessionId={SESSION_ID} />);
 
@@ -204,7 +221,7 @@ describe("WhiteboardArchive — plan 094 phase 3", () => {
 
     await waitFor(() => {
       expect(whiteboardOptions.filter(({ canvasId }) => canvasId !== null)).toEqual([
-        { canvasId: CANVAS_ID, readOnly: true },
+        { canvasId: CANVAS_ID, sessionId: SESSION_ID, readOnly: true },
       ]);
     });
     const latestBoard = boardProps.at(-1);
@@ -215,6 +232,26 @@ describe("WhiteboardArchive — plan 094 phase 3", () => {
     fireEvent.click(screen.getByTestId("board-change-attempt"));
     expect(bindingWritePath).not.toHaveBeenCalled();
     expect(screen.queryByRole("button", { name: /create|new whiteboard|visibility/i })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["confirmed", true, "Whiteboard archive confirmed"],
+    ["degraded", false, "Latest whiteboard changes may not have been archived"],
+    ["legacy omission", undefined, null],
+  ] as const)("renders %s durable archive status through the archive consumer", async (_label, archiveComplete, expected) => {
+    vi.stubGlobal("fetch", archiveFetch([], archiveComplete));
+
+    render(<WhiteboardArchive sessionId={SESSION_ID} />);
+
+    await waitFor(() => {
+      expect(globalThis.fetch).toHaveBeenCalledWith(`/api/sessions/${SESSION_ID}/canvas-settings`);
+    });
+    if (expected) {
+      expect(await screen.findByText(expected)).toBeInTheDocument();
+    } else {
+      expect(screen.queryByText(/archive confirmed|latest whiteboard changes/i)).not.toBeInTheDocument();
+    }
+    expect(whiteboardOptions.filter(({ canvasId }) => canvasId !== null)).toEqual([]);
   });
 
   it("keeps the teacher on the live dashboard when ending the session is not successful", async () => {
