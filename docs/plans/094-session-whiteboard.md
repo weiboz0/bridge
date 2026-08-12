@@ -765,3 +765,14 @@ _Plan-wide report pending later phases._
   The scoped system-review operator query now requires exactly eight canvas columns and all three nullable lifecycle columns with their exact PostgreSQL types.
 - Focused pinned store, handler, and DB suites passed; `go vet ./internal/store ./internal/handlers ./internal/db`, `gofmt`, `git diff --check`, and `PATH=/home/chris/.bun/bin:$PATH bunx tsc --noEmit` passed.
   No database reconciliation, migration, service, E2E, or non-test database access ran for this review fix.
+
+### Phase 8 race-proof follow-up — lifecycle replacement ordering (2026-08-11)
+
+- RED: the deterministic race tests initially failed to compile because replacement had no observable class-guard/lifecycle-lock seam and no tested process-local representation of the required signed-key-plus-UUID lock order.
+- GREEN: controlled two-pool tests pause `CreateSession` after the class guard and prove a preceding confirmed end commits archive-complete `true` without a later replacement overwrite.
+  The opposite controlled order pauses after replacement has acquired the session lifecycle lock, proves the explicit confirmed end blocks behind it, then returns the conflict after replacement commits the only allowed archive-incomplete `false` result.
+  The scheduled-start equivalent pauses after its class guard, lets confirmed completion win, then proves the scheduled replacement does not overwrite durable `true`.
+- A collision test inserts two live UUIDs with the identical `12345678` signed-key prefix, holds the disjoint legacy one-argument advisory lock, and proves replacement acquires lifecycle locks in full UUID tie-break order without deadlock.
+  The ordered helper is used by replacement after its SQL discovery order, retaining PostgreSQL's cross-process `ORDER BY` as the authoritative first ordering.
+- The database-clock regression expires a lease with `clock_timestamp()` and proves a different token replaces it with a fresh approximately 15-second lease.
+  Earlier ownership tests cover matching expired, different expired, different unexpired, matching cleanup, and durable-result cleanup.

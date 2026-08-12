@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -61,6 +62,29 @@ func sessionLifecycleAdvisoryKey(id string) (int32, error) {
 		return 0, fmt.Errorf("parse lifecycle UUID key: %w", err)
 	}
 	return int32(uint32(v)), nil
+}
+
+// sortedSessionLifecycleIDs provides a process-local mirror of the database
+// ordering used by replacement: derived signed key first, then canonical UUID.
+// The SQL ORDER BY remains authoritative across processes; this duplicate sort
+// makes every lock acquisition order explicit and regression-testable.
+func sortedSessionLifecycleIDs(ids []string) ([]string, error) {
+	ordered := append([]string(nil), ids...)
+	keys := make(map[string]int32, len(ordered))
+	for _, id := range ordered {
+		key, err := sessionLifecycleAdvisoryKey(id)
+		if err != nil {
+			return nil, err
+		}
+		keys[id] = key
+	}
+	sort.Slice(ordered, func(i, j int) bool {
+		if keys[ordered[i]] != keys[ordered[j]] {
+			return keys[ordered[i]] < keys[ordered[j]]
+		}
+		return ordered[i] < ordered[j]
+	})
+	return ordered, nil
 }
 
 func lockSessionLifecycle(ctx context.Context, tx *sql.Tx, sessionID string, shared bool) error {
@@ -274,6 +298,10 @@ func replaceClassLiveSessions(ctx context.Context, tx *sql.Tx, classID string) (
 // replaceLockedClassLiveSessions discovers sessions only after its caller has
 // acquired the class guard and revalidated any producer-specific row state.
 func replaceLockedClassLiveSessions(ctx context.Context, tx *sql.Tx, classID string) ([]ReplacedSession, error) {
+	return replaceLockedClassLiveSessionsWithHook(ctx, tx, classID, nil, nil)
+}
+
+func replaceLockedClassLiveSessionsWithHook(ctx context.Context, tx *sql.Tx, classID string, afterLocks func(), lockedIDs func([]string)) ([]ReplacedSession, error) {
 	rows, err := tx.QueryContext(ctx, `SELECT id FROM sessions WHERE class_id = $1 AND status = 'live'
 		ORDER BY (('x' || substr(replace(lower(id::text), '-', ''), 1, 8))::bit(32))::int4, id`, classID)
 	if err != nil {
@@ -291,11 +319,23 @@ func replaceLockedClassLiveSessions(ctx context.Context, tx *sql.Tx, classID str
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	ids, err = sortedSessionLifecycleIDs(ids)
+	if err != nil {
+		return nil, err
+	}
 	replaced := make([]ReplacedSession, 0, len(ids))
 	for _, id := range ids {
 		if err := lockSessionLifecycle(ctx, tx, id, false); err != nil {
 			return nil, err
 		}
+	}
+	if lockedIDs != nil {
+		lockedIDs(ids)
+	}
+	if afterLocks != nil {
+		afterLocks()
+	}
+	for _, id := range ids {
 		var token sql.NullString
 		err := tx.QueryRowContext(ctx, `SELECT canvas_freeze_token FROM sessions WHERE id = $1 AND status = 'live'`, id).Scan(&token)
 		if err == sql.ErrNoRows {

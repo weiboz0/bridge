@@ -107,7 +107,14 @@ type ListSessionsFilter struct {
 }
 
 type SessionStore struct {
-	db *sql.DB
+	db        *sql.DB
+	testHooks *sessionStoreTestHooks
+}
+
+type sessionStoreTestHooks struct {
+	afterClassGuard     func()
+	afterLifecycleLocks func()
+	lockedLifecycleIDs  func([]string)
 }
 
 func NewSessionStore(db *sql.DB) *SessionStore {
@@ -177,7 +184,19 @@ func (s *SessionStore) CreateSession(ctx context.Context, input CreateSessionInp
 	now := time.Now()
 	var replaced []ReplacedSession
 	if input.ClassID != nil {
-		replaced, err = replaceClassLiveSessions(ctx, tx, *input.ClassID)
+		if err = lockClassReplacement(ctx, tx, *input.ClassID); err != nil {
+			return nil, err
+		}
+		if s.testHooks != nil && s.testHooks.afterClassGuard != nil {
+			s.testHooks.afterClassGuard()
+		}
+		var afterLocks func()
+		var lockedIDs func([]string)
+		if s.testHooks != nil {
+			afterLocks = s.testHooks.afterLifecycleLocks
+			lockedIDs = s.testHooks.lockedLifecycleIDs
+		}
+		replaced, err = replaceLockedClassLiveSessionsWithHook(ctx, tx, *input.ClassID, afterLocks, lockedIDs)
 		if err != nil {
 			return nil, err
 		}

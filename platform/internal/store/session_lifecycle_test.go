@@ -68,6 +68,109 @@ func TestSessionLifecycleUsesSharedAndExclusiveTransactionLocks(t *testing.T) {
 	require.NoError(t, <-blocked)
 }
 
+func TestSessionLifecycleReplacementOrderUsesDerivedKeyThenUUID(t *testing.T) {
+	ids := []string{
+		"12345678-0000-0000-0000-000000000002",
+		"80000000-0000-0000-0000-000000000001",
+		"12345678-0000-0000-0000-000000000001",
+	}
+	got, err := sortedSessionLifecycleIDs(ids)
+	require.NoError(t, err)
+	assert.Equal(t, []string{
+		"80000000-0000-0000-0000-000000000001",
+		"12345678-0000-0000-0000-000000000001",
+		"12345678-0000-0000-0000-000000000002",
+	}, got)
+}
+
+func TestCreateSessionCollisionKeysLockInUUIDOrderUnderLegacyPressure(t *testing.T) {
+	db := testDB(t)
+	observer := testDB(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	sessions := NewSessionStore(db)
+	classID, teacherID := setupSessionTest(t, db, t.Name()+uuid.NewString())
+	ids := []string{"12345678-0000-0000-0000-000000000002", "12345678-0000-0000-0000-000000000001"}
+	for _, id := range ids {
+		_, err := db.ExecContext(ctx, `INSERT INTO sessions (id, class_id, teacher_id, title, status, settings, started_at, visibility) VALUES ($1, $2, $3, $4, 'live', '{}', clock_timestamp(), 'unlisted')`, id, classID, teacherID, id)
+		require.NoError(t, err)
+	}
+	locked := make(chan []string, 1)
+	sessions.testHooks = &sessionStoreTestHooks{lockedLifecycleIDs: func(ids []string) { locked <- append([]string(nil), ids...) }}
+	legacy, err := observer.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	defer legacy.Rollback()
+	_, err = legacy.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, "session_create:"+teacherID)
+	require.NoError(t, err)
+	_, err = sessions.CreateSession(ctx, CreateSessionInput{ClassID: strPtr(classID), TeacherID: teacherID, Title: "replacement"})
+	require.NoError(t, err)
+	assert.Equal(t, []string{ids[1], ids[0]}, <-locked)
+}
+
+func TestCreateSessionReplacementRacePreservesExplicitConfirmedArchive(t *testing.T) {
+	db := testDB(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	sessions := NewSessionStore(db)
+	classID, teacherID := setupSessionTest(t, db, t.Name()+uuid.NewString())
+	prior, err := sessions.CreateSession(ctx, CreateSessionInput{ClassID: strPtr(classID), TeacherID: teacherID, Title: "prior"})
+	require.NoError(t, err)
+	token := uuid.NewString()
+	_, err = acquireSessionFreezeLease(ctx, db, prior.ID, token)
+	require.NoError(t, err)
+
+	guarded, release := make(chan struct{}), make(chan struct{})
+	sessions.testHooks = &sessionStoreTestHooks{afterClassGuard: func() { close(guarded); <-release }}
+	createDone := make(chan error, 1)
+	go func() {
+		_, err := sessions.CreateSession(ctx, CreateSessionInput{ClassID: strPtr(classID), TeacherID: teacherID, Title: "replacement"})
+		createDone <- err
+	}()
+	<-guarded
+	require.NoError(t, completeSessionConfirmed(ctx, testDB(t), prior.ID, token, nil))
+	close(release)
+	require.NoError(t, <-createDone)
+	var archive bool
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT whiteboard_server_archive_complete FROM sessions WHERE id = $1`, prior.ID).Scan(&archive))
+	assert.True(t, archive, "replacement must not overwrite a confirmed archive result")
+}
+
+func TestCreateSessionReplacementRaceWinsBeforeExplicitEndWithoutDeadlock(t *testing.T) {
+	db := testDB(t)
+	observer := testDB(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	sessions := NewSessionStore(db)
+	classID, teacherID := setupSessionTest(t, db, t.Name()+uuid.NewString())
+	prior, err := sessions.CreateSession(ctx, CreateSessionInput{ClassID: strPtr(classID), TeacherID: teacherID, Title: "prior"})
+	require.NoError(t, err)
+	token := uuid.NewString()
+	_, err = acquireSessionFreezeLease(ctx, db, prior.ID, token)
+	require.NoError(t, err)
+
+	locked, release := make(chan struct{}), make(chan struct{})
+	sessions.testHooks = &sessionStoreTestHooks{afterLifecycleLocks: func() { close(locked); <-release }}
+	createDone := make(chan error, 1)
+	go func() {
+		_, err := sessions.CreateSession(ctx, CreateSessionInput{ClassID: strPtr(classID), TeacherID: teacherID, Title: "replacement"})
+		createDone <- err
+	}()
+	<-locked
+	endDone := make(chan error, 1)
+	go func() { endDone <- completeSessionConfirmed(ctx, observer, prior.ID, token, nil) }()
+	select {
+	case err := <-endDone:
+		t.Fatalf("confirmed end bypassed replacement lifecycle lock: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+	require.NoError(t, <-createDone)
+	assert.ErrorIs(t, <-endDone, ErrSessionEndInProgress)
+	var archive bool
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT whiteboard_server_archive_complete FROM sessions WHERE id = $1`, prior.ID).Scan(&archive))
+	assert.False(t, archive, "replacement's degraded result is the only allowed result when it acquired the lifecycle lock first")
+}
+
 func TestSessionLifecycleLeaseUsesDatabaseClockAndExactToken(t *testing.T) {
 	db := testDB(t)
 	ctx := context.Background()
@@ -92,6 +195,25 @@ func TestSessionLifecycleLeaseUsesDatabaseClockAndExactToken(t *testing.T) {
 	foreign, err := acquireSessionFreezeLease(ctx, db, session.ID, uuid.NewString())
 	assert.ErrorIs(t, err, ErrSessionEndInProgress)
 	assert.Empty(t, foreign.Token)
+}
+
+func TestSessionLifecycleDatabaseClockExpiresThenReplacesLease(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	sessions := NewSessionStore(db)
+	_, teacherID := setupSessionTest(t, db, t.Name()+uuid.NewString())
+	session, err := sessions.CreateSession(ctx, CreateSessionInput{TeacherID: teacherID, Title: "expiry replacement"})
+	require.NoError(t, err)
+	t.Cleanup(func() { _, _ = db.ExecContext(ctx, `DELETE FROM sessions WHERE id = $1`, session.ID) })
+	first, second := uuid.NewString(), uuid.NewString()
+	_, err = acquireSessionFreezeLease(ctx, db, session.ID, first)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `UPDATE sessions SET canvas_freeze_until = clock_timestamp() - interval '1 millisecond' WHERE id = $1`, session.ID)
+	require.NoError(t, err)
+	lease, err := acquireSessionFreezeLease(ctx, db, session.ID, second)
+	require.NoError(t, err)
+	assert.Equal(t, second, lease.Token)
+	assert.Greater(t, lease.Remaining, 14*time.Second)
 }
 
 func TestSessionLifecycleConfirmedEndRollsBackWhenSnapshotCountMismatches(t *testing.T) {
