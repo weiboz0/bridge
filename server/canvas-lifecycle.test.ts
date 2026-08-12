@@ -45,7 +45,7 @@ describe("Phase 10 canvas lifecycle RED contract", () => {
     await expect(control.dispatch({ method: "POST", path: "/internal/canvas-sessions/unknown", authorization: "Bearer " + "a".repeat(32), json: {} })).resolves.toMatchObject({ status: 404 });
   });
 
-  test("serializes freeze, unfreeze, and complete, with complete winning a matching terminal race", async () => {
+  test("freeze complete serializes terminal cleanup", async () => {
     const { createCanvasLifecycle } = await lifecycle();
     const gate = Promise.withResolvers<void>();
     const sut = createCanvasLifecycle({ validateLease: async () => { await gate.promise; return { allowed: true, remainingMs: 2_000 }; } });
@@ -97,11 +97,12 @@ describe("Phase 10 canvas lifecycle RED contract", () => {
     expect(sut.accounting().captureBytes).toBe(0);
   });
 
-  test("bounds half-open response writers and reference-counts cached entries through complete", async () => {
+  test("half-open writer permits same-token retry", async () => {
     const { createCanvasLifecycle } = await lifecycle();
     const sut = createCanvasLifecycle({ validateLease: async () => ({ allowed: true, remainingMs: 2_000 }), writerNoProgressMs: 1, writerDeadlineMs: 2 });
-    await sut.freeze({ sessionId, freezeToken: token, canvasIds: [] });
+    const frozen = await sut.freeze({ sessionId, freezeToken: token, canvasIds: [] });
     const stalled = sut.stream({ sessionId, freezeToken: token, write: () => false, onceDrain: () => new Promise(() => {}) });
+    await expect(sut.freeze({ sessionId, freezeToken: token, canvasIds: [] })).resolves.toEqual(frozen);
     await expect(sut.complete({ sessionId, freezeToken: token })).resolves.toEqual({ released: true });
     await expect(stalled).rejects.toMatchObject({ code: "writer_aborted" });
     expect(sut.accounting().captureBytes).toBe(0);
@@ -135,7 +136,7 @@ describe("Phase 10 canvas lifecycle RED contract", () => {
     expect(closed).toEqual(["first", "second"]);
   });
 
-  test("rejects the ninth canvas mutation before allocating a waiter and settles all eight on cancellation", async () => {
+  test("admission cap rejects ninth before allocation", async () => {
     const { createCanvasLifecycle } = await lifecycle();
     const blocked = Promise.withResolvers<{ allowed: boolean; readOnly: boolean }>();
     const sut = createCanvasLifecycle({ authorizeMutation: async () => blocked.promise });
@@ -146,7 +147,7 @@ describe("Phase 10 canvas lifecycle RED contract", () => {
     expect(sut.inspectDocument(`canvas:${canvasId}`)?.admissions).toBe(0);
   });
 
-  test("rolls back shadow, accounting, and turnstile for auth deny, timeout, cancel, local fence, and apply failure", async () => {
+  test("denied auth releases turnstile and accounting", async () => {
     const { createCanvasLifecycle } = await lifecycle();
     const sut = createCanvasLifecycle({ authorizeMutation: async () => ({ allowed: false, readOnly: false }) });
     await expect(sut.admitMutation({ documentName: `canvas:${canvasId}`, sessionId, userId: "writer", connection: { close() {} }, update: updateWith("denied") })).rejects.toThrow();
@@ -166,7 +167,7 @@ describe("Phase 10 canvas lifecycle RED contract", () => {
     expect(sut.inspectDocument(documentName)).toMatchObject({ admissions: 0, turnstileLocked: false, shadowMatchesAuthoritative: true });
   });
 
-  test("handles partial-overlap Yjs updates by identity and actual-state fallback, never byte digest", async () => {
+  test("partial-overlap update commits exact state", async () => {
     const { createCanvasLifecycle } = await lifecycle();
     const authoritative = new Y.Doc();
     const sut = createCanvasLifecycle({ documents: new Map([[`canvas:${canvasId}`, authoritative]]), authorizeMutation: async () => ({ allowed: true, readOnly: false }) });
@@ -184,7 +185,7 @@ describe("Phase 10 canvas lifecycle RED contract", () => {
     await expect(sut.validateParsedFrame({ documentName: `attempt:${randomUUID()}`, update: new Uint8Array(2 * 1024 * 1024) })).resolves.toBeUndefined();
   });
 
-  test("uses generation-keyed load watchdogs, makes unload reversible, and frees resources only on actual destroy", async () => {
+  test("destroy releases generation exactly once", async () => {
     const { createCanvasLifecycle } = await lifecycle();
     const sut = createCanvasLifecycle();
     const document = new Y.Doc();
@@ -199,7 +200,7 @@ describe("Phase 10 canvas lifecycle RED contract", () => {
     expect(sut.inspectDocument(`canvas:${canvasId}`)).toBeUndefined();
   });
 
-  test("releases a failed unregistered load from its next-turn watchdog without releasing a later generation", async () => {
+  test("failed unregistered load releases reservation", async () => {
     const { createCanvasLifecycle } = await lifecycle();
     const sut = createCanvasLifecycle();
     const documentName = `canvas:${canvasId}`;

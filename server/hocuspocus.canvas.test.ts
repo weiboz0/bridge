@@ -617,7 +617,7 @@ describe("Phase 10 installed Hocuspocus hook RED contract", () => {
     expect(() => assertFinal!([{ afterLoadDocument: () => undefined }, { afterLoadDocument: bridgeAfterLoad }], bridgeAfterLoad)).not.toThrow();
   });
 
-  test("registered onDisconnect and beforeUnload abort and settle all eight half-open admissions while reconnect-aborted unload preserves the exact document generation", async () => {
+  test("reconnect-aborted unload retains instrumentation", async () => {
     const runtime = await import("./hocuspocus") as Record<string, unknown>;
     const install = runtime.createCanvasLifecycleHooks as ((input: Record<string, unknown>) => Record<string, (input: Record<string, unknown>) => Promise<unknown>>) | undefined;
     expect(install).toBeTypeOf("function");
@@ -743,7 +743,7 @@ describe("Phase 10 installed Hocuspocus hook RED contract", () => {
     expect(connection.readOnly).toBe(false);
   });
 
-  test("closes writable and read-only canvas sockets at their verified JWT expiry and clears early-close timers", async () => {
+  test("jwt expiry closes established reader", async () => {
     const runtime = await import("./hocuspocus") as Record<string, unknown>;
     const schedule = runtime.scheduleCanvasJwtExpiry as ((input: Record<string, unknown>) => { cancel(): void }) | undefined;
     expect(schedule).toBeTypeOf("function");

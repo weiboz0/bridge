@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -976,7 +977,7 @@ func TestSessionHandler_EndSession_ViaPost(t *testing.T) {
 	assert.Equal(t, "ended", session.Status)
 }
 
-func TestEndSession_DegradedResponseWarnsAndEmitsOnlyAfterDurableCommit(t *testing.T) {
+func TestEndSession_DegradedWhenHocuspocusUnavailableWarnsTeacher(t *testing.T) {
 	fx := newSessionFixture(t, t.Name())
 	// Phase 9 must treat control unavailability as a degraded successful end,
 	// not as a failed session end.  The public response is the handoff contract
@@ -995,7 +996,62 @@ func TestEndSession_DegradedResponseWarnsAndEmitsOnlyAfterDurableCommit(t *testi
 	require.Equal(t, "ended", status)
 }
 
-func TestEndSession_ConfirmedSubsetPersistsSnapshotsWithoutWarning(t *testing.T) {
+func TestEndSession_DatabaseFailureLeavesLiveClearsLeaseAndEmitsNoEvent(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	// The durable end statement is the only failing step.  Cleanup must use the
+	// operation token to release the live lease, unfreeze Hocuspocus, and avoid
+	// publishing a false session_ended event.
+	trigger := "plan094_reject_end_" + strings.ReplaceAll(fx.sessionID, "-", "")
+	function := trigger + "_fn"
+	_, err := fx.db.ExecContext(context.Background(), fmt.Sprintf(`
+		CREATE FUNCTION %s() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN RAISE EXCEPTION 'planned durable end failure'; END; $$;
+		CREATE TRIGGER %s BEFORE UPDATE OF status ON sessions
+		FOR EACH ROW WHEN (NEW.id = '%s'::uuid AND NEW.status = 'ended')
+		EXECUTE FUNCTION %s();`, function, trigger, fx.sessionID, function))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = fx.db.ExecContext(context.Background(), fmt.Sprintf(`DROP TRIGGER IF EXISTS %s ON sessions; DROP FUNCTION IF EXISTS %s();`, trigger, function))
+	})
+
+	event := make(chan struct{}, 1)
+	unsubscribe := fx.h.Broadcaster.Subscribe(fx.sessionID, func(name string, _ interface{}) {
+		if name == "session_ended" {
+			select {
+			case event <- struct{}{}:
+			default:
+			}
+		}
+	})
+	defer unsubscribe()
+	unfrozen := make(chan struct{}, 1)
+	fx.h.CanvasControl = &fakeCanvasControl{onUnfreeze: func(_, _ string) {
+		select {
+		case unfrozen <- struct{}{}:
+		default:
+		}
+	}}
+
+	w := fx.doRequest(t, http.MethodPost, "/api/sessions/"+fx.sessionID+"/end", nil, fx.claims(fx.teacher, false))
+	require.Equal(t, http.StatusInternalServerError, w.Code, w.Body.String())
+	select {
+	case <-unfrozen:
+	case <-time.After(time.Second):
+		t.Fatal("failed durable end did not unfreeze its matching operation")
+	}
+	var status string
+	var token sql.NullString
+	require.NoError(t, fx.db.QueryRowContext(context.Background(), `SELECT status, canvas_freeze_token FROM sessions WHERE id = $1`, fx.sessionID).Scan(&status, &token))
+	assert.Equal(t, "live", status)
+	assert.False(t, token.Valid, "cleanup must clear its own lease after durable failure")
+	select {
+	case <-event:
+		t.Fatal("session_ended emitted despite the durable transition failure")
+	default:
+	}
+}
+
+func TestEndSession_ConfirmedBundlePersistsBeforeCommit(t *testing.T) {
 	fx := newSessionFixture(t, t.Name())
 	canvases := store.NewCanvasStore(fx.db)
 	canvas, err := canvases.CreateCanvas(context.Background(), store.CreateCanvasInput{SessionID: fx.sessionID, OwnerID: fx.teacher.ID, Title: "captured", Visibility: "private"})
@@ -1014,7 +1070,7 @@ func TestEndSession_ConfirmedSubsetPersistsSnapshotsWithoutWarning(t *testing.T)
 	require.Equal(t, "ZmluYWw=", state)
 }
 
-func TestEndSession_MatchingLeaseExpiresAfterFreezeEndsDegraded(t *testing.T) {
+func TestEndSession_LeaseExpiryUsesSeparateDegradedTransaction(t *testing.T) {
 	fx := newSessionFixture(t, t.Name())
 	fx.h.CanvasControl = &fakeCanvasControl{onFreeze: func(request realtime.FreezeRequest) {
 		_, err := fx.db.ExecContext(context.Background(), `
@@ -1245,7 +1301,7 @@ func TestEndSession_ResponseUsesDurableEndedAtAndTopLevelContract(t *testing.T) 
 	}
 }
 
-func TestEndSession_ConflictingLiveFreezeAfterCaptureReturnsStable409(t *testing.T) {
+func TestEndSession_LateFreezeResponseCannotReinstallLease(t *testing.T) {
 	fx := newSessionFixture(t, t.Name())
 	// A control response can race a replacement operation after this request
 	// has already acquired its lease.  The stale token must become the stable

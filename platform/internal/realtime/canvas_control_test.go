@@ -143,7 +143,7 @@ func TestCanvasControlClient_RetriesConflictAndPartialCapturedBodyWithSameToken(
 	require.Equal(t, state, bundle.Snapshots[0].State)
 }
 
-func TestCanvasControlClient_RetriesSameTokenWithinTwoSecondBudgetAndTerminalCallsAreBestEffort(t *testing.T) {
+func TestEndSession_TransportLossRecoversSameTokenBundle(t *testing.T) {
 	attempts := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		attempts++

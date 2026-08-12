@@ -205,7 +205,7 @@ func TestScheduleStore_StartScheduledSession(t *testing.T) {
 	assert.Equal(t, topic.ID, linkedTopics[0].TopicID)
 }
 
-func TestStartScheduledSessionReplacementMarksPriorSessionArchiveIncomplete(t *testing.T) {
+func TestStartScheduledSession_ReplacementCompletesScheduleAndWarns(t *testing.T) {
 	db := testDB(t)
 	ctx := context.Background()
 	schedules := NewScheduleStore(db)

@@ -245,7 +245,7 @@ func TestSessionStore_CreateAutoEnds(t *testing.T) {
 	assert.NotNil(t, ended.EndedAt)
 }
 
-func TestCreateSessionReplacementMarksPriorSessionArchiveIncomplete(t *testing.T) {
+func TestCreateSession_ReplacementEndsIncompleteAndWarns(t *testing.T) {
 	db := testDB(t)
 	ctx := context.Background()
 	sessions := NewSessionStore(db)

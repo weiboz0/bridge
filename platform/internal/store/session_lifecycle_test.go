@@ -133,7 +133,7 @@ func TestCreateSessionCollisionKeysLockInUUIDOrderUnderLegacyPressure(t *testing
 	assert.Equal(t, []string{ids[1], ids[0]}, <-locked)
 }
 
-func TestCreateSessionReplacementRacePreservesExplicitConfirmedArchive(t *testing.T) {
+func TestReplacementRacePreservesExplicitConfirmedResult(t *testing.T) {
 	db := testDB(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -315,7 +315,7 @@ func TestSessionLifecycleAlreadyEndedPreservesNullableArchiveAndEmptyTokenCleanu
 	}
 }
 
-func TestSessionStoreEndSessionEmptyTokenNeverClearsDifferentUnexpiredResidue(t *testing.T) {
+func TestEndSession_OverlappingRequestsCannotClearForeignLease(t *testing.T) {
 	db := testDB(t)
 	ctx := context.Background()
 	sessions := NewSessionStore(db)
@@ -333,9 +333,36 @@ func TestSessionStoreEndSessionEmptyTokenNeverClearsDifferentUnexpiredResidue(t 
 	assert.Equal(t, token, saved)
 }
 
+func TestEndSession_DifferentExpiredTokenEndsDegradedClearsLeaseWithoutReusingFreeze(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	sessions := NewSessionStore(db)
+	_, teacherID := setupSessionTest(t, db, t.Name()+uuid.NewString())
+	session, err := sessions.CreateSession(ctx, CreateSessionInput{TeacherID: teacherID, Title: "expired foreign lease"})
+	require.NoError(t, err)
+	t.Cleanup(func() { _, _ = db.ExecContext(context.Background(), `DELETE FROM sessions WHERE id = $1`, session.ID) })
+
+	ownerToken, staleToken := uuid.NewString(), uuid.NewString()
+	_, err = db.ExecContext(ctx, `UPDATE sessions
+		SET canvas_freeze_token = $2::uuid,
+			canvas_freeze_until = clock_timestamp() - interval '1 millisecond'
+		WHERE id = $1`, session.ID, ownerToken)
+	require.NoError(t, err)
+
+	result, err := completeSessionDegradedResult(ctx, db, session.ID, staleToken)
+	require.NoError(t, err)
+	require.NotNil(t, result.WhiteboardServerArchiveComplete)
+	assert.False(t, *result.WhiteboardServerArchiveComplete)
+	var status string
+	var lease sql.NullString
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT status, canvas_freeze_token FROM sessions WHERE id = $1`, session.ID).Scan(&status, &lease))
+	assert.Equal(t, "ended", status)
+	assert.False(t, lease.Valid, "an expired foreign operation cannot be reused or retained")
+}
+
 func lifecycleBoolPtr(value bool) *bool { return &value }
 
-func TestSessionLifecycleConfirmedEndRollsBackWhenSnapshotCountMismatches(t *testing.T) {
+func TestEndSession_BatchFailureRollsBackTrueAndSnapshots(t *testing.T) {
 	db := testDB(t)
 	ctx := context.Background()
 	sessions := NewSessionStore(db)

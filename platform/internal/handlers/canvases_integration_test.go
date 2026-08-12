@@ -215,7 +215,7 @@ func TestCanvasHandler_MutationAuthAndEndedArchive(t *testing.T) {
 	}
 }
 
-func TestCanvasHandler_ActiveFreezeReturnsStable409WithoutWrites(t *testing.T) {
+func TestCanvasMutations_BlockBehindEndLifecycleLock(t *testing.T) {
 	fx := newCanvasHandlerFixture(t)
 	canvas, err := fx.h.Canvases.CreateCanvas(context.Background(), store.CreateCanvasInput{SessionID: fx.session.ID, OwnerID: fx.student.ID, Title: "unchanged", Visibility: "private"})
 	require.NoError(t, err)

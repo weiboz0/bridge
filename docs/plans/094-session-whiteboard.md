@@ -533,6 +533,21 @@ That recheck is now defense in depth: the confirmed path gains the lifecycle lea
   Run only against that separately started Bridge stack with explicit `E2E_BASE_URL`; without those prerequisites record E2E as `UNVERIFIED`, do not claim the phase or merge gate complete, and pause before shipping.
 - Happy, auth-denial, malformed/timeout, cross-user, cross-session, and cross-org paths are mandatory; no broad green count substitutes for the named tests.
 
+#### Phase 12 non-E2E integration evidence (2026-08-12; Terra)
+
+- `[GREEN]` Audited the frozen matrix against existing mechanism-facing Go, Bun, and frontend contracts rather than adding duplicate broad-count tests.
+  Renamed the matching decisive tests to the exact required lifecycle/replacement/freeze-auth/realtime/mutation/scheduled-start acceptance names.
+  The cross-language advisory-key vectors are exercised by the Go transaction-lock test and the Bun `sessionLifecycleKey` vectors, including signed `int32` boundaries.
+- `[GREEN]` Added `TestEndSession_DifferentExpiredTokenEndsDegradedClearsLeaseWithoutReusingFreeze`: a stale caller cannot reuse a different expired operation's capture result; it commits only the durable degraded result and clears the expired residue.
+  Added `TestEndSession_DatabaseFailureLeavesLiveClearsLeaseAndEmitsNoEvent`: a database-injected confirmed-end failure leaves the session live, removes only the matching lease, requests matching unfreeze, and never emits `session_ended`.
+  Added a real internal-realtime authorization wait proof: it blocks behind the two-`int4` exclusive session lifecycle advisory lock and resumes only after release.
+- `[GREEN evidence]` The guarded `_test` database validator accepted `bridge_test` with both database variables pinned.
+  Focused lifecycle/replacement/freeze/auth/control Go tests passed; package runs for `./internal/handlers`, `./internal/store`, and `./internal/realtime` passed with `-count=1 -timeout 120s`, followed by `go vet` on the same packages.
+  `bun test server/canvas-lifecycle.test.ts server/hocuspocus.canvas.test.ts` passed **82 tests / 247 assertions**; the focused frontend/retry suite passed **6 files / 62 tests**; `bunx --bun tsc --noEmit`, scoped ESLint, and `git diff --check` passed.
+  No migration, non-test database, service, E2E, or live provider ran.
+- `[UNVERIFIED — hard safeguard]` The live-stack E2E acceptance remains intentionally unrun.
+  It requires user-provisioned `HOCUSPOCUS_CONTROL_SECRET`, any necessary collision-free control-port override, and a separately started Bridge stack with explicit `E2E_BASE_URL`; this phase did not read or edit `.env`, start a service, or run Playwright.
+
 ### Phase 13 — Documentation, cross-phase verification, and shipping evidence *(orchestrator)*
 
 - Update `docs/api.md`, `docs/architecture/decisions.md`, `docs/testing.md`, `docs/setup.md`, `docs/project-structure.md`, `.env.example`, and `README.md` for status-first lifecycle semantics, confirmed/degraded guarantees, control transport/config, replacement warnings, admission bounds, single-Hocuspocus limitation, no independent administrator/impersonator bypass for private canvases, and operator behavior; verify the Phase-9 config docs remain synchronized with the final implementation.

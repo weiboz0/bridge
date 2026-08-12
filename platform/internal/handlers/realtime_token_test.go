@@ -7,8 +7,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
@@ -1070,7 +1072,7 @@ func TestInternalAuth_NilUsersStore_500(t *testing.T) {
 // authorization.  Its only success shape proves that this exact still-live
 // lifecycle lease owns a positive amount of database-clock time; callers must
 // treat every other response as a closed gate.
-func TestFreezeAuth_ExactBearerBodyAndLiveLeaseFailClosed(t *testing.T) {
+func TestFreezeAuth_SharedLockAndExactToken(t *testing.T) {
 	fx := newCanvasHandlerFixture(t)
 	h := newRealtimeHandlerForCanvasFixture(fx)
 	r := chi.NewRouter()
@@ -1149,24 +1151,45 @@ func TestFreezeAuth_RejectsTrailingUnknownExpiredAndMissingLeaseWithoutLeakingSt
 	require.JSONEq(t, `{"allowed":false}`, expired.Body.String())
 }
 
-func TestRealtimeAuthLifecycle_ActiveFreezeReturnsStableRetryableCode(t *testing.T) {
+func TestRealtimeAuth_BlocksBehindFreezeLifecycleLock(t *testing.T) {
 	fx := newCanvasHandlerFixture(t)
 	canvas, err := fx.h.Canvases.CreateCanvas(context.Background(), store.CreateCanvasInput{
 		SessionID: fx.session.ID, OwnerID: fx.student.ID, Title: "Writable board", Visibility: "private",
 	})
 	require.NoError(t, err)
-	_, err = fx.db.ExecContext(context.Background(), `UPDATE sessions SET canvas_freeze_token = '11111111-1111-4111-8111-111111111111', canvas_freeze_until = clock_timestamp() + interval '15 seconds' WHERE id = $1`, fx.session.ID)
+	key, err := strconv.ParseUint(fx.session.ID[:8], 16, 32)
+	require.NoError(t, err)
+	holder, err := fx.db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = holder.Rollback() })
+	_, err = holder.ExecContext(context.Background(), `SELECT pg_advisory_xact_lock($1, $2)`, int32(1112687687), int32(key))
 	require.NoError(t, err)
 
-	body, err := json.Marshal(map[string]string{"documentName": "canvas:" + canvas.ID, "sub": fx.student.ID, "sessionId": fx.session.ID})
-	require.NoError(t, err)
-	req := httptest.NewRequest(http.MethodPost, "/api/internal/realtime/auth", bytes.NewReader(body))
-	req.Header.Set("Authorization", "Bearer "+rtSecret)
-	w := httptest.NewRecorder()
-	newRealtimeHandlerForCanvasFixture(fx).InternalAuth(w, req)
-	require.Equal(t, http.StatusConflict, w.Code, w.Body.String())
-	require.Contains(t, w.Body.String(), "session_freezing")
-	require.NotContains(t, w.Body.String(), "readOnly")
+	result := make(chan int, 1)
+	go func() {
+		body, marshalErr := json.Marshal(map[string]string{"documentName": "canvas:" + canvas.ID, "sub": fx.student.ID, "sessionId": fx.session.ID})
+		if marshalErr != nil {
+			result <- http.StatusInternalServerError
+			return
+		}
+		req := httptest.NewRequest(http.MethodPost, "/api/internal/realtime/auth", bytes.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+rtSecret)
+		w := httptest.NewRecorder()
+		newRealtimeHandlerForCanvasFixture(fx).InternalAuth(w, req)
+		result <- w.Code
+	}()
+	select {
+	case code := <-result:
+		t.Fatalf("realtime authorization bypassed the exclusive lifecycle lock with status %d", code)
+	case <-time.After(100 * time.Millisecond):
+	}
+	require.NoError(t, holder.Commit())
+	select {
+	case code := <-result:
+		require.Equal(t, http.StatusOK, code)
+	case <-time.After(time.Second):
+		t.Fatal("realtime authorization did not resume after lifecycle-lock release")
+	}
 }
 
 func TestRealtimeAuthLifecycle_ActiveFreezeIsRetryableNotPermanentReadOnly(t *testing.T) {
