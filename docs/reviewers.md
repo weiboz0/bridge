@@ -47,6 +47,21 @@ it is not the default, because a Fable-pinned slot failed mid-gate on quota exha
 - Keep external prompts under ~500 words and time-bounded.
   If a reviewer needs a remote read, push the branch first.
 
+## Design-review gate
+
+Every committed design spec under `docs/specs/**` passes a design-review gate before an implementation plan is drafted or revised from it.
+The design gate has exactly two required reviewers: Codex Sol (`gpt-5.6-sol`, reasoning effort high) and Claude Code (`claude-fable-5`).
+Design reviews are read-only and bind every verdict to the exact substantive commit.
+Both receive read-only prompts and must approve the same exact substantive commit with no open blocker.
+Record verdicts and findings in the spec with `[sol]` and `[fable]` source tags.
+An author response remains `[OPEN]` until the flagging reviewer confirms it; a material revision invalidates both approvals and re-dispatches both reviewers.
+
+The design gate, plan-review gate, and code-review gate are uncapped consensus loops with no numeric round cap.
+Consensus requires every required reviewer to return `APPROVE` or `APPROVE WITH NITS` with no open blocker.
+An unavailable required reviewer pauses the gate; do not silently substitute, replace, or waive that reviewer.
+After every three consecutive non-converged substantive rounds, record and surface a concise checkpoint.
+If the same finding reopens twice after claimed resolutions, or two consecutive checkpoints show no net reduction in open blockers, pause for a genuine user decision.
+
 ## Plan-review gate
 
 Every plan — new or revised — passes its tier's gate before any code is written.
@@ -65,9 +80,6 @@ Every plan — new or revised — passes its tier's gate before any code is writ
 APPROVE or APPROVE WITH NITS with no open blockers.
 A passing gate IS user approval — no separate approval pause follows it.
 
-**`max_review_rounds` = 3.** Unresolved `[OPEN]` blockers at the cap are a hard safeguard pause,
-not something to override.
-
 **Reviewer duty on integration tests.** Every reviewer MUST reject a plan that lacks a named
 integration-tests phase when it touches the Go API surface, the realtime protocol, or cross-cutting
 plumbing (auth, persistence, org scoping). One reject blocks the gate.
@@ -83,6 +95,9 @@ Same roster and tier rules, run against the consolidated branch diff.
 - Findings go in the plan's `## Code Review` section per `docs/code-review.md`, with `[OPEN]` status and file:line refs.
 - Authors respond inline with `→ Response:` and `[FIXED]` / `[WONTFIX]`.
 - All `[OPEN]` items resolve before merge. Re-dispatch only the flagging reviewers to confirm.
+
+Plan and code review retain the risk-tiered roster above.
+They iterate under the same uncapped consensus and no-open-blocker contract as the design gate.
 
 ## Notes on reviewer independence
 

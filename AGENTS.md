@@ -30,7 +30,8 @@ The repo-root `CLAUDE.md` is a thin pointer that `@`-imports this file — **edi
 - **Delegate coding work by DOMAIN, not by complexity.**
   Backend (Go in `platform/`, `server/hocuspocus.ts`) → Codex `gpt-5.6-terra`.
   Frontend (`src/`) → Sonnet 5.
-  All tests → Opus 5.
+  All tests → Opus 5 by default.
+  An explicit user model pin overrides these implementation defaults for the named work.
   Cross-cutting refactors, new patterns, and hard multi-system debugging stay inline on the orchestrator.
   Dispatch table: `docs/coding-agent.md`.
 
@@ -92,7 +93,7 @@ Always pause and surface to the user, regardless of operating mode.
   Autopilot merges with `gh pr merge --squash` only.
 
 - **Process** — file changes outside the plan's `## File scope`,
-  unresolved `[OPEN]` findings at the review round-cap,
+  unresolved `[OPEN]` review findings,
   and a failing `pre-merge-guard.sh` or `ci-local.sh`.
 
 - **Governance docs** — `AGENTS.md`, the `CLAUDE.md` pointer,
@@ -105,6 +106,20 @@ Always pause and surface to the user, regardless of operating mode.
   via `AskUserQuestion`.
   Under autopilot a fork **halts the run**; it does not proceed on a default.
   Mechanical or clear-cut decisions proceed without asking — don't manufacture questions.
+
+## Permanent review-gate contract
+
+Every committed design spec under `docs/specs/**` passes a design-review gate before an implementation plan is drafted or revised from it.
+The design gate has exactly two required reviewers: Codex Sol (`gpt-5.6-sol`, reasoning effort high) and Claude Code (`claude-fable-5`).
+Design reviews are read-only and bind every verdict to the exact substantive commit.
+Both receive read-only prompts and must approve the same exact substantive commit with no open blocker.
+Verdicts and findings are recorded in the spec with `[sol]` and `[fable]` tags; author responses remain `[OPEN]` until the flagging reviewer confirms them.
+
+The design gate, plan-review gate, and code-review gate are uncapped consensus loops with no numeric round cap.
+Consensus requires every required reviewer to return `APPROVE` or `APPROVE WITH NITS` with no open blocker.
+Only flagging reviewers are re-dispatched after a response; a material revision invalidates approval of the prior substantive commit.
+An unavailable required reviewer pauses the gate; the reviewer is never silently substituted, replaced, or waived.
+After every three consecutive non-converged substantive rounds, record and surface a concise checkpoint; repeated reopening or two checkpoints without net blocker reduction becomes a genuine user-decision pause.
 
 ## References
 

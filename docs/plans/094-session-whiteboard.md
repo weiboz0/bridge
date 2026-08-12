@@ -4,7 +4,7 @@
 **Status:** Phases 1a through 6 are complete.
 Spec 013 passed its exact-commit Sol + Fable 5 design gate; the user approved the remediation scope widening on 2026-08-11.
 The Spec 013 remediation plan gate reached consensus at exact substantive commit `fdaf90af2a6c9500396ced27f2ca0df4be780645`.
-Phases 7 through 13 are authorized for phase-by-phase implementation.
+Phase 7 is complete; Phases 8 through 13 are authorized for phase-by-phase implementation.
 
 ## File scope
 
@@ -724,3 +724,14 @@ _Plan-wide report pending later phases._
 - `PATH=/home/chris/.bun/bin:$PATH DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test TEST_DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test bash scripts/ci-local.sh --fast` passed on commit `74adf8f` with all five provider keys empty.
   Evidence: root Vitest 112 files passed and 2 skipped, 875 tests passed and 11 skipped; standalone whiteboard Vitest 3/3; Hocuspocus 18/18; guard self-tests 58/58; all Go packages passed, including handlers in 33.691 seconds, store in 30.742 seconds, and contract in 0.023 seconds.
   E2E was intentionally skipped by `--fast`, so this attestation is phase evidence only and is not acceptable for merge.
+
+### Phase 7 — permanent consensus review governance (2026-08-11)
+
+- Added the exact-commit, read-only design gate to all four canonical governance documents with exactly two required reviewers: Codex Sol (`gpt-5.6-sol`, high) and Claude Code (`claude-fable-5`).
+- Made design, plan, and code gates uncapped consensus loops, retained the risk-tiered plan/code roster, replaced the obsolete numeric-cap safeguard, and required an unavailable reviewer to pause rather than be silently substituted or waived.
+- Recorded the three-round non-convergence checkpoint and repeated-finding/no-net-reduction user-decision triggers without converting elapsed rounds into approval.
+- Mirrored the explicit user model-pin override in `AGENTS.md` and `docs/coding-agent.md`; Plan 094 continues to route all new or changed tests to Terra.
+- Terra added executable governance assertions first; the initial pinned run produced the intended RED with 14 missing-governance failures.
+  After implementation, `PATH=/home/chris/.bun/bin:$PATH DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test TEST_DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test bash scripts/tests/test-guards.sh` passed 73 checks with zero failures.
+- `bash scripts/check-plan-uniqueness.sh`, `bash scripts/check-spec-uniqueness.sh`, `bash -n scripts/tests/test-guards.sh`, and `git diff --check` passed.
+  A first run without Bun on `PATH` made the lint ratchet's suppressed ESLint command yield empty JSON; rerunning with the repository's installed Bun path passed without any lint-script change.

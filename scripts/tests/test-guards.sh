@@ -289,6 +289,83 @@ else
   bad "AGENTS governance safeguard names every test gate artifact"
 fi
 
+# ── 15. permanent review-gate governance cannot drift ───────────────────────
+# These deliberately inspect semantic clauses rather than copied paragraphs.
+# All four canonical documents must make the design gate enforceable in the same
+# way, while preserving the separate risk-tiered roster for plan/code reviews.
+GOVERNANCE_DOCS=(
+  "$REPO_ROOT/AGENTS.md"
+  "$REPO_ROOT/docs/reviewers.md"
+  "$REPO_ROOT/docs/development-workflow.md"
+  "$REPO_ROOT/docs/coding-agent.md"
+)
+
+has_permanent_design_gate_contract() {
+  local document="$1"
+
+  rg -Pqi '(?s)design.{0,240}gate' "$document" \
+    && rg -Pqi '(?s)exactly two.{0,120}required reviewers' "$document" \
+    && rg -Pqi '(?s)design.{0,600}Sol.{0,120}gpt-5\.6-sol.{0,120}(?:reasoning effort )?high' "$document" \
+    && rg -Pqi '(?s)design.{0,600}Claude Code.{0,120}claude-fable-5' "$document" \
+    && rg -Pqi '(?is)design.{0,600}exact (?:substantive )?commit' "$document" \
+    && rg -Pqi '(?is)design.{0,600}read-only' "$document"
+}
+
+has_uncapped_consensus_contract() {
+  local document="$1"
+
+  rg -Pqi '(?is)design.{0,240}gate' "$document" \
+    && rg -Pqi '(?is)plan-review gate' "$document" \
+    && rg -Pqi '(?is)code-review gate' "$document" \
+    && rg -Pqi '(?i)(?:uncapped|no numeric (?:review )?round cap)' "$document" \
+    && rg -Pqi '(?is)consensus.{0,180}no open blocker|no open blocker.{0,180}consensus' "$document" \
+    && ! rg -Pqi '(?i)max_review_rounds|review[- ]round cap|rounds? at the cap' "$document"
+}
+
+has_unavailable_reviewer_pause_contract() {
+  local document="$1"
+
+  rg -Pqi '(?is)(?:unavailable.{0,100}required reviewer|required reviewer.{0,100}unavailable).{0,240}pause' "$document" \
+    && rg -Pqi '(?is)pause.{0,180}(?:substitut|replace|waiv)|(?:substitut|replace|waiv).{0,180}pause' "$document"
+}
+
+for governance_document in "${GOVERNANCE_DOCS[@]}"; do
+  governance_name="${governance_document#"$REPO_ROOT/"}"
+  if has_permanent_design_gate_contract "$governance_document"; then
+    ok "$governance_name fixes the exact Sol + Fable read-only design roster to one commit"
+  else
+    bad "$governance_name fixes the exact Sol + Fable read-only design roster to one commit"
+  fi
+
+  if has_uncapped_consensus_contract "$governance_document"; then
+    ok "$governance_name makes design, plan, and code gates uncapped consensus loops"
+  else
+    bad "$governance_name makes design, plan, and code gates uncapped consensus loops"
+  fi
+
+  if has_unavailable_reviewer_pause_contract "$governance_document"; then
+    ok "$governance_name pauses unavailable required reviewers instead of substituting or waiving"
+  else
+    bad "$governance_name pauses unavailable required reviewers instead of substituting or waiving"
+  fi
+done
+
+for model_policy_document in "$REPO_ROOT/AGENTS.md" "$REPO_ROOT/docs/coding-agent.md"; do
+  model_policy_name="${model_policy_document#"$REPO_ROOT/"}"
+  if rg -Pqi '(?is)user.{0,80}(?:/model )?pin.{0,120}overrides?' "$model_policy_document"; then
+    ok "$model_policy_name gives an explicit user model pin priority over implementation defaults"
+  else
+    bad "$model_policy_name gives an explicit user model pin priority over implementation defaults"
+  fi
+done
+
+phase_seven="$(sed -n '/^### Phase 7 /,/^### Phase 8 /p' "$REPO_ROOT/docs/plans/094-session-whiteboard.md")"
+if [[ "$phase_seven" =~ [Aa]ll[[:space:]]new[[:space:]]or[[:space:]]changed[[:space:]]tests[[:space:]]are[[:space:]]delegated[[:space:]]to[[:space:]]Terra ]]; then
+  ok "Plan 094 applies the user test-model pin to Terra"
+else
+  bad "Plan 094 applies the user test-model pin to Terra"
+fi
+
 llm_block="$(sed -n '/\*\*LLM-touching tests bill real money\.\*\*/,/## Documentation/p' "$REPO_ROOT/AGENTS.md")"
 if [[ "$llm_block" == *'ANTHROPIC_API_KEY='* \
   && "$llm_block" == *'OPENAI_API_KEY='* \
