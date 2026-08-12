@@ -243,7 +243,11 @@ func TestStartScheduledSessionRereadsPlannedScheduleBeforeDiscoveringLiveSession
 
 	guarded := make(chan struct{})
 	release := make(chan struct{})
-	schedules.testHooks = &scheduleStoreTestHooks{afterClassGuard: func() { close(guarded); <-release }}
+	discoveries := 0
+	schedules.testHooks = &scheduleStoreTestHooks{
+		afterClassGuard:            func() { close(guarded); <-release },
+		beforeLiveSessionDiscovery: func() { discoveries++ },
+	}
 	result := make(chan error, 1)
 	go func() { _, err := schedules.StartScheduledSession(ctx, schedule.ID, teacherID); result <- err }()
 	<-guarded
@@ -251,6 +255,7 @@ func TestStartScheduledSessionRereadsPlannedScheduleBeforeDiscoveringLiveSession
 	require.NoError(t, err)
 	close(release)
 	require.Error(t, <-result)
+	assert.Zero(t, discoveries, "cancelled schedule must fail before live-session discovery")
 
 	stillLive, err := sessions.GetSession(ctx, live.ID)
 	require.NoError(t, err)

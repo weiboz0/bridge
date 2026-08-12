@@ -48,7 +48,8 @@ type ScheduleStore struct {
 }
 
 type scheduleStoreTestHooks struct {
-	afterClassGuard func()
+	afterClassGuard            func()
+	beforeLiveSessionDiscovery func()
 }
 
 func NewScheduleStore(db *sql.DB) *ScheduleStore {
@@ -255,6 +256,9 @@ func (s *ScheduleStore) StartScheduledSession(ctx context.Context, scheduleID, t
 		return nil, err
 	}
 	sched.TopicIDs = parseUUIDArray(topicIDs)
+	if s.testHooks != nil && s.testHooks.beforeLiveSessionDiscovery != nil {
+		s.testHooks.beforeLiveSessionDiscovery()
+	}
 	replaced, err := replaceLockedClassLiveSessions(ctx, tx, sched.ClassID)
 	if err != nil {
 		return nil, err

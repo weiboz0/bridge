@@ -36,7 +36,7 @@ type freezeLeaseValidation struct {
 }
 
 type sessionEndResult struct {
-	WhiteboardServerArchiveComplete bool
+	WhiteboardServerArchiveComplete *bool
 }
 
 // CanvasSnapshot is one persisted state from an already fenced canvas bundle.
@@ -253,9 +253,14 @@ func completeSessionDegradedResult(ctx context.Context, db *sql.DB, sessionID, t
 		return sessionEndResult{}, err
 	}
 	if status == "ended" {
-		if existing.Valid && (existing.String == token || !active) {
-			_, err = tx.ExecContext(ctx, `UPDATE sessions SET canvas_freeze_token = NULL, canvas_freeze_until = NULL
-				WHERE id = $1 AND status = 'ended' AND (canvas_freeze_token = $2::uuid OR canvas_freeze_until <= clock_timestamp())`, sessionID, token)
+		if existing.Valid && ((token != "" && existing.String == token) || !active) {
+			if token != "" && existing.String == token {
+				_, err = tx.ExecContext(ctx, `UPDATE sessions SET canvas_freeze_token = NULL, canvas_freeze_until = NULL
+					WHERE id = $1 AND status = 'ended' AND canvas_freeze_token = $2::uuid`, sessionID, token)
+			} else {
+				_, err = tx.ExecContext(ctx, `UPDATE sessions SET canvas_freeze_token = NULL, canvas_freeze_until = NULL
+					WHERE id = $1 AND status = 'ended' AND canvas_freeze_until <= clock_timestamp()`, sessionID)
+			}
 			if err != nil {
 				return sessionEndResult{}, err
 			}
@@ -263,7 +268,12 @@ func completeSessionDegradedResult(ctx context.Context, db *sql.DB, sessionID, t
 		if err := tx.Commit(); err != nil {
 			return sessionEndResult{}, err
 		}
-		return sessionEndResult{WhiteboardServerArchiveComplete: archiveComplete.Valid && archiveComplete.Bool}, nil
+		var archive *bool
+		if archiveComplete.Valid {
+			archive = new(bool)
+			*archive = archiveComplete.Bool
+		}
+		return sessionEndResult{WhiteboardServerArchiveComplete: archive}, nil
 	}
 	if active && (!existing.Valid || existing.String != token) {
 		return sessionEndResult{}, ErrSessionEndInProgress
@@ -284,7 +294,8 @@ func completeSessionDegradedResult(ctx context.Context, db *sql.DB, sessionID, t
 	if err := tx.Commit(); err != nil {
 		return sessionEndResult{}, err
 	}
-	return sessionEndResult{WhiteboardServerArchiveComplete: false}, nil
+	archive := false
+	return sessionEndResult{WhiteboardServerArchiveComplete: &archive}, nil
 }
 
 // replaceClassLiveSessions obeys the global class-guard then lifecycle-lock order.

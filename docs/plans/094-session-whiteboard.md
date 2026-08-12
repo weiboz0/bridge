@@ -776,3 +776,13 @@ _Plan-wide report pending later phases._
   The ordered helper is used by replacement after its SQL discovery order, retaining PostgreSQL's cross-process `ORDER BY` as the authoritative first ordering.
 - The database-clock regression expires a lease with `clock_timestamp()` and proves a different token replaces it with a fresh approximately 15-second lease.
   Earlier ownership tests cover matching expired, different expired, different unexpired, matching cleanup, and durable-result cleanup.
+
+### Phase 8 final lifecycle-cleanup semantics (2026-08-11)
+
+- RED: final acceptance regressions first failed because `sessionEndResult` collapsed nullable archive completeness to `false`, the ended-row cleanup query cast the empty ordinary `EndSession` token to UUID, and scheduled-start had no discovery-entry proof seam.
+- GREEN: lifecycle results now retain a nullable archive-complete pointer, so already-ended durable `true`, `false`, and `null` are returned exactly.
+  Empty-token ordinary end retries clean only expired ended residue without a UUID cast and leave a different unexpired token untouched; matching/expired cleanup remains idempotent.
+- The scheduled cancellation race records every live-session discovery entry and proves the count remains zero when cancellation occurs after class-guard acquisition but before the still-planned `FOR UPDATE` re-read.
+  This test would fail under discovery-before-reread ordering.
+- A database-clock confirmed-end regression expires a matching lease with `clock_timestamp()`, then proves confirmed completion returns the lifecycle conflict while the session remains live, no archive-true result persists, and no snapshot state is written.
+- The active-freeze HTTP regression now also counts `session_canvases` and proves blocked create leaves no extra row, alongside the existing update/delete/floor no-write assertions.

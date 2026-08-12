@@ -227,6 +227,9 @@ func TestCanvasHandler_ActiveFreezeReturnsStable409WithoutWrites(t *testing.T) {
 		require.Equal(t, "session_end_in_progress", body["code"])
 	}
 	var title, floor string
+	var count int
+	require.NoError(t, fx.db.QueryRowContext(context.Background(), `SELECT count(*) FROM session_canvases WHERE session_id = $1`, fx.session.ID).Scan(&count))
+	assert.Equal(t, 1, count, "blocked create must not insert a canvas row")
 	require.NoError(t, fx.db.QueryRowContext(context.Background(), `SELECT title FROM session_canvases WHERE id = $1`, canvas.ID).Scan(&title))
 	require.NoError(t, fx.db.QueryRowContext(context.Background(), `SELECT canvas_floor FROM sessions WHERE id = $1`, fx.session.ID).Scan(&floor))
 	assert.Equal(t, "unchanged", title)

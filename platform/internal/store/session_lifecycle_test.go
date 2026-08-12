@@ -216,6 +216,82 @@ func TestSessionLifecycleDatabaseClockExpiresThenReplacesLease(t *testing.T) {
 	assert.Greater(t, lease.Remaining, 14*time.Second)
 }
 
+func TestSessionLifecycleConfirmedEndRejectsMatchingExpiredLeaseWithoutWrites(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	sessions := NewSessionStore(db)
+	canvases := NewCanvasStore(db)
+	_, teacherID := setupSessionTest(t, db, t.Name()+uuid.NewString())
+	session, err := sessions.CreateSession(ctx, CreateSessionInput{TeacherID: teacherID, Title: "confirmed expiry"})
+	require.NoError(t, err)
+	canvas, err := canvases.CreateCanvas(ctx, CreateCanvasInput{SessionID: session.ID, OwnerID: teacherID, Title: "state", Visibility: "private"})
+	require.NoError(t, err)
+	token := uuid.NewString()
+	_, err = acquireSessionFreezeLease(ctx, db, session.ID, token)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `UPDATE sessions SET canvas_freeze_until = clock_timestamp() - interval '1 millisecond' WHERE id = $1`, session.ID)
+	require.NoError(t, err)
+	err = completeSessionConfirmed(ctx, db, session.ID, token, []CanvasSnapshot{{CanvasID: canvas.ID, YjsState: "must-not-write"}})
+	assert.ErrorIs(t, err, ErrSessionEndInProgress)
+	var status string
+	var archive sql.NullBool
+	var state sql.NullString
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT status, whiteboard_server_archive_complete FROM sessions WHERE id = $1`, session.ID).Scan(&status, &archive))
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT yjs_state FROM session_canvases WHERE id = $1`, canvas.ID).Scan(&state))
+	assert.Equal(t, "live", status)
+	assert.False(t, archive.Valid)
+	assert.False(t, state.Valid)
+}
+
+func TestSessionLifecycleAlreadyEndedPreservesNullableArchiveAndEmptyTokenCleanup(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	sessions := NewSessionStore(db)
+	_, teacherID := setupSessionTest(t, db, t.Name()+uuid.NewString())
+	for _, tc := range []struct {
+		name    string
+		archive any
+		want    *bool
+	}{
+		{"true", true, lifecycleBoolPtr(true)},
+		{"false", false, lifecycleBoolPtr(false)},
+		{"null", nil, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			session, err := sessions.CreateSession(ctx, CreateSessionInput{TeacherID: teacherID, Title: t.Name()})
+			require.NoError(t, err)
+			token := uuid.NewString()
+			_, err = db.ExecContext(ctx, `UPDATE sessions SET status='ended', whiteboard_server_archive_complete=$2, canvas_freeze_token=$3::uuid, canvas_freeze_until=clock_timestamp()-interval '1 second' WHERE id=$1`, session.ID, tc.archive, token)
+			require.NoError(t, err)
+			result, err := completeSessionDegradedResult(ctx, db, session.ID, "")
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, result.WhiteboardServerArchiveComplete)
+			var residue sql.NullString
+			require.NoError(t, db.QueryRowContext(ctx, `SELECT canvas_freeze_token FROM sessions WHERE id=$1`, session.ID).Scan(&residue))
+			assert.False(t, residue.Valid)
+		})
+	}
+}
+
+func TestSessionStoreEndSessionEmptyTokenNeverClearsDifferentUnexpiredResidue(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	sessions := NewSessionStore(db)
+	_, teacherID := setupSessionTest(t, db, t.Name()+uuid.NewString())
+	session, err := sessions.CreateSession(ctx, CreateSessionInput{TeacherID: teacherID, Title: "unexpired residue"})
+	require.NoError(t, err)
+	token := uuid.NewString()
+	_, err = acquireSessionFreezeLease(ctx, db, session.ID, token)
+	require.NoError(t, err)
+	_, err = sessions.EndSession(ctx, session.ID)
+	assert.ErrorIs(t, err, ErrSessionEndInProgress)
+	var saved string
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT canvas_freeze_token FROM sessions WHERE id=$1`, session.ID).Scan(&saved))
+	assert.Equal(t, token, saved)
+}
+
+func lifecycleBoolPtr(value bool) *bool { return &value }
+
 func TestSessionLifecycleConfirmedEndRollsBackWhenSnapshotCountMismatches(t *testing.T) {
 	db := testDB(t)
 	ctx := context.Background()
@@ -366,7 +442,8 @@ func TestSessionLifecycleAbortAndEndedCleanupRespectLeaseOwnership(t *testing.T)
 				return
 			}
 			require.NoError(t, err)
-			assert.False(t, result.WhiteboardServerArchiveComplete)
+			require.NotNil(t, result.WhiteboardServerArchiveComplete)
+			assert.False(t, *result.WhiteboardServerArchiveComplete)
 			var status string
 			var residue sql.NullString
 			require.NoError(t, db.QueryRowContext(ctx, `SELECT status, canvas_freeze_token FROM sessions WHERE id = $1`, session.ID).Scan(&status, &residue))
@@ -383,7 +460,8 @@ func TestSessionLifecycleAbortAndEndedCleanupRespectLeaseOwnership(t *testing.T)
 			require.NoError(t, err)
 			result, err := completeSessionDegradedResult(ctx, db, session.ID, uuid.NewString())
 			require.NoError(t, err)
-			assert.Equal(t, complete, result.WhiteboardServerArchiveComplete)
+			require.NotNil(t, result.WhiteboardServerArchiveComplete)
+			assert.Equal(t, complete, *result.WhiteboardServerArchiveComplete)
 			var archive bool
 			var residue sql.NullString
 			require.NoError(t, db.QueryRowContext(ctx, `SELECT whiteboard_server_archive_complete, canvas_freeze_token FROM sessions WHERE id = $1`, session.ID).Scan(&archive, &residue))
