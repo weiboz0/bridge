@@ -127,7 +127,7 @@ External database clients do not share that registry, so an accidental external 
 
 The existing one-argument `pg_advisory_xact_lock(hashtext(...))` uses PostgreSQL's disjoint `int8` advisory-lock keyspace.
 
-If a future transaction needs both classes, it must take the new two-`int4` session-lifecycle lock first and the legacy one-`int8` lock second; the implementation audit and deadlock test include the current legacy caller.
+The class-replacement guard defined below precedes sorted session-lifecycle locks, which precede the legacy one-`int8` lock if a future transaction needs multiple classes; the implementation audit and deadlock test include the current legacy caller.
 
 Lease acquisition, lease replacement, successful or degraded end, abort cleanup, and ended-session residual cleanup take the exclusive session advisory lock.
 
@@ -187,29 +187,43 @@ If no retry succeeds, the end proceeds on the degraded path with the warning.
 
 The per-session queue therefore contains at most one active operation and one coalesced pending matching terminal cleanup, whose mode may be promoted from unfreeze to complete but never duplicated.
 
-Hocuspocus passes `maxPayload: 1 MiB plus the fixed protocol-envelope allowance` as the second argument to the pinned `Server` constructor, so `ws` rejects every oversized websocket message during reassembly with close code 1009 before Hocuspocus receives it.
+Hocuspocus passes `maxPayload: 1_048_625` as the second argument to the pinned `Server` constructor: 1,048,576 update bytes plus one byte for the 43-byte `canvas:<uuid>` string length, 43 document-name bytes, one outer message-type byte, one sync-type byte, and three update-length bytes.
+
+`ws` therefore accepts a fragmented frame of exactly 1,048,625 bytes and rejects 1,048,626 bytes with close code 1009 during reassembly before Hocuspocus receives it.
 
 Before applying persisted state, Hocuspocus rejects a decoded update above 4 MiB and reserves the same 16 MiB scratch slot from a process-wide 128 MiB resident-document admission ledger; successful authoritative-and-shadow load shrinks it to twice the encoded current-state size and any failure releases it.
 
 Each loaded canvas owns a shadow `Y.Doc`, a per-document admission turnstile, and exact resident-ledger accounting for the authoritative document plus shadow.
 
-For a mutation, `beforeHandleMessage` first reserves a 16 MiB mutation-scratch slot from the resident ledger, holds the turnstile across the library handoff, applies the at-most-1-MiB decoded Yjs update to the shadow, encodes the shadow's resulting current state, and rejects before the authoritative apply if syntax, the 4 MiB current-state ceiling, or the process ledger fails.
+For every canvas mutation entrypoint, `beforeHandleMessage` first performs the cheap local-fence check, awaits the document turnstile, rechecks the local fence after that possible yield, performs the uncached Go authorization, and rechecks the local fence again.
+
+The freeze operation installs its fence first, then awaits each loaded document's admission turnstile before acquiring its save mutex and capturing, so any frame already inside the handoff finishes or rolls back before capture.
+
+Only after the final authorization and fence check does the hook reserve a 16 MiB mutation-scratch slot, apply the at-most-1-MiB decoded Yjs update to the shadow, reject any result with pinned-Yjs `store.pendingStructs` or `store.pendingDs`, encode the shadow's resulting current state, and reject before authoritative apply if syntax, the 4 MiB current-state ceiling, or the process ledger fails.
+
+Every authorization denial, timeout, cancellation, frozen recheck, shadow rejection, or reservation failure before handoff synchronously rolls the shadow back to the authoritative state, restores accounting, and releases the turnstile before the hook rejects.
 
 The hook schedules a `setImmediate` failure fallback before resolving.
 
-An `afterLoadDocument` hook installs a direct synchronous Yjs `document.on("update")` admission-commit listener and `beforeUnloadDocument` removes that exact listener.
+An `onLoadDocument` hook owns the initial scratch reservation and installs an exact document-destroy cleanup before returning loaded state, so a failure while Hocuspocus applies the returned document cannot leak accounting.
 
-During the subsequent `MessageReceiver.apply`, that listener matches the transaction-origin connection, document instance, and update digest, commits the shadow and exact current-state accounting, cancels the fallback, and releases the turnstile before the apply call returns.
+After successful load, `afterLoadDocument` constructs the shadow, shrinks the reservation, and installs a direct synchronous Yjs `document.on("update")` admission-commit listener; `beforeUnloadDocument` removes that exact listener and the destroy cleanup releases the exact instance accounting.
 
-If `MessageReceiver.apply` throws or emits no matching document update, the fallback rebuilds the shadow from the unchanged authoritative document, rolls back the temporary accounting, and releases the turnstile before another mutation may validate.
+Because the turnstile permits only one pending authoritative mutation, the listener correlates by pending admission identity, transaction-origin connection, and document instance rather than byte digest.
 
-Awareness, stateless, query, and sync-step-one messages do not reserve mutation state and release the turnstile through an explicit non-mutation path.
+During the subsequent `MessageReceiver.apply`, it encodes the actual authoritative state, commits that state and exact accounting, cancels the fallback, and releases the turnstile before the apply call returns.
+
+If `MessageReceiver.apply` throws or emits no matching document update, the fallback encodes the actual authoritative document without assuming it is unchanged, rebuilds the shadow from that actual state, reconciles accounting, and releases the turnstile before another mutation may validate.
+
+Awareness, stateless, query, and sync-step-one messages never acquire the mutation turnstile or reserve mutation state.
 
 After success the scratch slot shrinks to twice the encoded current-state size, accounting for the authoritative and shadow serialized-state baselines; that accounting is released only when those exact instances unload.
 
 These ledgers bound admitted encoded inputs, scratch concurrency, encoded states, capture buffers, and cached responses, not the Yjs implementation's unobservable object overhead; the design makes no exact JavaScript-heap bound claim.
 
 An update whose shadow result exceeds the ceiling fails closed with a visible size-limit error instead of changing the authoritative document.
+
+Transient process-ledger exhaustion closes with retryable code 1013 and the existing bounded reconnect policy; deterministic document-size rejection uses a distinct visible non-retryable reason.
 
 The sum of those counters for the authoritative canvases in one freeze request must not exceed 16 MiB.
 
@@ -245,11 +259,11 @@ Hocuspocus yields with `setImmediate` between documents so other sessions can pr
 
 Only after every document capture succeeds and the immutable bundle is cached does the handler emit a 200 response incrementally by entry with stream backpressure; it never constructs one 48 MiB `JSON.stringify` value.
 
-Each response writer takes a reference on that cached token entry, streams outside the per-session serializer, owns an `AbortController`, has a 250-millisecond no-progress timeout reset by successful writes, and has an absolute deadline no later than the operation deadline.
+Each response writer takes a reference on that cached token entry, streams outside the per-session serializer, owns an `AbortController`, has a 250-millisecond no-progress timeout reset by successful writes, and has an absolute deadline at the earlier of two seconds from that writer's start or the cached token's remaining monotonic lease.
 
 Abort forcibly destroys the HTTP response and the writer's settled promise releases its reader reference by token and entry identity.
 
-Cached entries are re-streamed through the same writer for an idempotent retry, so a stalled first writer cannot block serializer access by the retry.
+Cached entries are re-streamed through a new writer over the same immutable cached entry for an idempotent retry, so a stalled first writer cannot block serializer access by the retry.
 
 Complete aborts all matching writers inside the serializer, awaits their bounded settlement, and releases cached bytes only after the last reader reference reaches zero.
 
@@ -429,6 +443,34 @@ Mutation authorization remains uncached so a committed session end takes precede
 
 Client-side 100-millisecond coalescing reduces mutation volume without weakening that server-side decision.
 
+### Implicit replacement-session ends
+
+Creating a new class session and starting a scheduled class session currently end any existing live session for that class inside `SessionStore.CreateSession` and `ScheduleStore.StartSession`.
+
+Those status producers must not bypass lifecycle locking or silently imply a complete archive.
+
+Session status still outranks Hocuspocus availability: replacement start does not wait for a freeze request and never fails merely because realtime is unavailable.
+
+Both store transactions acquire a reserved two-`int4` class-replacement advisory guard using class ID hexadecimal `0x4252434C`, decimal `1112687436`, and the same signed UUID mapping applied to the class ID; they then read live session IDs in sorted order, acquire each session's exclusive lifecycle advisory lock, and recheck `status = 'live'` before changing it.
+
+Scheduled start first reads the planned row's class ID without a row lock, then begins the write transaction, takes the class-replacement guard, and re-reads the same still-planned schedule row `FOR UPDATE` before any session discovery, so it never holds the schedule row while waiting for the guard.
+
+The global order is class-replacement guard, then sorted session-lifecycle locks, then the legacy one-`int8` session-create lock if a future transaction ever needs all three; mutation authorization takes only one session lock, so it cannot invert the order.
+
+For every row still live after locking, the replacement transaction sets `status = 'ended'`, `ended_at`, `whiteboard_server_archive_complete = false`, clears any freeze lease, and returns the ended session ID plus the cleared token if present.
+
+It never overwrites a true or false result on a row that an explicit end completed first.
+
+After commit, the handler emits the ordinary ended event and best-effort calls token-matched complete for every returned token; missing Hocuspocus cleanup remains bounded by JWT and token expiry.
+
+The create/start response adds `replacedSessions: [{ "id": "<uuid>", "whiteboardServerArchiveComplete": false }]`, which is empty when no live session was replaced.
+
+The initiating teacher interface displays `Previous session ended, but its latest whiteboard changes may not have been archived.` once when that array is nonempty.
+
+This is an intentionally degraded end rather than a confirmed snapshot path: starting the next class remains status-first, but the data-loss risk is durable and visible instead of null or silent.
+
+The revised Plan 094 file scope must include both stores, both initiating handlers, their response types and teacher consumers, event emission, API documentation, and integration tests for these existing producers.
+
 ### Go end-session sequence
 
 1. The existing handler authorizes the represented user as the session teacher under the existing tenancy rules.
@@ -511,7 +553,7 @@ A per-connection hook performs the current internal authorization check before t
 
 Permanent viewer or ended-session authorization applies `connectionConfig.readOnly = true`.
 
-An active temporary freeze does not mutate `connectionConfig.readOnly` because that flag is irreversible for the lifetime of the connection under Hocuspocus 3.4.4.
+An active temporary freeze does not mutate `connectionConfig.readOnly`; although the pinned property is technically mutable, Bridge treats promotion to read-only as a one-way per-connection invariant because reversing it across concurrent message handling is unsupported and racy.
 
 Instead, the server rejects or closes a frozen writer with the retryable `session_freezing` outcome.
 
@@ -600,6 +642,8 @@ No migration is run against a non-test database.
 - Freeze success ends the session and returns `whiteboardServerArchiveComplete: true` without a warning.
 - Freeze timeout, transport failure, non-2xx response, malformed response, and internal-auth failure each still end the session and return the stable warning.
 - Database end failure leaves the session live, clears only the matching lease, attempts token-matched unfreeze, returns an error, and emits no ended event.
+- Class-session creation and scheduled-session start acquire the class guard plus sorted lifecycle locks, replace only rows still live, persist archive-complete false, clear and complete any returned token, emit ended events, return the replaced-session metadata, and succeed when Hocuspocus is unavailable.
+- A replacement racing an explicit confirmed end never overwrites the explicit true result; the opposite lock ordering and the legacy advisory caller are exercised under a deadlock timeout.
 - Overlapping end requests cannot clear each other's leases or turn a stale snapshot into a successful archive result.
 - A timed-out freeze response arriving after cleanup cannot reinstall or prolong the cleared lease.
 - A crashed end request stops blocking mutations after the controlled 15-second lease expiry.
@@ -628,9 +672,11 @@ No migration is run against a non-test database.
 ### Hocuspocus tests
 
 - Freeze authenticates the bearer secret and validates strict input.
-- The installed pinned `Server` receives the exact `ws.maxPayload` option, and a real fragmented oversized websocket message closes with code 1009 before any Hocuspocus message hook runs.
+- The installed pinned `Server` receives exact `ws.maxPayload = 1_048_625`; a real fragmented 1,048,625-byte frame is accepted and 1,048,626 bytes closes with code 1009 before any Hocuspocus message hook runs.
 - A mutation racing a successful freeze proves that the last accepted scene is present in the returned bundle before connections close and is later persisted by the Go integration test.
 - A mutation awaiting authorization when freeze begins is rejected before Yjs apply and relay.
+- Mutation ordering acquires the admission turnstile before uncached authorization, rechecks the fence after every awaited grant and authorization, and freeze awaits that same turnstile after installing its fence before capture.
+- Authorization denial, timeout, cancellation, frozen recheck, pending-struct rejection, shadow error, and ledger exhaustion each restore shadow/accounting and release the turnstile without entering `MessageReceiver.apply`.
 - Two successive frames on one connection perform two Go rechecks, and a durable lease acquired between them is observed even when the local freeze map is empty.
 - The installed promise microtask from the second freeze check through Yjs apply cannot be interleaved by the freeze HTTP macrotask.
 - Snapshot capture waits for an already in-flight ordinary store through the shared save mutex, then returns the current encoded state without writing PostgreSQL.
@@ -649,7 +695,9 @@ No migration is run against a non-test database.
 - Transport abort after successful capture followed by a same-token request re-streams the identical entries, while successful complete acknowledgment frees them promptly and lost acknowledgment falls back to token-conditional expiry.
 - A half-open first response hits its no-progress timeout, destroys and settles its writer, permits a same-token cached retry inside the overall deadline, and protects cached bytes with reader references until complete settles every writer.
 - `ws` rejects every oversized websocket message during reassembly with code 1009; persisted-state load, shadow-result mutation, per-session aggregate, resident-document, and concurrent capture reservations each fail at their exact boundary before authoritative Yjs apply, snapshot encode, or connection close.
-- An accepted reservation followed by a real installed-path `MessageReceiver.apply` failure exercises the `setImmediate` fallback, rebuilds the shadow, rolls back accounting, and releases the admission turnstile; a successful apply exercises the direct synchronous Yjs update-listener commit path, and unload removes the exact listener and accounting.
+- An accepted reservation followed by a real installed-path `MessageReceiver.apply` failure exercises the `setImmediate` fallback, reconciles from the actual authoritative state, rebuilds the shadow, and releases the turnstile; successful ordinary, duplicate, and partially overlapping updates commit by pending identity plus origin/document rather than byte digest.
+- A dependency-missing Yjs update is rejected from the shadow before authoritative handoff, and the later complete update can succeed without parked pending structs or ledger drift.
+- Initial-load apply failure triggers the document-destroy cleanup even though `afterLoadDocument` never ran; successful load, unload, and reload replace listener and accounting identities exactly once.
 - Concurrent capture reservation never exceeds the 256 MiB capture-and-cache ledger, resident documents never exceed their separate 128 MiB ledger, and rejection or unload releases only the exact instance reservation.
 - The maximum accepted document and 50-canvas request stay within the declared pre-reserved allocation; controlled instrumentation proves no encode begins without its 64 MiB reservation.
 - Incremental response streaming honors backpressure and request abort, yields between document encodes, never constructs one aggregate JSON string, and leaves other-session websocket and awareness work schedulable.
@@ -676,6 +724,7 @@ No migration is run against a non-test database.
 - Owner visibility changes require confirmation at the irreversible levels.
 - Owner and viewer controls differ correctly.
 - Teacher end failure remains in place with an error.
+- Class-session creation and scheduled-session start show the prior-session archive warning exactly once when `replacedSessions` is nonempty and show none for an empty array.
 - Incomplete server-archive status survives the redirect, remains durably discoverable, and displays exactly once per archive visit.
 - A 200 durable status overrides and consumes browser state, while network and non-200 responses retain it.
 - The new settings client accepts only a 2xx response with the exact schema, and repository/main-history checks prove no deployed bundle called the removed feature-branch route.
