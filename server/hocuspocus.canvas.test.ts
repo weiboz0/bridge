@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { Document, Hocuspocus, IncomingMessage, MessageReceiver, OutgoingMessage } from "@hocuspocus/server";
+import { Connection, Document, Hocuspocus, IncomingMessage, MessageReceiver, OutgoingMessage } from "@hocuspocus/server";
 import { createHmac, randomUUID } from "node:crypto";
 import { Readable } from "node:stream";
 import postgres from "postgres";
@@ -629,6 +629,31 @@ describe("Phase 10 installed Hocuspocus hook RED contract", () => {
     expect(calls).toEqual(["freeze", "stream"]);
   });
 
+  test("the actual control HTTP abort releases a backpressured lifecycle writer immediately and a late drain is inert", async () => {
+    const runtime = await import("./hocuspocus") as Record<string, unknown>;
+    const create = runtime.createCanvasControlListener as ((input: Record<string, unknown>) => { listener: import("node:http").Server }) | undefined;
+    const calls: string[] = [];
+    const lifecycle = {
+      freeze: async () => ({ snapshots: [], closed: 0 }),
+      stream: async ({ signal }: { signal?: AbortSignal }) => {
+        await new Promise<void>((resolve) => signal?.addEventListener("abort", () => { calls.push("aborted"); resolve(); }, { once: true }));
+        calls.push("released");
+      },
+    };
+    const { listener } = create!({ secret: "a".repeat(32), lifecycle: lifecycle as never });
+    const request = Readable.from([JSON.stringify({ sessionId: randomUUID(), freezeToken: randomUUID(), canvasIds: [] })]) as Readable & { method?: string; url?: string; headers?: Record<string, string> };
+    request.method = "POST";
+    request.url = "/internal/canvas-sessions/freeze";
+    request.headers = { authorization: `Bearer ${"a".repeat(32)}` };
+    const response = Object.assign(new (await import("node:events")).EventEmitter(), { writeHead() {}, write: () => false, end() { calls.push("end"); }, destroy() { calls.push("destroy"); } });
+    listener.emit("request", request, response);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    request.emit("aborted");
+    response.emit("drain");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(calls).toEqual(["aborted", "released", "end"]);
+  });
+
   test("runs current authorization for every canvas admission, including an already-loaded document", async () => {
     const runtime = await import("./hocuspocus") as Record<string, unknown>;
     const install = runtime.createCanvasLifecycleHooks as ((input: Record<string, unknown>) => Record<string, (input: Record<string, unknown>) => Promise<unknown>>) | undefined;
@@ -683,13 +708,87 @@ describe("Phase 10 installed Hocuspocus hook RED contract", () => {
     const frame = new OutgoingMessage(documentName).createSyncMessage().writeUpdate(Y.encodeStateAsUpdate(second)).toUint8Array();
     const lifecycleCalls: string[] = [];
     const hooks = install!({ lifecycle: { beginAdmission: () => lifecycleCalls.push("reserve"), commitAdmission: () => lifecycleCalls.push("commit"), rollbackAdmission: () => lifecycleCalls.push("rollback") }, authorize: async () => ({ allowed: true, readOnly: false }) });
-    await hooks.beforeHandleMessage({ documentName, document: target, connection: { readOnly: false }, update: frame, context: { userId: "writer", sessionId: randomUUID() } });
+    const connection = { readOnly: false, send() {}, callbacks: { beforeSync() {} } };
+    await hooks.beforeHandleMessage({ documentName, document: target, connection, update: frame, context: { userId: "writer", sessionId: randomUUID() } });
     const incoming = new IncomingMessage(frame);
     incoming.readVarString();
     incoming.writeVarString(documentName);
-    new MessageReceiver(incoming).apply(target, { readOnly: false, send() {}, callbacks: { beforeSync() {} } } as never);
+    new MessageReceiver(incoming).apply(target, connection as never);
     expect(target.getMap("elements").toJSON()).toMatchObject({ first: "a", second: "b" });
     expect(lifecycleCalls).toEqual(["reserve", "commit"]);
+  });
+
+  test("ignores an unrelated microtask Yjs transaction until the pinned MessageReceiver applies the admitted connection update", async () => {
+    const runtime = await import("./hocuspocus") as Record<string, unknown>;
+    const install = runtime.createCanvasLifecycleHooks as ((input: Record<string, unknown>) => Record<string, (input: Record<string, unknown>) => Promise<unknown>>) | undefined;
+    expect(install).toBeTypeOf("function");
+    const documentName = `canvas:${phase10CanvasId}`;
+    const target = new Document(documentName);
+    const changed = new Y.Doc();
+    changed.getMap("elements").set("admitted", true);
+    const frame = new OutgoingMessage(documentName).createSyncMessage().writeUpdate(Y.encodeStateAsUpdate(changed)).toUint8Array();
+    const calls: string[] = [];
+    const hooks = install!({ lifecycle: { beginAdmission: () => { calls.push("reserve"); return { identity: Symbol("pending") }; }, commitAdmission: () => calls.push("commit"), rollbackAdmission: () => calls.push("rollback") }, authorize: async () => ({ allowed: true, readOnly: false }) });
+    const connection = { readOnly: false, send() {}, callbacks: { beforeSync() {} } };
+    await hooks.beforeHandleMessage({ documentName, document: target, connection, update: frame, context: { userId: "writer", sessionId: randomUUID() } });
+    await Promise.resolve().then(() => Y.transact(target, () => target.getMap("extension").set("unrelated", true), { extension: true }));
+    expect(calls).toEqual(["reserve"]);
+    const incoming = new IncomingMessage(frame);
+    incoming.readVarString();
+    incoming.writeVarString(documentName);
+    new MessageReceiver(incoming).apply(target, connection as never);
+    expect(calls).toEqual(["reserve", "commit"]);
+  });
+
+  test("the installed ninth canvas frame reaches pinned Connection closure once with numeric 1013 and stable saturation reason", async () => {
+    const runtime = await import("./hocuspocus") as Record<string, unknown>;
+    const { createCanvasLifecycle } = await import("./canvas-lifecycle");
+    const install = runtime.createCanvasLifecycleHooks as ((input: Record<string, unknown>) => Record<string, (input: Record<string, unknown>) => Promise<unknown>>) | undefined;
+    const documentName = `canvas:${phase10CanvasId}`;
+    const document = new Document(documentName);
+    const auth = Promise.withResolvers<{ allowed: boolean; readOnly: boolean }>();
+    const lifecycle = createCanvasLifecycle({ authorizeMutation: async () => auth.promise });
+    const hooks = install!({ lifecycle });
+    const sent: Uint8Array[] = [];
+    const socket = { binaryType: "", readyState: 1, send: (frame: Uint8Array, callback: (error?: Error) => void) => { sent.push(frame); callback(); } };
+    const connection = new Connection(socket as never, {} as never, document, "ninth", { userId: "writer", sessionId: randomUUID() });
+    connection.beforeHandleMessage(async (installed, frame) => hooks.beforeHandleMessage({ documentName, document, connection: installed as never, update: frame, context: { userId: "writer", sessionId: randomUUID() } }));
+    const frame = new OutgoingMessage(documentName).createSyncMessage().writeUpdate(Y.encodeStateAsUpdate(new Y.Doc())).toUint8Array();
+    const eight = Array.from({ length: 8 }, () => lifecycle.beginAdmission({ documentName, sessionId: randomUUID(), userId: "writer", connection: { close() {} }, update: Y.encodeStateAsUpdate(new Y.Doc()) }));
+    await Promise.resolve();
+    connection.handleMessage(frame);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(sent).toHaveLength(1);
+    const close = new IncomingMessage(sent[0]);
+    close.readVarString();
+    expect(close.readVarUint()).toBe(7);
+    expect(close.readVarString()).toBe("canvas_admission_saturated");
+    auth.resolve({ allowed: true, readOnly: false });
+    await lifecycle.cancelAdmissions({ documentName, reason: "test_cleanup" });
+    await Promise.allSettled(eight);
+  });
+
+  test("the installed resident-exhaustion frame reaches pinned Connection closure once with numeric 1013 and a stable retryable reason", async () => {
+    const runtime = await import("./hocuspocus") as Record<string, unknown>;
+    const { createCanvasLifecycle } = await import("./canvas-lifecycle");
+    const install = runtime.createCanvasLifecycleHooks as ((input: Record<string, unknown>) => Record<string, (input: Record<string, unknown>) => Promise<unknown>>) | undefined;
+    const documentName = `canvas:${phase10CanvasId}`;
+    const document = new Document(documentName);
+    const lifecycle = createCanvasLifecycle({ limits: { residentBytes: 0 } });
+    const hooks = install!({ lifecycle });
+    const sent: Uint8Array[] = [];
+    const socket = { binaryType: "", readyState: 1, send: (frame: Uint8Array, callback: (error?: Error) => void) => { sent.push(frame); callback(); } };
+    const connection = new Connection(socket as never, {} as never, document, "resident", { userId: "writer", sessionId: randomUUID() });
+    connection.beforeHandleMessage(async (installed, frame) => hooks.beforeHandleMessage({ documentName, document, connection: installed as never, update: frame, context: { userId: "writer", sessionId: randomUUID() } }));
+    const source = new Y.Doc();
+    source.getMap("elements").set("resident", true);
+    connection.handleMessage(new OutgoingMessage(documentName).createSyncMessage().writeUpdate(Y.encodeStateAsUpdate(source)).toUint8Array());
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(sent).toHaveLength(1);
+    const close = new IncomingMessage(sent[0]);
+    close.readVarString();
+    expect(close.readVarUint()).toBe(7);
+    expect(close.readVarString()).toBe("resident_ledger_exhausted");
   });
 
   test("passes the decoded installed nested Yjs update, not the raw websocket frame, into the registered lifecycle admission hook", async () => {

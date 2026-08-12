@@ -92,18 +92,58 @@ export function createCanvasProviderEventBridge({ documentName, now = () => Date
 }
 
 /** Physical CLOSE recovery refreshes the token before reconnect; no write queue is created. */
-export function bindInstalledCanvasProvider({ provider, refreshToken, reconnect }: {
+export function bindInstalledCanvasProvider({ provider, refreshToken, reconnect, onRecovered, now = () => Date.now(), schedule = (callback: () => void, delayMs: number) => setTimeout(callback, delayMs) }: {
   provider: HocuspocusProvider;
   refreshToken: () => Promise<string>;
   reconnect?: () => void;
+  onRecovered?: () => void;
+  now?: () => number;
+  schedule?: (callback: () => void, delayMs: number) => ReturnType<typeof setTimeout>;
 }) {
   const original = provider.onMessage.bind(provider);
   const originalSend = provider.send.bind(provider);
+  const originalAuthenticationFailed = provider.configuration.onAuthenticationFailed;
   let stopped = false;
   let refreshing = false;
+  let sendingToken = false;
+  let recovery: CanvasReconnectState | undefined;
   provider.send = ((...args: Parameters<typeof provider.send>) => {
-    if (!refreshing) return originalSend(...args);
+    // sendToken's concrete provider message is the sole emission allowed
+    // while fenced.  Sync, awareness, and local Yjs updates remain blocked.
+    if (!refreshing || sendingToken) return originalSend(...args);
   }) as typeof provider.send;
+  const remintCanvasToken = async () => {
+    try {
+      const token = await refreshToken();
+      if (stopped) return;
+      provider.setConfiguration({ token });
+      // getToken/sendToken is async in pinned provider. Keep the local-write
+      // fence until its Auth frame has been emitted, then start sync.
+      sendingToken = true;
+      try {
+        await provider.sendToken();
+      } finally {
+        sendingToken = false;
+      }
+      if (stopped) return;
+      refreshing = false;
+      provider.startSync();
+      onRecovered?.();
+      reconnect?.();
+    } catch (error: unknown) {
+      if (!stopped && isRetryableFreeze(error)) {
+        recovery = canvasReconnectPolicy({ now: now(), event: { reason: "session_freezing" }, previous: recovery, believedLive: true });
+        schedule(() => { void remintCanvasToken(); }, recovery.delayMs);
+        return;
+      }
+      originalAuthenticationFailed({ reason: "canvas_jwt_refresh_failed" });
+    }
+  };
+  const startRecovery = () => {
+    if (stopped || refreshing) return;
+    refreshing = true;
+    void remintCanvasToken();
+  };
   provider.onMessage = ((event: MessageEvent) => {
     if (stopped) return original(event);
     try {
@@ -118,23 +158,35 @@ export function bindInstalledCanvasProvider({ provider, refreshToken, reconnect 
       if (message.readVarUint() !== MessageType.CLOSE) return original(event);
       const reason = message.readVarString();
       if (reason !== "canvas_jwt_expired" && reason !== "session_freezing") return original(event);
-      refreshing = true;
       original(event);
-      void refreshToken().then((token) => {
-        if (stopped) return;
-        provider.setConfiguration({ token });
-        refreshing = false;
-        void provider.sendToken();
-        provider.startSync();
-        reconnect?.();
-      }).catch(() => {
-        // Keep writes fenced: an expired canvas token must never be replayed
-        // after a failed remint.
-        provider.configuration.onAuthenticationFailed({ reason: "canvas_jwt_refresh_failed" });
-      });
+      startRecovery();
     } catch { original(event); }
   }) as typeof provider.onMessage;
-  return () => { stopped = true; provider.onMessage = original; provider.send = originalSend; };
+  const recoverPermissionDenied = ({ reason }: { reason?: string }) => {
+    if (reason !== "session_freezing" || refreshing || stopped) {
+      originalAuthenticationFailed({ reason: reason ?? "permission-denied" });
+      return;
+    }
+    startRecovery();
+  };
+  // Pinned provider emits its PermissionDenied reason through this event;
+  // replace only the configured terminal listener so retryable freezing can
+  // share the CLOSE recovery path without declaring permanent auth failure.
+  provider.off("authenticationFailed", originalAuthenticationFailed);
+  provider.on("authenticationFailed", recoverPermissionDenied);
+  return () => {
+    stopped = true;
+    provider.onMessage = original;
+    provider.send = originalSend;
+    provider.off("authenticationFailed", recoverPermissionDenied);
+    provider.on("authenticationFailed", originalAuthenticationFailed);
+  };
+}
+
+function isRetryableFreeze(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const value = error as { status?: unknown; code?: unknown; reason?: unknown };
+  return value.status === 409 && (value.code === "session_freezing" || value.reason === "session_freezing");
 }
 
 interface UseYjsProviderOptions {
@@ -223,7 +275,7 @@ export function useYjsProvider({
       },
     });
     const releaseInstalledRecovery = canvas && refreshToken
-      ? bindInstalledCanvasProvider({ provider, refreshToken })
+      ? bindInstalledCanvasProvider({ provider, refreshToken, onRecovered: () => eventBridge?.onConnect() })
       : undefined;
 
     yDocRef.current = yDoc;

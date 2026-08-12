@@ -259,12 +259,12 @@ export function createCanvasLifecycleHooks({
 
       if (!input.document || !lifecycle.commitAdmission) return;
       let settled = false;
-      const commit = () => {
+      const commit = (_update: Uint8Array, origin: unknown) => {
         // Hocuspocus passes the Connection instance as Yjs origin.  The
         // installed 3.4.4 apply seam can wrap that object, so the pending
         // admission is correlated to this exact document/turnstile rather
         // than a byte digest or a fragile wrapper identity.
-        if (settled) return;
+        if (settled || origin !== input.connection) return;
         settled = true;
         input.document?.off("update", commit);
         lifecycle.commitAdmission?.({ documentName: input.documentName, admission });
@@ -743,15 +743,30 @@ export function createCanvasControlListener({
     if (path === "/internal/canvas-sessions/freeze" && result.status === 200 && json !== undefined && lifecycle.stream) {
       const parsed = parseCanvasControlRequest("freeze", json) as { sessionId: string; freezeToken: string };
       response.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+      const writer = new AbortController();
+      let finished = false;
+      const abortWriter = () => {
+        if (!finished) writer.abort();
+      };
+      request.once("aborted", abortWriter);
+      request.once("close", abortWriter);
+      response.once("close", abortWriter);
       try {
         await lifecycle.stream({
           ...parsed,
           write: (chunk: string) => response.write(chunk),
           onceDrain: () => new Promise<void>((resolve) => response.once("drain", resolve)),
+          signal: writer.signal,
         });
+        finished = true;
         response.end();
       } catch {
+        finished = true;
         response.destroy();
+      } finally {
+        request.off("aborted", abortWriter);
+        request.off("close", abortWriter);
+        response.off?.("close", abortWriter);
       }
       return;
     }

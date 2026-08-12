@@ -58,6 +58,20 @@ describe("Phase 10 canvas lifecycle RED contract", () => {
     await expect(freezing).rejects.toMatchObject({ code: "operation_completed" });
   });
 
+  test("promotes unfreeze to complete behind one terminal queue slot while the freeze serializer is active", async () => {
+    const { createCanvasLifecycle } = await lifecycle();
+    const gate = Promise.withResolvers<{ allowed: boolean; remainingMs: number }>();
+    const sut = createCanvasLifecycle({ validateLease: async () => gate.promise });
+    const freezing = sut.freeze({ sessionId, freezeToken: token, canvasIds: [] });
+    const unfreeze = sut.unfreeze({ sessionId, freezeToken: token });
+    const complete = sut.complete({ sessionId, freezeToken: token });
+    expect(sut.inspect(sessionId)).toMatchObject({ terminal: "complete", terminalQueueDepth: 1 });
+    gate.resolve({ allowed: true, remainingMs: 2_000 });
+    await expect(unfreeze).resolves.toEqual({ unfrozen: true });
+    await expect(complete).resolves.toEqual({ released: true });
+    await expect(freezing).rejects.toMatchObject({ code: "operation_completed" });
+  });
+
   test("shares same-token immutable cached capture, rejects foreign tokens, and permits validated replacement after expiry", async () => {
     const { createCanvasLifecycle } = await lifecycle();
     let captures = 0;
@@ -196,6 +210,26 @@ describe("Phase 10 canvas lifecycle RED contract", () => {
     first.destroy();
   });
 
+  test("transactionally removes a failed claimed generation before a later generation's watchdog runs", async () => {
+    const { createCanvasLifecycle } = await lifecycle();
+    const documentName = `canvas:${canvasId}`;
+    const scratch = 1_024;
+    const sut = createCanvasLifecycle({ limits: { loadScratchBytes: scratch, residentBytes: scratch + 16 } });
+    await sut.prepareLoad({ documentName, persistedUpdate: updateWith("claimed-load-must-not-leak") });
+    const failedAuthoritative = new Y.Doc();
+    const firstRegistry = new Map([[documentName, failedAuthoritative]]);
+    expect(() => sut.claimPreparedLoad({ documentName, document: failedAuthoritative, registry: firstRegistry })).toThrow(/resident ledger/i);
+    expect(sut.inspectDocument(documentName)).toBeUndefined();
+    expect(sut.accounting()).toEqual({ residentBytes: 0, captureBytes: 0 });
+
+    await sut.prepareLoad({ documentName });
+    const replacement = new Y.Doc();
+    const replacementRegistry = new Map([[documentName, replacement]]);
+    sut.claimPreparedLoad({ documentName, document: replacement, registry: replacementRegistry });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(sut.inspectDocument(documentName)?.document).toBe(replacement);
+  });
+
   test("decodes the installed nested Yjs sync envelope and enforces the exact 1 MiB decoded-update boundary", async () => {
     const { decodeCanvasMutationUpdate } = await lifecycle();
     // This is intentionally not a raw-buffer-size check: Hocuspocus wraps the
@@ -239,6 +273,26 @@ describe("Phase 10 canvas lifecycle RED contract", () => {
     await expect(sut.freeze({ sessionId, freezeToken: token, canvasIds: [] })).rejects.toMatchObject({ code: "operation_completed" });
   });
 
+  test("expires completed-token tombstones by identity after the retry horizon without bypassing lease denial or capture", async () => {
+    const { createCanvasLifecycle } = await lifecycle();
+    let now = 0;
+    let validations = 0;
+    let captures = 0;
+    const sut = createCanvasLifecycle({
+      now: () => now,
+      validateLease: async () => ({ allowed: ++validations === 1, remainingMs: 2_000 }),
+      capture: async () => { captures += 1; return { snapshots: [], closed: 0 }; },
+    });
+    await sut.freeze({ sessionId, freezeToken: token, canvasIds: [] });
+    await sut.complete({ sessionId, freezeToken: token });
+    await expect(sut.freeze({ sessionId, freezeToken: token, canvasIds: [] })).rejects.toMatchObject({ code: "operation_completed" });
+    expect(sut.inspectTombstones()).toBe(1);
+    now = 2_001;
+    await expect(sut.freeze({ sessionId, freezeToken: token, canvasIds: [] })).rejects.toMatchObject({ code: "lease_not_valid" });
+    expect(sut.inspectTombstones()).toBe(0);
+    expect(captures).toBe(0);
+  });
+
   test("starts uncached authorization only after the installed admission turnstile grants, and aborts its exact fetch at the owned deadline", async () => {
     const { createCanvasLifecycle } = await lifecycle();
     const events: string[] = [];
@@ -250,6 +304,15 @@ describe("Phase 10 canvas lifecycle RED contract", () => {
     const first = sut.admitMutation({ documentName, sessionId, userId: "writer", connection: { close() {} }, update: updateWith("first") });
     await expect(first).rejects.toMatchObject({ code: "authorization_timeout" });
     expect(events).toEqual(["authorize", "abort"]);
+  });
+
+  test("rejects an active freeze before constructing a canvas document, admission controller, or waiter", async () => {
+    const { createCanvasLifecycle } = await lifecycle();
+    const sut = createCanvasLifecycle({ validateLease: async () => ({ allowed: true, remainingMs: 2_000 }) });
+    await sut.freeze({ sessionId, freezeToken: token, canvasIds: [] });
+    const documentName = `canvas:${canvasId}`;
+    await expect(sut.admitMutation({ documentName, sessionId, userId: "writer", connection: { close() {} }, update: updateWith("fenced-pre-allocation") })).rejects.toMatchObject({ code: "session_freezing" });
+    expect(sut.inspectDocument(documentName)).toBeUndefined();
   });
 
   test("coalesces matching terminal cleanup behind one active freeze and forbids a foreign token from occupying the bounded terminal queue", async () => {
@@ -340,6 +403,17 @@ describe("Phase 10 canvas lifecycle RED contract", () => {
     await sut.freeze({ sessionId, freezeToken: token, canvasIds: [canvasId] });
     expect(bytesAtClose).toBeGreaterThan(0);
     expect(bytesAtClose).toBeLessThan(64 * 1024 * 1024);
+  });
+
+  test("closes captured installed canvas connections with the retryable session_freezing reason after accounting conversion", async () => {
+    const { createCanvasLifecycle } = await lifecycle();
+    const { Document } = await import("@hocuspocus/server");
+    const document = new Document(`canvas:${canvasId}`);
+    const closed: Array<{ code?: number; reason?: string }> = [];
+    const sut = createCanvasLifecycle({ validateLease: async () => ({ allowed: true, remainingMs: 2_000 }), documents: new Map([[document.name, document]]) });
+    document.connections.set({} as never, { clients: new Set(), connection: { close: (event: { code?: number; reason?: string }) => closed.push(event) } } as never);
+    await sut.freeze({ sessionId, freezeToken: token, canvasIds: [canvasId] });
+    expect(closed).toEqual([{ code: 1013, reason: "session_freezing" }]);
   });
 
   test("awaits connection-owned cancellation settlement rather than merely aborting document-wide work", async () => {

@@ -26,15 +26,16 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-
 
 export class CanvasLifecycleError extends Error {
   readonly status?: number;
-  readonly code: string;
+  readonly code: string | number;
   readonly retryable: boolean;
   readonly closeCode?: number;
   readonly reason: string;
 
-  constructor(code: string, message = code, options: {
+  constructor(code: string | number, message = String(code), options: {
     status?: number;
     retryable?: boolean;
     closeCode?: number;
+    reason?: string;
   } = {}) {
     super(message);
     this.name = "CanvasLifecycleError";
@@ -42,7 +43,7 @@ export class CanvasLifecycleError extends Error {
     this.status = options.status;
     this.retryable = options.retryable ?? false;
     this.closeCode = options.closeCode;
-    this.reason = code;
+    this.reason = options.reason ?? String(code);
   }
 }
 
@@ -269,7 +270,10 @@ interface Operation {
   captureBytes: number;
   readers: number;
   writers: Set<Writer>;
-  captureConnections: Array<{ close?: () => void }>;
+  captureConnections: Array<{ close?: (event?: { code?: number; reason?: string }) => void }>;
+  // One serialized cleanup can satisfy either terminal endpoint.  The
+  // endpoint acknowledgement is deliberately layered over this shared work.
+  terminalPromise?: Promise<void>;
   unfreezePromise?: Promise<{ unfrozen: true }>;
   completePromise?: Promise<{ released: true }>;
   expiryTimer?: ReturnType<typeof setTimeout>;
@@ -358,7 +362,7 @@ export class CanvasLifecycle {
   private readonly residentLimit: number;
   private readonly captureLimit: number;
   private readonly captureReservation: number;
-  private readonly completedTokens = new Map<string, string>();
+  private readonly completedTokens = new Map<string, { token: string; expiresAt: number }>();
   private readonly operations = new Map<string, Operation>();
   private readonly serializers = new Map<string, Promise<void>>();
   private readonly managed = new Map<string, ManagedDocument>();
@@ -388,9 +392,22 @@ export class CanvasLifecycle {
 
   accounting() { return { residentBytes: this.residentBytes, captureBytes: this.captureBytes }; }
 
+  /** Diagnostic-only bounded-tombstone count used by lifecycle regression tests. */
+  inspectTombstones(): number {
+    this.pruneCompletedTokens();
+    return this.completedTokens.size;
+  }
+
   inspect(sessionId: string) {
     const entry = this.operations.get(sessionId);
-    return entry && { freezeToken: entry.token, deadline: entry.deadline, active: entry.active, readers: entry.readers };
+    return entry && {
+      freezeToken: entry.token,
+      deadline: entry.deadline,
+      active: entry.active,
+      readers: entry.readers,
+      terminal: entry.terminal,
+      terminalQueueDepth: entry.terminalPromise ? 1 : 0,
+    };
   }
 
   inspectDocument(documentName: string) {
@@ -409,7 +426,8 @@ export class CanvasLifecycle {
   freeze(request: FreezeControlRequest): Promise<FreezeResult> {
     const parsed = parseCanvasControlRequest("freeze", request) as FreezeControlRequest;
     const current = this.operations.get(parsed.sessionId);
-    if (!current && this.completedTokens.get(parsed.sessionId) === parsed.freezeToken) {
+    this.pruneCompletedTokens();
+    if (!current && this.completedTokens.get(parsed.sessionId)?.token === parsed.freezeToken) {
       return Promise.reject(lifecycleError("operation_completed", "Canvas lifecycle operation was completed", { retryable: true }));
     }
     if (current) {
@@ -432,13 +450,7 @@ export class CanvasLifecycle {
     if (!operation) return Promise.resolve({ unfrozen: true });
     if (operation.token !== parsed.freezeToken) return Promise.reject(lifecycleError("freeze_token_mismatch", "A different token owns this session", { status: 409, retryable: true }));
     if (operation.unfreezePromise) return operation.unfreezePromise;
-    operation.terminal = operation.terminal === "complete" ? "complete" : "unfreeze";
-    operation.active = false;
-    operation.controller.abort();
-    operation.unfreezePromise = this.serialize(parsed.sessionId, async () => {
-      await this.cleanup(operation);
-      return { unfrozen: true } as const;
-    });
+    operation.unfreezePromise = this.enqueueTerminal(operation, "unfreeze").then(() => ({ unfrozen: true } as const));
     return operation.unfreezePromise;
   }
 
@@ -448,13 +460,7 @@ export class CanvasLifecycle {
     if (!operation) return Promise.resolve({ released: true });
     if (operation.token !== parsed.freezeToken) return Promise.reject(lifecycleError("freeze_token_mismatch", "A different token owns this session", { status: 409, retryable: true }));
     if (operation.completePromise) return operation.completePromise;
-    operation.terminal = "complete";
-    operation.active = false;
-    operation.controller.abort();
-    operation.completePromise = this.serialize(parsed.sessionId, async () => {
-      await this.cleanup(operation);
-      return { released: true } as const;
-    });
+    operation.completePromise = this.enqueueTerminal(operation, "complete").then(() => ({ released: true } as const));
     return operation.completePromise;
   }
 
@@ -476,12 +482,15 @@ export class CanvasLifecycle {
     freezeToken: string;
     write: (chunk: string) => boolean | void;
     onceDrain?: () => Promise<void>;
+    signal?: AbortSignal;
   }): Promise<void> {
     const entry = this.operations.get(input.sessionId);
     if (!entry || entry.token !== input.freezeToken || !entry.result) {
       throw lifecycleError("freeze_not_found", "No cached freeze result is available", { status: 409, retryable: true });
     }
     const controller = new AbortController();
+    const abort = () => controller.abort();
+    input.signal?.addEventListener("abort", abort, { once: true });
     entry.readers += 1;
     const writer = {} as Writer;
     const deadline = setTimeout(() => controller.abort(), Math.min(this.writerDeadlineMs, Math.max(0, entry.deadline - this.now())));
@@ -499,6 +508,7 @@ export class CanvasLifecycle {
         await write(`],"closed":${entry.result.closed}}`);
       } finally {
         clearTimeout(deadline);
+        input.signal?.removeEventListener("abort", abort);
         entry.readers -= 1;
         entry.writers.delete(writer);
       }
@@ -643,14 +653,22 @@ export class CanvasLifecycle {
     const old = this.managed.get(documentName);
     if (old) this.releaseDocument(documentName, old);
     this.documents.set(documentName, document);
+    let state: ManagedDocument | undefined;
     try {
       if (pending.document !== document) Y.applyUpdate(document, Y.encodeStateAsUpdate(pending.document));
-      const state = this.makeManagedDocument(document, pending.generation);
+      state = this.makeManagedDocument(document, pending.generation);
       state.registry = registry;
       this.managed.set(documentName, state);
       setImmediate(() => {
         if (this.managed.get(documentName) === state && registry.get(documentName) !== document) this.releaseDocument(documentName, state);
       });
+    } catch (error) {
+      // afterLoad is before Hocuspocus publishes the document.  Roll every
+      // claim-side effect back here, because its normal destroy path cannot
+      // reach an unregistered authoritative instance.
+      if (state) this.releaseDocument(documentName, state);
+      else if (this.documents.get(documentName) === document) this.documents.delete(documentName);
+      throw error;
     } finally {
       this.residentBytes -= this.loadScratchBytes;
       pending.document.destroy();
@@ -726,14 +744,14 @@ export class CanvasLifecycle {
       if (exactBytes > MAX_RESPONSE_BYTES || operation.captureBytes !== exactBytes) {
         throw lifecycleError("capture_ledger_exhausted", "Canvas capture ledger is full", { status: 503, retryable: true });
       }
-      for (const connection of operation.captureConnections) connection.close?.();
+      for (const connection of operation.captureConnections) connection.close?.({ code: 1013, reason: "session_freezing" });
       operation.captureConnections = [];
       return operation.result;
     } catch (error) {
       // A rejected Go validation owns no durable barrier. Capture failures
       // after an accepted validation retain the bounded token fence until its
       // terminal callback or the conservative deadline cleans it up.
-      if (!operation.result && error instanceof CanvasLifecycleError && ["lease_not_valid", "lease_expired"].includes(error.code)) {
+      if (!operation.result && error instanceof CanvasLifecycleError && ["lease_not_valid", "lease_expired"].includes(String(error.code))) {
         operation.active = false;
         await this.cleanup(operation);
       }
@@ -818,6 +836,9 @@ export class CanvasLifecycle {
   }
 
   private async prepareAdmission(input: AdmissionInput): Promise<{ state: ManagedDocument; pending: PendingAdmission }> {
+    // The local fence is deliberately ahead of document lookup/allocation:
+    // freezing must not leave even an empty managed generation behind.
+    this.assertNotFrozen(input.sessionId);
     if (!canvasDocumentName(input.documentName)) {
       const state = this.documentState(input.documentName);
       const settlement = Promise.withResolvers<void>();
@@ -829,7 +850,7 @@ export class CanvasLifecycle {
     const state = this.documentState(input.documentName);
     if (state.admissions >= MAX_MUTATION_ADMISSIONS) {
       input.connection.close?.({ code: 1013, reason: "canvas_admission_saturated" });
-      throw lifecycleError("canvas_admission_saturated", "Canvas mutation admission is saturated", { retryable: true, closeCode: 1013 });
+      throw new CanvasLifecycleError(1013, "Canvas mutation admission is saturated", { retryable: true, closeCode: 1013, reason: "canvas_admission_saturated" });
     }
     state.admissions += 1;
     const controller = new AbortController();
@@ -927,7 +948,9 @@ export class CanvasLifecycle {
     const shadow = new Y.Doc();
     Y.applyUpdate(shadow, Y.encodeStateAsUpdate(document));
     const bytes = Y.encodeStateAsUpdate(document).byteLength * 2;
-    if (this.residentBytes + bytes > this.residentLimit) throw lifecycleError("resident_ledger_exhausted", "Canvas resident ledger is full", { retryable: true });
+    if (this.residentBytes + bytes > this.residentLimit) {
+      throw new CanvasLifecycleError(1013, "Canvas resident ledger is full", { retryable: true, closeCode: 1013, reason: "resident_ledger_exhausted" });
+    }
     const state: ManagedDocument = { document, shadow, turnstile: new Turnstile(), admissions: 0, residentBytes: bytes, generation, destroyed: false, unloading: false, pending: new Map(), admissionControllers: new Set() };
     this.residentBytes += bytes;
     document.on("destroy", () => {
@@ -1010,8 +1033,24 @@ export class CanvasLifecycle {
     operation.captureBytes = 0;
     if (this.operations.get(operation.sessionId) === operation) {
       this.operations.delete(operation.sessionId);
-      if (operation.terminal === "complete") this.completedTokens.set(operation.sessionId, operation.token);
+      if (operation.terminal === "complete") {
+        this.completedTokens.set(operation.sessionId, { token: operation.token, expiresAt: this.now() + DEFAULT_FREEZE_BUDGET_MS });
+      }
     }
+  }
+
+  private enqueueTerminal(operation: Operation, requested: "unfreeze" | "complete"): Promise<void> {
+    // Complete is irreversible and therefore wins a queued unfreeze before
+    // cleanup begins.  Both HTTP callers still receive their endpoint's ACK.
+    operation.terminal = requested === "complete" ? "complete" : operation.terminal ?? "unfreeze";
+    operation.active = false;
+    operation.controller.abort();
+    if (!operation.terminalPromise) {
+      operation.terminalPromise = this.serialize(operation.sessionId, async () => {
+        await this.cleanup(operation);
+      });
+    }
+    return operation.terminalPromise;
   }
 
   private serialize<T>(sessionId: string, task: () => Promise<T>): Promise<T> {
@@ -1023,6 +1062,12 @@ export class CanvasLifecycle {
       if (this.serializers.get(sessionId) === tail && !this.operations.has(sessionId)) this.serializers.delete(sessionId);
     });
     return result;
+  }
+
+  private pruneCompletedTokens(): void {
+    for (const [sessionId, entry] of this.completedTokens) {
+      if (entry.expiresAt <= this.now()) this.completedTokens.delete(sessionId);
+    }
   }
 }
 

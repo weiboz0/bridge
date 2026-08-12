@@ -69,6 +69,8 @@ describe("canvas reconnect policy", () => {
     const release = bindInstalledCanvasProvider({ provider, refreshToken: async () => { refreshes += 1; return "new-token"; }, reconnect: () => { reconnects += 1; } });
     provider.onMessage({ data: frame } as MessageEvent);
     await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
     expect(refreshes).toBe(1);
     expect(reconnects).toBe(1);
     expect(queuedWrites).toBe(0);
@@ -89,9 +91,132 @@ describe("canvas reconnect policy", () => {
     const release = bindInstalledCanvasProvider({ provider, refreshToken: async () => { refreshes += 1; return "forced-remint"; }, reconnect: () => { reconnects += 1; } });
     provider.onMessage({ data: frame } as MessageEvent);
     await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
     expect(refreshes).toBe(1);
     expect(reconnects).toBe(1);
     expect(writes).toBe(0);
+    release();
+    provider.destroy();
+  });
+
+  it("keeps an installed ArrayBuffer CLOSE fenced through retryable 409 freezing, then remints inside the reset fast horizon", async () => {
+    const { bindInstalledCanvasProvider } = await import("@/lib/yjs/use-yjs-provider");
+    const documentName = "canvas:22222222-2222-4222-8222-222222222222";
+    const bytes = new OutgoingMessage(documentName).writeCloseMessage("session_freezing").toUint8Array();
+    const frame = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+    let now = 1_000;
+    let retry: (() => void) | undefined;
+    let remints = 0;
+    let writes = 0;
+    let authFailures = 0;
+    const websocket = { on() {}, off() {}, attach() {}, detach() {}, setConfiguration() {}, send() { writes += 1; } };
+    const provider = new HocuspocusProvider({ name: documentName, document: new Y.Doc(), websocketProvider: websocket as never, onAuthenticationFailed: () => authFailures++ });
+    const release = bindInstalledCanvasProvider({
+      provider,
+      now: () => now,
+      schedule: (callback, delayMs) => { expect(delayMs).toBeLessThanOrEqual(2_000); retry = callback; return 0 as never; },
+      refreshToken: async () => {
+        remints += 1;
+        if (remints === 1) throw Object.assign(new Error("freezing"), { status: 409, code: "session_freezing" });
+        return "recovered-token";
+      },
+    });
+    provider.onMessage({ data: frame } as MessageEvent);
+    await Promise.resolve();
+    expect(remints).toBe(1);
+    expect(writes).toBe(0);
+    expect(authFailures).toBe(0);
+    now += 250;
+    retry!();
+    await Promise.resolve();
+    expect(remints).toBe(2);
+    expect(writes).toBe(0);
+    expect(authFailures).toBe(0);
+    release();
+    provider.destroy();
+  });
+
+  it("treats the pinned PermissionDenied session_freezing reason as the same recoverable canvas lifecycle path", async () => {
+    const { bindInstalledCanvasProvider } = await import("@/lib/yjs/use-yjs-provider");
+    const documentName = "canvas:22222222-2222-4222-8222-222222222222";
+    const frame = new OutgoingMessage(documentName).writePermissionDenied("session_freezing").toUint8Array();
+    let retry: (() => void) | undefined;
+    let remints = 0;
+    let permanentFailures = 0;
+    const websocket = { on() {}, off() {}, attach() {}, detach() {}, setConfiguration() {}, send() {} };
+    const provider = new HocuspocusProvider({ name: documentName, document: new Y.Doc(), websocketProvider: websocket as never, onAuthenticationFailed: () => permanentFailures++ });
+    const release = bindInstalledCanvasProvider({
+      provider,
+      schedule: (callback, delayMs) => { expect(delayMs).toBeLessThanOrEqual(2_000); retry = callback; return 0 as never; },
+      refreshToken: async () => {
+        remints += 1;
+        if (remints === 1) throw Object.assign(new Error("still freezing"), { status: 409, code: "session_freezing" });
+        return "post-freeze-token";
+      },
+    });
+    provider.onMessage({ data: frame } as MessageEvent);
+    await Promise.resolve();
+    expect(remints).toBe(1);
+    expect(permanentFailures).toBe(0);
+    retry!();
+    await Promise.resolve();
+    expect(remints).toBe(2);
+    expect(permanentFailures).toBe(0);
+    release();
+    provider.destroy();
+  });
+
+  it("uses an attached installed provider to emit Auth before sync and keeps local writes fenced until that ordered recovery completes", async () => {
+    const { bindInstalledCanvasProvider } = await import("@/lib/yjs/use-yjs-provider");
+    const documentName = "canvas:22222222-2222-4222-8222-222222222222";
+    const frame = new OutgoingMessage(documentName).writeCloseMessage("canvas_jwt_expired").toUint8Array();
+    const outbound: string[] = [];
+    const websocket = { on() {}, off() {}, attach() {}, detach() {}, setConfiguration() {}, send(frame: Uint8Array) { void frame; } };
+    const provider = new HocuspocusProvider({ name: documentName, document: new Y.Doc(), websocketProvider: websocket as never });
+    (provider as unknown as { _isAttached: boolean })._isAttached = true;
+    (provider as unknown as { configuration: { websocketProvider: typeof websocket } }).configuration.websocketProvider = websocket;
+    const send = provider.send.bind(provider);
+    provider.send = ((message, ...args) => {
+      outbound.push(new (message as new () => { description: string })().description);
+      return send(message, ...args);
+    }) as typeof provider.send;
+    const token = Promise.withResolvers<string>();
+    let remints = 0;
+    const release = bindInstalledCanvasProvider({ provider, refreshToken: () => { remints += 1; return token.promise; } });
+    provider.onMessage({ data: frame } as MessageEvent);
+    provider.startSync();
+    expect(outbound).toEqual([]);
+    expect(remints).toBe(1);
+    token.resolve("ordered-token");
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(outbound.slice(0, 2)).toEqual(["Authentication", "First sync step"]);
+    release();
+    provider.destroy();
+  });
+
+  it("resets composed canvas recovery after each successful reauth so a later outage and later expiry remain recoverable", async () => {
+    const { bindInstalledCanvasProvider, createCanvasProviderEventBridge } = await import("@/lib/yjs/use-yjs-provider");
+    const documentName = "canvas:22222222-2222-4222-8222-222222222222";
+    const frame = new OutgoingMessage(documentName).writeCloseMessage("canvas_jwt_expired").toUint8Array();
+    const websocket = { on() {}, off() {}, attach() {}, detach() {}, setConfiguration() {}, send() {} };
+    const provider = new HocuspocusProvider({ name: documentName, document: new Y.Doc(), websocketProvider: websocket as never });
+    const bridge = createCanvasProviderEventBridge({ documentName, now: () => 1_000 });
+    let recovered = 0;
+    const release = bindInstalledCanvasProvider({ provider, refreshToken: async () => "renewed", onRecovered: () => { recovered += 1; bridge.onConnect(); } });
+    bridge.onClose({ reason: "canvas_jwt_expired" });
+    provider.onMessage({ data: frame } as MessageEvent);
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    expect(recovered).toBe(1);
+    expect(bridge.state()).toBeUndefined();
+    expect(bridge.onClose({ reason: "transport_closed" })).toMatchObject({ retry: true, terminal: false, delayMs: expect.any(Number) });
+    bridge.onConnect();
+    provider.onMessage({ data: frame } as MessageEvent);
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    expect(recovered).toBe(2);
     release();
     provider.destroy();
   });
