@@ -245,6 +245,24 @@ func TestSessionStore_CreateAutoEnds(t *testing.T) {
 	assert.NotNil(t, ended.EndedAt)
 }
 
+func TestCreateSessionReplacementMarksPriorSessionArchiveIncomplete(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	sessions := NewSessionStore(db)
+	classID, teacherID := setupSessionTest(t, db, t.Name())
+	prior, err := sessions.CreateSession(ctx, CreateSessionInput{ClassID: strPtr(classID), TeacherID: teacherID, Title: "prior"})
+	require.NoError(t, err)
+	replacement, err := sessions.CreateSession(ctx, CreateSessionInput{ClassID: strPtr(classID), TeacherID: teacherID, Title: "replacement"})
+	require.NoError(t, err)
+	require.Len(t, replacement.ReplacedSessions, 1)
+	assert.Equal(t, prior.ID, replacement.ReplacedSessions[0].ID)
+	assert.False(t, replacement.ReplacedSessions[0].WhiteboardServerArchiveComplete)
+	var complete sql.NullBool
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT whiteboard_server_archive_complete FROM sessions WHERE id = $1`, prior.ID).Scan(&complete))
+	require.True(t, complete.Valid)
+	assert.False(t, complete.Bool)
+}
+
 func TestSessionStore_EndSession(t *testing.T) {
 	db := testDB(t)
 	sessions := NewSessionStore(db)

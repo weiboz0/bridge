@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 	"time"
 
@@ -201,6 +202,29 @@ func TestScheduleStore_StartScheduledSession(t *testing.T) {
 	linkedTopics, _ := NewSessionStore(db).GetSessionTopics(ctx, session.ID)
 	assert.Len(t, linkedTopics, 1)
 	assert.Equal(t, topic.ID, linkedTopics[0].TopicID)
+}
+
+func TestStartScheduledSessionReplacementMarksPriorSessionArchiveIncomplete(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	schedules := NewScheduleStore(db)
+	sessions := NewSessionStore(db)
+	classID, teacherID := setupSessionTest(t, db, t.Name())
+	prior, err := sessions.CreateSession(ctx, CreateSessionInput{ClassID: strPtr(classID), TeacherID: teacherID, Title: "prior"})
+	require.NoError(t, err)
+	start := time.Now().Add(time.Hour)
+	schedule, err := schedules.CreateSchedule(ctx, CreateScheduleInput{ClassID: classID, TeacherID: teacherID, ScheduledStart: start, ScheduledEnd: start.Add(time.Hour)})
+	require.NoError(t, err)
+
+	started, err := schedules.StartScheduledSession(ctx, schedule.ID, teacherID)
+	require.NoError(t, err)
+	require.Len(t, started.ReplacedSessions, 1)
+	assert.Equal(t, prior.ID, started.ReplacedSessions[0].ID)
+	assert.False(t, started.ReplacedSessions[0].WhiteboardServerArchiveComplete)
+	var complete sql.NullBool
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT whiteboard_server_archive_complete FROM sessions WHERE id = $1`, prior.ID).Scan(&complete))
+	require.True(t, complete.Valid)
+	assert.False(t, complete.Bool)
 }
 
 func TestScheduleStore_GetSchedule_NotFound(t *testing.T) {

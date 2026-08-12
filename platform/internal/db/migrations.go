@@ -101,7 +101,7 @@ var ExpectedSchemaSentinels = SchemaSentinels{
 		{
 			Table: "session_canvases",
 			Columns: []string{
-				"id", "session_id", "owner_id", "title", "visibility", "yjs_state", "plain_text", "created_at", "updated_at",
+				"id", "session_id", "owner_id", "title", "visibility", "yjs_state", "created_at", "updated_at",
 			},
 			Indexes: []string{
 				"session_canvases_session_idx", "session_canvases_session_owner_idx",
@@ -109,7 +109,7 @@ var ExpectedSchemaSentinels = SchemaSentinels{
 		},
 		{
 			Table:   "sessions",
-			Columns: []string{"canvas_floor"},
+			Columns: []string{"canvas_floor", "canvas_freeze_token", "canvas_freeze_until", "whiteboard_server_archive_complete"},
 		},
 	},
 	Enums: []SchemaEnumSentinel{

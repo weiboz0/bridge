@@ -735,3 +735,19 @@ _Plan-wide report pending later phases._
   After implementation, `PATH=/home/chris/.bun/bin:$PATH DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test TEST_DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test bash scripts/tests/test-guards.sh` passed 73 checks with zero failures.
 - `bash scripts/check-plan-uniqueness.sh`, `bash scripts/check-spec-uniqueness.sh`, `bash -n scripts/tests/test-guards.sh`, and `git diff --check` passed.
   A first run without Bun on `PATH` made the lint ratchet's suppressed ESLint command yield empty JSON; rerunning with the repository's installed Bun path passed without any lint-script change.
+
+### Phase 8 — durable lifecycle schema, locks, and replacement transitions (2026-08-11)
+
+- RED: the initial pinned store command failed at compile time because `sessionLifecycleAdvisoryKey`, lease ownership, confirmed/degraded transitions, and the stable lifecycle conflict errors did not yet exist.
+  The scheduled replacement regression then failed with `started.ReplacedSessions` empty, proving the old direct end producer did not return the required durable replacement metadata.
+- Pre-ship migration provenance: `git show main:drizzle/0028_session_canvases.sql` reported that the path does not exist on `main`; `git log --all -- drizzle/0028_session_canvases.sql` names only feature-branch commits `f5ad8e0` and `cdd0483`; and `git log origin/main..HEAD -- drizzle/0028_session_canvases.sql` names the same commits while `git log HEAD..origin/main -- drizzle/0028_session_canvases.sql` is empty.
+  Migration 0028 was therefore rewritten before it shipped through `main`.
+- Test-only reconciliation: both configured URLs were literally `postgresql://work@127.0.0.1:5432/bridge_test`, and the preflight `SELECT current_database()` returned `bridge_test`.
+  Before reconciliation, the probe found only `session_canvases.plain_text`; the exact SQL delta was `ALTER TABLE sessions ADD COLUMN canvas_freeze_token uuid`, `ALTER TABLE sessions ADD COLUMN canvas_freeze_until timestamptz`, `ALTER TABLE sessions ADD COLUMN whiteboard_server_archive_complete boolean`, and `ALTER TABLE session_canvases DROP COLUMN plain_text` in one transaction.
+  Afterward, the live probe returned all three nullable columns with types `uuid`, `timestamp with time zone`, and `boolean`, and the `plain_text` count was zero.
+  No non-test connection, migration runner, service, or E2E command ran.
+- GREEN: the lifecycle owner derives the fixed signed two-int4 advisory key vectors, uses transaction-scoped shared/exclusive locks and PostgreSQL `clock_timestamp()` with the named 15-second lease duration, conditionally commits confirmed snapshots, rolls back failed snapshot batches, and makes the false/no-snapshot degraded transition separately.
+  Canvas create, update, floor, and delete take the shared lifecycle lock before their session row lock and return the stable end-in-progress error while a lease is live.
+  Class creation and scheduled start take the replacement guard followed by collision-safe sorted lifecycle locks, persist archive-incomplete replacement state, clear leases, and return replacement metadata.
+- `DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test TEST_DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test go test ./internal/store -run 'Test(SessionLifecycle|CreateSessionReplacement|StartScheduledSessionReplacement)' -count=1` passed.
+  The pinned `go test ./internal/store -count=1` passed in 28.874 seconds; pinned `go test ./internal/db -count=1` and `go vet ./internal/store ./internal/db` passed; `gofmt` and `git diff --check` passed.

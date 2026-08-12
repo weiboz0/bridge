@@ -24,17 +24,18 @@ var (
 )
 
 type LiveSession struct {
-	ID              string     `json:"id"`
-	ClassID         *string    `json:"classId"`
-	TeacherID       string     `json:"teacherId"`
-	Title           string     `json:"title"`
-	Status          string     `json:"status"`
-	Settings        string     `json:"settings"`
-	InviteToken     *string    `json:"inviteToken,omitempty"`
-	InviteExpiresAt *time.Time `json:"inviteExpiresAt,omitempty"`
-	StartedAt       time.Time  `json:"startedAt"`
-	EndedAt         *time.Time `json:"endedAt"`
-	Visibility      string     `json:"visibility"`
+	ID               string            `json:"id"`
+	ClassID          *string           `json:"classId"`
+	TeacherID        string            `json:"teacherId"`
+	Title            string            `json:"title"`
+	Status           string            `json:"status"`
+	Settings         string            `json:"settings"`
+	InviteToken      *string           `json:"inviteToken,omitempty"`
+	InviteExpiresAt  *time.Time        `json:"inviteExpiresAt,omitempty"`
+	StartedAt        time.Time         `json:"startedAt"`
+	EndedAt          *time.Time        `json:"endedAt"`
+	Visibility       string            `json:"visibility"`
+	ReplacedSessions []ReplacedSession `json:"replacedSessions,omitempty"`
 }
 
 type SessionParticipant struct {
@@ -174,11 +175,9 @@ func (s *SessionStore) CreateSession(ctx context.Context, input CreateSessionInp
 	}
 
 	now := time.Now()
+	var replaced []ReplacedSession
 	if input.ClassID != nil {
-		// End any live session for this classroom.
-		_, err = tx.ExecContext(ctx,
-			`UPDATE sessions SET status = 'ended', ended_at = $1 WHERE class_id = $2 AND status = 'live'`,
-			now, input.ClassID)
+		replaced, err = replaceClassLiveSessions(ctx, tx, *input.ClassID)
 		if err != nil {
 			return nil, err
 		}
@@ -208,6 +207,7 @@ func (s *SessionStore) CreateSession(ctx context.Context, input CreateSessionInp
 	if err != nil {
 		return nil, err
 	}
+	session.ReplacedSessions = replaced
 
 	// Plan 048 phase 1: snapshot the class's focus areas into
 	// session_topics inside the same transaction as the session row.
@@ -459,9 +459,10 @@ func (s *SessionStore) ListPublicSessions(ctx context.Context, limit int, cursor
 }
 
 func (s *SessionStore) EndSession(ctx context.Context, id string) (*LiveSession, error) {
-	return scanSession(s.db.QueryRowContext(ctx,
-		`UPDATE sessions SET status = 'ended', ended_at = $1 WHERE id = $2 RETURNING `+sessionColumns,
-		time.Now(), id))
+	if err := completeSessionDegraded(ctx, s.db, id, ""); err != nil {
+		return nil, err
+	}
+	return s.GetSession(ctx, id)
 }
 
 func (s *SessionStore) JoinSession(ctx context.Context, sessionID, studentID string) (*SessionParticipant, error) {

@@ -60,13 +60,13 @@ func TestExpectedSchemaProbe_TracksSessionCanvases(t *testing.T) {
 	primary := ExpectedSchemaSentinels.Tables[0]
 	require.Equal(t, "session_canvases", primary.Table)
 	require.ElementsMatch(t, []string{
-		"id", "session_id", "owner_id", "title", "visibility", "yjs_state", "plain_text", "created_at", "updated_at",
+		"id", "session_id", "owner_id", "title", "visibility", "yjs_state", "created_at", "updated_at",
 	}, primary.Columns)
 	require.Empty(t, primary.Constraints)
 	require.ElementsMatch(t, []string{
 		"session_canvases_session_idx", "session_canvases_session_owner_idx",
 	}, primary.Indexes)
-	require.Equal(t, SchemaTableSentinels{Table: "sessions", Columns: []string{"canvas_floor"}}, ExpectedSchemaSentinels.Tables[1])
+	require.Equal(t, SchemaTableSentinels{Table: "sessions", Columns: []string{"canvas_floor", "canvas_freeze_token", "canvas_freeze_until", "whiteboard_server_archive_complete"}}, ExpectedSchemaSentinels.Tables[1])
 	require.Equal(t, []SchemaEnumSentinel{{Name: "canvas_visibility", Labels: []string{"private", "host", "participants", "session"}}}, ExpectedSchemaSentinels.Enums)
 }
 

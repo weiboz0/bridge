@@ -206,13 +206,34 @@ func (s *ScheduleStore) CancelSchedule(ctx context.Context, id string) (*Schedul
 }
 
 func (s *ScheduleStore) StartScheduledSession(ctx context.Context, scheduleID, teacherID string) (*LiveSession, error) {
+	// Read only the class identity before the replacement guard. Holding a
+	// schedule row while waiting on the class guard would invert the approved
+	// order with callers that must complete or cancel that schedule row.
+	var classID string
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT class_id FROM scheduled_sessions WHERE id = $1 AND status = 'planned'`, scheduleID,
+	).Scan(&classID); err == sql.ErrNoRows {
+		return nil, fmt.Errorf("schedule not found or not in planned status")
+	} else if err != nil {
+		return nil, err
+	}
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback()
 
-	// Get the schedule entry
+	// The replacement guard comes before every lifecycle lock. Re-read the
+	// planned row only after it is held, so a concurrent starter cannot turn a
+	// stale read into a second live session.
+	replaced, err := replaceClassLiveSessions(ctx, tx, classID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Get the schedule entry after the class guard, then lock it for the
+	// remaining session/schedule transition.
 	var sched ScheduledSession
 	var topicIDs []byte
 	err = tx.QueryRowContext(ctx,
@@ -228,14 +249,7 @@ func (s *ScheduleStore) StartScheduledSession(ctx context.Context, scheduleID, t
 	}
 	sched.TopicIDs = parseUUIDArray(topicIDs)
 
-	// End any live session for this class
 	now := time.Now()
-	_, err = tx.ExecContext(ctx,
-		`UPDATE sessions SET status = 'ended', ended_at = $1 WHERE class_id = $2 AND status = 'live'`,
-		now, sched.ClassID)
-	if err != nil {
-		return nil, err
-	}
 
 	// Create live session
 	sessionID := uuid.New().String()
@@ -260,6 +274,7 @@ func (s *ScheduleStore) StartScheduledSession(ctx context.Context, scheduleID, t
 	if err != nil {
 		return nil, err
 	}
+	session.ReplacedSessions = replaced
 
 	// Link planned topics to session
 	for _, topicID := range sched.TopicIDs {

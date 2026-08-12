@@ -131,15 +131,19 @@ func (s *CanvasStore) CreateCanvas(ctx context.Context, input CreateCanvasInput)
 		return nil, err
 	}
 	defer tx.Rollback()
+	if err := lockSessionLifecycle(ctx, tx, input.SessionID, true); err != nil {
+		return nil, err
+	}
 	backendPID, err := s.beforeSessionLock(ctx, tx, canvasStoreOperationCreate)
 	if err != nil {
 		return nil, err
 	}
 
 	var floor, status string
+	var freezing bool
 	if err := tx.QueryRowContext(ctx,
-		`SELECT canvas_floor, status FROM sessions WHERE id = $1 FOR UPDATE`, input.SessionID,
-	).Scan(&floor, &status); err == sql.ErrNoRows {
+		`SELECT canvas_floor, status, COALESCE(canvas_freeze_until > clock_timestamp(), false) FROM sessions WHERE id = $1 FOR UPDATE`, input.SessionID,
+	).Scan(&floor, &status, &freezing); err == sql.ErrNoRows {
 		return nil, nil
 	} else if err != nil {
 		return nil, err
@@ -147,6 +151,9 @@ func (s *CanvasStore) CreateCanvas(ctx context.Context, input CreateCanvasInput)
 	s.afterSessionLock(canvasStoreOperationCreate, backendPID)
 	if status == "ended" {
 		return nil, ErrSessionEnded
+	}
+	if freezing {
+		return nil, ErrSessionEndInProgress
 	}
 
 	var count int
@@ -222,15 +229,19 @@ func (s *CanvasStore) UpdateCanvas(ctx context.Context, sessionID, canvasID, own
 		return nil, err
 	}
 	defer tx.Rollback()
+	if err := lockSessionLifecycle(ctx, tx, sessionID, true); err != nil {
+		return nil, err
+	}
 	backendPID, err := s.beforeSessionLock(ctx, tx, canvasStoreOperationSetVisibility)
 	if err != nil {
 		return nil, err
 	}
 
 	var floor, status string
+	var freezing bool
 	if err := tx.QueryRowContext(ctx,
-		`SELECT canvas_floor, status FROM sessions WHERE id = $1 FOR UPDATE`, sessionID,
-	).Scan(&floor, &status); err == sql.ErrNoRows {
+		`SELECT canvas_floor, status, COALESCE(canvas_freeze_until > clock_timestamp(), false) FROM sessions WHERE id = $1 FOR UPDATE`, sessionID,
+	).Scan(&floor, &status, &freezing); err == sql.ErrNoRows {
 		return nil, nil
 	} else if err != nil {
 		return nil, err
@@ -238,6 +249,9 @@ func (s *CanvasStore) UpdateCanvas(ctx context.Context, sessionID, canvasID, own
 	s.afterSessionLock(canvasStoreOperationSetVisibility, backendPID)
 	if status == "ended" {
 		return nil, ErrSessionEnded
+	}
+	if freezing {
+		return nil, ErrSessionEndInProgress
 	}
 
 	var current string
@@ -300,15 +314,19 @@ func (s *CanvasStore) SetSessionCanvasFloor(ctx context.Context, sessionID, host
 		return "", err
 	}
 	defer tx.Rollback()
+	if err := lockSessionLifecycle(ctx, tx, sessionID, true); err != nil {
+		return "", err
+	}
 	backendPID, err := s.beforeSessionLock(ctx, tx, canvasStoreOperationSetFloor)
 	if err != nil {
 		return "", err
 	}
 
 	var teacherID, current, status string
+	var freezing bool
 	if err := tx.QueryRowContext(ctx,
-		`SELECT teacher_id, canvas_floor, status FROM sessions WHERE id = $1 FOR UPDATE`, sessionID,
-	).Scan(&teacherID, &current, &status); err == sql.ErrNoRows {
+		`SELECT teacher_id, canvas_floor, status, COALESCE(canvas_freeze_until > clock_timestamp(), false) FROM sessions WHERE id = $1 FOR UPDATE`, sessionID,
+	).Scan(&teacherID, &current, &status, &freezing); err == sql.ErrNoRows {
 		return "", nil
 	} else if err != nil {
 		return "", err
@@ -316,6 +334,9 @@ func (s *CanvasStore) SetSessionCanvasFloor(ctx context.Context, sessionID, host
 	s.afterSessionLock(canvasStoreOperationSetFloor, backendPID)
 	if status == "ended" {
 		return "", ErrSessionEnded
+	}
+	if freezing {
+		return "", ErrSessionEndInProgress
 	}
 	if teacherID != hostID {
 		return "", ErrCanvasFloorUnauthorized
@@ -419,14 +440,21 @@ func (s *CanvasStore) DeleteCanvas(ctx context.Context, sessionID, canvasID, own
 		return false, err
 	}
 	defer tx.Rollback()
+	if err := lockSessionLifecycle(ctx, tx, sessionID, true); err != nil {
+		return false, err
+	}
 	var status string
-	if err := tx.QueryRowContext(ctx, `SELECT status FROM sessions WHERE id = $1 FOR UPDATE`, sessionID).Scan(&status); err == sql.ErrNoRows {
+	var freezing bool
+	if err := tx.QueryRowContext(ctx, `SELECT status, COALESCE(canvas_freeze_until > clock_timestamp(), false) FROM sessions WHERE id = $1 FOR UPDATE`, sessionID).Scan(&status, &freezing); err == sql.ErrNoRows {
 		return false, nil
 	} else if err != nil {
 		return false, err
 	}
 	if status == "ended" {
 		return false, ErrSessionEnded
+	}
+	if freezing {
+		return false, ErrSessionEndInProgress
 	}
 	result, err := tx.ExecContext(ctx,
 		`DELETE FROM session_canvases WHERE id = $1 AND session_id = $2 AND owner_id = $3`,

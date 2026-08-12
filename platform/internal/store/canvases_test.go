@@ -263,6 +263,21 @@ func TestCanvasStore_CreateGreatestWithSessionFloor(t *testing.T) {
 	assert.Equal(t, "host", canvas.Visibility)
 }
 
+func TestCanvasMutationsRejectUnexpiredSessionFreezeLease(t *testing.T) {
+	db := canvasTestDB(t)
+	ctx := context.Background()
+	canvases := NewCanvasStore(db)
+	sessions := NewSessionStore(db)
+	_, teacherID := setupSessionTest(t, db, t.Name())
+	session, err := sessions.CreateSession(ctx, CreateSessionInput{TeacherID: teacherID, Title: "frozen canvas"})
+	require.NoError(t, err)
+	t.Cleanup(func() { _, _ = db.ExecContext(ctx, `DELETE FROM sessions WHERE id = $1`, session.ID) })
+	_, err = acquireSessionFreezeLease(ctx, db, session.ID, uuid.NewString())
+	require.NoError(t, err)
+	_, err = canvases.CreateCanvas(ctx, CreateCanvasInput{SessionID: session.ID, OwnerID: teacherID, Title: "blocked", Visibility: "private"})
+	assert.ErrorIs(t, err, ErrSessionEndInProgress)
+}
+
 func TestCanvasStore_GetCanvasScopesToSession(t *testing.T) {
 	db := canvasTestDB(t)
 	ctx := context.Background()

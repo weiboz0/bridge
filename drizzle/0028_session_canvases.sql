@@ -13,6 +13,15 @@ ALTER TABLE sessions
   ALTER COLUMN canvas_floor SET DEFAULT 'private',
   ALTER COLUMN canvas_floor SET NOT NULL;
 
+ALTER TABLE sessions
+  ADD COLUMN canvas_freeze_token uuid;
+
+ALTER TABLE sessions
+  ADD COLUMN canvas_freeze_until timestamptz;
+
+ALTER TABLE sessions
+  ADD COLUMN whiteboard_server_archive_complete boolean;
+
 CREATE TABLE session_canvases (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   session_id uuid NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
@@ -20,7 +29,6 @@ CREATE TABLE session_canvases (
   title varchar(255) NOT NULL,
   visibility canvas_visibility NOT NULL,
   yjs_state text,
-  plain_text text NOT NULL DEFAULT '',
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );

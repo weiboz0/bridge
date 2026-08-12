@@ -256,7 +256,7 @@ func TestExtractDeclaredSchema_CapturesAlterColumnAndOrderedEnum(t *testing.T) {
 	declared := extractDeclaredSchema(content)
 	require.Contains(t, declared.Tables, SchemaTableSentinels{
 		Table:   "sessions",
-		Columns: []string{"canvas_floor"},
+		Columns: []string{"canvas_floor", "canvas_freeze_token", "canvas_freeze_until", "whiteboard_server_archive_complete"},
 	})
 	require.Contains(t, declared.Enums, SchemaEnumSentinel{
 		Name:   "canvas_visibility",
