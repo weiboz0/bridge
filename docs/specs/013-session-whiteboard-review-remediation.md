@@ -187,17 +187,23 @@ If no retry succeeds, the end proceeds on the degraded path with the warning.
 
 The per-session queue therefore contains at most one active operation and one coalesced pending matching terminal cleanup, whose mode may be promoted from unfreeze to complete but never duplicated.
 
-Hocuspocus passes `maxPayload: 1_048_625` as the second argument to the pinned `Server` constructor: 1,048,576 update bytes plus one byte for the 43-byte `canvas:<uuid>` string length, 43 document-name bytes, one outer message-type byte, one sync-type byte, and three update-length bytes.
+The shared Hocuspocus listener preserves the pinned `ws` global `maxPayload` of 100 MiB because it also carries existing attempt, chapter, broadcast, and session documents whose compatibility contract is not reduced by this remediation.
 
-`ws` therefore accepts a fragmented frame of exactly 1,048,625 bytes and rejects 1,048,626 bytes with close code 1009 during reassembly before Hocuspocus receives it.
+After Hocuspocus parses the document name and message envelope, the canvas admission hook rejects a decoded canvas mutation update above exactly 1,048,576 bytes before shadow or authoritative Yjs apply.
+
+This canvas-only bound cannot prevent the shared `ws` layer from reassembling an authenticated oversized message up to its existing global cap, and the design makes no such pre-buffer claim.
 
 Before applying persisted state, Hocuspocus rejects a decoded update above 4 MiB and reserves the same 16 MiB scratch slot from a process-wide 128 MiB resident-document admission ledger; successful authoritative-and-shadow load shrinks it to twice the encoded current-state size and any failure releases it.
 
 Each loaded canvas owns a shadow `Y.Doc`, a per-document admission turnstile, and exact resident-ledger accounting for the authoritative document plus shadow.
 
-For every canvas mutation entrypoint, `beforeHandleMessage` first performs the cheap local-fence check, awaits the document turnstile, rechecks the local fence after that possible yield, performs the uncached Go authorization, and rechecks the local fence again.
+For every canvas mutation entrypoint, `beforeHandleMessage` first performs the cheap local-fence check, awaits the document turnstile with an owned deadline and abort signal, rechecks the local fence after that possible yield, performs the uncached Go authorization with a separate owned `AbortController` and 500-millisecond deadline, and rechecks the local fence again.
 
-The freeze operation installs its fence first, then awaits each loaded document's admission turnstile before acquiring its save mutex and capturing, so any frame already inside the handoff finishes or rolls back before capture.
+Connection close, document unload, operation cancellation, or deadline aborts the owned authorization request and awaits its settlement before turnstile release.
+
+If a cancelled turnstile waiter is later granted, its continuation observes the cancelled generation and releases the grant synchronously without touching shadow, accounting, or document state.
+
+The freeze operation installs its fence first, then awaits each loaded document's admission turnstile with the freeze deadline and the same cancelled-grant release rule before acquiring its save mutex and capturing, so any frame already inside the handoff finishes or rolls back before capture.
 
 Only after the final authorization and fence check does the hook reserve a 16 MiB mutation-scratch slot, apply the at-most-1-MiB decoded Yjs update to the shadow, reject any result with pinned-Yjs `store.pendingStructs` or `store.pendingDs`, encode the shadow's resulting current state, and reject before authoritative apply if syntax, the 4 MiB current-state ceiling, or the process ledger fails.
 
@@ -205,9 +211,19 @@ Every authorization denial, timeout, cancellation, frozen recheck, shadow reject
 
 The hook schedules a `setImmediate` failure fallback before resolving.
 
-An `onLoadDocument` hook owns the initial scratch reservation and installs an exact document-destroy cleanup before returning loaded state, so a failure while Hocuspocus applies the returned document cannot leak accounting.
+`onLoadDocument` reserves load scratch, applies persisted state to a temporary Yjs document inside its own `try`/`catch`, and releases immediately on decode or apply failure.
 
-After successful load, `afterLoadDocument` constructs the shadow, shrinks the reservation, and installs a direct synchronous Yjs `document.on("update")` admission-commit listener; `beforeUnloadDocument` removes that exact listener and the destroy cleanup releases the exact instance accounting.
+Before returning the validated temporary document, it registers a pending-load reservation and a `setImmediate` watchdog keyed by document name plus load generation.
+
+After Hocuspocus synchronously applies the returned state and registers the authoritative document, `afterLoadDocument` claims the matching pending reservation, cancels the watchdog, constructs the shadow, shrinks accounting, and installs a direct synchronous Yjs `document.on("update")` admission-commit listener.
+
+If Hocuspocus apply or registration fails and `afterLoadDocument` never claims it, the watchdog releases the still-pending reservation by generation without relying on `unloadDocument` or `destroy` for an unregistered document.
+
+`beforeUnloadDocument` marks the exact document generation unloading, aborts and awaits any authorization, cancels and settles its pending admission or awaits its current handoff, then acquires and holds the turnstile while it removes the exact listener and accounting.
+
+It rechecks the Hocuspocus registry still maps the name to the same document instance before cleanup; a later load uses a distinct generation and cannot be released by the old unload.
+
+The unload hook releases the turnstile only after its synchronous listener/accounting cleanup, after which pinned Hocuspocus removes and destroys that exact registered document.
 
 Because the turnstile permits only one pending authoritative mutation, the listener correlates by pending admission identity, transaction-origin connection, and document instance rather than byte digest.
 
@@ -445,13 +461,13 @@ Client-side 100-millisecond coalescing reduces mutation volume without weakening
 
 ### Implicit replacement-session ends
 
-Creating a new class session and starting a scheduled class session currently end any existing live session for that class inside `SessionStore.CreateSession` and `ScheduleStore.StartSession`.
+Creating a new class session and starting a scheduled class session currently end any existing live session for that class inside `SessionStore.CreateSession` and `ScheduleStore.StartScheduledSession`.
 
 Those status producers must not bypass lifecycle locking or silently imply a complete archive.
 
 Session status still outranks Hocuspocus availability: replacement start does not wait for a freeze request and never fails merely because realtime is unavailable.
 
-Both store transactions acquire a reserved two-`int4` class-replacement advisory guard using class ID hexadecimal `0x4252434C`, decimal `1112687436`, and the same signed UUID mapping applied to the class ID; they then read live session IDs in sorted order, acquire each session's exclusive lifecycle advisory lock, and recheck `status = 'live'` before changing it.
+Both store transactions acquire a reserved two-`int4` class-replacement advisory guard using class ID hexadecimal `0x4252434C`, decimal `1112687436`, and the same signed UUID mapping applied to the class ID; they then read live session IDs sorted by the derived signed lifecycle advisory key and full UUID tie-break, acquire each distinct session lock in that order, and recheck `status = 'live'` before changing it.
 
 Scheduled start first reads the planned row's class ID without a row lock, then begins the write transaction, takes the class-replacement guard, and re-reads the same still-planned schedule row `FOR UPDATE` before any session discovery, so it never holds the schedule row while waiting for the guard.
 
@@ -461,7 +477,7 @@ For every row still live after locking, the replacement transaction sets `status
 
 It never overwrites a true or false result on a row that an explicit end completed first.
 
-After commit, the handler emits the ordinary ended event and best-effort calls token-matched complete for every returned token; missing Hocuspocus cleanup remains bounded by JWT and token expiry.
+After commit, the handler runs the same scheduled-session completion work as explicit end for every replaced session, emits the ordinary ended event, and best-effort calls token-matched complete for every returned token; missing Hocuspocus cleanup remains bounded by JWT and token expiry.
 
 The create/start response adds `replacedSessions: [{ "id": "<uuid>", "whiteboardServerArchiveComplete": false }]`, which is empty when no live session was replaced.
 
@@ -470,6 +486,10 @@ The initiating teacher interface displays `Previous session ended, but its lates
 This is an intentionally degraded end rather than a confirmed snapshot path: starting the next class remains status-first, but the data-loss risk is durable and visible instead of null or silent.
 
 The revised Plan 094 file scope must include both stores, both initiating handlers, their response types and teacher consumers, event emission, API documentation, and integration tests for these existing producers.
+
+The same remediation deletes the legacy Next.js `PATCH /api/sessions/[id]` shadow handler and the unused Drizzle `createSession` and `endSession` helpers, updates the shadow-route inventory, and proves no remaining TypeScript session-status writer exists.
+
+It does not rely on the current Next.js proxy to keep those status producers unreachable.
 
 ### Go end-session sequence
 
@@ -642,7 +662,8 @@ No migration is run against a non-test database.
 - Freeze success ends the session and returns `whiteboardServerArchiveComplete: true` without a warning.
 - Freeze timeout, transport failure, non-2xx response, malformed response, and internal-auth failure each still end the session and return the stable warning.
 - Database end failure leaves the session live, clears only the matching lease, attempts token-matched unfreeze, returns an error, and emits no ended event.
-- Class-session creation and scheduled-session start acquire the class guard plus sorted lifecycle locks, replace only rows still live, persist archive-complete false, clear and complete any returned token, emit ended events, return the replaced-session metadata, and succeed when Hocuspocus is unavailable.
+- Class-session creation and scheduled-session start acquire the class guard plus lifecycle locks sorted by derived key and UUID, replace only rows still live, persist archive-complete false, clear and complete any returned token, complete associated in-progress scheduled sessions, emit ended events, return the replaced-session metadata, and succeed when Hocuspocus is unavailable.
+- The legacy Next.js session PATCH route and unused TypeScript create/end writers are removed, the shadow-route inventory is updated, and a repository scan plus route test proves no TypeScript session-status end producer remains.
 - A replacement racing an explicit confirmed end never overwrites the explicit true result; the opposite lock ordering and the legacy advisory caller are exercised under a deadlock timeout.
 - Overlapping end requests cannot clear each other's leases or turn a stale snapshot into a successful archive result.
 - A timed-out freeze response arriving after cleanup cannot reinstall or prolong the cleared lease.
@@ -672,10 +693,11 @@ No migration is run against a non-test database.
 ### Hocuspocus tests
 
 - Freeze authenticates the bearer secret and validates strict input.
-- The installed pinned `Server` receives exact `ws.maxPayload = 1_048_625`; a real fragmented 1,048,625-byte frame is accepted and 1,048,626 bytes closes with code 1009 before any Hocuspocus message hook runs.
+- The installed pinned `Server` preserves global `ws.maxPayload = 100 MiB`; existing attempt, chapter, broadcast, and longest session namespaces accept representative messages above the canvas limit, while the parsed canvas admission path accepts exactly 1,048,576 decoded update bytes and rejects 1,048,577 before shadow apply.
 - A mutation racing a successful freeze proves that the last accepted scene is present in the returned bundle before connections close and is later persisted by the Go integration test.
 - A mutation awaiting authorization when freeze begins is rejected before Yjs apply and relay.
-- Mutation ordering acquires the admission turnstile before uncached authorization, rechecks the fence after every awaited grant and authorization, and freeze awaits that same turnstile after installing its fence before capture.
+- Mutation ordering acquires the admission turnstile with owned cancellation before uncached authorization, rechecks the fence after every awaited grant and authorization, and freeze awaits that same turnstile with its deadline after installing its fence before capture.
+- Half-open authorization, connection close, unload, and deadline each abort and settle the exact fetch; a cancelled turnstile grant releases synchronously on arrival; freeze cannot remain blocked behind either resource.
 - Authorization denial, timeout, cancellation, frozen recheck, pending-struct rejection, shadow error, and ledger exhaustion each restore shadow/accounting and release the turnstile without entering `MessageReceiver.apply`.
 - Two successive frames on one connection perform two Go rechecks, and a durable lease acquired between them is observed even when the local freeze map is empty.
 - The installed promise microtask from the second freeze check through Yjs apply cannot be interleaved by the freeze HTTP macrotask.
@@ -697,7 +719,8 @@ No migration is run against a non-test database.
 - `ws` rejects every oversized websocket message during reassembly with code 1009; persisted-state load, shadow-result mutation, per-session aggregate, resident-document, and concurrent capture reservations each fail at their exact boundary before authoritative Yjs apply, snapshot encode, or connection close.
 - An accepted reservation followed by a real installed-path `MessageReceiver.apply` failure exercises the `setImmediate` fallback, reconciles from the actual authoritative state, rebuilds the shadow, and releases the turnstile; successful ordinary, duplicate, and partially overlapping updates commit by pending identity plus origin/document rather than byte digest.
 - A dependency-missing Yjs update is rejected from the shadow before authoritative handoff, and the later complete update can succeed without parked pending structs or ledger drift.
-- Initial-load apply failure triggers the document-destroy cleanup even though `afterLoadDocument` never ran; successful load, unload, and reload replace listener and accounting identities exactly once.
+- Temporary-document load failure releases in the hook's `catch`; Hocuspocus authoritative apply failure is reclaimed by the unclaimed pending-load watchdog even though `afterLoadDocument` never ran; successful load cancels that watchdog.
+- Paused mutation authorization followed by last-socket disconnect makes unload abort and settle the admission under the turnstile before exact listener/accounting release, while a concurrent reload's new generation remains untouched.
 - Concurrent capture reservation never exceeds the 256 MiB capture-and-cache ledger, resident documents never exceed their separate 128 MiB ledger, and rejection or unload releases only the exact instance reservation.
 - The maximum accepted document and 50-canvas request stay within the declared pre-reserved allocation; controlled instrumentation proves no encode begins without its 64 MiB reservation.
 - Incremental response streaming honors backpressure and request abort, yields between document encodes, never constructs one aggregate JSON string, and leaves other-session websocket and awareness work schedulable.
@@ -726,6 +749,7 @@ No migration is run against a non-test database.
 - Teacher end failure remains in place with an error.
 - Class-session creation and scheduled-session start show the prior-session archive warning exactly once when `replacedSessions` is nonempty and show none for an empty array.
 - Incomplete server-archive status survives the redirect, remains durably discoverable, and displays exactly once per archive visit.
+- A non-teacher archive visitor receiving 403 from teacher-only canvas settings renders the archive without a completeness claim or settings error, while teacher true/false/null behavior remains distinct.
 - A 200 durable status overrides and consumes browser state, while network and non-200 responses retain it.
 - The new settings client accepts only a 2xx response with the exact schema, and repository/main-history checks prove no deployed bundle called the removed feature-branch route.
 - Missing sessions remain 404 instead of redirecting to the archive.
