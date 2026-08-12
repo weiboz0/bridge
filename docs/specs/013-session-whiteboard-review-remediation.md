@@ -199,6 +199,12 @@ Each loaded canvas owns a shadow `Y.Doc`, a per-document admission turnstile, an
 
 For every canvas mutation entrypoint, `beforeHandleMessage` first performs the cheap local-fence check, awaits the document turnstile with an owned deadline and abort signal, rechecks the local fence after that possible yield, performs the uncached Go authorization with a separate owned `AbortController` and 500-millisecond deadline, and rechecks the local fence again.
 
+Before allocating a waiter, timer, abort controller, or close listener, one synchronous per-document counter admits at most eight mutation admissions total, including the active holder and queued waiters.
+
+The ninth concurrent mutation admission is never queued; its connection closes with retryable code 1013 and the existing bounded reconnect policy.
+
+Every admitted path decrements the exact generation counter only after its waiter, authorization, handoff, and cancellation settlement complete.
+
 Connection close, document unload, operation cancellation, or deadline aborts the owned authorization request and awaits its settlement before turnstile release.
 
 If a cancelled turnstile waiter is later granted, its continuation observes the cancelled generation and releases the grant synchronously without touching shadow, accounting, or document state.
@@ -215,15 +221,25 @@ The hook schedules a `setImmediate` failure fallback before resolving.
 
 Before returning the validated temporary document, it registers a pending-load reservation and a `setImmediate` watchdog keyed by document name plus load generation.
 
-After Hocuspocus synchronously applies the returned state and registers the authoritative document, `afterLoadDocument` claims the matching pending reservation, cancels the watchdog, constructs the shadow, shrinks accounting, and installs a direct synchronous Yjs `document.on("update")` admission-commit listener.
+After Hocuspocus synchronously applies the returned state but before it registers the authoritative document, Bridge's `afterLoadDocument` hook verifies the matching pending reservation and performs shadow construction, accounting shrink, direct synchronous Yjs `document.on("update")` listener installation, and exact `document.on("destroy")` cleanup installation inside one `try`/`catch`.
 
-If Hocuspocus apply or registration fails and `afterLoadDocument` never claims it, the watchdog releases the still-pending reservation by generation without relying on `unloadDocument` or `destroy` for an unregistered document.
+If any after-load initialization fails, its catch removes any partially installed listener, releases pending and committed accounting by generation, and rethrows while the watchdog remains armed.
 
-`beforeUnloadDocument` marks the exact document generation unloading, aborts and awaits any authorization, cancels and settles its pending admission or awaits its current handoff, then acquires and holds the turnstile while it removes the exact listener and accounting.
+Successful after-load initialization marks the pending generation initialized but does not cancel or release its watchdog.
 
-It rechecks the Hocuspocus registry still maps the name to the same document instance before cleanup; a later load uses a distinct generation and cannot be released by the old unload.
+At the next `setImmediate`, the watchdog finalizes the load only if Hocuspocus's document registry maps the name to that exact initialized instance; otherwise it removes any installed listeners and releases all reservation and resident accounting for the failed unregistered generation.
 
-The unload hook releases the turnstile only after its synchronous listener/accounting cleanup, after which pinned Hocuspocus removes and destroys that exact registered document.
+This ordering relies on Bridge's hook being the final `afterLoadDocument` extension and on no macrotask yield between the pinned load hooks and registry insertion; startup configuration assertions and the load tests enforce that invariant before a future extension can change it.
+
+`beforeUnloadDocument` marks the exact document generation unloading, aborts and awaits any authorization, cancels and settles its pending admission or awaits its current handoff, then acquires the turnstile and rechecks the Hocuspocus registry still maps the name to the same instance.
+
+It releases the turnstile without removing listeners or accounting because pinned Hocuspocus may still abort unload if a connection arrived while the hook awaited.
+
+The transient unloading flag is cleared immediately before the hook returns; actual destruction is the point of no return, and a reconnect to a surviving instance may admit new work normally.
+
+Only the synchronous Yjs `destroy` listener performs irreversible listener removal and exact instance-accounting release, so a post-hook aborted unload leaves the live document fully instrumented.
+
+A later load uses a distinct generation and cannot be released by the old destroy listener.
 
 Because the turnstile permits only one pending authoritative mutation, the listener correlates by pending admission identity, transaction-origin connection, and document instance rather than byte digest.
 
@@ -487,7 +503,7 @@ This is an intentionally degraded end rather than a confirmed snapshot path: sta
 
 The revised Plan 094 file scope must include both stores, both initiating handlers, their response types and teacher consumers, event emission, API documentation, and integration tests for these existing producers.
 
-The same remediation deletes the legacy Next.js `PATCH /api/sessions/[id]` shadow handler and the unused Drizzle `createSession` and `endSession` helpers, updates the shadow-route inventory, and proves no remaining TypeScript session-status writer exists.
+The same remediation deletes the legacy Next.js `PATCH /api/sessions/[id]` shadow handler, its live Drizzle `endSession` helper, and the unused Drizzle `createSession` helper; updates the shadow-route allowlist and `TODO.md`; and proves no remaining production TypeScript session-status writer exists while excluding test fixtures from that scan.
 
 It does not rely on the current Next.js proxy to keep those status producers unreachable.
 
@@ -663,7 +679,7 @@ No migration is run against a non-test database.
 - Freeze timeout, transport failure, non-2xx response, malformed response, and internal-auth failure each still end the session and return the stable warning.
 - Database end failure leaves the session live, clears only the matching lease, attempts token-matched unfreeze, returns an error, and emits no ended event.
 - Class-session creation and scheduled-session start acquire the class guard plus lifecycle locks sorted by derived key and UUID, replace only rows still live, persist archive-complete false, clear and complete any returned token, complete associated in-progress scheduled sessions, emit ended events, return the replaced-session metadata, and succeed when Hocuspocus is unavailable.
-- The legacy Next.js session PATCH route and unused TypeScript create/end writers are removed, the shadow-route inventory is updated, and a repository scan plus route test proves no TypeScript session-status end producer remains.
+- The legacy Next.js session PATCH route, live TypeScript end helper, and unused create helper are removed, the shadow-route allowlist and `TODO.md` are updated, and a production-source scan plus route test proves no TypeScript session-status end producer remains while ignoring test fixtures.
 - A replacement racing an explicit confirmed end never overwrites the explicit true result; the opposite lock ordering and the legacy advisory caller are exercised under a deadlock timeout.
 - Overlapping end requests cannot clear each other's leases or turn a stale snapshot into a successful archive result.
 - A timed-out freeze response arriving after cleanup cannot reinstall or prolong the cleared lease.
@@ -697,6 +713,7 @@ No migration is run against a non-test database.
 - A mutation racing a successful freeze proves that the last accepted scene is present in the returned bundle before connections close and is later persisted by the Go integration test.
 - A mutation awaiting authorization when freeze begins is rejected before Yjs apply and relay.
 - Mutation ordering acquires the admission turnstile with owned cancellation before uncached authorization, rechecks the fence after every awaited grant and authorization, and freeze awaits that same turnstile with its deadline after installing its fence before capture.
+- A synchronous per-document admission counter permits exactly eight active-plus-queued mutations before allocating waiter resources; the ninth closes 1013, and a saturated burst followed by freeze or unload settles all eight generations without a timer, listener, promise, or counter leak.
 - Half-open authorization, connection close, unload, and deadline each abort and settle the exact fetch; a cancelled turnstile grant releases synchronously on arrival; freeze cannot remain blocked behind either resource.
 - Authorization denial, timeout, cancellation, frozen recheck, pending-struct rejection, shadow error, and ledger exhaustion each restore shadow/accounting and release the turnstile without entering `MessageReceiver.apply`.
 - Two successive frames on one connection perform two Go rechecks, and a durable lease acquired between them is observed even when the local freeze map is empty.
@@ -719,8 +736,11 @@ No migration is run against a non-test database.
 - `ws` rejects every oversized websocket message during reassembly with code 1009; persisted-state load, shadow-result mutation, per-session aggregate, resident-document, and concurrent capture reservations each fail at their exact boundary before authoritative Yjs apply, snapshot encode, or connection close.
 - An accepted reservation followed by a real installed-path `MessageReceiver.apply` failure exercises the `setImmediate` fallback, reconciles from the actual authoritative state, rebuilds the shadow, and releases the turnstile; successful ordinary, duplicate, and partially overlapping updates commit by pending identity plus origin/document rather than byte digest.
 - A dependency-missing Yjs update is rejected from the shadow before authoritative handoff, and the later complete update can succeed without parked pending structs or ledger drift.
-- Temporary-document load failure releases in the hook's `catch`; Hocuspocus authoritative apply failure is reclaimed by the unclaimed pending-load watchdog even though `afterLoadDocument` never ran; successful load cancels that watchdog.
+- Temporary-document load failure releases in the hook's `catch`; Hocuspocus authoritative apply failure is reclaimed by the unclaimed pending-load watchdog even though `afterLoadDocument` never ran.
+- Failure during shadow construction, accounting shrink, either listener installation, a later after-load extension, or pre-registry completion leaves the watchdog armed and releases every partial resource; only the next-turn exact registry-and-generation check finalizes a successful load.
+- Startup and controlled scheduling prove Bridge is the final after-load extension and no macrotask yield occurs before pinned registry insertion.
 - Paused mutation authorization followed by last-socket disconnect makes unload abort and settle the admission under the turnstile before exact listener/accounting release, while a concurrent reload's new generation remains untouched.
+- A reconnect arriving during `beforeUnloadDocument` makes pinned Hocuspocus abort destruction; the transient unloading flag clears and the surviving document retains its listener and accounting, while actual destroy releases both exactly once.
 - Concurrent capture reservation never exceeds the 256 MiB capture-and-cache ledger, resident documents never exceed their separate 128 MiB ledger, and rejection or unload releases only the exact instance reservation.
 - The maximum accepted document and 50-canvas request stay within the declared pre-reserved allocation; controlled instrumentation proves no encode begins without its 64 MiB reservation.
 - Incremental response streaming honors backpressure and request abort, yields between document encodes, never constructs one aggregate JSON string, and leaves other-session websocket and awareness work schedulable.
