@@ -306,4 +306,78 @@ describe("Phase 10 canvas lifecycle RED contract", () => {
     expect(sut.inspectDocument(documentName)).toMatchObject({ admissions: 0, turnstileLocked: false, shadowMatchesAuthoritative: true });
   });
 
+  test("keeps lifecycle authorization behind the eight-slot turnstile and carries the authenticated user plus its owned AbortSignal", async () => {
+    const { createCanvasLifecycle } = await lifecycle();
+    const seen: Array<{ userId?: string; signal?: AbortSignal }> = [];
+    const sut = createCanvasLifecycle({ authorizeMutation: (input: unknown) => {
+      seen.push(input as { userId?: string; signal?: AbortSignal });
+      return Promise.resolve({ allowed: true, readOnly: false });
+    } });
+    await sut.admitMutation({ documentName: `canvas:${canvasId}`, sessionId, userId: "writer", connection: { close() {} }, update: updateWith("owned-auth") } as never);
+    expect(seen).toEqual([expect.objectContaining({ userId: "writer", signal: expect.any(AbortSignal) })]);
+  });
+
+  test("releases an unclaimed cold-load generation at the next-turn watchdog instead of retaining a logical load forever", async () => {
+    const { createCanvasLifecycle } = await lifecycle();
+    const sut = createCanvasLifecycle();
+    const documentName = `canvas:${canvasId}`;
+    await sut.beginLoad({ documentName, document: new Y.Doc(), persistedUpdate: updateWith("cold") });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(sut.inspectDocument(documentName)).toBeUndefined();
+    expect(sut.accounting()).toEqual({ residentBytes: 0, captureBytes: 0 });
+  });
+
+  test("converts capture reservation to exact immutable bytes before closing registered sockets", async () => {
+    const { createCanvasLifecycle } = await lifecycle();
+    const { Document } = await import("@hocuspocus/server");
+    const document = new Document(`canvas:${canvasId}`);
+    let bytesAtClose = -1;
+    const sut = createCanvasLifecycle({ validateLease: async () => ({ allowed: true, remainingMs: 2_000 }), documents: new Map([[document.name, document]]) });
+    document.connections.set({} as never, { clients: new Set(), connection: { close: () => { bytesAtClose = sut.accounting().captureBytes; } } } as never);
+    await sut.freeze({ sessionId, freezeToken: token, canvasIds: [canvasId] });
+    expect(bytesAtClose).toBeGreaterThan(0);
+    expect(bytesAtClose).toBeLessThan(64 * 1024 * 1024);
+  });
+
+  test("awaits connection-owned cancellation settlement rather than merely aborting document-wide work", async () => {
+    const { createCanvasLifecycle } = await lifecycle();
+    let settled = false;
+    const sut = createCanvasLifecycle({ authorizeMutation: ({ signal }: { signal: AbortSignal }) => new Promise((resolve) => {
+      signal.addEventListener("abort", () => setImmediate(() => { settled = true; resolve({ allowed: false, readOnly: false }); }), { once: true });
+    }) });
+    const documentName = `canvas:${canvasId}`;
+    const connection = { close() {} };
+    const admission = sut.admitMutation({ documentName, sessionId, connection, update: updateWith("cancel-settlement") });
+    await sut.cancelAdmissions({ documentName, connection, reason: "disconnect" } as never);
+    expect(settled).toBe(true);
+    await expect(admission).rejects.toMatchObject({ code: "disconnect" });
+  });
+
+  test("coalesces a terminal flood into one cleanup promise instead of serializing unbounded duplicate cleanup actions", async () => {
+    const { createCanvasLifecycle } = await lifecycle();
+    const gate = Promise.withResolvers<{ allowed: boolean; remainingMs: number }>();
+    const sut = createCanvasLifecycle({ validateLease: async () => gate.promise });
+    const freeze = sut.freeze({ sessionId, freezeToken: token, canvasIds: [] });
+    const first = sut.complete({ sessionId, freezeToken: token });
+    const terminals = Array.from({ length: 31 }, () => sut.complete({ sessionId, freezeToken: token }));
+    expect(terminals.every((terminal) => terminal === first)).toBe(true);
+    gate.resolve({ allowed: true, remainingMs: 2_000 });
+    await Promise.allSettled([freeze, first, ...terminals]);
+  });
+
+  test("streams cached snapshots incrementally under writer backpressure rather than constructing one aggregate JSON response", async () => {
+    const { createCanvasLifecycle } = await lifecycle();
+    const secondCanvas = "33333333-3333-4333-8333-333333333333";
+    const first = new Y.Doc();
+    const second = new Y.Doc();
+    first.getMap("elements").set("first", true);
+    second.getMap("elements").set("second", true);
+    const sut = createCanvasLifecycle({ validateLease: async () => ({ allowed: true, remainingMs: 2_000 }), documents: new Map([[`canvas:${canvasId}`, first], [`canvas:${secondCanvas}`, second]]) });
+    await sut.freeze({ sessionId, freezeToken: token, canvasIds: [canvasId, secondCanvas] });
+    const chunks: string[] = [];
+    await sut.stream({ sessionId, freezeToken: token, write: (chunk: string) => { chunks.push(chunk); return true; } });
+    expect(chunks.length).toBeGreaterThan(2);
+    expect(chunks.some((chunk) => chunk.includes(canvasId) && chunk.includes(secondCanvas))).toBe(false);
+  });
+
 });

@@ -691,4 +691,80 @@ describe("Phase 10 installed Hocuspocus hook RED contract", () => {
     expect(target.getMap("elements").toJSON()).toMatchObject({ first: "a", second: "b" });
     expect(lifecycleCalls).toEqual(["reserve", "commit"]);
   });
+
+  test("passes the decoded installed nested Yjs update, not the raw websocket frame, into the registered lifecycle admission hook", async () => {
+    const runtime = await import("./hocuspocus") as Record<string, unknown>;
+    const install = runtime.createCanvasLifecycleHooks as ((input: Record<string, unknown>) => Record<string, (input: Record<string, unknown>) => Promise<unknown>>) | undefined;
+    expect(install).toBeTypeOf("function");
+    const documentName = `canvas:${phase10CanvasId}`;
+    const source = new Y.Doc();
+    source.getMap("elements").set("nested", "boundary");
+    const decoded = Y.encodeStateAsUpdate(source);
+    const frame = new OutgoingMessage(documentName).createSyncMessage().writeUpdate(decoded).toUint8Array();
+    let admitted: Uint8Array | undefined;
+    const hooks = install!({
+      authorize: async () => ({ allowed: true, readOnly: false }),
+      lifecycle: { beginAdmission: async ({ update }: { update: Uint8Array }) => { admitted = update; } },
+    });
+    await hooks.beforeHandleMessage({ documentName, document: new Y.Doc(), connection: { readOnly: false }, update: frame, context: { userId: "writer", sessionId: randomUUID() } });
+    expect(admitted).toEqual(decoded);
+  });
+
+  test("uses lifecycle-owned admission authorization after its cap instead of a separate pre-turnstile fetch", async () => {
+    const runtime = await import("./hocuspocus") as Record<string, unknown>;
+    const install = runtime.createCanvasLifecycleHooks as ((input: Record<string, unknown>) => Record<string, (input: Record<string, unknown>) => Promise<unknown>>) | undefined;
+    expect(install).toBeTypeOf("function");
+    const changed = new Y.Doc();
+    changed.getMap("elements").set("cap", true);
+    const documentName = `canvas:${phase10CanvasId}`;
+    const frame = new OutgoingMessage(documentName).createSyncMessage().writeUpdate(Y.encodeStateAsUpdate(changed)).toUint8Array();
+    const hooks = install!({
+      authorize: async () => { throw new Error("pre-cap authorization must not run"); },
+      lifecycle: { beginAdmission: async () => undefined },
+    });
+    await expect(hooks.beforeHandleMessage({ documentName, document: new Y.Doc(), connection: { readOnly: false }, update: frame, context: { userId: "writer", sessionId: randomUUID() } })).resolves.toBeUndefined();
+  });
+
+  test("permits installed afterLoad before pinned registry insertion, then retains only the exact synchronously registered generation", async () => {
+    const runtime = await import("./hocuspocus") as Record<string, unknown>;
+    const hooks = registeredCanvasHooks(runtime) as CanvasHooks & { afterLoadDocument?: (input: Record<string, unknown>) => Promise<void>; beforeUnloadDocument?: (input: Record<string, unknown>) => Promise<void> };
+    const document = new Document(`canvas:${phase10CanvasId}`);
+    const instance = { documents: new Map<string, Y.Doc>() };
+    await expect(hooks.afterLoadDocument!({ documentName: document.name, document, instance })).resolves.toBeUndefined();
+    instance.documents.set(document.name, document);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(instance.documents.get(document.name)).toBe(document);
+    await hooks.beforeUnloadDocument!({ documentName: document.name, document, instance });
+    expect(instance.documents.get(document.name)).toBe(document);
+    document.destroy();
+  });
+
+  test("returns the stable session_freezing reason from the direct hook for the installed Connection close path", async () => {
+    const runtime = await import("./hocuspocus") as Record<string, unknown>;
+    const install = runtime.createCanvasLifecycleHooks as ((input: Record<string, unknown>) => Record<string, (input: Record<string, unknown>) => Promise<unknown>>) | undefined;
+    expect(install).toBeTypeOf("function");
+    const changed = new Y.Doc();
+    changed.getMap("elements").set("frozen", true);
+    const frame = new OutgoingMessage(`canvas:${phase10CanvasId}`).createSyncMessage().writeUpdate(Y.encodeStateAsUpdate(changed)).toUint8Array();
+    const connection = { readOnly: false, close() {} };
+    const hooks = install!({ authorize: async () => ({ allowed: false, readOnly: false, code: "session_freezing" }), lifecycle: {} });
+    await expect(hooks.beforeHandleMessage({ documentName: `canvas:${phase10CanvasId}`, connection, update: frame, context: { userId: "writer", sessionId: randomUUID() } })).rejects.toMatchObject({ code: "session_freezing", reason: "session_freezing" });
+  });
+
+  test("sets redirect:error on both installed Go authorization fetches before either bearer is sent", async () => {
+    const runtime = await import("./hocuspocus") as Record<string, unknown>;
+    const createHooks = runtime.createCanvasLifecycleHooks as (() => { onAuthenticate(input: { documentName: string; context: { userId: string; sessionId: string }; connectionConfig: { readOnly: boolean } }): Promise<void> }) | undefined;
+    expect(createHooks).toBeTypeOf("function");
+    const fetches: RequestInit[] = [];
+    globalThis.fetch = async (_url, init) => {
+      fetches.push(init ?? {});
+      return new Response(JSON.stringify({ allowed: true, readOnly: false }), { status: 200 });
+    };
+    const documentName = `canvas:${phase10CanvasId}`;
+    await createHooks!().onAuthenticate({ documentName, context: { userId: "writer", sessionId: randomUUID() }, connectionConfig: { readOnly: false } });
+    const { rechckDocumentAccess } = await import("./realtime-jwt");
+    await rechckDocumentAccess({ apiBaseUrl: "http://127.0.0.1:8002", secret, documentName, sub: "writer", sessionId: randomUUID() });
+    expect(fetches).toHaveLength(2);
+    expect(fetches).toEqual(expect.arrayContaining([expect.objectContaining({ redirect: "error" }), expect.objectContaining({ redirect: "error" })]));
+  });
 });

@@ -75,4 +75,24 @@ describe("canvas reconnect policy", () => {
     release();
     provider.destroy();
   });
+
+  it("recovers an installed binary ArrayBuffer CLOSE by force-reminting before it can emit any queued canvas write", async () => {
+    const { bindInstalledCanvasProvider } = await import("@/lib/yjs/use-yjs-provider");
+    const documentName = "canvas:22222222-2222-4222-8222-222222222222";
+    const bytes = new OutgoingMessage(documentName).writeCloseMessage("canvas_jwt_expired").toUint8Array();
+    const frame = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+    let refreshes = 0;
+    let reconnects = 0;
+    let writes = 0;
+    const websocket = { on() {}, off() {}, attach() {}, detach() {}, setConfiguration() {}, send() { writes += 1; } };
+    const provider = new HocuspocusProvider({ name: documentName, document: new Y.Doc(), websocketProvider: websocket as never });
+    const release = bindInstalledCanvasProvider({ provider, refreshToken: async () => { refreshes += 1; return "forced-remint"; }, reconnect: () => { reconnects += 1; } });
+    provider.onMessage({ data: frame } as MessageEvent);
+    await Promise.resolve();
+    expect(refreshes).toBe(1);
+    expect(reconnects).toBe(1);
+    expect(writes).toBe(0);
+    release();
+    provider.destroy();
+  });
 });
