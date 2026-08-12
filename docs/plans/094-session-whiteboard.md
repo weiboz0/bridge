@@ -3,7 +3,8 @@
 **Branch:** `feat/094-session-whiteboard`
 **Status:** Phases 1a through 6 are complete.
 Spec 013 passed its exact-commit Sol + Fable 5 design gate; the user approved the remediation scope widening on 2026-08-11.
-Phases 7 through 13 remain blocked until this revised Tier-A plan reaches consensus.
+The Spec 013 remediation plan gate reached consensus at exact substantive commit `fdaf90af2a6c9500396ced27f2ca0df4be780645`.
+Phases 7 through 13 are authorized for phase-by-phase implementation.
 
 ## File scope
 
@@ -572,6 +573,14 @@ No implementation, Round-4 plan edit, migration, service, E2E, or remote action 
 - The user directed the uncapped consensus loop to continue until every problem is resolved.
 - The exact Round-3 blocker and all accepted nits are addressed above.
 - Only `[codex]`, the reviewer retaining a material finding, is redispatched against the next exact substantive commit; the two Opus approvals remain authoritative because their nits are incorporated without changing the settled design.
+
+### Spec 013 remediation plan gate — Round 4 consensus — commit `fdaf90af2a6c9500396ced27f2ca0df4be780645`
+
+- `[codex]` **APPROVE.** No residual findings; Phase 9 now owns the complete settings producer/consumer cutover and Phase 11 only extends the existing panel/test for separate UX.
+- `[claude-self]` and `[opus]` retain **APPROVE WITH NITS** from Round 3; every accepted nit is incorporated in the approved substantive commit.
+- `[glm]` retains **APPROVE WITH NITS** from Round 1; it had no blocker and no later response invalidated its findings.
+- The Round-3 `[OPEN]` settings-cutover finding is now `[FIXED]` by reviewer confirmation.
+- All four Tier-A roster slots approve the same final substantive plan state with no open material finding; Phase 7 is authorized.
 
 ## Code Review
 
