@@ -976,3 +976,26 @@ The user approved moving final snapshot persistence into Go.
 **Round 9 verdicts:** `[sol]` CHANGES REQUESTED; `[fable]` CHANGES REQUESTED.
 
 **Round 9 responses await Sol and Fable confirmation on commit `73b0764`.**
+
+### Round 10 — 2026-08-11 — commit `0509fca`
+
+- `[OPEN]` `[sol][fable]` The new complete operation mutated serializer-owned state without participating in the serializer or defining its matching-active-token behavior.
+  → Response in `5933b14`: freeze, unfreeze, and complete share the serializer; one coalesced terminal cleanup cancels and settles validation, capture, and writers, complete wins a matching terminal race, and identity-checked removal is the final action.
+- `[OPEN]` `[sol]` Incremental response streaming had no owned deadline or reader lifetime, so a half-open first stream could block recovery or allow completion to free bytes still in use.
+  → Response in `5933b14`: capture publishes an immutable cache before streaming, writers run outside the serializer with reader references and no-progress plus absolute deadlines, forced response destruction is awaited, and complete settles all readers before release.
+- `[OPEN]` `[sol]` The admission contract promised rollback after downstream apply failure through `beforeHandleMessage`, but that hook cannot observe pinned Hocuspocus's internal `MessageReceiver.apply` result.
+  → Response in `5933b14`: an admission turnstile spans the library handoff, a direct synchronous Yjs update listener commits the matching shadow reservation during apply, and a `setImmediate` failure fallback rebuilds and rolls back before releasing the turnstile.
+- `[OPEN]` `[sol][fable]` Acceptance wording could be read to promise database persistence before Hocuspocus closed connections, contrary to the protocol sequence.
+  → Response in `5933b14`: the criterion now separately orders capture before close and Go persistence before the confirmed database-end commit.
+- `[OPEN]` `[fable]` Current response-failure prose did not explicitly prohibit starting a 200 stream before all capture stages succeeded.
+  → Response in `5933b14`: a 200 response begins only after complete capture and immutable cache publication, preserving the non-2xx whole-capture failure contract.
+- `[OPEN]` `[fable]` The spec named Node scheduling although production uses Bun, and its oversized-message wording promised mutation classification before buffering that `ws` cannot perform.
+  → Response in `5933b14`: scheduling and timer rules name Bun and run under Bun tests; the exact pinned `Server` `maxPayload` option rejects every oversized fragmented websocket message with code 1009 during reassembly.
+- `[OPEN]` `[fable]` Cumulative admitted-update counters could permanently reject a busy but compact live document.
+  → Response in `5933b14`: admission now validates the shadow document's current encoded state rather than lifetime traffic, while a scratch ledger bounds concurrent validation and unload releases exact instance accounting.
+- `[OPEN]` `[fable]` The lock-order registry omitted the existing disjoint one-argument advisory-lock class.
+  → Response in `5933b14`: the registry names the legacy `int8` class, requires two-`int4` lifecycle lock first if both are ever needed, and includes the current legacy caller in deadlock testing.
+
+**Round 10 verdicts:** `[sol]` CHANGES REQUESTED; `[fable]` CHANGES REQUESTED.
+
+**Round 10 responses await Sol and Fable confirmation on commit `5933b14`.**
