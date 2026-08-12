@@ -855,4 +855,21 @@ The historical Round 5 block is therefore resolved as a process decision, while 
 
 **Round 8 verdicts:** `[sol]` CHANGES REQUESTED; `[fable]` CHANGES REQUESTED.
 
-**User-decision pause:** final snapshot persistence must either move into Go's owned pgx transaction boundary or use a new Node database primitive with genuinely owned and awaited socket abort.
+**User-decision pause:** final snapshot persistence must either move into Go's owned database transaction boundary or use a new Node database primitive with genuinely owned and awaited socket abort.
+
+### User direction — 2026-08-11
+
+The user approved moving final snapshot persistence into Go.
+
+### Round 8 responses — commit `2695e6a`
+
+- `[OPEN]` `[sol][fable]` Node could not own and await postgres.js query and cancel sockets.
+  → Hocuspocus no longer performs any database validation or snapshot write during freeze; its only asynchronous external operation is an owned, abortable HTTP validation callback to Go.
+- `[OPEN]` `[fable]` The one-connection Node design contradicted the 50-canvas capture deadline and isolated-pool promise.
+  → Hocuspocus now captures Yjs updates synchronously under document save mutexes and returns a bounded bundle; Go performs one batch persistence transaction.
+- `[OPEN]` `[fable]` Retryable replacement-token conflicts had no retrier.
+  → Go retries with bounded jitter inside the original two-second budget and degrades honestly if no attempt succeeds.
+- `[OPEN]` `[fable]` The PostgreSQL advisory-key expression, pre-merge history evidence, non-convergence metrics, duplicate success, and reconnect category transition were underspecified.
+  → The SQL bit-cast expression is exact; history evidence is pre-merge rather than a permanent test; metrics are deduplicated and prospective; successful bundles are cached idempotently under a global bound; and uncategorized disconnects move to the jittered long-tail policy.
+
+**Round 8 responses await Sol and Fable confirmation on commit `2695e6a`.**
