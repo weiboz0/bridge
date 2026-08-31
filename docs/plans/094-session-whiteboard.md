@@ -566,7 +566,10 @@ That recheck is now defense in depth: the confirmed path gains the lifecycle lea
   `admin@e2e.test` and its email provider are inserted only where `current_database() ~ '_test$'`, so the known-password platform-admin fixture is absent from non-test targets.
   The obsolete `teaching_units`/`unit_documents` writes now target the migrated `chapters`/`chapter_documents` schema without changing the seeded chapter or class content.
 - `[GREEN evidence]` Immediately before all database actions, the guarded validator accepted `postgresql://work@127.0.0.1:5432/bridge_test`.
-  The executable harness then applied only the real seed and candidate copies to that database, performed exact fixed-ID cleanup and canonical restoration, and ended with the original full fixture fingerprint.
+  Before that live check, a subprocess passed a fake `psql` sentinel while parser-rejecting `postgresql://127.0.0.1:5432/bridge`; the sentinel remained absent, proving rejected targets cannot run `psql`, the seed, or a DML-capable EXIT cleanup.
+  A deliberate mutation that called the sentinel instead produced the expected RED failure and was restored before the GREEN run.
+  After validation, the executable harness clears the complete dependency-ordered, fixed-ID fixture graph and requires a zero census before every real/candidate seed; this prevents pre-existing correct rows from masking an omitted Eve provider, Alice bcrypt, Bob membership, or chapters.
+  It then restores only the canonical fixed graph and reruns its full fingerprint/idempotence assertion.
   Its non-test admin proof substitutes a non-test literal only inside the seed copy and executes it against `bridge_test`; it never connects to a non-test database.
   No migration, non-test database, service, E2E, provider, or environment-file read ran.
 

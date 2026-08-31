@@ -305,4 +305,4 @@ CHECK_TEST_DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test \
   scripts/tests/test-problem-demo-seed.sh
 ```
 
-The check validates the fixed login identities, email auth providers, bcrypt password, memberships, current chapter tables, test-only platform-admin guard, transactional rollback, and a byte-for-byte idempotent second seed run.
+The check first proves that a parser-rejected target cannot invoke `psql` or the seed, then validates the fixed login identities, email auth providers, bcrypt password, memberships, current chapter tables, test-only platform-admin guard, transactional rollback, and a byte-for-byte idempotent second seed run.
