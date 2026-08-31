@@ -66,6 +66,8 @@ Phase 7 is complete; Phases 8 through 13 are authorized for phase-by-phase imple
 **`src/components/teacher/scheduled-session-list.tsx`** + **`tests/unit/scheduled-session-list.test.tsx`** (new rendered scheduled-start consumer and replacement warning regression) ·
 **`tests/unit/shadow-routes.test.ts`** · **`TODO.md`** ·
 **`e2e/session-whiteboard.spec.ts`** + **`e2e/helpers.ts`** + **`e2e/helpers/**`** + **`e2e/seed.setup.ts`** (new lifecycle flow, fixtures, and controlled failure seam; explicit pinned-stack execution only) ·
+**PHASE-13 E2E GATE REMEDIATION SCOPE (user-authorized 2026-08-31):**
+**`e2e/auth-identity.spec.ts`** · **`e2e/auth.spec.ts`** · **`e2e/auth.setup.ts`** · **`e2e/courses.spec.ts`** · **`e2e/editor.spec.ts`** · **`e2e/help-queue.spec.ts`** · **`e2e/hocuspocus-auth.spec.ts`** · **`e2e/impersonation.spec.ts`** · **`e2e/live-session.spec.ts`** · **`e2e/portals.spec.ts`** · **`e2e/session-flow.spec.ts`** · **`e2e/unit-picker.spec.ts`** (repair stale route, fixture-role, and cross-test-state contracts exposed by the exact full local gate; no production auth or tenancy change is authorized by this widening) ·
 **`.env.example`** · **`docs/setup.md`** · **`docs/project-structure.md`** (server-only control configuration and ports) ·
 **`docs/reviewers.md`** + **`docs/development-workflow.md`** + **`docs/coding-agent.md`** (permanent review-gate and dispatch contracts).
 
@@ -80,6 +82,9 @@ The signed canvas JWT and every internal canvas recheck carry the authoritative 
 The hint and claim select a lock and constrain the authoritative query; neither grants access.
 Missing, malformed, or mismatched canvas session IDs fail closed, while non-canvas request and JWT contracts remain compatible.
 This substantive Spec 013 revision must clear the uncapped Sol + Fable 5 design gate before implementation.
+
+Scope-widening (Phase 13 broad E2E gate remediation) authorized by the user 2026-08-31 via “go ahead.”
+The widening is limited to the twelve E2E files named above and does not authorize production auth, tenancy, impersonation, or session-verification changes.
 The scoped `src/lib/whiteboard/**` tests must exercise the real `useWhiteboard` producer with the selected `(canvas:{canvasId}, sessionId)` pair and prove a changed hint clears the retained token before reminting.
 The lock-key correction passed its exact-commit Round 16 design gate on `e91598fb8b177063a8afd2bc0fd9f791c9c76a0a`: Sol APPROVE and Fable 5 APPROVE, with no open findings.
 
