@@ -22,13 +22,14 @@ function loadConfigFrom(directory: string, overrides: Record<string, string> = {
 }
 
 describe("Playwright environment configuration", () => {
-  it("loads E2E settings from the working-directory .env without overriding explicit shell values", async () => {
+  it("loads E2E settings from a dotenv-config fixture without overriding explicit shell values", async () => {
     const directory = await mkdtemp(join(process.cwd(), ".playwright-config-test-"));
     tempDirectories.push(directory);
-    await writeFile(join(directory, ".env"), "E2E_BASE_URL=http://dotenv.test:3999\nBRIDGE_E2E_CANVAS_CONTROL_FAILURE=1\n");
+    const dotenvFixture = join(directory, "e2e-env-fixture");
+    await writeFile(dotenvFixture, "E2E_BASE_URL=http://dotenv.test:3999\nBRIDGE_E2E_CANVAS_CONTROL_FAILURE=1\n");
     await writeFile(join(directory, "playwright.config.mjs"), await readFile(configSourcePath));
 
-    const dotenv = loadConfigFrom(directory);
+    const dotenv = loadConfigFrom(directory, { DOTENV_CONFIG_PATH: dotenvFixture });
     expect(dotenv.status, dotenv.stderr).toBe(0);
     expect(JSON.parse(dotenv.stdout)).toEqual({
       baseURL: "http://dotenv.test:3999",
@@ -37,6 +38,7 @@ describe("Playwright environment configuration", () => {
     const shell = loadConfigFrom(directory, {
       E2E_BASE_URL: "http://shell.test:4888",
       BRIDGE_E2E_CANVAS_CONTROL_FAILURE: "0",
+      DOTENV_CONFIG_PATH: dotenvFixture,
     });
     expect(shell.status, shell.stderr).toBe(0);
     expect(JSON.parse(shell.stdout)).toEqual({

@@ -850,7 +850,7 @@ No implementation, Round-4 plan edit, migration, service, E2E, or remote action 
 ### Phase 13 local-gate remediation (2026-08-31; reviewer confirmation pending)
 
 - `[FIXED] [quality]` `e2e/playwright.config.ts` no longer defaults a missing E2E target to port 3003.
-  It loads dotenv first, then rejects configuration evaluation unless a persistent or explicit-shell `E2E_BASE_URL` exists; the isolated Node-runtime regression proves dotenv loading, shell precedence, and the absent-value rejection.
+  It loads dotenv first, then rejects configuration evaluation unless a persistent or explicit-shell `E2E_BASE_URL` exists; the isolated Node-runtime regression uses a nonsecret `DOTENV_CONFIG_PATH` fixture to prove dotenv loading, shell precedence, and the absent-value rejection, while the earlier live E2E run proved the default repository `.env` path.
 - `[FIXED] [quality]` `scripts/check-test-database-url.mjs` now rejects every decoded, case-insensitive libpq routing query key that could make later `psql` seed execution consume a different target than the Node live probe.
   Parser regressions cover direct, case-varied, and percent-encoded keys, retain safe application/SSL options, and the mocked `ci-local` subprocess proves a rejected routing URL invokes neither seed nor Playwright.
 - `[FIXED] [quality]` A dotenv-loader failure records a named gate failure, removes a stale attestation, and returns before seed/E2E under `set -e`.
