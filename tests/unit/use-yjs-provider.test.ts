@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { renderHook } from "@testing-library/react";
 import { HocuspocusProvider } from "@hocuspocus/provider";
 import { OutgoingMessage } from "@hocuspocus/server";
 import * as Y from "yjs";
-import { canvasReconnectPolicy } from "@/lib/yjs/use-yjs-provider";
+import { canvasReconnectPolicy, useYjsProvider } from "@/lib/yjs/use-yjs-provider";
 import { __resetRealtimeTokenCacheForTesting, getRealtimeToken } from "@/lib/realtime/get-token";
 
 afterEach(() => {
@@ -12,6 +13,17 @@ afterEach(() => {
 });
 
 describe("canvas reconnect policy", () => {
+  it("constructs the real pinned canvas provider with delay at least minDelay", () => {
+    expect(() => {
+      const { unmount } = renderHook(() => useYjsProvider({
+        documentName: "canvas:22222222-2222-4222-8222-222222222222",
+        token: "canvas-token",
+        serverUrl: "ws://127.0.0.1:1",
+      }));
+      unmount();
+    }).not.toThrow();
+  });
+
   it("resets a twenty-second recovery horizon on every session_freezing rejection", () => {
     const start = 1_000;
     const first = canvasReconnectPolicy({ now: start, event: { code: "session_freezing" }, believedLive: true });

@@ -586,6 +586,8 @@ That recheck is now defense in depth: the confirmed path gains the lifecycle lea
   The implicit label's text includes option descendants, so the live and archive visibility assertions now use the accessibility-tree contract: exact named `combobox "Visibility"`; the same source/accessibility audit made the existing board-title clicks role-scoped board-button locators plus exact `Canvas floor` labels. E2E was not rerun in this correction.
   `[FIXED — live E2E correction]` After the participant joined, the class page navigated to `/student/sessions/{sessionId}`, while this spec waited for a legacy class-nested route.
   The participant wait now matches the canonical exact `/student/sessions/${sessionId}` path; E2E was not rerun in this correction.
+  `[RED — live defect regression]` The live stack showed a locally drawn canvas never reached the participant because the pinned provider rejected the canvas construction options: `delay: 250` was below its `minDelay: 1000`.
+  Added a focused real-provider hook construction regression requiring canvas setup not to throw under the pinned provider; `bunx --bun vitest run tests/unit/use-yjs-provider.test.ts` reproduced two unhandled `delay: 250 < minDelay: 1000` rejections at provider construction, so it is intentionally RED until the production reconnect configuration satisfies that invariant.
 
 ### Phase 13 — Documentation, cross-phase verification, and shipping evidence *(orchestrator)*
 
