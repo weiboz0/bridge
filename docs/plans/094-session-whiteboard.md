@@ -593,6 +593,12 @@ That recheck is now defense in depth: the confirmed path gains the lifecycle lea
   `[RED → GREEN — live E2E configuration]` Bun's shell loads the repository `.env`, but the `playwright` executable runs under Node and previously skipped the injection-only assertion unless its variables were manually shell-exported.
   `e2e/playwright.config.ts` now explicitly loads `.env` through a direct `dotenv` development dependency, which preserves pre-existing shell values and leaves the existing `http://localhost:3003` fallback only when neither source provides `E2E_BASE_URL`.
   A no-setup isolated Node-runtime config test first observed the default URL and absent failure flag from a synthetic `.env`, then passed for `.env` loading, shell precedence, and the no-`.env` fallback; no live E2E, service, database, or repository `.env` read occurred.
+  `[GREEN — live E2E acceptance]` The durable-loader verification reran the isolated configuration test (1/1, setup 0), scoped ESLint, TypeScript, and diff checks successfully.
+  The guarded `bridge_test` seed restore accepted its target and confirmed six fixture users; the E2E seed also creates its fixture class and enrollments only in `bridge_test`.
+  The normal live-stack run at `eaf59c3` passed 11/11 applicable tests in 20.2 seconds, with only the intentionally disabled failure-injection assertion skipped.
+  The persistent-`.env` degraded run passed 12/12 in 15.6 seconds, including the injected-control incomplete-archive warning, without temporary exports for `E2E_BASE_URL`, the control-failure flag, Hocuspocus control secret, or database URLs; only the five external-provider keys were blanked for that command.
+  Afterward the failure flag was restored to `0` with mode `0600`, and the owned stack stopped gracefully.
+  No non-test database, migration, or external provider was used.
 
 ### Phase 13 — Documentation, cross-phase verification, and shipping evidence *(orchestrator)*
 
