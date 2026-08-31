@@ -87,14 +87,14 @@ test.describe.serial("session whiteboard live stack", () => {
     await teacher.getByRole("button", { name: "New whiteboard" }).click();
     await expect(teacher.getByRole("button", { name: boardTitle })).toBeVisible();
 
-    const visibility = teacher.getByLabel("Visibility");
+    const visibility = teacher.getByLabel("Visibility", { exact: true });
     await visibility.selectOption("participants");
     await expect(teacher.getByRole("dialog", { name: "Raise whiteboard visibility?" })).toBeVisible();
     await teacher.getByRole("button", { name: "Raise visibility" }).click();
     await expect(visibility).toHaveValue("participants");
 
-    await teacher.getByLabel("Canvas floor").selectOption("participants");
-    await expect(teacher.getByLabel("Canvas floor")).toHaveValue("participants");
+    await teacher.getByLabel("Canvas floor", { exact: true }).selectOption("participants");
+    await expect(teacher.getByLabel("Canvas floor", { exact: true })).toHaveValue("participants");
   });
 
   test("participant views the raised board while a public outsider cannot create", async () => {
@@ -102,7 +102,7 @@ test.describe.serial("session whiteboard live stack", () => {
     await participant.getByText("Live Session — Join Now").click();
     await participant.waitForURL(/\/student\/classes\/.*\/session\//);
     await openWhiteboard(participant);
-    await participant.getByText(boardTitle, { exact: true }).click();
+    await participant.getByRole("button", { name: boardTitle }).click();
     await expect(participant.getByText("View only", { exact: true })).toBeVisible();
 
     // Bob is the public-outsider fixture: authenticated but neither a class
@@ -142,12 +142,12 @@ test.describe.serial("session whiteboard live stack", () => {
   });
 
   test("read-only archive suppresses live controls after explicit end", async () => {
-    await teacher.getByText(boardTitle, { exact: true }).click();
+    await teacher.getByRole("button", { name: boardTitle }).click();
     await expect(teacher.getByText("Read-only session archive", { exact: true })).toBeVisible();
     await expect(teacher.getByText("View only", { exact: true })).toBeVisible();
     await expect(teacher.getByRole("button", { name: "New whiteboard" })).toHaveCount(0);
-    await expect(teacher.getByLabel("Canvas floor")).toHaveCount(0);
-    await expect(teacher.getByLabel("Visibility")).toHaveCount(0);
+    await expect(teacher.getByLabel("Canvas floor", { exact: true })).toHaveCount(0);
+    await expect(teacher.getByLabel("Visibility", { exact: true })).toHaveCount(0);
   });
 
   test("named E2E control-client failure injection reports an incomplete archive", async () => {
