@@ -271,7 +271,10 @@ export function useYjsProvider({
       name: documentName,
       document: yDoc,
       token,
-      ...(canvas ? { delay: 250, maxDelay: CANVAS_FAST_DELAY_MAX_MS, factor: 2, jitter: true, maxAttempts: 0 } : {}),
+      // minDelay must stay <= the lowest delay canvasReconnectPolicy ever issues (250ms,
+      // the first fast-phase attempt); @lifeomic/attempt's retry() throws "delay cannot be
+      // less than minDelay" against its 1000ms default otherwise, on the very first attempt.
+      ...(canvas ? { delay: 250, minDelay: 250, maxDelay: CANVAS_FAST_DELAY_MAX_MS, factor: 2, jitter: true, maxAttempts: 0 } : {}),
       onConnect: () => {
         console.log(`[yjs] Connected to ${documentName}`);
         setConnected(true);
