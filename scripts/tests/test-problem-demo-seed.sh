@@ -201,7 +201,7 @@ VALUES ('$sentinel_membership_id', '$sentinel_org_id', '$sentinel_user_id', 'tea
 INSERT INTO courses (id, org_id, created_by, title, description, grade_level, language, is_published)
 VALUES ('$sentinel_course_id', '$sentinel_org_id', '$sentinel_user_id', 'Seed Harness Sentinel', 'Isolation sentinel', '9-12', 'python', false);
 INSERT INTO classes (id, course_id, org_id, title, term, join_code, status)
-VALUES ('$sentinel_class_id', '$sentinel_course_id', '$sentinel_org_id', 'Seed Harness Sentinel', 'test', 'SENTINEL', 'active');
+VALUES ('$sentinel_class_id', '$sentinel_course_id', '$sentinel_org_id', 'Seed Harness Sentinel', 'test', 'S${sentinel_class_id:0:7}', 'active');
 INSERT INTO class_memberships (id, class_id, user_id, role)
 VALUES ('$sentinel_class_membership_id', '$sentinel_class_id', '$sentinel_user_id', 'instructor');
 COMMIT;
@@ -213,7 +213,7 @@ assert_unrelated_sentinel_survives() {
     SELECT (
       (SELECT count(*) FROM organizations WHERE id = '$sentinel_org_id'::uuid) = 1 AND
       (SELECT count(*) FROM courses WHERE id = '$sentinel_course_id'::uuid) = 1 AND
-      (SELECT count(*) FROM classes WHERE id = '$sentinel_class_id'::uuid) = 1 AND
+      (SELECT count(*) FROM classes WHERE id = '$sentinel_class_id'::uuid AND join_code = 'S${sentinel_class_id:0:7}' AND join_code <> 'SENTINEL') = 1 AND
       (SELECT count(*) FROM org_memberships WHERE id = '$sentinel_membership_id'::uuid) = 1 AND
       (SELECT count(*) FROM class_memberships WHERE id = '$sentinel_class_membership_id'::uuid) = 1
     )::text;"

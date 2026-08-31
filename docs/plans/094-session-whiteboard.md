@@ -575,7 +575,7 @@ That recheck is now defense in depth: the confirmed path gains the lifecycle lea
   The seed now inserts `topics` using the current schema (without dropped `lesson_content`); a candidate restoring that column is required to fail.
   The non-test proof substitutes only `current_database()` in the actual predicate, so an `OR true` guard candidate creates the test-only admin rows and demonstrates that the normal assertion would reject the bypass.
   Each harness run transforms the seed and verifier into a unique ID/email/slug/join-code namespace before DML, so no pre-existing Bridge Demo School fixture is cleared.
-  An unrelated sentinel organization, course, class, and memberships is asserted after fixture clearing and removed only by exact IDs; canonical restoration or sentinel-cleanup failures fail the command rather than being suppressed.
+  An unrelated sentinel organization, course, class, and memberships is asserted after fixture clearing and removed only by exact IDs; its join code is derived from the per-run transformed class ID, and canonical restoration or sentinel-cleanup failures fail the command rather than being suppressed.
   Its non-test admin proof substitutes a non-test literal only inside the seed copy and executes it against `bridge_test`; it never connects to a non-test database.
   No migration, non-test database, service, E2E, provider, or environment-file read ran.
 
