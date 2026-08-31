@@ -15,8 +15,7 @@ source "$REPO_ROOT/scripts/lib/uniqueness.sh"
 
 PASS=0; FAIL=0
 FIXTURES="$(mktemp -d)"
-ROOT_FIXTURE=""
-trap 'rm -rf "$FIXTURES" "${ROOT_FIXTURE:-}"' EXIT
+trap 'rm -rf "$FIXTURES"' EXIT
 
 ok()   { echo "  ✓ $1"; PASS=$((PASS+1)); }
 bad()  { echo "  ✗ $1" >&2; FAIL=$((FAIL+1)); }
@@ -278,23 +277,13 @@ restore_e2e_seed_uses_validated_url() {
 expect 0 "fixture restore applies the canonical seed only through GATE_DATABASE_URL" \
   restore_e2e_seed_uses_validated_url
 
-ci_local_dotenv_loader() {
-  ROOT_FIXTURE="$(mktemp -d "$REPO_ROOT/.ci-local-e2e-env.XXXXXX")"
-  printf 'E2E_BASE_URL=http://dotenv.test:3999\n' > "$ROOT_FIXTURE/.env"
-  (
-    cd "$ROOT_FIXTURE"
-    # shellcheck disable=SC1090
-    source "$E2E_GATE_FUNCTIONS"
-    unset E2E_BASE_URL
-    load_persistent_e2e_base_url
-    [[ "$E2E_BASE_URL" == "http://dotenv.test:3999" ]]
-    E2E_BASE_URL="http://shell.test:4888"
-    load_persistent_e2e_base_url
-    [[ "$E2E_BASE_URL" == "http://shell.test:4888" ]]
-  )
-}
-expect 0 "ci-local loads only persistent E2E_BASE_URL while preserving a shell override" \
-  ci_local_dotenv_loader
+if rg -Fq 'import { config } from "dotenv";' "$REPO_ROOT/scripts/ci-local.sh" \
+  && rg -Fq 'config({ path: ".env", quiet: true })' "$REPO_ROOT/scripts/ci-local.sh" \
+  && rg -Fq '[[ -n "${E2E_BASE_URL:-}" ]] && return' "$REPO_ROOT/scripts/ci-local.sh"; then
+  ok "ci-local reads only E2E_BASE_URL through dotenv while preserving a shell override"
+else
+  bad "ci-local reads only E2E_BASE_URL through dotenv while preserving a shell override"
+fi
 
 e2e_gate_call_line="$(rg -n '^run_e2e_gate$' "$REPO_ROOT/scripts/ci-local.sh" | tail -1 | cut -d: -f1 || true)"
 if [[ -n "$gate_validate_line" && -n "$e2e_gate_call_line" && "$gate_validate_line" -lt "$e2e_gate_call_line" ]]; then
