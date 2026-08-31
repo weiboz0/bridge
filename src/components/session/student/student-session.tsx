@@ -36,8 +36,6 @@ interface StudentSessionProps {
 
 export function StudentSession({
   sessionId,
-  classId,
-  returnPath,
   editorMode,
   starterCode = "",
 }: StudentSessionProps) {
