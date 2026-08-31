@@ -123,23 +123,21 @@ ON CONFLICT (id) DO NOTHING;
 
 -- ---------- Topics ----------
 
-INSERT INTO topics (id, course_id, title, description, sort_order, lesson_content)
+INSERT INTO topics (id, course_id, title, description, sort_order)
 VALUES
   (
     '00000000-0000-0000-0000-000000010001',
     '00000000-0000-0000-0000-0000000aa001',
     'Warm-ups',
     'Simple I/O: read from input(), print a result.',
-    0,
-    '{}'::jsonb
+    0
   ),
   (
     '00000000-0000-0000-0000-000000010002',
     '00000000-0000-0000-0000-0000000aa001',
     'Arrays',
     'Work with lists of numbers.',
-    1,
-    '{}'::jsonb
+    1
   )
 ON CONFLICT (id) DO NOTHING;
 

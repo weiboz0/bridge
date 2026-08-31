@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
-canonical_seed="$repo_root/scripts/seed_problem_demo.sql"
+repo_root="${BRIDGE_REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+canonical_seed="${CANONICAL_SEED_FILE:-$repo_root/scripts/seed_problem_demo.sql}"
 
 fail() {
   printf 'FAIL: %s\n' "$1" >&2
@@ -42,6 +42,12 @@ database_url="${CHECK_TEST_DATABASE_URL:?CHECK_TEST_DATABASE_URL must name the g
 psql_bin="${PSQL_BIN:-psql}"
 admin_user_id='00000000-0000-0000-0000-0000000e0006'
 admin_provider_id='00000000-0000-0000-0000-0000000f0006'
+sentinel_org_id='10000000-0000-0000-0000-000000000001'
+sentinel_user_id='10000000-0000-0000-0000-000000000002'
+sentinel_membership_id='10000000-0000-0000-0000-000000000003'
+sentinel_course_id='10000000-0000-0000-0000-000000000004'
+sentinel_class_id='10000000-0000-0000-0000-000000000005'
+sentinel_class_membership_id='10000000-0000-0000-0000-000000000006'
 temp_dir=''
 
 # The subprocess must prove parser rejection before this process accepts its
@@ -51,6 +57,50 @@ if [[ "${PROBLEM_DEMO_SEED_SKIP_REJECTION_PROBE:-}" != '1' ]]; then
   prove_rejected_target_never_reaches_psql
 fi
 node "$repo_root/scripts/check-test-database-url.mjs"
+
+# Run every DML assertion against an ID/email/slug/join-code namespace derived
+# from this invocation. The child transforms the real seed and this verifier
+# together, so it exercises the same SQL without deleting any pre-existing
+# Bridge Demo School rows.
+if [[ "${PROBLEM_DEMO_SEED_ISOLATED_CHILD:-}" != '1' ]]; then
+  isolated_dir=$(mktemp -d /dev/shm/bridge-problem-demo-seed-isolated.XXXXXX)
+  isolated_script="$isolated_dir/test-problem-demo-seed.sh"
+  isolated_seed="$isolated_dir/seed_problem_demo.sql"
+  isolated_nonce=$(node -e "console.log(require('node:crypto').randomUUID().replace(/-/g, ''))")
+  node --input-type=module - "$0" "$canonical_seed" "$isolated_script" "$isolated_seed" "$isolated_nonce" <<'NODE'
+import { createHash } from 'node:crypto';
+import { readFileSync, writeFileSync } from 'node:fs';
+const [scriptPath, seedPath, outputScript, outputSeed, nonce] = process.argv.slice(2);
+const ids = new Map();
+const fixtureId = (id) => {
+  if (!ids.has(id)) {
+    const hex = createHash('sha256').update(`${nonce}:${id}`).digest('hex');
+    ids.set(id, `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`);
+  }
+  return ids.get(id);
+};
+const rewrite = (text) => text
+  .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, fixtureId)
+  .replaceAll('@demo.edu', `+seed-${nonce.slice(0, 10)}@demo.edu`)
+  .replaceAll('admin@e2e.test', `admin+seed-${nonce.slice(0, 10)}@e2e.test`)
+  .replaceAll('bridge-demo-school', `bridge-demo-school-${nonce.slice(0, 10)}`)
+  .replaceAll('DEMOP3AB', `D${nonce.slice(0, 7).toUpperCase()}`);
+writeFileSync(outputScript, rewrite(readFileSync(scriptPath, 'utf8')), { mode: 0o700 });
+writeFileSync(outputSeed, rewrite(readFileSync(seedPath, 'utf8')), { mode: 0o600 });
+NODE
+  set +e
+  BRIDGE_REPO_ROOT="$repo_root" \
+    CANONICAL_SEED_FILE="$isolated_seed" \
+    SEED_FILE="$isolated_seed" \
+    CHECK_TEST_DATABASE_URL="$database_url" \
+    PROBLEM_DEMO_SEED_ISOLATED_CHILD=1 \
+    bash "$isolated_script"
+  isolated_status=$?
+  set -e
+  rm -rf "$isolated_dir"
+  exit "$isolated_status"
+fi
+
 temp_dir=$(mktemp -d /dev/shm/bridge-problem-demo-seed.XXXXXX)
 
 psql_checked() {
@@ -139,6 +189,49 @@ COMMIT;
 SQL
 }
 
+create_unrelated_sentinel() {
+  psql_checked <<SQL
+BEGIN;
+INSERT INTO organizations (id, name, slug, type, status, contact_email, contact_name, domain, settings, verified_at, created_at, updated_at)
+VALUES ('$sentinel_org_id', 'Seed Harness Sentinel', 'seed-harness-sentinel-$sentinel_org_id', 'school', 'active', 'sentinel@example.test', 'Sentinel', 'example.test', '{}'::jsonb, now(), now(), now());
+INSERT INTO users (id, name, email, password_hash, is_platform_admin, status, intended_role, created_at, updated_at)
+VALUES ('$sentinel_user_id', 'Seed Harness Sentinel', 'sentinel-$sentinel_user_id@example.test', 'not-a-login', false, 'active', NULL, now(), now());
+INSERT INTO org_memberships (id, org_id, user_id, role, status, invited_by, created_at)
+VALUES ('$sentinel_membership_id', '$sentinel_org_id', '$sentinel_user_id', 'teacher', 'active', NULL, now());
+INSERT INTO courses (id, org_id, created_by, title, description, grade_level, language, is_published)
+VALUES ('$sentinel_course_id', '$sentinel_org_id', '$sentinel_user_id', 'Seed Harness Sentinel', 'Isolation sentinel', '9-12', 'python', false);
+INSERT INTO classes (id, course_id, org_id, title, term, join_code, status)
+VALUES ('$sentinel_class_id', '$sentinel_course_id', '$sentinel_org_id', 'Seed Harness Sentinel', 'test', 'SENTINEL', 'active');
+INSERT INTO class_memberships (id, class_id, user_id, role)
+VALUES ('$sentinel_class_membership_id', '$sentinel_class_id', '$sentinel_user_id', 'instructor');
+COMMIT;
+SQL
+}
+
+assert_unrelated_sentinel_survives() {
+  assert_scalar_true 'unrelated sentinel org/course/class/membership was modified' "
+    SELECT (
+      (SELECT count(*) FROM organizations WHERE id = '$sentinel_org_id'::uuid) = 1 AND
+      (SELECT count(*) FROM courses WHERE id = '$sentinel_course_id'::uuid) = 1 AND
+      (SELECT count(*) FROM classes WHERE id = '$sentinel_class_id'::uuid) = 1 AND
+      (SELECT count(*) FROM org_memberships WHERE id = '$sentinel_membership_id'::uuid) = 1 AND
+      (SELECT count(*) FROM class_memberships WHERE id = '$sentinel_class_membership_id'::uuid) = 1
+    )::text;"
+}
+
+clear_unrelated_sentinel() {
+  psql_checked <<SQL
+BEGIN;
+DELETE FROM class_memberships WHERE id = '$sentinel_class_membership_id'::uuid;
+DELETE FROM classes WHERE id = '$sentinel_class_id'::uuid;
+DELETE FROM courses WHERE id = '$sentinel_course_id'::uuid;
+DELETE FROM org_memberships WHERE id = '$sentinel_membership_id'::uuid;
+DELETE FROM users WHERE id = '$sentinel_user_id'::uuid;
+DELETE FROM organizations WHERE id = '$sentinel_org_id'::uuid;
+COMMIT;
+SQL
+}
+
 replace_seed_chapters_with_supported_random_ids() {
   psql_checked <<SQL
 BEGIN;
@@ -183,7 +276,14 @@ SQL
 cleanup() {
   local status=$?
   if [[ -n "$temp_dir" ]]; then rm -rf "$temp_dir"; fi
-  restore_canonical_fixture
+  if ! restore_canonical_fixture; then
+    printf 'FAIL: canonical fixture restoration failed\n' >&2
+    exit 1
+  fi
+  if ! clear_unrelated_sentinel; then
+    printf 'FAIL: unrelated sentinel cleanup failed\n' >&2
+    exit 1
+  fi
   exit "$status"
 }
 
@@ -340,7 +440,8 @@ seed_from_empty_graph() {
 }
 
 restore_canonical_fixture() {
-  clear_canonical_fixture && run_seed "$canonical_seed" || true
+  clear_canonical_fixture
+  run_seed "$canonical_seed"
 }
 
 expect_fixture_verification_failure() {
@@ -354,6 +455,7 @@ expect_fixture_verification_failure() {
 
 # Validation is complete; the only DML-capable EXIT handler is armed now.
 trap cleanup EXIT
+create_unrelated_sentinel
 
 # The seed intentionally allows an earlier chapter UUID for either fixed topic.
 # Install two such rows, prove the real seed accepts them, then prove the
@@ -364,6 +466,7 @@ run_seed "$canonical_seed"
 verify_fixture || fail 'canonical seed did not reuse supported random topic chapter IDs'
 clear_canonical_fixture
 assert_empty_fixture
+assert_unrelated_sentinel_survives
 
 # Baseline: clear the complete graph, run the actual seed, verify all behavior,
 # then prove a second run leaves every fixed fixture row byte-for-byte unchanged.
@@ -378,7 +481,7 @@ run_seed "$seed_file"
 # the production condition became unconditional, the mutation would not match
 # and this assertion would fail without ever opening a non-test connection.
 non_test_guard="$temp_dir/non-test-guard.sql"
-awk 'index($0, "WHERE current_database() ~") { print "WHERE '\''non_test_target'\'' ~ '\''_test$'\''"; next } { print }' "$seed_file" > "$non_test_guard"
+awk '{ gsub(/current_database\(\)/, "'\''non_test_target'\''"); print }' "$seed_file" > "$non_test_guard"
 seed_from_empty_graph "$non_test_guard"
 admin_count=$(query_scalar "SELECT count(*)::text FROM users WHERE id = '$admin_user_id'::uuid")
 admin_provider_count=$(query_scalar "SELECT count(*)::text FROM auth_providers WHERE id = '$admin_provider_id'::uuid")
@@ -386,6 +489,14 @@ admin_provider_count=$(query_scalar "SELECT count(*)::text FROM auth_providers W
 [[ "$admin_provider_count" == '0' ]] || fail 'admin guard created an auth provider for a simulated non-test database'
 restore_canonical_fixture
 verify_fixture || fail 'canonical seed did not restore simulated non-test admin state'
+
+or_true_guard="$temp_dir/non-test-guard-or-true.sql"
+sed "s/WHERE current_database() ~ '_test\$'/WHERE current_database() ~ '_test\$' OR true/" "$seed_file" > "$or_true_guard"
+seed_from_empty_graph "$or_true_guard"
+admin_count=$(query_scalar "SELECT count(*)::text FROM users WHERE id = '$admin_user_id'::uuid")
+admin_provider_count=$(query_scalar "SELECT count(*)::text FROM auth_providers WHERE id = '$admin_provider_id'::uuid")
+[[ "$admin_count" == '1' && "$admin_provider_count" == '1' ]] || fail 'OR true admin-guard near miss did not bypass the actual predicate'
+restore_canonical_fixture
 
 # Each mutation must be rejected by the same behavioral verifier rather than
 # by source fragments. Cleanup targets only the fixed row under test and the
@@ -422,6 +533,14 @@ expect_seed_failure "$invalid_chapter_columns"
 assert_empty_fixture
 restore_canonical_fixture
 
+invalid_topic_columns="$temp_dir/invalid-topic-columns.sql"
+sed '0,/INSERT INTO topics (id, course_id, title, description, sort_order)/s//INSERT INTO topics (id, course_id, title, description, sort_order, lesson_content)/' "$seed_file" > "$invalid_topic_columns"
+clear_canonical_fixture
+assert_empty_fixture
+expect_seed_failure "$invalid_topic_columns"
+assert_empty_fixture
+restore_canonical_fixture
+
 missing_conflict="$temp_dir/missing-conflict.sql"
 sed '0,/ON CONFLICT (id) DO NOTHING;/s//;/' "$seed_file" > "$missing_conflict"
 clear_canonical_fixture
@@ -444,4 +563,5 @@ verify_fixture || fail 'canonical seed did not commit and restore admin state'
 final_baseline=$(fixture_fingerprint)
 run_seed "$canonical_seed"
 [[ "$(fixture_fingerprint)" == "$final_baseline" ]] || fail 'final canonical seed re-run changed the fixture graph'
+assert_unrelated_sentinel_survives
 printf 'problem demo seed integration contract: pass\n'

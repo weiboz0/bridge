@@ -569,9 +569,13 @@ That recheck is now defense in depth: the confirmed path gains the lifecycle lea
   Before that live check, a subprocess passed a fake `psql` sentinel while parser-rejecting `postgresql://127.0.0.1:5432/bridge`; the sentinel remained absent, proving rejected targets cannot run `psql`, the seed, or a DML-capable EXIT cleanup.
   A deliberate mutation that called the sentinel instead produced the expected RED failure and was restored before the GREEN run.
   After validation, the executable harness clears the complete dependency-ordered fixed fixture graph, including topic-owned chapters/documents, and requires a zero census before every real/candidate seed; this prevents pre-existing correct rows from masking an omitted Eve provider, Alice bcrypt, Bob membership, or chapters.
-  It then restores only the canonical fixed graph and reruns its full fingerprint/idempotence assertion.
+  It then restores only the canonical fixture graph and reruns its fingerprint/idempotence assertion.
   Chapter ownership is resolved through the two fixed topic IDs throughout clear, census, verification, and fingerprinting, rather than assuming the seed's preferred chapter UUIDs.
   A regression installs two supported non-fixed chapter UUIDs and documents for those topics, proves the canonical seed reuses them, then proves the topic-owned clear reaches a zero census; mutating that clear back to fixed IDs produced the expected foreign-key RED and was restored.
+  The seed now inserts `topics` using the current schema (without dropped `lesson_content`); a candidate restoring that column is required to fail.
+  The non-test proof substitutes only `current_database()` in the actual predicate, so an `OR true` guard candidate creates the test-only admin rows and demonstrates that the normal assertion would reject the bypass.
+  Each harness run transforms the seed and verifier into a unique ID/email/slug/join-code namespace before DML, so no pre-existing Bridge Demo School fixture is cleared.
+  An unrelated sentinel organization, course, class, and memberships is asserted after fixture clearing and removed only by exact IDs; canonical restoration or sentinel-cleanup failures fail the command rather than being suppressed.
   Its non-test admin proof substitutes a non-test literal only inside the seed copy and executes it against `bridge_test`; it never connects to a non-test database.
   No migration, non-test database, service, E2E, provider, or environment-file read ran.
 
