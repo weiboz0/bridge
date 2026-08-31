@@ -578,6 +578,8 @@ That recheck is now defense in depth: the confirmed path gains the lifecycle lea
   Two consecutive guarded `bridge_test` harness runs completed with each EXIT cleanup reporting its zero internal census; a post-run query found no `+seed-` users or `bridge-demo-school-` organizations.
   Its non-test admin proof substitutes a non-test literal only inside the seed copy and executes it against `bridge_test`; it never connects to a non-test database.
   No migration, non-test database, service, E2E, provider, or environment-file read ran.
+  `[FIXED — live E2E correction]` A user-provisioned live-stack RED showed `Start Live Session` navigates to `/teacher/sessions/{sessionId}`, while this spec waited for the legacy class-dashboard route.
+  The wait and UUID extraction now match the canonical `/teacher/sessions/{uuid}` route, consistent with `StartSessionButton` integration/unit coverage; E2E was not rerun in this correction.
 
 ### Phase 13 — Documentation, cross-phase verification, and shipping evidence *(orchestrator)*
 

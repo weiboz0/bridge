@@ -72,8 +72,8 @@ test.describe.serial("session whiteboard live stack", () => {
   test("teacher creates a board, confirms a visibility raise, and raises the floor", async () => {
     await teacher.goto(`/teacher/classes/${classId}`);
     await teacher.getByRole("button", { name: "Start Live Session" }).click();
-    await teacher.waitForURL(/\/teacher\/classes\/.*\/session\/.*\/dashboard/);
-    const match = teacher.url().match(/\/session\/([0-9a-f-]{36})\/dashboard/);
+    await teacher.waitForURL(/\/teacher\/sessions\/[0-9a-f-]{36}/);
+    const match = teacher.url().match(/\/teacher\/sessions\/([0-9a-f-]{36})/);
     expect(match?.[1]).toBeTruthy();
     sessionId = match![1];
 
