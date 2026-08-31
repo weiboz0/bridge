@@ -53,7 +53,14 @@ load_persistent_e2e_base_url() {
   # Do not source .env: it is data, not trusted shell.  Dotenv leaves an
   # explicit shell value untouched and this process prints only the one URL
   # ci-local needs for its pinned-stack refusal check.
-  E2E_BASE_URL="$(node --input-type=module -e 'import { config } from "dotenv"; config({ path: ".env", quiet: true }); process.stdout.write(process.env.E2E_BASE_URL ?? "");')"
+  local env_file="${1:-.env}" loaded
+  if ! loaded="$(node --input-type=module -e 'import { config } from "dotenv"; config({ path: process.argv.at(-1), quiet: true }); process.stdout.write(process.env.E2E_BASE_URL ?? "");' "$env_file")"; then
+    echo "REFUSING TO RUN E2E: persistent E2E_BASE_URL loading failed." >&2
+    rm -f "$ATTESTATION"
+    FAILED+=("e2e (persistent E2E_BASE_URL load failed)")
+    return 1
+  fi
+  E2E_BASE_URL="$loaded"
 }
 
 run_e2e_gate() {
@@ -63,7 +70,9 @@ run_e2e_gate() {
     return
   fi
 
-  load_persistent_e2e_base_url
+  if ! load_persistent_e2e_base_url; then
+    return
+  fi
   if [[ -z "${E2E_BASE_URL:-}" ]]; then
     echo ""
     echo "REFUSING TO RUN E2E: E2E_BASE_URL is unset." >&2

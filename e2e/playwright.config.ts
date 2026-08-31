@@ -1,6 +1,11 @@
 import { defineConfig, devices } from "@playwright/test";
 import "dotenv/config";
 
+const e2eBaseURL = process.env.E2E_BASE_URL;
+if (!e2eBaseURL) {
+  throw new Error("E2E_BASE_URL must be set to a pinned Bridge stack URL");
+}
+
 export default defineConfig({
   testDir: ".",
   testMatch: "**/*.spec.ts",
@@ -12,7 +17,7 @@ export default defineConfig({
   timeout: 30000,
 
   use: {
-    baseURL: process.env.E2E_BASE_URL || "http://localhost:3003",
+    baseURL: e2eBaseURL,
     trace: "on-first-retry",
     screenshot: "only-on-failure",
   },

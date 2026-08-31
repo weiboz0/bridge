@@ -5,6 +5,10 @@ import postgres from "postgres";
 
 const INPUT_ENV = "CHECK_TEST_DATABASE_URL";
 const TIMEOUT_MS = 5_000;
+const LIBPQ_ROUTING_OPTIONS = new Set([
+  "host", "hostaddr", "port", "dbname", "database", "user", "password",
+  "service", "servicefile", "target_session_attrs", "load_balance_hosts",
+]);
 
 // This dedicated CLI performs exactly one direct probe, never Postgres.js's
 // target-session routing checks inherited from its ambient environment.
@@ -41,8 +45,8 @@ function parseTestDatabaseURL(value) {
     throw new Error("multiple database hosts");
   }
 
-  if ([...parsed.searchParams.keys()].some((key) => key.toLowerCase() === "target_session_attrs")) {
-    throw new Error("target session attributes are not allowed");
+  if ([...parsed.searchParams.keys()].some((key) => LIBPQ_ROUTING_OPTIONS.has(key.toLowerCase()))) {
+    throw new Error("libpq routing options are not allowed");
   }
 
   const rawPathname = parsed.pathname;

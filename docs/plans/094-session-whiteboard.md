@@ -847,6 +847,17 @@ No implementation, Round-4 plan edit, migration, service, E2E, or remote action 
   Commit `74adf8f` `[FIXED]` the finding by importing and executing the real signup-intent route, checking the root-produced error through the supported `zod/v4` entry point, and adding the same boundary to the standalone whiteboard suite.
   The original reviewer and an independent quality arbiter then approved; the repository has no production dependency that exposes a second physical Zod error producer, so an artificial nested-package fixture is not part of the application contract.
 
+### Phase 13 local-gate remediation (2026-08-31; reviewer confirmation pending)
+
+- `[FIXED] [quality]` `e2e/playwright.config.ts` no longer defaults a missing E2E target to port 3003.
+  It loads dotenv first, then rejects configuration evaluation unless a persistent or explicit-shell `E2E_BASE_URL` exists; the isolated Node-runtime regression proves dotenv loading, shell precedence, and the absent-value rejection.
+- `[FIXED] [quality]` `scripts/check-test-database-url.mjs` now rejects every decoded, case-insensitive libpq routing query key that could make later `psql` seed execution consume a different target than the Node live probe.
+  Parser regressions cover direct, case-varied, and percent-encoded keys, retain safe application/SSL options, and the mocked `ci-local` subprocess proves a rejected routing URL invokes neither seed nor Playwright.
+- `[FIXED] [quality]` A dotenv-loader failure records a named gate failure, removes a stale attestation, and returns before seed/E2E under `set -e`.
+  The production loader is exercised against a synthetic non-`.env` fixture path with shell precedence, while a fake Node failure proves stale-attestation removal and the exact failure record.
+  Guard regressions capture every seed `psql` argument, one exact protected E2E environment assignment per key, no seed path for fast/unpinned/rejected targets, and restore-failure blocking.
+- Reviewer confirmation remains pending for this exact remediation commit.
+
 ### Plan-wide Review 1 (2026-08-10)
 
 - **Reviewers:** Claude self-review (Opus), Codex (`gpt-5.6-sol`, high), independent Claude (Opus), GLM 5.2.
@@ -1178,8 +1189,9 @@ _Plan-wide report pending later phases._
 
 ### Phase 10 — StudentSession unused-prop lint ratchet fix (2026-08-31)
 
-- **Root cause:** after the Plan 094 ended-session redirect moved to the neutral whiteboard archive, `StudentSession` (`src/components/session/student/student-session.tsx`) no longer reads its destructured `classId`/`returnPath` props inside the function body — the redirect target is now resolved by the caller (`src/app/(portal)/sessions/[id]/page.tsx`) before `StudentSession` ever mounts. The `StudentSessionProps` interface still declares both fields because every existing caller (`sessions/[id]/page.tsx`, `student/sessions/[sessionId]/page.tsx`, `student/classes/[id]/session/[sessionId]/page.tsx`) passes them, so the public prop type could not be narrowed as part of this fix.
+- **Root cause:** after the Plan 094 ended-session redirect moved to the neutral whiteboard archive, `StudentSession` (`src/components/session/student/student-session.tsx`) no longer reads its destructured `classId`/`returnPath` props inside the function body — the redirect target is now resolved by the caller (`src/app/(portal)/sessions/[id]/page.tsx`) before `StudentSession` ever mounts. The `StudentSessionProps` interface still declares both fields because the two rendering callers (`sessions/[id]/page.tsx` and `student/sessions/[sessionId]/page.tsx`) pass them; the legacy class-nested page only redirects to the canonical student-session route and does not render `StudentSession`.
 - `[RED evidence]` On the pre-fix commit, `bunx eslint src/components/session/student/student-session.tsx` reported exactly the two flagged warnings: `39:3 'classId' is defined but never used` and `40:3 'returnPath' is defined but never used` (`@typescript-eslint/no-unused-vars`), 0 errors.
-- **Fix:** dropped `classId` and `returnPath` from the function's destructuring pattern (`src/components/session/student/student-session.tsx:37-41`) while leaving `StudentSessionProps` and every call site unchanged — the props remain part of the public type and are still passed by all three callers, they're simply no longer bound to local variables the component doesn't use.
+- **Fix:** dropped `classId` and `returnPath` from the function's destructuring pattern (`src/components/session/student/student-session.tsx:37-41`) while leaving `StudentSessionProps` and its two rendering call sites unchanged — the props remain part of the public type and are simply no longer bound to local variables the component does not use.
+- `[FIXED] [spec-review]` Corrected the prior factual error that counted the legacy class-nested redirect as a third `StudentSession` rendering caller; reviewer confirmation is pending.
 - `[GREEN evidence]` `bunx eslint src/components/session/student/student-session.tsx` → 0 problems. `bunx tsc --noEmit` → clean. `bunx --bun vitest run tests/unit/sessions-room-page.test.tsx tests/unit/whiteboard-archive.test.tsx` → 17/17 passed (existing room/archive redirect coverage; no new test added since it was already covering this behavior). `git diff --check` → clean. No service, migration, E2E, or live provider ran.
 - **GREEN:** `bunx --bun vitest run tests/unit/use-yjs-provider.test.ts` passed 15/15 (the new "constructs the real pinned canvas provider with delay at least minDelay" test plus the 14 existing reconnect-policy/bridge tests). `bunx --bun eslint src/lib/yjs/use-yjs-provider.ts` and `bunx --bun tsc --noEmit` both passed clean. `git diff` scope confirmed to only `src/lib/yjs/use-yjs-provider.ts` (plus this plan file). No service, E2E, database, migration, or live provider ran.

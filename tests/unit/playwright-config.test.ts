@@ -18,8 +18,7 @@ function loadConfigFrom(directory: string, overrides: Record<string, string> = {
     env: { PATH: process.env.PATH ?? "", NODE_ENV: "test", ...overrides },
     encoding: "utf8",
   });
-  expect(result.status, result.stderr).toBe(0);
-  return JSON.parse(result.stdout) as { baseURL: string; failureFlag?: string };
+  return result;
 }
 
 describe("Playwright environment configuration", () => {
@@ -29,14 +28,18 @@ describe("Playwright environment configuration", () => {
     await writeFile(join(directory, ".env"), "E2E_BASE_URL=http://dotenv.test:3999\nBRIDGE_E2E_CANVAS_CONTROL_FAILURE=1\n");
     await writeFile(join(directory, "playwright.config.mjs"), await readFile(configSourcePath));
 
-    expect(loadConfigFrom(directory)).toEqual({
+    const dotenv = loadConfigFrom(directory);
+    expect(dotenv.status, dotenv.stderr).toBe(0);
+    expect(JSON.parse(dotenv.stdout)).toEqual({
       baseURL: "http://dotenv.test:3999",
       failureFlag: "1",
     });
-    expect(loadConfigFrom(directory, {
+    const shell = loadConfigFrom(directory, {
       E2E_BASE_URL: "http://shell.test:4888",
       BRIDGE_E2E_CANVAS_CONTROL_FAILURE: "0",
-    })).toEqual({
+    });
+    expect(shell.status, shell.stderr).toBe(0);
+    expect(JSON.parse(shell.stdout)).toEqual({
       baseURL: "http://shell.test:4888",
       failureFlag: "0",
     });
@@ -44,6 +47,8 @@ describe("Playwright environment configuration", () => {
     const emptyDirectory = await mkdtemp(join(process.cwd(), ".playwright-config-test-"));
     tempDirectories.push(emptyDirectory);
     await writeFile(join(emptyDirectory, "playwright.config.mjs"), await readFile(configSourcePath));
-    expect(loadConfigFrom(emptyDirectory)).toEqual({ baseURL: "http://localhost:3003" });
+    const absent = loadConfigFrom(emptyDirectory);
+    expect(absent.status).not.toBe(0);
+    expect(absent.stderr).toContain("E2E_BASE_URL must be set to a pinned Bridge stack URL");
   });
 });

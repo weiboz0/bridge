@@ -51,10 +51,10 @@ Any future CI uses the same five-key mechanism.
 
 ## The E2E hazard
 
-`e2e/playwright.config.ts` declares **no `webServer`** and defaults to:
+`e2e/playwright.config.ts` declares **no `webServer`** and rejects configuration evaluation unless it has:
 
 ```ts
-baseURL: process.env.E2E_BASE_URL || "http://localhost:3003"
+process.env.E2E_BASE_URL
 ```
 
 On the primary dev machine, port 3003 is a **different service** — Bridge's own stack runs on
@@ -62,14 +62,14 @@ On the primary dev machine, port 3003 is a **different service** — Bridge's ow
 And `e2e/seed.setup.ts` is not read-only: it signs in as `eve@demo.edu`,
 creates a fixture class via `POST /api/classes`, and enrolls students.
 
-So an unpinned E2E run points **mutating** setup logic at whatever happens to be listening on 3003.
+This avoids an unpinned E2E run directing **mutating** setup logic at whatever happens to be listening on
+port 3003.
 
 `e2e/playwright.config.ts` loads the repository `.env` through `dotenv`, so a persistent
 `E2E_BASE_URL` and the E2E-only control-failure flag work when Playwright runs under Node.
 An explicit shell value still wins.
 For a full gate, `ci-local.sh` safely reads only `E2E_BASE_URL` through the same dotenv parser (it never
-shell-sources `.env` or prints its contents), then fails closed if neither source supplies it; it never
-falls back to port 3003.
+shell-sources `.env` or prints its contents), then fails closed if neither source supplies it.
 
 After the destructive Vitest and Go suites and immediately before a full pinned E2E run, `ci-local.sh`
 reapplies `scripts/seed_problem_demo.sql` with `psql -v ON_ERROR_STOP=1` using only the already parsed
@@ -89,6 +89,11 @@ Its one supported encoded database-name form is a trailing `%5Ftest` or `%5ftest
 to `_test` before live validation and runner pinning.
 Its live probe makes one bounded `SELECT current_database()` call and requires the connected database name
 to end in `_test` too.
+Before that probe, the parser rejects every libpq routing override in the URL query—`host`, `hostaddr`,
+`port`, `dbname`/`database`, `user`, `password`, `service`, `servicefile`, `target_session_attrs`, and
+`load_balance_hosts`—case-insensitively after URL decoding.
+This keeps the Node validator and the later `psql` seed consumer bound to the same pathname/host target;
+ordinary application and SSL options remain allowed.
 The gate pins that validated URL as both `DATABASE_URL` and `TEST_DATABASE_URL` for Vitest, Go, and E2E.
 Parser-only mode exists exclusively for `scripts/tests/test-guards.sh` selftests and never gates a run.
 

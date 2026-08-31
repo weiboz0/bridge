@@ -129,14 +129,16 @@ expect 1 "non-test database path is rejected" \
   parse_test_url "postgresql://guard:guard@127.0.0.1:5432/bridge"
 expect 1 "query-suffix test-name decoy is rejected" \
   parse_test_url "postgresql://guard:guard@127.0.0.1:5432/bridge?dbname=bridge_test"
-expect 0 "safe test pathname ignores production query override in parser mode" \
-  parse_test_url "postgresql://guard:guard@127.0.0.1:5432/bridge_test?dbname=production"
+for option in host hostaddr port dbname database user password service servicefile target_session_attrs load_balance_hosts HOST '%68ost' '%64bname'; do
+  expect 1 "libpq routing option $option is rejected" \
+    parse_test_url "postgresql://guard:guard@127.0.0.1:5432/bridge_test?$option=foreign"
+done
+expect 0 "nonrouting ssl and application options remain accepted" \
+  parse_test_url "postgresql://guard:guard@127.0.0.1:5432/bridge_test?application_name=guard&sslmode=require"
 expect 1 "comma-separated database hosts are rejected" \
   parse_test_url "postgresql://guard:guard@primary,replica:5432/bridge_test"
 expect 1 "encoded comma-separated database hosts are rejected" \
   parse_test_url "postgresql://guard:guard@safe%2Cforeign:5432/bridge_test"
-expect 1 "target session attributes are rejected" \
-  parse_test_url "postgresql://guard:guard@127.0.0.1:5432/bridge_test?target_session_attrs=read-write"
 
 # Extract only the canonicalizer function.  It must not run ci-local or invoke
 # the validator, and it must communicate exclusively through its output variable.
@@ -270,20 +272,59 @@ restore_e2e_seed_uses_validated_url() {
   source "$E2E_GATE_FUNCTIONS"
   REPO_ROOT="$REPO_ROOT"
   GATE_DATABASE_URL="postgresql://guard:guard@127.0.0.1:5432/bridge_test"
-  psql() { printf '%s\n' "$*" > "$trace"; }
+  psql() { printf '<%s>\n' "$@" >> "$trace"; }
   restore_e2e_demo_seed
-  [[ "$(<"$trace")" == *"-v ON_ERROR_STOP=1 -d $GATE_DATABASE_URL -f $REPO_ROOT/scripts/seed_problem_demo.sql"* ]]
+  [[ "$(cat "$trace")" == $'<-v>\n<ON_ERROR_STOP=1>\n<-d>\n<'"$GATE_DATABASE_URL"$'>\n<-f>\n<'"$REPO_ROOT"$'/scripts/seed_problem_demo.sql>' ]]
 }
 expect 0 "fixture restore applies the canonical seed only through GATE_DATABASE_URL" \
   restore_e2e_seed_uses_validated_url
 
-if rg -Fq 'import { config } from "dotenv";' "$REPO_ROOT/scripts/ci-local.sh" \
-  && rg -Fq 'config({ path: ".env", quiet: true })' "$REPO_ROOT/scripts/ci-local.sh" \
-  && rg -Fq '[[ -n "${E2E_BASE_URL:-}" ]] && return' "$REPO_ROOT/scripts/ci-local.sh"; then
-  ok "ci-local reads only E2E_BASE_URL through dotenv while preserving a shell override"
-else
-  bad "ci-local reads only E2E_BASE_URL through dotenv while preserving a shell override"
-fi
+production_dotenv_loader_reads_fixture_and_preserves_shell() {
+  local fixture="$FIXTURES/e2e-env-fixture"
+  printf 'E2E_BASE_URL=http://dotenv.test:3999\n' > "$fixture"
+  # shellcheck disable=SC1090
+  source "$E2E_GATE_FUNCTIONS"
+  unset E2E_BASE_URL
+  load_persistent_e2e_base_url "$fixture"
+  [[ "$E2E_BASE_URL" == "http://dotenv.test:3999" ]]
+  E2E_BASE_URL="http://shell.test:4888"
+  load_persistent_e2e_base_url "$fixture"
+  [[ "$E2E_BASE_URL" == "http://shell.test:4888" ]]
+}
+expect 0 "production dotenv loader reads a non-.env fixture and preserves a shell override" \
+  production_dotenv_loader_reads_fixture_and_preserves_shell
+
+dotenv_load_failure_blocks_e2e() {
+  local attestation="$FIXTURES/stale-attestation"
+  : > "$attestation"
+  # shellcheck disable=SC1090
+  source "$E2E_GATE_FUNCTIONS"
+  node() { return 1; }
+  FAILED=()
+  E2E_BASE_URL=""
+  ATTESTATION="$attestation"
+  if load_persistent_e2e_base_url "$FIXTURES/e2e-env-fixture" >/dev/null 2>&1; then return 1; fi
+  [[ ! -e "$attestation" && "${FAILED[*]}" == "e2e (persistent E2E_BASE_URL load failed)" ]]
+}
+expect 0 "production dotenv loader failure removes stale attestation and records failure" \
+  dotenv_load_failure_blocks_e2e
+
+rejected_gate_url_never_invokes_consumers() {
+  local fakebin="$FIXTURES/rejected-gate-bin" trace="$FIXTURES/rejected-gate-trace"
+  mkdir -p "$fakebin"
+  : > "$trace"
+  printf '#!/usr/bin/env bash\nprintf psql >> "%s"\n' "$trace" > "$fakebin/psql"
+  printf '#!/usr/bin/env bash\nprintf bun >> "%s"\n' "$trace" > "$fakebin/bun"
+  chmod +x "$fakebin/psql" "$fakebin/bun"
+  local rc=0
+  env PATH="$fakebin:/usr/bin:/bin" \
+    DATABASE_URL="postgresql://guard:guard@127.0.0.1:5432/bridge_test?dbname=foreign" \
+    TEST_DATABASE_URL="postgresql://guard:guard@127.0.0.1:5432/bridge_test?dbname=foreign" \
+    bash "$REPO_ROOT/scripts/ci-local.sh" --fast >/dev/null 2>&1 || rc=$?
+  [[ "$rc" == 2 && ! -s "$trace" ]]
+}
+expect 0 "rejected routing URL invokes neither seed nor test consumers" \
+  rejected_gate_url_never_invokes_consumers
 
 e2e_gate_call_line="$(rg -n '^run_e2e_gate$' "$REPO_ROOT/scripts/ci-local.sh" | tail -1 | cut -d: -f1 || true)"
 if [[ -n "$gate_validate_line" && -n "$e2e_gate_call_line" && "$gate_validate_line" -lt "$e2e_gate_call_line" ]]; then
@@ -299,6 +340,20 @@ for key in ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY DASHSCOPE_API_KEY OPE
     bad "e2e empties $key"
   fi
 done
+
+e2e_env_assignments_are_exact() {
+  local block key count
+  block="$(sed -n '/step "e2e" env \\/,/bun run test:e2e/p' "$REPO_ROOT/scripts/ci-local.sh")"
+  for key in DATABASE_URL TEST_DATABASE_URL ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY DASHSCOPE_API_KEY OPENROUTER_API_KEY; do
+    count="$(printf '%s\n' "$block" | rg -c "^    $key=" || true)"
+    [[ "$count" == 1 ]] || return 1
+  done
+  [[ "$block" == *'    DATABASE_URL="$GATE_DATABASE_URL" \'* ]] \
+    && [[ "$block" == *'    TEST_DATABASE_URL="$GATE_DATABASE_URL" \'* ]] \
+    && [[ "$block" == *$'    ANTHROPIC_API_KEY= \\\n    OPENAI_API_KEY= \\\n    GEMINI_API_KEY= \\\n    DASHSCOPE_API_KEY= \\\n    OPENROUTER_API_KEY= \\'* ]]
+}
+expect 0 "E2E command has one exact empty-or-gate assignment per protected variable" \
+  e2e_env_assignments_are_exact
 
 # ── 15. validator and governance hardening cannot silently regress ──────────
 if rg -q 'max: 1,' "$VALIDATOR" \
