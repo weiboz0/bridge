@@ -583,7 +583,7 @@ That recheck is now defense in depth: the confirmed path gains the lifecycle lea
   `[FIXED — live E2E correction]` The subsequent live RED created the board but failed strict locator resolution because its title is intentionally present in both the board-list button and details text.
   A further live RED showed that button's accessible name includes its visibility badge (for example, `${boardTitle} private`), so the role-scoped assertion now matches the title non-exactly; E2E was not rerun in this correction.
   `[FIXED — live E2E correction]` After a successful visibility raise, non-exact `getByLabel("Visibility")` matched both the control and confirmation dialog, triggering strict-mode failure.
-  The visibility label is now exact, and the same source/accessibility audit made the existing board-title clicks role-scoped board-button locators plus exact `Canvas floor`/archive-control labels; E2E was not rerun in this correction.
+  The implicit label's text includes option descendants, so the live and archive visibility assertions now use the accessibility-tree contract: exact named `combobox "Visibility"`; the same source/accessibility audit made the existing board-title clicks role-scoped board-button locators plus exact `Canvas floor` labels. E2E was not rerun in this correction.
 
 ### Phase 13 — Documentation, cross-phase verification, and shipping evidence *(orchestrator)*
 

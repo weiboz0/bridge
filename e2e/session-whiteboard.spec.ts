@@ -87,7 +87,7 @@ test.describe.serial("session whiteboard live stack", () => {
     await teacher.getByRole("button", { name: "New whiteboard" }).click();
     await expect(teacher.getByRole("button", { name: boardTitle })).toBeVisible();
 
-    const visibility = teacher.getByLabel("Visibility", { exact: true });
+    const visibility = teacher.getByRole("combobox", { name: "Visibility", exact: true });
     await visibility.selectOption("participants");
     await expect(teacher.getByRole("dialog", { name: "Raise whiteboard visibility?" })).toBeVisible();
     await teacher.getByRole("button", { name: "Raise visibility" }).click();
@@ -147,7 +147,7 @@ test.describe.serial("session whiteboard live stack", () => {
     await expect(teacher.getByText("View only", { exact: true })).toBeVisible();
     await expect(teacher.getByRole("button", { name: "New whiteboard" })).toHaveCount(0);
     await expect(teacher.getByLabel("Canvas floor", { exact: true })).toHaveCount(0);
-    await expect(teacher.getByLabel("Visibility", { exact: true })).toHaveCount(0);
+    await expect(teacher.getByRole("combobox", { name: "Visibility", exact: true })).toHaveCount(0);
   });
 
   test("named E2E control-client failure injection reports an incomplete archive", async () => {
