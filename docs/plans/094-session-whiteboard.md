@@ -558,13 +558,16 @@ That recheck is now defense in depth: the confirmed path gains the lifecycle lea
 
 #### Phase 12 demo E2E seed recovery (2026-08-31; Terra)
 
-- `[RED → GREEN]` Added `scripts/tests/test-problem-demo-seed.sh`; it first failed because the documented E2E prerequisite `INSERT INTO users` was absent.
-  The test now proves the fixed identity, email-auth-provider, organization, active-membership, `_test`-only admin, fixed-ID no-op, and post-0026 chapter-table contracts.
+- `[RED → GREEN]` Replaced the initial fragment matcher in `scripts/tests/test-problem-demo-seed.sh` with a guarded executable fixture harness.
+  A temporary test-only mutation changing both `current_database() ~ '_test$'` predicates to `WHERE false` produced the expected identity/provider verification failure; restoration of the real seed then passed.
+  The harness runs the real seed twice and fingerprints every fixed identity, provider, membership, organization, course, topic, problem, attachment, solution, test case, chapter/document, class, class-membership, and class-setting row to prove counts and data remain unchanged.
+  It also rejects isolated near-miss copies with an unconditional admin insert, omitted admin provider, inactive/wrong membership, invalid bcrypt, invalid `chapters` column, removed conflict no-op, and a late transactional failure; the latter proves rollback under `BEGIN` and durable restoration under `COMMIT`.
 - `[FIXED]` `scripts/seed_problem_demo.sql` now creates Bridge Demo School plus Eve, Alice, Bob, Frank, and Diana with fixed UUIDs, active role memberships, email providers, and the authentication-compatible bcrypt hash for `bridge123`.
   `admin@e2e.test` and its email provider are inserted only where `current_database() ~ '_test$'`, so the known-password platform-admin fixture is absent from non-test targets.
   The obsolete `teaching_units`/`unit_documents` writes now target the migrated `chapters`/`chapter_documents` schema without changing the seeded chapter or class content.
-- `[GREEN evidence]` Immediately after the guarded validator accepted `bridge_test`, the seed applied twice to only `postgresql://work@127.0.0.1:5432/bridge_test`.
-  The second apply was a conflict no-op; SQL checks confirmed all six identities' fixed IDs, active status, exact email providers, admin bit, and six expected active memberships, while `bcryptjs.compareSync('bridge123', hash)` passed for every account.
+- `[GREEN evidence]` Immediately before all database actions, the guarded validator accepted `postgresql://work@127.0.0.1:5432/bridge_test`.
+  The executable harness then applied only the real seed and candidate copies to that database, performed exact fixed-ID cleanup and canonical restoration, and ended with the original full fixture fingerprint.
+  Its non-test admin proof substitutes a non-test literal only inside the seed copy and executes it against `bridge_test`; it never connects to a non-test database.
   No migration, non-test database, service, E2E, provider, or environment-file read ran.
 
 ### Phase 13 — Documentation, cross-phase verification, and shipping evidence *(orchestrator)*

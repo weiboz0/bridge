@@ -298,8 +298,11 @@ psql -v ON_ERROR_STOP=1 postgresql://work@127.0.0.1:5432/bridge_test \
 ```
 
 The seed is one transaction and uses fixed IDs with conflict no-ops, so it is safe to re-run.
-Its focused static contract check needs no database:
+Its focused integration contract runs the real seed and isolated near-miss copies only against a live-validated test database:
 
 ```bash
-scripts/tests/test-problem-demo-seed.sh
+CHECK_TEST_DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test \
+  scripts/tests/test-problem-demo-seed.sh
 ```
+
+The check validates the fixed login identities, email auth providers, bcrypt password, memberships, current chapter tables, test-only platform-admin guard, transactional rollback, and a byte-for-byte idempotent second seed run.
