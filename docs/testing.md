@@ -40,7 +40,7 @@ To run the suite without billing anything:
 bun run --env-file=/dev/null test
 ```
 
-`ci-local.sh` explicitly exports all five provider keys as empty values for Vitest:
+`ci-local.sh` explicitly exports all five provider keys as empty values for Vitest and E2E:
 `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `DASHSCOPE_API_KEY`,
 `OPENROUTER_API_KEY`.
 The empty values take precedence over values Bun auto-loads from `.env` and make the corresponding
@@ -64,8 +64,20 @@ creates a fixture class via `POST /api/classes`, and enrolls students.
 
 So an unpinned E2E run points **mutating** setup logic at whatever happens to be listening on 3003.
 
-**Always export `E2E_BASE_URL` explicitly.** `ci-local.sh` fails closed if it is unset rather than
-falling back to the default. Never put E2E in an automated gate without it.
+`e2e/playwright.config.ts` loads the repository `.env` through `dotenv`, so a persistent
+`E2E_BASE_URL` and the E2E-only control-failure flag work when Playwright runs under Node.
+An explicit shell value still wins.
+For a full gate, `ci-local.sh` safely reads only `E2E_BASE_URL` through the same dotenv parser (it never
+shell-sources `.env` or prints its contents), then fails closed if neither source supplies it; it never
+falls back to port 3003.
+
+After the destructive Vitest and Go suites and immediately before a full pinned E2E run, `ci-local.sh`
+reapplies `scripts/seed_problem_demo.sql` with `psql -v ON_ERROR_STOP=1` using only the already parsed
+and live-validated `GATE_DATABASE_URL`.
+The seed is skipped for `--fast`, an absent E2E URL, a rejected database target, and a failed restore;
+a failed restore blocks Playwright.
+This recovery is limited to the gate's `_test` target and restores the documented demo login identities,
+course, and memberships that `e2e/auth.setup.ts` requires before its own fixture class/enrollment setup.
 
 ## Database
 

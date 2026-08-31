@@ -599,6 +599,10 @@ That recheck is now defense in depth: the confirmed path gains the lifecycle lea
   The persistent-`.env` degraded run passed 12/12 in 15.6 seconds, including the injected-control incomplete-archive warning, without temporary exports for `E2E_BASE_URL`, the control-failure flag, Hocuspocus control secret, or database URLs; only the five external-provider keys were blanked for that command.
   Afterward the failure flag was restored to `0` with mode `0600`, and the owned stack stopped gracefully.
   No non-test database, migration, or external provider was used.
+  `[RED → GREEN — full-gate fixture recovery]` The full local gate ran destructive Vitest and Go suites before Playwright, deleting the canonical `bridge_test` demo users, course, and memberships required by E2E authentication, so no clean full-gate run could reach Playwright reproducibly.
+  `ci-local.sh` now skips recovery in `--fast`, loads only `E2E_BASE_URL` from persistent `.env` through dotenv when the shell has no explicit value, fails closed when still unpinned, and—only in the full pinned branch after the parsed/live `_test` gate validation—runs the canonical idempotent seed through `GATE_DATABASE_URL` before E2E.
+  The recovery failure blocks Playwright, and the E2E command pins both database variables and blanks all five provider keys.
+  Mocked governance selftests first failed against the absent branch, then proved fast no-op, persistent-URL recovery ordering, shell precedence, missing-URL refusal, restore-failure blocking, validated-URL-only seed invocation, validation-before-restore ordering, and provider-key isolation; no database, E2E, service, migration, or `.env` read was performed for this change.
 
 ### Phase 13 — Documentation, cross-phase verification, and shipping evidence *(orchestrator)*
 

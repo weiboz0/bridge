@@ -40,6 +40,61 @@ step() {
   fi
 }
 
+# Root Vitest and Go tests clean bridge_test, including the canonical demo
+# identities required by e2e/auth.setup.ts.  This applies the idempotent seed
+# only after those destructive suites, and only after the gate URL has passed
+# its parsed and live _test checks below.
+restore_e2e_demo_seed() {
+  psql -v ON_ERROR_STOP=1 -d "$GATE_DATABASE_URL" -f "$REPO_ROOT/scripts/seed_problem_demo.sql"
+}
+
+load_persistent_e2e_base_url() {
+  [[ -n "${E2E_BASE_URL:-}" ]] && return
+  # Do not source .env: it is data, not trusted shell.  Dotenv leaves an
+  # explicit shell value untouched and this process prints only the one URL
+  # ci-local needs for its pinned-stack refusal check.
+  E2E_BASE_URL="$(node --input-type=module -e 'import { config } from "dotenv"; config({ path: ".env", quiet: true }); process.stdout.write(process.env.E2E_BASE_URL ?? "");')"
+}
+
+run_e2e_gate() {
+  if [[ $FAST -eq 1 ]]; then
+    echo ""
+    echo "══ e2e SKIPPED (--fast)"
+    return
+  fi
+
+  load_persistent_e2e_base_url
+  if [[ -z "${E2E_BASE_URL:-}" ]]; then
+    echo ""
+    echo "REFUSING TO RUN E2E: E2E_BASE_URL is unset." >&2
+    echo "  playwright.config.ts would fall back to http://localhost:3003, which on this" >&2
+    echo "  machine is an unrelated service — and e2e/seed.setup.ts CREATES CLASSES and" >&2
+    echo "  ENROLLS USERS against whatever answers." >&2
+    echo "  Export E2E_BASE_URL pointing at your own stack, or use --fast." >&2
+    FAILED+=("e2e (E2E_BASE_URL unset)")
+    return
+  fi
+
+  echo ""
+  echo "══ e2e demo seed restore"
+  if restore_e2e_demo_seed; then
+    echo "── e2e demo seed restore OK"
+  else
+    echo "── e2e demo seed restore FAILED" >&2
+    FAILED+=("e2e demo seed restore")
+    return
+  fi
+  step "e2e" env \
+    DATABASE_URL="$GATE_DATABASE_URL" \
+    TEST_DATABASE_URL="$GATE_DATABASE_URL" \
+    ANTHROPIC_API_KEY= \
+    OPENAI_API_KEY= \
+    GEMINI_API_KEY= \
+    DASHSCOPE_API_KEY= \
+    OPENROUTER_API_KEY= \
+    bun run test:e2e
+}
+
 canonicalize_test_database_url() {
   local input="$1" output_var="$2" before_query query_suffix scheme rest authority pathname base_length
   if [[ "$input" == *\?* ]]; then
@@ -152,23 +207,7 @@ step "go test" env \
 
 # ── E2E ──────────────────────────────────────────────────────────────────────
 
-if [[ $FAST -eq 1 ]]; then
-  echo ""
-  echo "══ e2e SKIPPED (--fast)"
-elif [[ -z "${E2E_BASE_URL:-}" ]]; then
-  echo ""
-  echo "REFUSING TO RUN E2E: E2E_BASE_URL is unset." >&2
-  echo "  playwright.config.ts would fall back to http://localhost:3003, which on this" >&2
-  echo "  machine is an unrelated service — and e2e/seed.setup.ts CREATES CLASSES and" >&2
-  echo "  ENROLLS USERS against whatever answers." >&2
-  echo "  Export E2E_BASE_URL pointing at your own stack, or use --fast." >&2
-  FAILED+=("e2e (E2E_BASE_URL unset)")
-else
-  step "e2e" env \
-    DATABASE_URL="$GATE_DATABASE_URL" \
-    TEST_DATABASE_URL="$GATE_DATABASE_URL" \
-    bun run test:e2e
-fi
+run_e2e_gate
 
 # ── Result ───────────────────────────────────────────────────────────────────
 

@@ -15,7 +15,8 @@ source "$REPO_ROOT/scripts/lib/uniqueness.sh"
 
 PASS=0; FAIL=0
 FIXTURES="$(mktemp -d)"
-trap 'rm -rf "$FIXTURES"' EXIT
+ROOT_FIXTURE=""
+trap 'rm -rf "$FIXTURES" "${ROOT_FIXTURE:-}"' EXIT
 
 ok()   { echo "  ✓ $1"; PASS=$((PASS+1)); }
 bad()  { echo "  ✗ $1" >&2; FAIL=$((FAIL+1)); }
@@ -215,7 +216,102 @@ for key in ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY DASHSCOPE_API_KEY OPE
   fi
 done
 
-# ── 14. validator and governance hardening cannot silently regress ──────────
+# ── 14. full-gate E2E fixture restoration is ordered and fail-closed ────────
+# Extract the executable branch and run it with shell-function mocks.  This
+# proves the gate cannot reach Playwright before the destructive-suite recovery
+# seed succeeds, without starting a stack or touching a database.
+E2E_GATE_FUNCTIONS="$FIXTURES/e2e-gate-functions.sh"
+sed -n '/^restore_e2e_demo_seed() {/,/^}$/p' "$REPO_ROOT/scripts/ci-local.sh" > "$E2E_GATE_FUNCTIONS"
+sed -n '/^load_persistent_e2e_base_url() {/,/^}$/p' "$REPO_ROOT/scripts/ci-local.sh" >> "$E2E_GATE_FUNCTIONS"
+sed -n '/^run_e2e_gate() {/,/^}$/p' "$REPO_ROOT/scripts/ci-local.sh" >> "$E2E_GATE_FUNCTIONS"
+
+run_e2e_gate_case() {
+  local fast="$1" base_url="$2" loaded_base_url="$3" restore_rc="$4" expected="$5" gate_rc
+  local trace="$FIXTURES/e2e-gate-trace"
+  : > "$trace"
+  # shellcheck disable=SC1090
+  source "$E2E_GATE_FUNCTIONS"
+  restore_e2e_demo_seed() { echo restore >> "$trace"; return "$restore_rc"; }
+  load_persistent_e2e_base_url() {
+    [[ -n "${E2E_BASE_URL:-}" ]] && return
+    echo load >> "$trace"
+    E2E_BASE_URL="$loaded_base_url"
+  }
+  step() { echo "step:$1" >> "$trace"; return 0; }
+  FAILED=()
+  FAST="$fast"
+  E2E_BASE_URL="$base_url"
+  GATE_DATABASE_URL="postgresql://guard:guard@127.0.0.1:5432/bridge_test"
+  if run_e2e_gate >/dev/null 2>&1; then
+    gate_rc=0
+  else
+    gate_rc=$?
+  fi
+  if [[ "$gate_rc" == 0 && "$(tr '\n' ' ' < "$trace")|${FAILED[*]}" == "$expected" ]]; then
+    return 0
+  fi
+  return 1
+}
+
+expect 0 "fast gate never restores fixtures or starts E2E" \
+  run_e2e_gate_case 1 "http://pinned.test" "http://dotenv.test" 0 "|"
+expect 0 "unpinned gate refuses after persistent lookup but before fixture restoration" \
+  run_e2e_gate_case 0 "" "" 0 "load |e2e (E2E_BASE_URL unset)"
+expect 0 "full pinned gate restores fixtures before E2E" \
+  run_e2e_gate_case 0 "http://pinned.test" "http://dotenv.test" 0 "restore step:e2e |"
+expect 0 "persistent E2E URL restores fixtures before E2E when shell is unset" \
+  run_e2e_gate_case 0 "" "http://dotenv.test" 0 "load restore step:e2e |"
+expect 0 "failed fixture restoration blocks E2E fail-closed" \
+  run_e2e_gate_case 0 "http://pinned.test" "http://dotenv.test" 1 "restore |e2e demo seed restore"
+
+restore_e2e_seed_uses_validated_url() {
+  local trace="$FIXTURES/e2e-seed-command"
+  : > "$trace"
+  # shellcheck disable=SC1090
+  source "$E2E_GATE_FUNCTIONS"
+  REPO_ROOT="$REPO_ROOT"
+  GATE_DATABASE_URL="postgresql://guard:guard@127.0.0.1:5432/bridge_test"
+  psql() { printf '%s\n' "$*" > "$trace"; }
+  restore_e2e_demo_seed
+  [[ "$(<"$trace")" == *"-v ON_ERROR_STOP=1 -d $GATE_DATABASE_URL -f $REPO_ROOT/scripts/seed_problem_demo.sql"* ]]
+}
+expect 0 "fixture restore applies the canonical seed only through GATE_DATABASE_URL" \
+  restore_e2e_seed_uses_validated_url
+
+ci_local_dotenv_loader() {
+  ROOT_FIXTURE="$(mktemp -d "$REPO_ROOT/.ci-local-e2e-env.XXXXXX")"
+  printf 'E2E_BASE_URL=http://dotenv.test:3999\n' > "$ROOT_FIXTURE/.env"
+  (
+    cd "$ROOT_FIXTURE"
+    # shellcheck disable=SC1090
+    source "$E2E_GATE_FUNCTIONS"
+    unset E2E_BASE_URL
+    load_persistent_e2e_base_url
+    [[ "$E2E_BASE_URL" == "http://dotenv.test:3999" ]]
+    E2E_BASE_URL="http://shell.test:4888"
+    load_persistent_e2e_base_url
+    [[ "$E2E_BASE_URL" == "http://shell.test:4888" ]]
+  )
+}
+expect 0 "ci-local loads only persistent E2E_BASE_URL while preserving a shell override" \
+  ci_local_dotenv_loader
+
+e2e_gate_call_line="$(rg -n '^run_e2e_gate$' "$REPO_ROOT/scripts/ci-local.sh" | tail -1 | cut -d: -f1 || true)"
+if [[ -n "$gate_validate_line" && -n "$e2e_gate_call_line" && "$gate_validate_line" -lt "$e2e_gate_call_line" ]]; then
+  ok "live _test validation completes before the E2E restore branch can run"
+else
+  bad "live _test validation completes before the E2E restore branch can run"
+fi
+
+for key in ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY DASHSCOPE_API_KEY OPENROUTER_API_KEY; do
+  if sed -n '/step "e2e" env \\/,/bun run test:e2e/p' "$REPO_ROOT/scripts/ci-local.sh" | rg -q "^    $key= \\\\$"; then
+    ok "e2e empties $key"
+  else
+    bad "e2e empties $key"
+  fi
+done
+
+# ── 15. validator and governance hardening cannot silently regress ──────────
 if rg -q 'max: 1,' "$VALIDATOR" \
   && rg -q 'connect_timeout: 5,' "$VALIDATOR" \
   && rg -q 'fetch_types: false,' "$VALIDATOR" \
