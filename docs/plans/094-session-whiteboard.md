@@ -46,6 +46,7 @@ Phase 7 is complete; Phases 8 through 13 are authorized for phase-by-phase imple
 **`tests/unit/excalidraw-yjs.test.ts`** (custom-binding regression) · `package.json` + **`bun.lock`** (add `@excalidraw/excalidraw`; no `y-excalidraw`) ·
 **`vitest.config.ts`** (Bun/Vitest Zod interop — scope-widened local-gate fix) ·
 **`scripts/check-test-database-url.mjs`** (new) · **`scripts/ci-local.sh`** · **`scripts/tests/test-guards.sh`** (parsed/pinned local-gate database guard — provisional Round-10 governance scope) ·
+**DEMO-SEED SCOPE (user-authorized 2026-08-31):** **`scripts/seed_problem_demo.sql`** · **`scripts/tests/test-problem-demo-seed.sh`** (new focused contract test) · **`docs/setup.md`** ·
 **`AGENTS.md`** (classify the validator and its executable guard proof as governance; correct the LLM-isolation contract; mirror the permanent review gates, unavailable-reviewer rule, uncapped consensus safeguard, and explicit test-model override) ·
 `docs/api.md` · `docs/architecture/decisions.md` · **`docs/testing.md`** · `README.md` · **`.claude/skills/br-system-review/SKILL.md`** (operator probe guidance) · this plan file.
 
@@ -554,6 +555,17 @@ That recheck is now defense in depth: the confirmed path gains the lifecycle lea
   The current shell has no `bun`/`bunx` executable, so the repository-local `node_modules/.bin/tsc --noEmit`, scoped ESLint, and `git diff --check` were used as static fallbacks and passed.
 - `[UNVERIFIED — hard safeguard]` The live-stack E2E acceptance remains intentionally unrun.
   It requires user-provisioned `HOCUSPOCUS_CONTROL_SECRET`, any necessary collision-free control-port override, a separately started Bridge stack with explicit `E2E_BASE_URL`, and (for the degraded-archive branch) a start-time `BRIDGE_E2E_CANVAS_CONTROL_FAILURE=1` whose configured and live database names are both `_test`; this phase did not read or edit `.env`, start a service, or run Playwright.
+
+#### Phase 12 demo E2E seed recovery (2026-08-31; Terra)
+
+- `[RED → GREEN]` Added `scripts/tests/test-problem-demo-seed.sh`; it first failed because the documented E2E prerequisite `INSERT INTO users` was absent.
+  The test now proves the fixed identity, email-auth-provider, organization, active-membership, `_test`-only admin, fixed-ID no-op, and post-0026 chapter-table contracts.
+- `[FIXED]` `scripts/seed_problem_demo.sql` now creates Bridge Demo School plus Eve, Alice, Bob, Frank, and Diana with fixed UUIDs, active role memberships, email providers, and the authentication-compatible bcrypt hash for `bridge123`.
+  `admin@e2e.test` and its email provider are inserted only where `current_database() ~ '_test$'`, so the known-password platform-admin fixture is absent from non-test targets.
+  The obsolete `teaching_units`/`unit_documents` writes now target the migrated `chapters`/`chapter_documents` schema without changing the seeded chapter or class content.
+- `[GREEN evidence]` Immediately after the guarded validator accepted `bridge_test`, the seed applied twice to only `postgresql://work@127.0.0.1:5432/bridge_test`.
+  The second apply was a conflict no-op; SQL checks confirmed all six identities' fixed IDs, active status, exact email providers, admin bit, and six expected active memberships, while `bcryptjs.compareSync('bridge123', hash)` passed for every account.
+  No migration, non-test database, service, E2E, provider, or environment-file read ran.
 
 ### Phase 13 — Documentation, cross-phase verification, and shipping evidence *(orchestrator)*
 

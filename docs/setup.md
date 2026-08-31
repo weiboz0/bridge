@@ -275,7 +275,9 @@ bun run test:e2e:ui           # interactive
 
 ### Required test accounts
 
-E2E tests expect the following accounts to exist in the dev DB (passwords all `bridge123`):
+The demo seed owns the complete Playwright identity contract with fixed UUIDs.
+All listed accounts use `bridge123`; `admin@e2e.test` is intentionally created only when the connected database name ends in `_test`.
+That prevents a known-password platform administrator from appearing in a development or production database.
 
 | Role        | Email                |
 |-------------|----------------------|
@@ -286,23 +288,18 @@ E2E tests expect the following accounts to exist in the dev DB (passwords all `b
 | parent      | diana@demo.edu       |
 | platform admin | admin@e2e.test    |
 
-The `demo.edu` accounts come from the demo seed. The `admin@e2e.test` account must be created once with `is_platform_admin=true`:
-
-```sql
--- Bcrypt hash for "bridge123" (same hash used by the demo accounts).
--- Run once in the dev DB:
-INSERT INTO "user" (id, email, name, password_hash, is_platform_admin)
-VALUES (
-  gen_random_uuid(),
-  'admin@e2e.test',
-  'E2E Admin',
-  '<bcrypt-of-bridge123>',
-  true
-);
-```
-
-To generate the bcrypt hash:
+For a Playwright stack backed by `bridge_test`, validate the target and apply the idempotent seed before starting the stack:
 
 ```bash
-bun -e "import('bcryptjs').then(b => console.log(b.default.hashSync('bridge123', 10)))"
+CHECK_TEST_DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test \
+  node scripts/check-test-database-url.mjs
+psql -v ON_ERROR_STOP=1 postgresql://work@127.0.0.1:5432/bridge_test \
+  -f scripts/seed_problem_demo.sql
+```
+
+The seed is one transaction and uses fixed IDs with conflict no-ops, so it is safe to re-run.
+Its focused static contract check needs no database:
+
+```bash
+scripts/tests/test-problem-demo-seed.sh
 ```
