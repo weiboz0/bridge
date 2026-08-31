@@ -100,7 +100,7 @@ test.describe.serial("session whiteboard live stack", () => {
   test("participant views the raised board while a public outsider cannot create", async () => {
     await participant.goto(`/student/classes/${classId}`);
     await participant.getByText("Live Session — Join Now").click();
-    await participant.waitForURL(/\/student\/classes\/.*\/session\//);
+    await participant.waitForURL(`/student/sessions/${sessionId}`);
     await openWhiteboard(participant);
     await participant.getByRole("button", { name: boardTitle }).click();
     await expect(participant.getByText("View only", { exact: true })).toBeVisible();

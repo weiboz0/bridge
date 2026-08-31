@@ -584,6 +584,8 @@ That recheck is now defense in depth: the confirmed path gains the lifecycle lea
   A further live RED showed that button's accessible name includes its visibility badge (for example, `${boardTitle} private`), so the role-scoped assertion now matches the title non-exactly; E2E was not rerun in this correction.
   `[FIXED — live E2E correction]` After a successful visibility raise, non-exact `getByLabel("Visibility")` matched both the control and confirmation dialog, triggering strict-mode failure.
   The implicit label's text includes option descendants, so the live and archive visibility assertions now use the accessibility-tree contract: exact named `combobox "Visibility"`; the same source/accessibility audit made the existing board-title clicks role-scoped board-button locators plus exact `Canvas floor` labels. E2E was not rerun in this correction.
+  `[FIXED — live E2E correction]` After the participant joined, the class page navigated to `/student/sessions/{sessionId}`, while this spec waited for a legacy class-nested route.
+  The participant wait now matches the canonical exact `/student/sessions/${sessionId}` path; E2E was not rerun in this correction.
 
 ### Phase 13 — Documentation, cross-phase verification, and shipping evidence *(orchestrator)*
 
