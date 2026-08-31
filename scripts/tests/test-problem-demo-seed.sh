@@ -74,9 +74,12 @@ expect_seed_failure() {
 clear_canonical_fixture() {
   psql_checked <<SQL
 BEGIN;
-DELETE FROM chapter_documents WHERE chapter_id IN (
-  '00000000-0000-0000-0000-0000000a1001'::uuid,
-  '00000000-0000-0000-0000-0000000a1002'::uuid
+DELETE FROM chapter_documents
+WHERE chapter_id IN (
+  SELECT id FROM chapters WHERE topic_id IN (
+    '00000000-0000-0000-0000-000000010001'::uuid,
+    '00000000-0000-0000-0000-000000010002'::uuid
+  )
 );
 DELETE FROM class_settings WHERE id = '00000000-0000-0000-0000-000000060001'::uuid;
 DELETE FROM class_memberships WHERE id IN (
@@ -103,9 +106,9 @@ DELETE FROM topic_problems WHERE (topic_id, problem_id) IN (
   ('00000000-0000-0000-0000-000000010002'::uuid, '00000000-0000-0000-0000-000000020003'::uuid),
   ('00000000-0000-0000-0000-000000010002'::uuid, '00000000-0000-0000-0000-000000020004'::uuid)
 );
-DELETE FROM chapters WHERE id IN (
-  '00000000-0000-0000-0000-0000000a1001'::uuid,
-  '00000000-0000-0000-0000-0000000a1002'::uuid
+DELETE FROM chapters WHERE topic_id IN (
+  '00000000-0000-0000-0000-000000010001'::uuid,
+  '00000000-0000-0000-0000-000000010002'::uuid
 );
 DELETE FROM problems WHERE id IN (
   '00000000-0000-0000-0000-000000020001'::uuid, '00000000-0000-0000-0000-000000020002'::uuid,
@@ -132,6 +135,47 @@ DELETE FROM users WHERE id IN (
   '00000000-0000-0000-0000-0000000e0005'::uuid, '$admin_user_id'::uuid
 );
 DELETE FROM organizations WHERE id = 'd386983b-6da4-4cb8-8057-f2aa70d27c07'::uuid;
+COMMIT;
+SQL
+}
+
+replace_seed_chapters_with_supported_random_ids() {
+  psql_checked <<SQL
+BEGIN;
+DELETE FROM chapter_documents
+WHERE chapter_id IN (
+  SELECT id FROM chapters WHERE topic_id IN (
+    '00000000-0000-0000-0000-000000010001'::uuid,
+    '00000000-0000-0000-0000-000000010002'::uuid
+  )
+);
+DELETE FROM chapters WHERE topic_id IN (
+  '00000000-0000-0000-0000-000000010001'::uuid,
+  '00000000-0000-0000-0000-000000010002'::uuid
+);
+INSERT INTO chapters (
+  id, scope, scope_id, title, slug, summary, grade_level,
+  subject_tags, standards_tags, estimated_minutes, status, created_by, topic_id
+)
+VALUES
+  (
+    '51d56f3c-f7a3-48b6-b7de-2c973627a7b1', 'org',
+    'd386983b-6da4-4cb8-8057-f2aa70d27c07', 'Existing Warm-ups', NULL,
+    'Existing valid chapter for the Warm-ups topic.', '9-12', '{}', '{}', NULL,
+    'classroom_ready', 'd0d3b031-a483-4214-97fb-48c9584f4dcb',
+    '00000000-0000-0000-0000-000000010001'
+  ),
+  (
+    'b6ee9e62-41c8-4b37-84b0-2b9e27f43647', 'org',
+    'd386983b-6da4-4cb8-8057-f2aa70d27c07', 'Existing Arrays', NULL,
+    'Existing valid chapter for the Arrays topic.', '9-12', '{}', '{}', NULL,
+    'classroom_ready', 'd0d3b031-a483-4214-97fb-48c9584f4dcb',
+    '00000000-0000-0000-0000-000000010002'
+  );
+INSERT INTO chapter_documents (chapter_id, blocks)
+VALUES
+  ('51d56f3c-f7a3-48b6-b7de-2c973627a7b1', jsonb_build_object('type', 'doc', 'content', '[]'::jsonb)),
+  ('b6ee9e62-41c8-4b37-84b0-2b9e27f43647', jsonb_build_object('type', 'doc', 'content', '[]'::jsonb));
 COMMIT;
 SQL
 }
@@ -184,10 +228,10 @@ verify_fixture() {
     ))::text
     FROM expected e JOIN org_memberships m ON m.id = e.id;" || return 1
 
-  assert_scalar_true 'seed did not create the current chapter/document rows' "
+  assert_scalar_true 'seed did not create the current chapter/document rows for both fixed topics' "
     SELECT (
-      (SELECT count(*) FROM chapters WHERE id IN ('00000000-0000-0000-0000-0000000a1001'::uuid, '00000000-0000-0000-0000-0000000a1002'::uuid)) = 2 AND
-      (SELECT count(*) FROM chapter_documents WHERE chapter_id IN ('00000000-0000-0000-0000-0000000a1001'::uuid, '00000000-0000-0000-0000-0000000a1002'::uuid)) = 2
+      (SELECT count(*) FROM chapters WHERE topic_id IN ('00000000-0000-0000-0000-000000010001'::uuid, '00000000-0000-0000-0000-000000010002'::uuid)) = 2 AND
+      (SELECT count(*) FROM chapter_documents d JOIN chapters c ON c.id = d.chapter_id WHERE c.topic_id IN ('00000000-0000-0000-0000-000000010001'::uuid, '00000000-0000-0000-0000-000000010002'::uuid)) = 2
     )::text;" || return 1
 
   assert_scalar_true 'seed did not create the documented course, problem, or class rows' "
@@ -241,12 +285,12 @@ fixture_fingerprint() {
         '00000000-0000-0000-0000-0000000b0003'::uuid, '00000000-0000-0000-0000-0000000b0004'::uuid,
         '00000000-0000-0000-0000-0000000b0005'::uuid, '00000000-0000-0000-0000-0000000b0006'::uuid
       )
-      UNION ALL SELECT 'chapter:' || id || ':' || topic_id || ':' || title FROM chapters WHERE id IN (
-        '00000000-0000-0000-0000-0000000a1001'::uuid, '00000000-0000-0000-0000-0000000a1002'::uuid
+      UNION ALL SELECT 'chapter:' || id || ':' || topic_id || ':' || title FROM chapters WHERE topic_id IN (
+        '00000000-0000-0000-0000-000000010001'::uuid, '00000000-0000-0000-0000-000000010002'::uuid
       )
-      UNION ALL SELECT 'document:' || chapter_id || ':' || md5(blocks::text) FROM chapter_documents WHERE chapter_id IN (
-        '00000000-0000-0000-0000-0000000a1001'::uuid, '00000000-0000-0000-0000-0000000a1002'::uuid
-      )
+      UNION ALL SELECT 'document:' || d.chapter_id || ':' || md5(d.blocks::text)
+      FROM chapter_documents d JOIN chapters c ON c.id = d.chapter_id
+      WHERE c.topic_id IN ('00000000-0000-0000-0000-000000010001'::uuid, '00000000-0000-0000-0000-000000010002'::uuid)
       UNION ALL SELECT 'organization:' || to_jsonb(o)::text FROM organizations o WHERE id = 'd386983b-6da4-4cb8-8057-f2aa70d27c07'::uuid
       UNION ALL SELECT 'course:' || to_jsonb(c)::text FROM courses c WHERE id = '00000000-0000-0000-0000-0000000aa001'::uuid
       UNION ALL SELECT 'topic:' || to_jsonb(t)::text FROM topics t WHERE id IN ('00000000-0000-0000-0000-000000010001'::uuid, '00000000-0000-0000-0000-000000010002'::uuid)
@@ -276,8 +320,8 @@ fixture_census() {
       'topic_problems=' || (SELECT count(*) FROM topic_problems WHERE topic_id IN ('00000000-0000-0000-0000-000000010001'::uuid, '00000000-0000-0000-0000-000000010002'::uuid)),
       'solutions=' || (SELECT count(*) FROM problem_solutions WHERE id IN ('00000000-0000-0000-0000-00000055d001'::uuid, '00000000-0000-0000-0000-00000055d002'::uuid, '00000000-0000-0000-0000-00000055d003'::uuid, '00000000-0000-0000-0000-00000055d004'::uuid)),
       'test_cases=' || (SELECT count(*) FROM test_cases WHERE id IN ('00000000-0000-0000-0000-000000301001'::uuid, '00000000-0000-0000-0000-000000301002'::uuid, '00000000-0000-0000-0000-000000302001'::uuid, '00000000-0000-0000-0000-000000302002'::uuid, '00000000-0000-0000-0000-000000302003'::uuid, '00000000-0000-0000-0000-000000303001'::uuid, '00000000-0000-0000-0000-000000303002'::uuid, '00000000-0000-0000-0000-000000303003'::uuid, '00000000-0000-0000-0000-000000304001'::uuid, '00000000-0000-0000-0000-000000304002'::uuid, '00000000-0000-0000-0000-000000304003'::uuid, '00000000-0000-0000-0000-000000304004'::uuid)),
-      'chapters=' || (SELECT count(*) FROM chapters WHERE id IN ('00000000-0000-0000-0000-0000000a1001'::uuid, '00000000-0000-0000-0000-0000000a1002'::uuid)),
-      'chapter_documents=' || (SELECT count(*) FROM chapter_documents WHERE chapter_id IN ('00000000-0000-0000-0000-0000000a1001'::uuid, '00000000-0000-0000-0000-0000000a1002'::uuid)),
+      'chapters=' || (SELECT count(*) FROM chapters WHERE topic_id IN ('00000000-0000-0000-0000-000000010001'::uuid, '00000000-0000-0000-0000-000000010002'::uuid)),
+      'chapter_documents=' || (SELECT count(*) FROM chapter_documents d JOIN chapters c ON c.id = d.chapter_id WHERE c.topic_id IN ('00000000-0000-0000-0000-000000010001'::uuid, '00000000-0000-0000-0000-000000010002'::uuid)),
       'classes=' || (SELECT count(*) FROM classes WHERE id = '00000000-0000-0000-0000-000000040001'::uuid),
       'class_memberships=' || (SELECT count(*) FROM class_memberships WHERE id IN ('00000000-0000-0000-0000-000000050001'::uuid, '00000000-0000-0000-0000-000000050002'::uuid, '00000000-0000-0000-0000-000000050003'::uuid)),
       'class_settings=' || (SELECT count(*) FROM class_settings WHERE id = '00000000-0000-0000-0000-000000060001'::uuid)
@@ -310,6 +354,16 @@ expect_fixture_verification_failure() {
 
 # Validation is complete; the only DML-capable EXIT handler is armed now.
 trap cleanup EXIT
+
+# The seed intentionally allows an earlier chapter UUID for either fixed topic.
+# Install two such rows, prove the real seed accepts them, then prove the
+# topic-owned clear removes their documents and chapters before every candidate.
+seed_from_empty_graph "$canonical_seed"
+replace_seed_chapters_with_supported_random_ids
+run_seed "$canonical_seed"
+verify_fixture || fail 'canonical seed did not reuse supported random topic chapter IDs'
+clear_canonical_fixture
+assert_empty_fixture
 
 # Baseline: clear the complete graph, run the actual seed, verify all behavior,
 # then prove a second run leaves every fixed fixture row byte-for-byte unchanged.

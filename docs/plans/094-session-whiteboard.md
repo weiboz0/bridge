@@ -568,8 +568,10 @@ That recheck is now defense in depth: the confirmed path gains the lifecycle lea
 - `[GREEN evidence]` Immediately before all database actions, the guarded validator accepted `postgresql://work@127.0.0.1:5432/bridge_test`.
   Before that live check, a subprocess passed a fake `psql` sentinel while parser-rejecting `postgresql://127.0.0.1:5432/bridge`; the sentinel remained absent, proving rejected targets cannot run `psql`, the seed, or a DML-capable EXIT cleanup.
   A deliberate mutation that called the sentinel instead produced the expected RED failure and was restored before the GREEN run.
-  After validation, the executable harness clears the complete dependency-ordered, fixed-ID fixture graph and requires a zero census before every real/candidate seed; this prevents pre-existing correct rows from masking an omitted Eve provider, Alice bcrypt, Bob membership, or chapters.
+  After validation, the executable harness clears the complete dependency-ordered fixed fixture graph, including topic-owned chapters/documents, and requires a zero census before every real/candidate seed; this prevents pre-existing correct rows from masking an omitted Eve provider, Alice bcrypt, Bob membership, or chapters.
   It then restores only the canonical fixed graph and reruns its full fingerprint/idempotence assertion.
+  Chapter ownership is resolved through the two fixed topic IDs throughout clear, census, verification, and fingerprinting, rather than assuming the seed's preferred chapter UUIDs.
+  A regression installs two supported non-fixed chapter UUIDs and documents for those topics, proves the canonical seed reuses them, then proves the topic-owned clear reaches a zero census; mutating that clear back to fixed IDs produced the expected foreign-key RED and was restored.
   Its non-test admin proof substitutes a non-test literal only inside the seed copy and executes it against `bridge_test`; it never connects to a non-test database.
   No migration, non-test database, service, E2E, provider, or environment-file read ran.
 
