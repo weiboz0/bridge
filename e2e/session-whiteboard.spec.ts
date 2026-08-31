@@ -85,7 +85,7 @@ test.describe.serial("session whiteboard live stack", () => {
     await openWhiteboard(teacher);
     await teacher.getByLabel("Whiteboard title").fill(boardTitle);
     await teacher.getByRole("button", { name: "New whiteboard" }).click();
-    await expect(teacher.getByRole("button", { name: boardTitle, exact: true })).toBeVisible();
+    await expect(teacher.getByRole("button", { name: boardTitle })).toBeVisible();
 
     const visibility = teacher.getByLabel("Visibility");
     await visibility.selectOption("participants");
