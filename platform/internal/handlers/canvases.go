@@ -241,12 +241,12 @@ func (h *CanvasHandler) PatchCanvasSettings(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusNotFound, "Session not found")
 		return
 	}
-	if session.TeacherID != claims.UserID {
-		writeError(w, http.StatusForbidden, "Not authorized")
-		return
-	}
 	if session.Status == "ended" {
 		writeError(w, http.StatusConflict, "Session has ended")
+		return
+	}
+	if session.TeacherID != claims.UserID {
+		writeError(w, http.StatusForbidden, "Not authorized")
 		return
 	}
 	var body struct {

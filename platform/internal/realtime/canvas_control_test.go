@@ -458,9 +458,13 @@ func TestCanvasControlClient_RespectsCallerDeadlineAndVerifiedHTTPS(t *testing.T
 	require.Error(t, err)
 
 	started := make(chan struct{}, 1)
+	release := make(chan struct{})
 	blocking := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		started <- struct{}{}
-		<-r.Context().Done()
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
 	}))
 	defer blocking.Close()
 	deadlineClient, err := NewCanvasControlClient(CanvasControlConfig{URL: blocking.URL, Secret: strings.Repeat("a", 64), HTTPClient: blocking.Client()})
@@ -474,6 +478,7 @@ func TestCanvasControlClient_RespectsCallerDeadlineAndVerifiedHTTPS(t *testing.T
 	case <-time.After(time.Second):
 		t.Fatal("freeze request did not reach the control transport")
 	}
+	close(release)
 }
 
 func TestCanvasControlClient_RetryJitterIsBoundedEvenWhenRandomnessFallsBack(t *testing.T) {
