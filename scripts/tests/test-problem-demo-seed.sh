@@ -276,8 +276,12 @@ SQL
 cleanup() {
   local status=$?
   if [[ -n "$temp_dir" ]]; then rm -rf "$temp_dir"; fi
-  if ! restore_canonical_fixture; then
-    printf 'FAIL: canonical fixture restoration failed\n' >&2
+  if ! clear_canonical_fixture; then
+    printf 'FAIL: ephemeral fixture cleanup failed\n' >&2
+    exit 1
+  fi
+  if ! assert_empty_fixture; then
+    printf 'FAIL: ephemeral fixture cleanup left residue\n' >&2
     exit 1
   fi
   if ! clear_unrelated_sentinel; then

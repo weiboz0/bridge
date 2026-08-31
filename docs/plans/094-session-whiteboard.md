@@ -559,9 +559,8 @@ That recheck is now defense in depth: the confirmed path gains the lifecycle lea
 #### Phase 12 demo E2E seed recovery (2026-08-31; Terra)
 
 - `[RED → GREEN]` Replaced the initial fragment matcher in `scripts/tests/test-problem-demo-seed.sh` with a guarded executable fixture harness.
-  A temporary test-only mutation changing both `current_database() ~ '_test$'` predicates to `WHERE false` produced the expected identity/provider verification failure; restoration of the real seed then passed.
-  The harness runs the real seed twice and fingerprints every fixed identity, provider, membership, organization, course, topic, problem, attachment, solution, test case, chapter/document, class, class-membership, and class-setting row to prove counts and data remain unchanged.
-  It also rejects isolated near-miss copies with an unconditional admin insert, omitted admin provider, inactive/wrong membership, invalid bcrypt, invalid `chapters` column, removed conflict no-op, and a late transactional failure; the latter proves rollback under `BEGIN` and durable restoration under `COMMIT`.
+  The harness runs the seed twice and compares its selected fixture fingerprint: identity/provider/membership fields, chapter/document values, and JSON row values for organization, course, topic, problem, attachment, solution, test case, class, class-membership, and class-setting rows.
+  It rejects the exercised near-miss copies for an inactive/wrong membership, invalid bcrypt, invalid current-schema column, removed conflict no-op, and a late transactional failure.
 - `[FIXED]` `scripts/seed_problem_demo.sql` now creates Bridge Demo School plus Eve, Alice, Bob, Frank, and Diana with fixed UUIDs, active role memberships, email providers, and the authentication-compatible bcrypt hash for `bridge123`.
   `admin@e2e.test` and its email provider are inserted only where `current_database() ~ '_test$'`, so the known-password platform-admin fixture is absent from non-test targets.
   The obsolete `teaching_units`/`unit_documents` writes now target the migrated `chapters`/`chapter_documents` schema without changing the seeded chapter or class content.
@@ -569,13 +568,14 @@ That recheck is now defense in depth: the confirmed path gains the lifecycle lea
   Before that live check, a subprocess passed a fake `psql` sentinel while parser-rejecting `postgresql://127.0.0.1:5432/bridge`; the sentinel remained absent, proving rejected targets cannot run `psql`, the seed, or a DML-capable EXIT cleanup.
   A deliberate mutation that called the sentinel instead produced the expected RED failure and was restored before the GREEN run.
   After validation, the executable harness clears the complete dependency-ordered fixed fixture graph, including topic-owned chapters/documents, and requires a zero census before every real/candidate seed; this prevents pre-existing correct rows from masking an omitted Eve provider, Alice bcrypt, Bob membership, or chapters.
-  It then restores only the canonical fixture graph and reruns its fingerprint/idempotence assertion.
+  Candidate recovery clears and reseeds only the transformed ephemeral fixture graph; final EXIT cleanup clears that graph again and requires a zero census rather than reseeding it.
   Chapter ownership is resolved through the two fixed topic IDs throughout clear, census, verification, and fingerprinting, rather than assuming the seed's preferred chapter UUIDs.
   A regression installs two supported non-fixed chapter UUIDs and documents for those topics, proves the canonical seed reuses them, then proves the topic-owned clear reaches a zero census; mutating that clear back to fixed IDs produced the expected foreign-key RED and was restored.
   The seed now inserts `topics` using the current schema (without dropped `lesson_content`); a candidate restoring that column is required to fail.
   The non-test proof substitutes only `current_database()` in the actual predicate, so an `OR true` guard candidate creates the test-only admin rows and demonstrates that the normal assertion would reject the bypass.
   Each harness run transforms the seed and verifier into a unique ID/email/slug/join-code namespace before DML, so no pre-existing Bridge Demo School fixture is cleared.
-  An unrelated sentinel organization, course, class, and memberships is asserted after fixture clearing and removed only by exact IDs; its join code is derived from the per-run transformed class ID, and canonical restoration or sentinel-cleanup failures fail the command rather than being suppressed.
+  An unrelated sentinel organization, course, class, and memberships is asserted after fixture clearing and removed only by exact IDs; its join code is derived from the per-run transformed class ID, and ephemeral or sentinel-cleanup failures fail the command rather than being suppressed.
+  Two consecutive guarded `bridge_test` harness runs completed with each EXIT cleanup reporting its zero internal census; a post-run query found no `+seed-` users or `bridge-demo-school-` organizations.
   Its non-test admin proof substitutes a non-test literal only inside the seed copy and executes it against `bridge_test`; it never connects to a non-test database.
   No migration, non-test database, service, E2E, provider, or environment-file read ran.
 
