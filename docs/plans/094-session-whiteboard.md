@@ -588,6 +588,8 @@ That recheck is now defense in depth: the confirmed path gains the lifecycle lea
   The participant wait now matches the canonical exact `/student/sessions/${sessionId}` path; E2E was not rerun in this correction.
   `[RED — live defect regression]` The live stack showed a locally drawn canvas never reached the participant because the pinned provider rejected the canvas construction options: `delay: 250` was below its `minDelay: 1000`.
   Added a focused real-provider hook construction regression requiring canvas setup not to throw under the pinned provider; `bunx --bun vitest run tests/unit/use-yjs-provider.test.ts` reproduced two unhandled `delay: 250 < minDelay: 1000` rejections at provider construction, so it is intentionally RED until the production reconnect configuration satisfies that invariant.
+  `[FIXED — live E2E correction]` After the provider correction, both canvas sockets connected and authenticated, and the stored Yjs scene contained the teacher rectangle, but the participant pixel poll sampled Excalidraw's topmost interactive canvas and incorrectly remained unchanged despite the rectangle being visibly rendered.
+  `sceneInk` now requires exactly one `canvas.excalidraw__canvas.static` rendered scene surface before applying the existing center-region, cross-browser pixel-delta proof; E2E was not rerun in this correction.
 
 ### Phase 13 — Documentation, cross-phase verification, and shipping evidence *(orchestrator)*
 

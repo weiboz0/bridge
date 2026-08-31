@@ -14,7 +14,10 @@ async function openWhiteboard(page: Page) {
 }
 
 async function sceneInk(page: Page): Promise<number> {
-  const canvas = page.getByTestId("excalidraw-board").locator("canvas").last();
+  // Excalidraw stacks a separate interactive input canvas above the rendered
+  // scene. Pixel verification must read the unique static scene surface.
+  const canvas = page.getByTestId("excalidraw-board").locator("canvas.excalidraw__canvas.static");
+  await expect(canvas).toHaveCount(1);
   await expect(canvas).toBeVisible();
   return canvas.evaluate((node) => {
     const surface = node as HTMLCanvasElement;
