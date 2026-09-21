@@ -511,7 +511,7 @@ export async function storeCanvasYjsState(canvasId: string, yjsState: string): P
 export const hocuspocusHooks = {
   port: HOCUSPOCUS_PORT,
   debounce: 30000, // Save to DB every 30 seconds (also saves on disconnect)
-  ...(e2eStackAttestation.enabled ? { onRequest: e2eStackAttestation.onRequest } : {}),
+  ...(e2eStackAttestation.registrable ? { onRequest: e2eStackAttestation.onRequest } : {}),
 
   async onAuthenticate({ token, documentName, connectionConfig }) {
     // noop documents don't carry collaboration content — short-circuit

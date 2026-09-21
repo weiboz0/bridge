@@ -22,6 +22,7 @@ import path from "node:path";
 import {
   E2E_STACK_DATABASE_URL_ENV,
   E2E_STACK_LOCK_CLASS,
+  E2E_STACK_MAX_IN_FLIGHT_OBSERVE_QUERIES,
   E2E_STACK_NONCE_PATTERN,
   createE2EStackAttestation,
   deriveE2EStackObjid,
@@ -57,8 +58,15 @@ interface Vector {
     successBody: Record<string, string[]>;
     paths: Record<string, string>;
     nonceQueryParam: string;
+    hostExposure: { name: string; exposedValue: string; normalization: string; rule: string };
+    observeConcurrency: {
+      maxInFlightPerProcess: number;
+      rule: string;
+      refusalReason: string;
+    };
   };
   cases: VectorCase[];
+  hostExposureCases: { value: string; exposed: boolean }[];
   composeKeyBoundaries: { objid: number; key: string }[];
   disjointFrom: {
     sessionLifecycleLockClass: number;
@@ -145,6 +153,7 @@ function harness(
     env?: Record<string, string | undefined>;
     query?: QueryFn;
     randomBytes?: (size: number) => Uint8Array;
+    maxInFlightObserveQueries?: number;
   } = {},
 ): Harness {
   const logs: string[] = [];
@@ -161,6 +170,7 @@ function harness(
     now: () => clock.value,
     log: (message: string) => logs.push(message),
     randomBytes: overrides.randomBytes ?? ((size: number) => new Uint8Array(size).fill(0xab)),
+    maxInFlightObserveQueries: overrides.maxInFlightObserveQueries,
   });
   return { attestation, query, logs, clock };
 }
@@ -216,9 +226,15 @@ describe("hocuspocus e2e stack attestation", () => {
 
   test("e2e stack hook is not registered without the flag", () => {
     // The production wiring is a conditional spread; assert the exact shape so
-    // an unconditional registration cannot slip in.
+    // an unconditional registration cannot slip in. R2-21: the condition is
+    // `registrable`, NOT `enabled` — the hook used to attach whenever the flag
+    // was on, while the exposed-host boot refusal ran only under
+    // `import.meta.main`, so a non-main importer got the endpoint anyway.
     const spread = hocuspocusSource.replace(/\s+/g, " ");
     expect(spread).toContain(
+      "...(e2eStackAttestation.registrable ? { onRequest: e2eStackAttestation.onRequest } : {})",
+    );
+    expect(spread).not.toContain(
       "...(e2eStackAttestation.enabled ? { onRequest: e2eStackAttestation.onRequest } : {})",
     );
 
@@ -588,13 +604,291 @@ describe("hocuspocus e2e stack attestation", () => {
       expect(observed, `observe query missing ${fragment}`).toContain(fragment);
     }
   });
+
+  // -------------------------------------------------------------------------
+  // R2-21: the hook registers only when boot would be allowed
+  // -------------------------------------------------------------------------
+
+  test("e2e stack hook is not registered on an exposed host without the opt-in", () => {
+    const flag = vector.contract.flag;
+    const optIn = vector.contract.tunnelOptIn;
+    const exposure = vector.contract.hostExposure;
+
+    const factory = (env: Record<string, string | undefined>) =>
+      createE2EStackAttestation({
+        env,
+        query: async () => ({ database: LIVE_DATABASE, seen: true }),
+        now: () => 0,
+        log: () => {},
+        randomBytes: (size: number) => new Uint8Array(size),
+      });
+
+    // Enabled but NOT registrable: the flag is on, so the process knows the
+    // surface exists, yet the hook must not attach.
+    const exposed = factory({
+      [flag.name]: flag.enabledValue,
+      [exposure.name]: exposure.exposedValue,
+    });
+    expect(exposed.enabled).toBe(true);
+    expect(exposed.registrable).toBe(false);
+
+    // Every exposed spelling from the shared vector behaves the same way.
+    for (const row of vector.hostExposureCases) {
+      const attestation = factory({
+        [flag.name]: flag.enabledValue,
+        [exposure.name]: row.value,
+      });
+      expect(attestation.enabled, `${JSON.stringify(row.value)} enabled`).toBe(true);
+      expect(attestation.registrable, `${JSON.stringify(row.value)} registrable`).toBe(!row.exposed);
+    }
+
+    // The opt-in is exact: only "true" re-enables registration.
+    for (const wrong of [undefined, "", "TRUE", "1", "yes"]) {
+      expect(
+        factory({
+          [flag.name]: flag.enabledValue,
+          [exposure.name]: exposure.exposedValue,
+          [optIn.name]: wrong,
+        }).registrable,
+      ).toBe(false);
+    }
+    expect(
+      factory({
+        [flag.name]: flag.enabledValue,
+        [exposure.name]: exposure.exposedValue,
+        [optIn.name]: optIn.enabledValue,
+      }).registrable,
+    ).toBe(true);
+
+    // Flag off: nothing is registrable regardless of exposure.
+    expect(factory({ [exposure.name]: exposure.exposedValue }).registrable).toBe(false);
+
+    // And in a real process: importing server/hocuspocus.ts (which is NOT
+    // `import.meta.main`, so the boot refusal never runs) must not hand the
+    // importer an onRequest hook on an exposed host without the opt-in.
+    expect(
+      hookRegisteredInChild(flag.enabledValue, {
+        [exposure.name]: exposure.exposedValue,
+      }),
+    ).toBe(false);
+    expect(
+      hookRegisteredInChild(flag.enabledValue, {
+        [exposure.name]: exposure.exposedValue,
+        [optIn.name]: optIn.enabledValue,
+      }),
+    ).toBe(true);
+  });
+
+  // -------------------------------------------------------------------------
+  // R2-15: exposure normalization is the shared vector's, exactly
+  // -------------------------------------------------------------------------
+
+  test("e2e stack exposure check matches the shared vector", () => {
+    const flag = vector.contract.flag;
+    const optIn = vector.contract.tunnelOptIn;
+    const exposure = vector.contract.hostExposure;
+    expect(exposure.name).toBe("BRIDGE_HOST_EXPOSURE");
+    expect(exposure.exposedValue).toBe("exposed");
+    expect(vector.hostExposureCases.length).toBeGreaterThan(0);
+
+    const boot = (env: Record<string, string | undefined>) => () =>
+      createE2EStackAttestation({
+        env,
+        query: async () => ({ database: LIVE_DATABASE, seen: true }),
+        now: () => 0,
+        log: () => {},
+        randomBytes: (size: number) => new Uint8Array(size),
+      }).assertBootAllowed();
+
+    for (const row of vector.hostExposureCases) {
+      const env = { [flag.name]: flag.enabledValue, [exposure.name]: row.value };
+      const label = JSON.stringify(row.value);
+      if (row.exposed) {
+        expect(boot(env), `${label} must refuse to boot`).toThrow(new RegExp(optIn.name));
+      } else {
+        expect(boot(env), `${label} must boot`).not.toThrow();
+      }
+      // The recorded opt-in allows every value; the flag being off dormant-ises
+      // every value.
+      expect(boot({ ...env, [optIn.name]: optIn.enabledValue })).not.toThrow();
+      expect(boot({ [exposure.name]: row.value })).not.toThrow();
+    }
+
+    // An absent variable is not exposure.
+    expect(boot({ [flag.name]: flag.enabledValue })).not.toThrow();
+  });
+
+  // -------------------------------------------------------------------------
+  // R2-16: the observe query is capped per process
+  // -------------------------------------------------------------------------
+
+  test("e2e stack refuses when the observe cap is reached and runs no query", async () => {
+    // Each call parks until the test resolves it, so the cap is reached with a
+    // query genuinely in flight rather than by racing the event loop.
+    const pending: ((result: QueryResult) => void)[] = [];
+    const query: QueryFn = () =>
+      new Promise<QueryResult>((resolve) => {
+        pending.push(resolve);
+      });
+    const { attestation, query: observed, logs } = harness({
+      query,
+      maxInFlightObserveQueries: 1,
+    });
+
+    const first = fakeResponse();
+    const firstCall = attestation.onRequest({
+      request: fakeRequest("GET", attestationUrl()),
+      response: first.response,
+    });
+    expect(observed.calls).toHaveLength(1);
+
+    // The only slot is occupied: refuse, write nothing, and run NO query.
+    const busy = fakeResponse();
+    await expect(
+      attestation.onRequest({ request: fakeRequest("GET", attestationUrl()), response: busy.response }),
+    ).resolves.toBeUndefined();
+    expect(observed.calls).toHaveLength(1);
+    expect(busy.heads).toEqual([]);
+    expect(busy.bodies).toEqual([]);
+    expect(logs.filter((line) => line.includes(vector.contract.observeConcurrency.refusalReason))).toHaveLength(1);
+
+    // Refusal logging is rate limited, so a flood cannot fill the log.
+    const flooded = fakeResponse();
+    await attestation.onRequest({
+      request: fakeRequest("GET", attestationUrl()),
+      response: flooded.response,
+    });
+    expect(observed.calls).toHaveLength(1);
+    expect(logs.filter((line) => line.includes(vector.contract.observeConcurrency.refusalReason))).toHaveLength(1);
+
+    // Releasing the holder completes it and frees the slot.
+    pending[0]({ database: LIVE_DATABASE, seen: true });
+    await expect(firstCall).rejects.toBeUndefined();
+    expect(first.heads[0].status).toBe(200);
+
+    const third = fakeResponse();
+    const thirdCall = attestation.onRequest({
+      request: fakeRequest("GET", attestationUrl()),
+      response: third.response,
+    });
+    expect(observed.calls).toHaveLength(2);
+    pending[1]({ database: LIVE_DATABASE, seen: true });
+    await expect(thirdCall).rejects.toBeUndefined();
+    expect(third.heads[0].status).toBe(200);
+  });
+
+  test("e2e stack releases its observe slot on success, error, and timeout", async () => {
+    const proveSlotIsFree = async (attestation: ReturnType<typeof createE2EStackAttestation>) => {
+      const after = fakeResponse();
+      await expect(
+        attestation.onRequest({ request: fakeRequest("GET", attestationUrl()), response: after.response }),
+      ).rejects.toBeUndefined();
+      expect(after.heads[0].status).toBe(200);
+    };
+
+    // Success.
+    {
+      const { attestation, query } = harness({ maxInFlightObserveQueries: 1 });
+      const ok = fakeResponse();
+      await expect(
+        attestation.onRequest({ request: fakeRequest("GET", attestationUrl()), response: ok.response }),
+      ).rejects.toBeUndefined();
+      await proveSlotIsFree(attestation);
+      expect(query.calls).toHaveLength(2);
+    }
+
+    // Error: a throwing query must not strand its slot.
+    {
+      let fail = true;
+      const { attestation, query, logs } = harness({
+        maxInFlightObserveQueries: 1,
+        query: async () => {
+          if (fail) throw new Error("connection terminated");
+          return { database: LIVE_DATABASE, seen: true };
+        },
+      });
+      const failed = fakeResponse();
+      await expect(
+        attestation.onRequest({ request: fakeRequest("GET", attestationUrl()), response: failed.response }),
+      ).resolves.toBeUndefined();
+      expect(failed.heads).toEqual([]);
+      expect(logs.join("\n")).toContain("query_error");
+      fail = false;
+      await proveSlotIsFree(attestation);
+      expect(query.calls).toHaveLength(2);
+    }
+
+    // Timeout: the abandoned query must not strand its slot either.
+    {
+      let hang = true;
+      const { attestation, query, logs } = harness({
+        maxInFlightObserveQueries: 1,
+        query: () =>
+          hang
+            ? new Promise<QueryResult>(() => {})
+            : Promise.resolve({ database: LIVE_DATABASE, seen: true }),
+      });
+      const timedOut = fakeResponse();
+      await expect(
+        attestation.onRequest({ request: fakeRequest("GET", attestationUrl()), response: timedOut.response }),
+      ).resolves.toBeUndefined();
+      expect(timedOut.heads).toEqual([]);
+      expect(logs.join("\n")).toContain("query_timeout");
+      hang = false;
+      await proveSlotIsFree(attestation);
+      expect(query.calls).toHaveLength(2);
+    }
+  }, 20_000);
+
+  test("e2e stack default observe cap matches the shared vector", async () => {
+    const limit = vector.contract.observeConcurrency.maxInFlightPerProcess;
+    expect(limit).toBeGreaterThan(0);
+    expect(E2E_STACK_MAX_IN_FLIGHT_OBSERVE_QUERIES).toBe(limit);
+    expect(vector.contract.observeConcurrency.refusalReason).toBe("observe_busy");
+
+    // Behaviourally, with NO injected cap: exactly `limit` queries fit.
+    const pending: ((result: QueryResult) => void)[] = [];
+    const { attestation, query, logs } = harness({
+      query: () =>
+        new Promise<QueryResult>((resolve) => {
+          pending.push(resolve);
+        }),
+    });
+
+    const held = [];
+    for (let i = 0; i < limit; i += 1) {
+      const response = fakeResponse();
+      held.push({
+        response,
+        call: attestation.onRequest({ request: fakeRequest("GET", attestationUrl()), response: response.response }),
+      });
+    }
+    expect(query.calls).toHaveLength(limit);
+
+    const over = fakeResponse();
+    await expect(
+      attestation.onRequest({ request: fakeRequest("GET", attestationUrl()), response: over.response }),
+    ).resolves.toBeUndefined();
+    expect(query.calls).toHaveLength(limit);
+    expect(over.heads).toEqual([]);
+    expect(logs.join("\n")).toContain(vector.contract.observeConcurrency.refusalReason);
+
+    for (let i = 0; i < limit; i += 1) {
+      pending[i]({ database: LIVE_DATABASE, seen: true });
+      await expect(held[i].call).rejects.toBeUndefined();
+      expect(held[i].response.heads[0].status).toBe(200);
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
 // Child-process probe for the flag-conditional hook registration.
 // ---------------------------------------------------------------------------
 
-function hookRegisteredInChild(flagValue: string): boolean {
+function hookRegisteredInChild(
+  flagValue: string,
+  extraEnv: Record<string, string> = {},
+): boolean {
   const script = `
     const mod = await import(${JSON.stringify(path.join(repoRoot, "server/hocuspocus.ts"))});
     const hooks = mod.hocuspocusHooks;
@@ -616,6 +910,7 @@ function hookRegisteredInChild(flagValue: string): boolean {
       HOCUSPOCUS_CONTROL_SECRET: "e2e-stack-test-control-secret",
       BRIDGE_HOST_EXPOSURE: "",
       ALLOW_E2E_STACK_OVER_TUNNEL: "",
+      ...extraEnv,
     },
     stdout: "pipe",
     stderr: "pipe",

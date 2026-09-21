@@ -10,6 +10,7 @@ export const E2E_STACK_NONCE_PATTERN = /^[0-9a-f]{64}$/;
 const E2E_STACK_PATH = "/e2e-stack";
 const E2E_STACK_QUERY_TIMEOUT_MS = 2_000;
 const E2E_STACK_REFUSAL_LOG_INTERVAL_MS = 10_000;
+export const E2E_STACK_MAX_IN_FLIGHT_OBSERVE_QUERIES = 2;
 const E2E_STACK_INSTANCE_GLOBAL_KEY = "__bridgeE2EStackAttestationInstance";
 const queryTimedOut = Symbol("e2e-stack-query-timeout");
 
@@ -26,6 +27,7 @@ export type E2EStackAttestationDeps = {
   now: () => number;
   log: (message: string) => void;
   randomBytes: (size: number) => Uint8Array;
+  maxInFlightObserveQueries: number;
 };
 
 type E2EStackGlobal = typeof globalThis & {
@@ -114,9 +116,13 @@ export function createE2EStackAttestation({
   now = Date.now,
   log = console.warn,
   randomBytes = nodeRandomBytes,
+  maxInFlightObserveQueries = E2E_STACK_MAX_IN_FLIGHT_OBSERVE_QUERIES,
 }: Partial<E2EStackAttestationDeps> = {}) {
   const enabled = env.BRIDGE_E2E_STACK === "1";
+  const isExposed = (env.BRIDGE_HOST_EXPOSURE ?? "").toLowerCase().trim() === "exposed";
+  const bootAllowed = !isExposed || env.ALLOW_E2E_STACK_OVER_TUNNEL === "true";
   const lastRefusalLog = new Map<string, number>();
+  let inFlightObserveQueries = 0;
 
   function logRefusal(reason: string): void {
     const timestamp = now();
@@ -128,10 +134,10 @@ export function createE2EStackAttestation({
 
   return {
     enabled,
+    registrable: enabled && bootAllowed,
 
     assertBootAllowed(): void {
-      const isExposed = (env.BRIDGE_HOST_EXPOSURE ?? "").toLowerCase().trim() === "exposed";
-      if (enabled && isExposed && env.ALLOW_E2E_STACK_OVER_TUNNEL !== "true") {
+      if (enabled && !bootAllowed) {
         throw new Error(
           "[hocuspocus] refusing to start: BRIDGE_E2E_STACK=1 with BRIDGE_HOST_EXPOSURE=exposed requires ALLOW_E2E_STACK_OVER_TUNNEL=true"
         );
@@ -158,13 +164,20 @@ export function createE2EStackAttestation({
         logRefusal("parsed_database_not_test");
         return;
       }
+      if (inFlightObserveQueries >= maxInFlightObserveQueries) {
+        logRefusal("observe_busy");
+        return;
+      }
 
       let observed: E2EStackQueryResult;
+      inFlightObserveQueries += 1;
       try {
         observed = await observeWithinTimeout(() => query(E2E_STACK_LOCK_CLASS, deriveE2EStackObjid(nonce)));
       } catch (error) {
         logRefusal(error === queryTimedOut ? "query_timeout" : "query_error");
         return;
+      } finally {
+        inFlightObserveQueries -= 1;
       }
       if (!observed.database.endsWith("_test")) {
         logRefusal("live_database_not_test");
