@@ -3,6 +3,10 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+	"math"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -10,6 +14,75 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// Plan 094 Phase 14 — the gate's advisory-lock namespace.
+//
+// E2EStackLockClass is the high word of a one-key bigint advisory lock held by
+// the local gate while every E2E service proves it can see it. If that class
+// ever collided with a lifecycle class, a real Bridge transaction could either
+// block the gate or be mistaken for it, and the E2E tier would be authorised
+// to mutate a stack the gate never proved anything about.
+func TestE2EStackLockClass_DisjointFromLifecycleClasses(t *testing.T) {
+	classes := map[string]int32{
+		"E2EStackLockClass":         E2EStackLockClass,
+		"sessionLifecycleLockClass": sessionLifecycleLockClass,
+		"classReplacementLockClass": classReplacementLockClass,
+	}
+	seen := map[int32]string{}
+	for name, value := range classes {
+		if other, duplicate := seen[value]; duplicate {
+			t.Fatalf("advisory lock classes %s and %s share the value %d", other, name, value)
+		}
+		seen[value] = name
+	}
+	require.Len(t, seen, 3, "the three reserved lock classes must be pairwise distinct")
+
+	// The one-key pg_advisory_xact_lock(hashtext(...)) form in sessions.go
+	// widens an int4 to a high word of 0 (non-negative) or 0xFFFFFFFF
+	// (negative); the reserved class must be neither, or a routine session
+	// lock would be indistinguishable from the gate's.
+	asUint := uint32(E2EStackLockClass)
+	assert.NotEqual(t, uint32(0), asUint, "a zero high word is exactly what a positive hashtext lock produces")
+	assert.NotEqual(t, uint32(0xFFFFFFFF), asUint, "an all-ones high word is exactly what a negative hashtext lock produces")
+	assert.Positive(t, E2EStackLockClass, "the class is composed with <<32 and must not sign-extend")
+
+	// The composed key stays a positive bigint across the whole 31-bit object
+	// id range, so PostgreSQL never sees a negative key and the decimal form
+	// the gate script computes in BigInt matches Go's int64.
+	for _, objid := range []int64{0, 1, math.MaxInt32 - 1, math.MaxInt32} {
+		key := int64(E2EStackLockClass)<<32 | objid
+		assert.Positive(t, key, "composed key for objid %d must be a positive bigint", objid)
+		assert.Equal(t, int64(E2EStackLockClass), key>>32, "the high word must survive composition")
+		assert.Equal(t, objid, key&0xFFFFFFFF, "the low word must survive composition")
+	}
+
+	// The same three values are pinned in the cross-language contract vector
+	// that Go, Bun, Vitest, and the gate selftests all assert.
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "scripts", "tests", "e2e-stack-vector.json"))
+	require.NoError(t, err)
+	var vector struct {
+		Contract struct {
+			LockClass int64 `json:"lockClass"`
+		} `json:"contract"`
+		DisjointFrom struct {
+			SessionLifecycleLockClass int64   `json:"sessionLifecycleLockClass"`
+			ClassReplacementLockClass int64   `json:"classReplacementLockClass"`
+			HashtextOneKeyHighWords   []int64 `json:"hashtextOneKeyHighWords"`
+		} `json:"disjointFrom"`
+		ComposeKeyBoundaries []struct {
+			Objid int64  `json:"objid"`
+			Key   string `json:"key"`
+		} `json:"composeKeyBoundaries"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &vector))
+	assert.Equal(t, vector.Contract.LockClass, int64(E2EStackLockClass))
+	assert.Equal(t, vector.DisjointFrom.SessionLifecycleLockClass, int64(sessionLifecycleLockClass))
+	assert.Equal(t, vector.DisjointFrom.ClassReplacementLockClass, int64(classReplacementLockClass))
+	require.NotEmpty(t, vector.DisjointFrom.HashtextOneKeyHighWords)
+	for _, highWord := range vector.DisjointFrom.HashtextOneKeyHighWords {
+		assert.NotEqual(t, highWord, int64(asUint), "the reserved class must differ from every hashtext high word")
+	}
+}
 
 func TestSessionLifecycleAdvisoryKeyVectors(t *testing.T) {
 	for _, tc := range []struct {

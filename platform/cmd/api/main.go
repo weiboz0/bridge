@@ -41,6 +41,15 @@ func main() {
 		slog.Error("Failed to load config", "error", err)
 		os.Exit(1)
 	}
+	if err := validateE2EStackEnv(
+		cfg.E2EStack,
+		os.Getenv("APP_ENV") == "production",
+		os.Getenv("BRIDGE_HOST_EXPOSURE"),
+		cfg.AllowE2EStackOverTunnel,
+	); err != nil {
+		slog.Error(err.Error())
+		os.Exit(1)
+	}
 
 	// Plan 065 — fail fast at boot when BRIDGE_SESSION_AUTH=1 but
 	// the supporting secrets are unset. Otherwise the flag-on
@@ -219,6 +228,14 @@ func main() {
 	}
 	realtimeH.HealthRoutes(r)
 	realtimeH.InternalRoutes(r)
+	if cfg.E2EStack {
+		e2eStackH := handlers.NewE2EStackHandler(handlers.E2EStackHandlerConfig{
+			DB:          database,
+			DatabaseURL: cfg.Database.URL,
+			NotFound:    r.NotFoundHandler(),
+		})
+		e2eStackH.Routes(r)
+	}
 
 	// Plan 065 Phase 1 — Bridge session mint endpoint. Like the
 	// realtime internal callback, this is server-to-server only
@@ -576,5 +593,20 @@ func validateDevAuthEnv(getEnv func(string) string) error {
 
 	slog.Warn("DEV_SKIP_AUTH is active — all requests bypass authentication. NEVER use in production.",
 		"DEV_SKIP_AUTH", devSkipAuth)
+	return nil
+}
+
+// validateE2EStackEnv is deliberately pure so startup policy can be
+// table-tested without mutating process environment or invoking os.Exit.
+func validateE2EStackEnv(enabled, production bool, exposure string, allowOverTunnel bool) error {
+	if !enabled {
+		return nil
+	}
+	if production {
+		return fmt.Errorf("refusing to start: BRIDGE_E2E_STACK=1 is set with APP_ENV=production. Unset BRIDGE_E2E_STACK before starting")
+	}
+	if strings.EqualFold(strings.TrimSpace(exposure), "exposed") && !allowOverTunnel {
+		return fmt.Errorf("refusing to start: BRIDGE_E2E_STACK=1 is set with BRIDGE_HOST_EXPOSURE=exposed. Set ALLOW_E2E_STACK_OVER_TUNNEL=true only for a deliberate exposed-host E2E stack")
+	}
 	return nil
 }

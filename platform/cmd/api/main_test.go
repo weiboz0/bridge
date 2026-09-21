@@ -272,3 +272,160 @@ func TestValidateBridgeSessionEnv(t *testing.T) {
 		})
 	}
 }
+
+// Plan 094 Phase 14: the E2E stack attestation is a test-only surface that
+// answers an anonymous caller with one database query per well-formed nonce.
+// Two boot guards keep it off production and off internet-facing hosts that
+// have not opted in a second time. Both are pure, so they are table-tested
+// here beside the DEV_SKIP_AUTH guard.
+
+type e2eStackEnvCase struct {
+	name            string
+	enabled         bool
+	production      bool
+	exposure        string
+	allowOverTunnel bool
+	expectError     bool
+	errSubstrs      []string
+	forbidSubstrs   []string
+}
+
+func runE2EStackEnvCases(t *testing.T, cases []e2eStackEnvCase) {
+	t.Helper()
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateE2EStackEnv(tc.enabled, tc.production, tc.exposure, tc.allowOverTunnel)
+			if !tc.expectError {
+				if err != nil {
+					t.Fatalf("expected no error, got: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("expected a refusal to start, got nil")
+			}
+			for _, substr := range tc.errSubstrs {
+				if !strings.Contains(err.Error(), substr) {
+					t.Errorf("expected error containing %q, got: %v", substr, err)
+				}
+			}
+			for _, substr := range tc.forbidSubstrs {
+				if strings.Contains(err.Error(), substr) {
+					t.Errorf("error must not contain %q, got: %v", substr, err)
+				}
+			}
+		})
+	}
+}
+
+func TestE2EStackFlag_RefusedInProduction(t *testing.T) {
+	runE2EStackEnvCases(t, []e2eStackEnvCase{
+		{
+			name:       "flag OFF + APP_ENV=production → no error (dormant)",
+			production: true,
+		},
+		{
+			name:            "flag OFF + production + exposed + opt-in → still no error",
+			production:      true,
+			exposure:        "exposed",
+			allowOverTunnel: true,
+		},
+		{
+			name:        "flag ON + production → ERROR",
+			enabled:     true,
+			production:  true,
+			expectError: true,
+			errSubstrs:  []string{"refusing to start", "BRIDGE_E2E_STACK", "production"},
+		},
+		{
+			name:            "flag ON + production + tunnel opt-in → ERROR (the opt-in never unlocks production)",
+			enabled:         true,
+			production:      true,
+			exposure:        "exposed",
+			allowOverTunnel: true,
+			expectError:     true,
+			errSubstrs:      []string{"refusing to start", "APP_ENV=production"},
+		},
+		{
+			name:    "flag ON + non-production → no error",
+			enabled: true,
+		},
+	})
+}
+
+func TestE2EStackFlag_RefusedOnExposedHostWithoutOptIn(t *testing.T) {
+	runE2EStackEnvCases(t, []e2eStackEnvCase{
+		{
+			name:     "flag OFF + exposed, no opt-in → no error (dormant)",
+			exposure: "exposed",
+		},
+		{
+			name:        "flag ON + exposed, no opt-in → ERROR naming the opt-in",
+			enabled:     true,
+			exposure:    "exposed",
+			expectError: true,
+			errSubstrs: []string{
+				"refusing to start",
+				"BRIDGE_HOST_EXPOSURE=exposed",
+				"ALLOW_E2E_STACK_OVER_TUNNEL",
+			},
+			// A boot refusal must not echo anything about the database.
+			forbidSubstrs: []string{"postgres"},
+		},
+		{
+			name:            "flag ON + exposed + opt-in → no error (a recorded choice)",
+			enabled:         true,
+			exposure:        "exposed",
+			allowOverTunnel: true,
+		},
+		{
+			name:     "flag ON + exposure unset → no error (default localhost)",
+			enabled:  true,
+			exposure: "",
+		},
+		{
+			name:     "flag ON + exposure=localhost → no error",
+			enabled:  true,
+			exposure: "localhost",
+		},
+		{
+			name:        "flag ON + EXPOSED (uppercase) → ERROR",
+			enabled:     true,
+			exposure:    "EXPOSED",
+			expectError: true,
+			errSubstrs:  []string{"ALLOW_E2E_STACK_OVER_TUNNEL"},
+		},
+		{
+			name:        "flag ON + Exposed (mixed case) → ERROR",
+			enabled:     true,
+			exposure:    "Exposed",
+			expectError: true,
+			errSubstrs:  []string{"ALLOW_E2E_STACK_OVER_TUNNEL"},
+		},
+		{
+			name:        "flag ON + padded ' exposed ' → ERROR (whitespace must not smuggle exposure past the guard)",
+			enabled:     true,
+			exposure:    "  exposed\t",
+			expectError: true,
+			errSubstrs:  []string{"ALLOW_E2E_STACK_OVER_TUNNEL"},
+		},
+		{
+			name:        "flag ON + '\\n exposed \\n' → ERROR",
+			enabled:     true,
+			exposure:    "\n exposed \n",
+			expectError: true,
+			errSubstrs:  []string{"ALLOW_E2E_STACK_OVER_TUNNEL"},
+		},
+		{
+			name:            "flag ON + padded exposure + opt-in → no error",
+			enabled:         true,
+			exposure:        " exposed ",
+			allowOverTunnel: true,
+		},
+		{
+			name:     "flag ON + exposure=exposed-ish word → no error (only `exposed` declares exposure)",
+			enabled:  true,
+			exposure: "exposedish",
+		},
+	})
+}

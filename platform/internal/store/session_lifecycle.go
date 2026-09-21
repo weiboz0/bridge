@@ -15,8 +15,13 @@ import (
 )
 
 const (
-	sessionLifecycleLockClass  int32 = 1112687687 // 0x42524447, Bridge session lifecycle.
-	classReplacementLockClass  int32 = 1112687436 // 0x4252434c, Bridge class replacement.
+	sessionLifecycleLockClass int32 = 1112687687 // 0x42524447, Bridge session lifecycle.
+	classReplacementLockClass int32 = 1112687436 // 0x4252434c, Bridge class replacement.
+	// E2EStackLockClass is used only as the high word of the gate's one-key bigint
+	// advisory lock (objsubid = 1). It cannot collide with the two-key lifecycle
+	// locks (objsubid = 2), nor with sessions.go's int4 hashtext lock, whose high
+	// word is always 0 or 0xFFFFFFFF.
+	E2EStackLockClass          int32 = 1112683077 // 0x42523245, Bridge E2E stack attestation (one-key form; see Plan 094 Phase 14).
 	sessionFreezeLeaseDuration       = 15 * time.Second
 )
 

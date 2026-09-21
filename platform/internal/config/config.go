@@ -12,13 +12,15 @@ import (
 )
 
 type Config struct {
-	Server        ServerConfig        `toml:"server"`
-	Database      DatabaseConfig      `toml:"database"`
-	Auth          AuthConfig          `toml:"auth"`
-	LLM           LLMConfig           `toml:"llm"`
-	Sandbox       SandboxConfig       `toml:"sandbox"`
-	Realtime      RealtimeConfig      `toml:"realtime"`
-	BridgeSession BridgeSessionConfig `toml:"bridge_session"`
+	Server                  ServerConfig        `toml:"server"`
+	Database                DatabaseConfig      `toml:"database"`
+	Auth                    AuthConfig          `toml:"auth"`
+	LLM                     LLMConfig           `toml:"llm"`
+	Sandbox                 SandboxConfig       `toml:"sandbox"`
+	Realtime                RealtimeConfig      `toml:"realtime"`
+	BridgeSession           BridgeSessionConfig `toml:"bridge_session"`
+	E2EStack                bool                `toml:"-"`
+	AllowE2EStackOverTunnel bool                `toml:"-"`
 }
 
 type ServerConfig struct {
@@ -174,6 +176,8 @@ func Load(path string) (*Config, error) {
 		cfg.Realtime.HocuspocusControlSecret = v
 	}
 	cfg.Realtime.E2ECanvasControlFailure = os.Getenv("BRIDGE_E2E_CANVAS_CONTROL_FAILURE") == "1"
+	cfg.E2EStack = os.Getenv("BRIDGE_E2E_STACK") == "1"
+	cfg.AllowE2EStackOverTunnel = os.Getenv("ALLOW_E2E_STACK_OVER_TUNNEL") == "true"
 
 	// Plan 065 — Bridge session secrets. Prefer the plural
 	// (rotation-aware) BRIDGE_SESSION_SECRETS; fall back to the
