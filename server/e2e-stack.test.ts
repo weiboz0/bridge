@@ -777,68 +777,169 @@ describe("hocuspocus e2e stack attestation", () => {
     expect(third.heads[0].status).toBe(200);
   });
 
-  test("e2e stack releases its observe slot on success, error, and timeout", async () => {
-    const proveSlotIsFree = async (attestation: ReturnType<typeof createE2EStackAttestation>) => {
-      const after = fakeResponse();
-      await expect(
-        attestation.onRequest({ request: fakeRequest("GET", attestationUrl()), response: after.response }),
-      ).rejects.toBeUndefined();
-      expect(after.heads[0].status).toBe(200);
+  // -------------------------------------------------------------------------
+  // R2-25: the slot follows the QUERY, not the request timeout
+  // -------------------------------------------------------------------------
+
+  test("e2e stack holds its observe slot until the query settles, not until the request times out", async () => {
+    // A controllable query: every call parks and hands the test its settlers,
+    // so the slot's lifetime can be observed independently of the 2s request
+    // timeout. The cap is 1 throughout, so "the slot" is unambiguous.
+    interface Settler {
+      resolve: (result: QueryResult) => void;
+      reject: (error: unknown) => void;
+    }
+    const controllable = () => {
+      const settlers: Settler[] = [];
+      const query: QueryFn = () =>
+        new Promise<QueryResult>((resolve, reject) => {
+          settlers.push({ resolve, reject });
+        });
+      return { settlers, query };
     };
+    const ok: QueryResult = { database: LIVE_DATABASE, seen: true };
+    // The release handler runs in a microtask on the settled query; a macrotask
+    // turn is strictly more than enough for it to have run.
+    const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
-    // Success.
-    {
-      const { attestation, query } = harness({ maxInFlightObserveQueries: 1 });
-      const ok = fakeResponse();
-      await expect(
-        attestation.onRequest({ request: fakeRequest("GET", attestationUrl()), response: ok.response }),
-      ).rejects.toBeUndefined();
-      await proveSlotIsFree(attestation);
-      expect(query.calls).toHaveLength(2);
+    // R2-25 also required that the abandoned query's LATE rejection stays
+    // handled: nothing may surface as an unhandled rejection after the request
+    // has already returned.
+    const unhandled: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandledRejection);
+
+    try {
+      // 1. A query that SUCCEEDS frees the slot.
+      {
+        const { settlers, query } = controllable();
+        const { attestation, query: observed } = harness({ maxInFlightObserveQueries: 1, query });
+        const first = fakeResponse();
+        const firstCall = attestation.onRequest({ request: fakeRequest("GET", attestationUrl()), response: first.response });
+        expect(observed.calls).toHaveLength(1);
+        settlers[0].resolve(ok);
+        await expect(firstCall).rejects.toBeUndefined();
+        expect(first.heads[0].status).toBe(200);
+
+        const next = fakeResponse();
+        const nextCall = attestation.onRequest({ request: fakeRequest("GET", attestationUrl()), response: next.response });
+        expect(observed.calls).toHaveLength(2);
+        settlers[1].resolve(ok);
+        await expect(nextCall).rejects.toBeUndefined();
+        expect(next.heads[0].status).toBe(200);
+      }
+
+      // 2. A query that REJECTS frees the slot.
+      {
+        const { settlers, query } = controllable();
+        const { attestation, query: observed, logs } = harness({ maxInFlightObserveQueries: 1, query });
+        const failed = fakeResponse();
+        const failedCall = attestation.onRequest({ request: fakeRequest("GET", attestationUrl()), response: failed.response });
+        expect(observed.calls).toHaveLength(1);
+        settlers[0].reject(new Error("connection terminated"));
+        await expect(failedCall).resolves.toBeUndefined();
+        expect(failed.heads).toEqual([]);
+        expect(failed.bodies).toEqual([]);
+        expect(logs.join("\n")).toContain("query_error");
+
+        const next = fakeResponse();
+        const nextCall = attestation.onRequest({ request: fakeRequest("GET", attestationUrl()), response: next.response });
+        expect(observed.calls).toHaveLength(2);
+        settlers[1].resolve(ok);
+        await expect(nextCall).rejects.toBeUndefined();
+        expect(next.heads[0].status).toBe(200);
+      }
+
+      // 3. The regression itself, in both late outcomes: the request times out
+      //    while its query is STILL RUNNING. The request refuses and writes
+      //    nothing, but the database work it started has not stopped, so the
+      //    slot must stay occupied until that query itself settles. Releasing
+      //    on the timeout instead let a stalled database accumulate running
+      //    queries without limit.
+      for (const late of ["resolve", "reject"] as const) {
+        const { settlers, query } = controllable();
+        const { attestation, query: observed, logs } = harness({ maxInFlightObserveQueries: 1, query });
+
+        const timedOut = fakeResponse();
+        await expect(
+          attestation.onRequest({ request: fakeRequest("GET", attestationUrl()), response: timedOut.response }),
+        ).resolves.toBeUndefined();
+        expect(timedOut.heads, late).toEqual([]);
+        expect(timedOut.bodies, late).toEqual([]);
+        expect(logs.join("\n"), late).toContain("query_timeout");
+        expect(observed.calls, late).toHaveLength(1);
+
+        // The abandoned query is still in flight: the next request is refused
+        // `observe_busy` and runs NO query of its own.
+        const busy = fakeResponse();
+        await expect(
+          attestation.onRequest({ request: fakeRequest("GET", attestationUrl()), response: busy.response }),
+        ).resolves.toBeUndefined();
+        expect(observed.calls, late).toHaveLength(1);
+        expect(busy.heads, late).toEqual([]);
+        expect(busy.bodies, late).toEqual([]);
+        expect(logs.join("\n"), late).toContain(vector.contract.observeConcurrency.refusalReason);
+
+        // Now the abandoned query settles — however it settles — and THAT is
+        // what frees the slot.
+        if (late === "resolve") settlers[0].resolve(ok);
+        else settlers[0].reject(new Error("connection terminated after the request gave up"));
+        await settle();
+
+        const after = fakeResponse();
+        const afterCall = attestation.onRequest({ request: fakeRequest("GET", attestationUrl()), response: after.response });
+        expect(observed.calls, late).toHaveLength(2);
+
+        // Exactly ONE slot came back: a second concurrent request is still
+        // refused, so the release cannot have run twice for one acquisition.
+        const stillBusy = fakeResponse();
+        await expect(
+          attestation.onRequest({ request: fakeRequest("GET", attestationUrl()), response: stillBusy.response }),
+        ).resolves.toBeUndefined();
+        expect(observed.calls, late).toHaveLength(2);
+        expect(stillBusy.heads, late).toEqual([]);
+
+        settlers[1].resolve(ok);
+        await expect(afterCall).rejects.toBeUndefined();
+        expect(after.heads[0].status, late).toBe(200);
+      }
+
+      // The late rejection above was handled by the production code, not by a
+      // race that had already lost.
+      await settle();
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandledRejection);
     }
+  }, 30_000);
 
-    // Error: a throwing query must not strand its slot.
-    {
-      let fail = true;
-      const { attestation, query, logs } = harness({
-        maxInFlightObserveQueries: 1,
-        query: async () => {
-          if (fail) throw new Error("connection terminated");
-          return { database: LIVE_DATABASE, seen: true };
-        },
-      });
-      const failed = fakeResponse();
+  test("e2e stack cannot exceed the cap however many requests time out", async () => {
+    // With a database that never answers, every request times out. Before
+    // R2-25 each timeout handed its slot back while its query kept running, so
+    // `cap + 5` requests started `cap + 5` queries. Now the cap holds.
+    const cap = vector.contract.observeConcurrency.maxInFlightPerProcess;
+    const { attestation, query, logs } = harness({
+      maxInFlightObserveQueries: cap,
+      query: () => new Promise<QueryResult>(() => {}),
+    });
+
+    for (let i = 0; i < cap + 5; i += 1) {
+      const response = fakeResponse();
       await expect(
-        attestation.onRequest({ request: fakeRequest("GET", attestationUrl()), response: failed.response }),
+        attestation.onRequest({ request: fakeRequest("GET", attestationUrl()), response: response.response }),
       ).resolves.toBeUndefined();
-      expect(failed.heads).toEqual([]);
-      expect(logs.join("\n")).toContain("query_error");
-      fail = false;
-      await proveSlotIsFree(attestation);
-      expect(query.calls).toHaveLength(2);
+      expect(response.heads, `request ${i} wrote a response head`).toEqual([]);
+      expect(response.bodies, `request ${i} wrote a response body`).toEqual([]);
+      expect(query.calls.length, `after request ${i}`).toBeLessThanOrEqual(cap);
     }
 
-    // Timeout: the abandoned query must not strand its slot either.
-    {
-      let hang = true;
-      const { attestation, query, logs } = harness({
-        maxInFlightObserveQueries: 1,
-        query: () =>
-          hang
-            ? new Promise<QueryResult>(() => {})
-            : Promise.resolve({ database: LIVE_DATABASE, seen: true }),
-      });
-      const timedOut = fakeResponse();
-      await expect(
-        attestation.onRequest({ request: fakeRequest("GET", attestationUrl()), response: timedOut.response }),
-      ).resolves.toBeUndefined();
-      expect(timedOut.heads).toEqual([]);
-      expect(logs.join("\n")).toContain("query_timeout");
-      hang = false;
-      await proveSlotIsFree(attestation);
-      expect(query.calls).toHaveLength(2);
-    }
-  }, 20_000);
+    expect(query.calls).toHaveLength(cap);
+    const text = logs.join("\n");
+    expect(text).toContain("query_timeout");
+    expect(text).toContain(vector.contract.observeConcurrency.refusalReason);
+  }, 30_000);
 
   test("e2e stack default observe cap matches the shared vector", async () => {
     const limit = vector.contract.observeConcurrency.maxInFlightPerProcess;

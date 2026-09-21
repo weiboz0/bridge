@@ -283,13 +283,34 @@ export async function evaluateE2EStackRequest({
     return { ok: false, reason: "observe_busy" };
   }
 
+  // The slot tracks the QUERY, not the 2s race below. Releasing in a
+  // `finally` around `withTimeout` would free the slot the instant the race
+  // resolves — while the underlying `observe()` promise is still running
+  // against the database — so a stalled database lets timed-out requests
+  // free their slots immediately, admit new requests, and accumulate
+  // unbounded running queries despite `E2E_STACK_OBSERVE_CONCURRENCY_LIMIT`.
+  // Instead `release` is bound directly to `pending` (the original observe
+  // promise) and fires exactly once, whenever `pending` itself settles —
+  // whether that is before the timeout, or later, after the request has
+  // already timed out and refused. `releaseOnce` guards against a slot ever
+  // being released twice, and attaching it to `pending` here (rather than
+  // leaving that promise to be handled only via the `withTimeout` race)
+  // means an observe rejection is always handled, never left dangling as an
+  // unhandled rejection once the request has already returned.
+  let released = false;
+  const releaseOnce = (): void => {
+    if (released) return;
+    released = true;
+    limiter.release();
+  };
+
   let observed: E2EStackObserveResult;
   try {
-    observed = await withTimeout(observe({ lockClass: E2E_STACK_LOCK_CLASS, objid }), OBSERVE_QUERY_TIMEOUT_MS, now);
+    const pending = Promise.resolve().then(() => observe({ lockClass: E2E_STACK_LOCK_CLASS, objid }));
+    pending.then(releaseOnce, releaseOnce);
+    observed = await withTimeout(pending, OBSERVE_QUERY_TIMEOUT_MS, now);
   } catch {
     return { ok: false, reason: "observe_query_failed" };
-  } finally {
-    limiter.release();
   }
 
   if (!observed.database.endsWith(TEST_DATABASE_SUFFIX)) {

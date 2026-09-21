@@ -171,13 +171,21 @@ export function createE2EStackAttestation({
 
       let observed: E2EStackQueryResult;
       inFlightObserveQueries += 1;
+      let released = false;
+      const releaseObserveQuerySlot = () => {
+        if (released) return;
+        released = true;
+        inFlightObserveQueries -= 1;
+      };
+      const pending = new Promise<E2EStackQueryResult>((resolve) =>
+        resolve(query(E2E_STACK_LOCK_CLASS, deriveE2EStackObjid(nonce))),
+      );
+      void pending.then(releaseObserveQuerySlot, releaseObserveQuerySlot);
       try {
-        observed = await observeWithinTimeout(() => query(E2E_STACK_LOCK_CLASS, deriveE2EStackObjid(nonce)));
+        observed = await observeWithinTimeout(() => pending);
       } catch (error) {
         logRefusal(error === queryTimedOut ? "query_timeout" : "query_error");
         return;
-      } finally {
-        inFlightObserveQueries -= 1;
       }
       if (!observed.database.endsWith("_test")) {
         logRefusal("live_database_not_test");

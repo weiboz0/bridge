@@ -666,67 +666,175 @@ describe("e2e-stack route", () => {
     expect(release).not.toHaveBeenCalled();
   });
 
-  it("e2e-stack route releases its observe slot on success, error, and timeout", async () => {
-    const counting = () => {
-      const state = { acquired: 0, released: 0 };
-      const limiter: E2EStackObserveLimiter = {
-        tryAcquire: () => {
-          state.acquired += 1;
-          return true;
-        },
-        release: () => {
-          state.released += 1;
-        },
-      };
-      return { state, limiter };
+  // -------------------------------------------------------------------------
+  // R2-25: the slot follows the QUERY, not the request timeout
+  // -------------------------------------------------------------------------
+
+  /** A limiter that counts and actually enforces `cap`, so contention is deterministic. */
+  function countingLimiter(cap: number) {
+    const state = { acquired: 0, released: 0, refused: 0 };
+    let inFlight = 0;
+    const limiter: E2EStackObserveLimiter = {
+      tryAcquire: () => {
+        if (inFlight >= cap) {
+          state.refused += 1;
+          return false;
+        }
+        inFlight += 1;
+        state.acquired += 1;
+        return true;
+      },
+      release: () => {
+        inFlight -= 1;
+        state.released += 1;
+      },
     };
+    return { state, limiter };
+  }
 
-    // Success.
-    {
-      const { state, limiter } = counting();
-      const result = await evaluateE2EStackRequest({
-        env: attestedEnv(),
-        nonce: NONCE,
-        observe: observing({ database: LIVE_DATABASE, lockSeen: true }),
-        limiter,
-      });
-      expect(result.ok).toBe(true);
-      expect(state).toEqual({ acquired: 1, released: 1 });
-    }
-
-    // Error.
-    {
-      const { state, limiter } = counting();
-      const result = await evaluateE2EStackRequest({
-        env: attestedEnv(),
-        nonce: NONCE,
-        observe: vi.fn(async () => {
-          throw new Error("connection terminated");
+  /** An observe the test settles by hand, so the slot's lifetime is observable. */
+  function deferredObserve() {
+    const settlers: {
+      resolve: (result: E2EStackObserveResult) => void;
+      reject: (error: unknown) => void;
+    }[] = [];
+    const observe = vi.fn(
+      () =>
+        new Promise<E2EStackObserveResult>((resolve, reject) => {
+          settlers.push({ resolve, reject });
         }),
-        limiter,
-      });
-      expect(result).toEqual({ ok: false, reason: "observe_query_failed" });
-      expect(state).toEqual({ acquired: 1, released: 1 });
-    }
+    );
+    return { settlers, observe };
+  }
 
-    // Timeout: the abandoned query must not strand its slot either.
-    {
-      const { state, limiter } = counting();
-      vi.useFakeTimers();
-      try {
-        const pending = evaluateE2EStackRequest({
+  it("e2e-stack route holds its observe slot until the query settles, not until the request times out", async () => {
+    // R2-25 also requires that the abandoned observe's LATE rejection stays
+    // handled: nothing may surface as an unhandled rejection after the request
+    // has already refused and returned.
+    const unhandled: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandledRejection);
+
+    try {
+      // Success: exactly one acquire, exactly one release.
+      {
+        const { state, limiter } = countingLimiter(1);
+        const result = await evaluateE2EStackRequest({
           env: attestedEnv(),
           nonce: NONCE,
-          observe: vi.fn(() => new Promise<E2EStackObserveResult>(() => {})),
+          observe: observing({ database: LIVE_DATABASE, lockSeen: true }),
           limiter,
         });
-        await vi.advanceTimersByTimeAsync(2_001);
-        expect(await pending).toEqual({ ok: false, reason: "observe_query_failed" });
-      } finally {
-        vi.useRealTimers();
+        expect(result.ok).toBe(true);
+        expect(state).toEqual({ acquired: 1, released: 1, refused: 0 });
       }
-      expect(state).toEqual({ acquired: 1, released: 1 });
+
+      // Error: a rejected observe releases its slot, exactly once.
+      {
+        const { state, limiter } = countingLimiter(1);
+        const result = await evaluateE2EStackRequest({
+          env: attestedEnv(),
+          nonce: NONCE,
+          observe: vi.fn(async () => {
+            throw new Error("connection terminated");
+          }),
+          limiter,
+        });
+        expect(result).toEqual({ ok: false, reason: "observe_query_failed" });
+        expect(state).toEqual({ acquired: 1, released: 1, refused: 0 });
+      }
+
+      // The regression itself, in both late outcomes. The request times out
+      // while its observe is STILL RUNNING against the database; before R2-25
+      // the `finally` handed the slot back there, so a stalled database let
+      // timed-out requests admit more and more running queries.
+      for (const late of ["resolve", "reject"] as const) {
+        const { state, limiter } = countingLimiter(1);
+        const { settlers, observe } = deferredObserve();
+        // R2-30: every wait here is on the injected fake clock, so no assertion
+        // depends on wall-clock time.
+        vi.useFakeTimers();
+        try {
+          const pending = evaluateE2EStackRequest({ env: attestedEnv(), nonce: NONCE, observe, limiter });
+          await vi.advanceTimersByTimeAsync(2_001);
+          expect(await pending, late).toEqual({ ok: false, reason: "observe_query_failed" });
+          expect(observe, late).toHaveBeenCalledTimes(1);
+          // The timeout did NOT free the slot: the query is still running.
+          expect(state, late).toEqual({ acquired: 1, released: 0, refused: 0 });
+
+          // So the next request is refused `observe_busy`, runs no query, and
+          // releases nothing (it never held a slot).
+          const busy = await evaluateE2EStackRequest({ env: attestedEnv(), nonce: NONCE, observe, limiter });
+          expect(busy, late).toEqual({ ok: false, reason: "observe_busy" });
+          expect(observe, late).toHaveBeenCalledTimes(1);
+          expect(state, late).toEqual({ acquired: 1, released: 0, refused: 1 });
+
+          // Settling the abandoned observe — however it settles — is what
+          // releases the slot, and it releases it exactly once.
+          if (late === "resolve") settlers[0].resolve({ database: LIVE_DATABASE, lockSeen: true });
+          else settlers[0].reject(new Error("connection terminated after the request gave up"));
+          await vi.advanceTimersByTimeAsync(0);
+          expect(state.released, late).toBe(1);
+
+          // One slot came back, not two: one further request is admitted and
+          // the one after it is still refused.
+          const admitted = evaluateE2EStackRequest({ env: attestedEnv(), nonce: NONCE, observe, limiter });
+          await vi.advanceTimersByTimeAsync(0);
+          expect(observe, late).toHaveBeenCalledTimes(2);
+          expect(
+            await evaluateE2EStackRequest({ env: attestedEnv(), nonce: NONCE, observe, limiter }),
+            late,
+          ).toEqual({ ok: false, reason: "observe_busy" });
+          expect(observe, late).toHaveBeenCalledTimes(2);
+
+          settlers[1].resolve({ database: LIVE_DATABASE, lockSeen: true });
+          await vi.advanceTimersByTimeAsync(0);
+          expect((await admitted).ok, late).toBe(true);
+          expect(state, late).toEqual({ acquired: 2, released: 2, refused: 2 });
+        } finally {
+          vi.useRealTimers();
+        }
+      }
+
+      // A real turn of the event loop: had the late rejection been left
+      // dangling, Node would have reported it by now.
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandledRejection);
     }
+  });
+
+  it("e2e-stack route cannot exceed the cap however many requests time out", async () => {
+    // With a database that never answers, every admitted request times out.
+    // Before R2-25 each timeout handed its slot straight back while its query
+    // kept running, so `limit + 5` requests started `limit + 5` queries.
+    const limit = vector.contract.observeConcurrency.maxInFlightPerProcess;
+    globalThis.bridgeE2EStackObserveInFlight = undefined;
+    const observe = vi.fn(() => new Promise<E2EStackObserveResult>(() => {}));
+
+    vi.useFakeTimers();
+    try {
+      for (let index = 0; index < limit + 5; index += 1) {
+        const pending = evaluateE2EStackRequest({ env: attestedEnv(), nonce: NONCE, observe });
+        await vi.advanceTimersByTimeAsync(2_001);
+        const outcome = await pending;
+        expect(outcome.ok, `request ${index}`).toBe(false);
+        expect(
+          outcome.ok ? "" : outcome.reason,
+          `request ${index}`,
+        ).toBe(index < limit ? "observe_query_failed" : vector.contract.observeConcurrency.refusalReason);
+        expect(observe.mock.calls.length, `after request ${index}`).toBeLessThanOrEqual(limit);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(observe).toHaveBeenCalledTimes(limit);
+    // The process-wide count never rose above the cap either.
+    expect(globalThis.bridgeE2EStackObserveInFlight).toBe(limit);
   });
 
   it("e2e-stack route default limiter is process-wide and capped at the contract value", async () => {
@@ -747,53 +855,65 @@ describe("e2e-stack route", () => {
         }),
     );
 
-    // Each evaluation builds its OWN default limiter, yet they share one count.
-    const held = [];
-    for (let index = 0; index < limit; index += 1) {
-      held.push(evaluateE2EStackRequest({ env: attestedEnv(), nonce: NONCE, observe }));
+    // R2-30: the held evaluations below carry a live 2s observe timeout across
+    // two further `GET` round-trips. On the real clock that is a flake window
+    // on a loaded machine — the timers could fire mid-assertion — so the whole
+    // test runs on the fake clock and never advances it past the timeout.
+    vi.useFakeTimers();
+    try {
+      // Each evaluation builds its OWN default limiter, yet they share one count.
+      const held = [];
+      for (let index = 0; index < limit; index += 1) {
+        held.push(evaluateE2EStackRequest({ env: attestedEnv(), nonce: NONCE, observe }));
+      }
+      // The slot is taken synchronously; the observe itself starts a microtask
+      // later, so let those run before counting the queries.
+      expect(globalThis.bridgeE2EStackObserveInFlight).toBe(limit);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(observe).toHaveBeenCalledTimes(limit);
+
+      const over = await evaluateE2EStackRequest({
+        env: attestedEnv(),
+        nonce: NONCE,
+        observe,
+      });
+      expect(over).toEqual({ ok: false, reason: vector.contract.observeConcurrency.refusalReason });
+      expect(observe).toHaveBeenCalledTimes(limit);
+      expect(globalThis.bridgeE2EStackObserveInFlight).toBe(limit);
+
+      // Through the real handler, the busy refusal takes the SAME single
+      // notFound() path as every other refusal, and runs no query.
+      applyEnv(attestedEnv());
+      executeMock.mockClear();
+      notFoundMock.mockClear();
+      const busyError = await GET(request()).then(
+        () => new Error("the busy request did not refuse"),
+        (caught: unknown) => caught,
+      );
+      expect(busyError).toBeInstanceOf(NotFoundSentinel);
+      expect(notFoundMock).toHaveBeenCalledTimes(1);
+      expect(notFoundMock).toHaveBeenCalledWith();
+      expect(executeMock).not.toHaveBeenCalled();
+      // ...and it was refused for THAT reason, not another.
+      expect(warnCalls.join("\n")).toContain(vector.contract.observeConcurrency.refusalReason);
+
+      // Byte-identical to the flag-off refusal.
+      globalThis.bridgeE2EStackObserveInFlight = 0;
+      applyEnv(attestedEnv({ [FLAG]: undefined }));
+      const flagOffError = await GET(request()).then(
+        () => new Error("the flag-off request did not refuse"),
+        (caught: unknown) => caught,
+      );
+      expect((busyError as Error).message).toBe((flagOffError as Error).message);
+
+      // Releasing every held query returns the process-wide count to zero.
+      globalThis.bridgeE2EStackObserveInFlight = limit;
+      for (const resolve of resolvers) resolve({ database: LIVE_DATABASE, lockSeen: true });
+      for (const pending of held) expect((await pending).ok).toBe(true);
+      expect(globalThis.bridgeE2EStackObserveInFlight).toBe(0);
+    } finally {
+      vi.useRealTimers();
     }
-    expect(globalThis.bridgeE2EStackObserveInFlight).toBe(limit);
-    expect(observe).toHaveBeenCalledTimes(limit);
-
-    const over = await evaluateE2EStackRequest({
-      env: attestedEnv(),
-      nonce: NONCE,
-      observe,
-    });
-    expect(over).toEqual({ ok: false, reason: vector.contract.observeConcurrency.refusalReason });
-    expect(observe).toHaveBeenCalledTimes(limit);
-    expect(globalThis.bridgeE2EStackObserveInFlight).toBe(limit);
-
-    // Through the real handler, the busy refusal takes the SAME single
-    // notFound() path as every other refusal, and runs no query.
-    applyEnv(attestedEnv());
-    executeMock.mockClear();
-    notFoundMock.mockClear();
-    const busyError = await GET(request()).then(
-      () => new Error("the busy request did not refuse"),
-      (caught: unknown) => caught,
-    );
-    expect(busyError).toBeInstanceOf(NotFoundSentinel);
-    expect(notFoundMock).toHaveBeenCalledTimes(1);
-    expect(notFoundMock).toHaveBeenCalledWith();
-    expect(executeMock).not.toHaveBeenCalled();
-    // ...and it was refused for THAT reason, not another.
-    expect(warnCalls.join("\n")).toContain(vector.contract.observeConcurrency.refusalReason);
-
-    // Byte-identical to the flag-off refusal.
-    globalThis.bridgeE2EStackObserveInFlight = 0;
-    applyEnv(attestedEnv({ [FLAG]: undefined }));
-    const flagOffError = await GET(request()).then(
-      () => new Error("the flag-off request did not refuse"),
-      (caught: unknown) => caught,
-    );
-    expect((busyError as Error).message).toBe((flagOffError as Error).message);
-
-    // Releasing every held query returns the process-wide count to zero.
-    globalThis.bridgeE2EStackObserveInFlight = limit;
-    for (const resolve of resolvers) resolve({ database: LIVE_DATABASE, lockSeen: true });
-    for (const pending of held) expect((await pending).ok).toBe(true);
-    expect(globalThis.bridgeE2EStackObserveInFlight).toBe(0);
   });
 
   it("e2e-stack route matches the shared vector", () => {
