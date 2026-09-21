@@ -556,8 +556,9 @@ func (h *SessionHandler) EndSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// A platform admin may end any session, as on the sibling teacher-only
-	// routes. Ending reads no canvas content, so this is not the private-canvas
-	// bypass that Spec 013 rules out for canvas authorization.
+	// routes. Ending archives canvas snapshots server-side but returns none of
+	// their content and grants no canvas read, mint, or settings access, so it
+	// is not the private-canvas bypass Spec 013 rules out.
 	if !claims.IsPlatformAdmin && session.TeacherID != claims.UserID {
 		writeError(w, http.StatusForbidden, "Only the session teacher can end the session")
 		return
@@ -576,6 +577,7 @@ func (h *SessionHandler) EndSession(w http.ResponseWriter, r *http.Request) {
 
 	durablyEnded := false
 	completeAfterCommit := false
+	degradedArchiveReason := ""
 	var durableEnd store.SessionEndResult
 	if h.CanvasControl != nil {
 		bundle, freezeErr := h.CanvasControl.Freeze(r.Context(), realtime.FreezeRequest{
@@ -608,6 +610,11 @@ func (h *SessionHandler) EndSession(w http.ResponseWriter, r *http.Request) {
 				durableEnd = degradedEnd
 				durablyEnded = true
 				completeAfterCommit = true
+				if errors.Is(completeErr, store.ErrSessionSnapshotCountMismatch) {
+					degradedArchiveReason = "snapshot_count_mismatch"
+				} else {
+					degradedArchiveReason = "session_end_in_progress"
+				}
 			} else {
 				slog.Error("canvas confirmed end failed", "sessionId", sessionID, "error", completeErr)
 				// An infrastructure failure is not evidence that an end committed.
@@ -617,7 +624,15 @@ func (h *SessionHandler) EndSession(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusInternalServerError, "Database error")
 				return
 			}
+		} else if errors.Is(freezeErr, context.DeadlineExceeded) {
+			degradedArchiveReason = "freeze_timeout"
+		} else {
+			// CanvasControl implementations may include a control URL in an error,
+			// so retain only a fixed category in the terminal audit log.
+			degradedArchiveReason = "freeze_failed"
 		}
+	} else {
+		degradedArchiveReason = "canvas_control_unconfigured"
 	}
 	if !durablyEnded {
 		if degradedEnd, err := h.Sessions.CompleteSessionDegraded(r.Context(), sessionID, prep.Token); err != nil {
@@ -631,6 +646,9 @@ func (h *SessionHandler) EndSession(w http.ResponseWriter, r *http.Request) {
 		if h.CanvasControl != nil {
 			completeAfterCommit = true
 		}
+	}
+	if degradedArchiveReason != "" {
+		slog.Warn("session ended with degraded whiteboard archive", "sessionId", sessionID, "reason", degradedArchiveReason)
 	}
 
 	// Durable status is the handoff boundary. Only after it succeeds may this

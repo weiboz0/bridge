@@ -53,7 +53,8 @@ Compatibility notes:
 - `POST /api/sessions/{id}/join` still returns `studentId` in the response payload when applicable.
 - `GET /api/sessions/{id}/help-queue` still returns the raised-hand queue, but internally it is backed by `help_requested_at` rather than a `"needs_help"` participant status.
 - `POST /api/sessions/{id}/end` ends a session (moved from `PATCH /api/sessions/{id}` in Plan 030b).
-  The session teacher or a platform administrator may end it, as on the sibling teacher-only session routes; ending a session reads no canvas content and grants the administrator no canvas access.
+  The session teacher or a platform administrator may end it, as on the sibling teacher-only session routes.
+  Ending archives the session's canvas snapshots server-side, but the response discloses no canvas content and the administrator gains no canvas read, mint, or settings access.
 - `GET /api/sessions/by-class/{classId}` and `GET /api/sessions/active/{classId}` remain available as compatibility wrappers for class-scoped surfaces.
 
 ### Ad-hoc (orphan) sessions — Plan 090

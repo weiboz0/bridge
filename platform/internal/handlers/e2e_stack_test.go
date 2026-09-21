@@ -52,6 +52,43 @@ type e2eStackFakeDatabase struct {
 	lockSeen bool
 	queryErr error
 	queries  []e2eStackFakeQuery
+	// entered/release let a test park a query INSIDE the driver, so "this
+	// request is running the observe query right now" is directly observable
+	// and a second request meets a genuinely occupied slot.
+	entered chan struct{}
+	release chan struct{}
+}
+
+// blockQueries makes every subsequent observe query announce itself on
+// `entered` and wait until `release` is closed (or its context ends).
+func (f *e2eStackFakeDatabase) blockQueries(entered chan struct{}, release chan struct{}) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.entered, f.release = entered, release
+}
+
+func (f *e2eStackFakeDatabase) hold(ctx context.Context) error {
+	f.mu.Lock()
+	entered, release := f.entered, f.release
+	f.mu.Unlock()
+	if entered != nil {
+		entered <- struct{}{}
+	}
+	if release == nil {
+		return nil
+	}
+	select {
+	case <-release:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (f *e2eStackFakeDatabase) setQueryErr(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.queryErr = err
 }
 
 func (f *e2eStackFakeDatabase) record(text string, args []driver.Value) {
@@ -110,12 +147,15 @@ func (c *e2eStackFakeConn) Begin() (driver.Tx, error) {
 	return nil, errors.New("e2e stack fake driver: transactions are not supported")
 }
 
-func (c *e2eStackFakeConn) QueryContext(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+func (c *e2eStackFakeConn) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
 	values := make([]driver.Value, 0, len(args))
 	for _, arg := range args {
 		values = append(values, arg.Value)
 	}
 	c.fake.record(query, values)
+	if err := c.fake.hold(ctx); err != nil {
+		return nil, err
+	}
 	name, lockSeen, queryErr := c.fake.snapshot()
 	if queryErr != nil {
 		return nil, queryErr
@@ -630,6 +670,11 @@ type e2eStackVectorFile struct {
 		SuccessHeaders     map[string]string   `json:"successHeaders"`
 		Paths              map[string]string   `json:"paths"`
 		NonceQueryParam    string              `json:"nonceQueryParam"`
+		ObserveConcurrency struct {
+			MaxInFlightPerProcess int    `json:"maxInFlightPerProcess"`
+			Rule                  string `json:"rule"`
+			RefusalReason         string `json:"refusalReason"`
+		} `json:"observeConcurrency"`
 	} `json:"contract"`
 	Cases []struct {
 		Nonce       string `json:"nonce"`
@@ -745,4 +790,248 @@ func TestE2EStack_MatchesSharedVector(t *testing.T) {
 	}))
 	assert.Equal(t, []string{http.MethodGet + " " + vector.Contract.Paths["go"]}, routes,
 		"the Go surface is exactly the contract's path, registered for GET only")
+}
+
+// ---------------------------------------------------------------------------
+// Observe-query concurrency cap (Plan 094 R2-16)
+// ---------------------------------------------------------------------------
+
+// e2eStackSyncBuffer is a log sink that is safe to write from a request
+// goroutine while the test reads it.
+type e2eStackSyncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *e2eStackSyncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *e2eStackSyncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func e2eStackLogger(sink *e2eStackSyncBuffer) *slog.Logger {
+	return slog.New(slog.NewJSONHandler(sink, &slog.HandlerOptions{Level: slog.LevelDebug}))
+}
+
+// e2eStackCountReason counts how many refusal records carry `reason`.
+func e2eStackCountReason(t *testing.T, sink *e2eStackSyncBuffer, reason string) int {
+	t.Helper()
+	count := 0
+	for _, line := range strings.Split(strings.TrimSpace(sink.String()), "\n") {
+		if line == "" {
+			continue
+		}
+		var record map[string]any
+		require.NoError(t, json.Unmarshal([]byte(line), &record))
+		if got, _ := record["reason"].(string); got == reason {
+			count++
+		}
+	}
+	return count
+}
+
+// e2eStackGetWithContext issues the request with a caller-supplied context, so
+// a test can end a request while its observe query is still in flight.
+func e2eStackGetWithContext(ctx context.Context, r chi.Router, target string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodGet, target, nil).WithContext(ctx)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	return rec
+}
+
+func e2eStackWaitEntered(t *testing.T, entered <-chan struct{}, what string) {
+	t.Helper()
+	select {
+	case <-entered:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("%s never reached the observe query", what)
+	}
+}
+
+// An anonymous caller on an opted-in exposed host could otherwise drive
+// unbounded concurrent pg_locks queries against the shared _test pool. Once the
+// per-process cap is reached, the next request is refused exactly like every
+// other refusal — and, crucially, runs NO query at all.
+func TestE2EStack_ObserveBusyRefusesWithoutQuerying(t *testing.T) {
+	logs := &e2eStackSyncBuffer{}
+	db, fake := newE2EStackFakeDB(t, "bridge_test", true)
+	entered := make(chan struct{}, 4)
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseAll := func() { releaseOnce.Do(func() { close(release) }) }
+	defer releaseAll()
+	fake.blockQueries(entered, release)
+
+	router := buildE2EStackRouter(t, true, E2EStackHandlerConfig{
+		DB:                        db,
+		DatabaseURL:               e2eStackTestDBURL,
+		MaxInFlightObserveQueries: 1,
+		Logger:                    e2eStackLogger(logs),
+	})
+
+	first := make(chan e2eStackResponse, 1)
+	go func() {
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, e2eStackAttestURL(e2eStackTestNonce), nil))
+		first <- capture(rec)
+	}()
+	e2eStackWaitEntered(t, entered, "the first request")
+	require.Equal(t, 1, fake.queryCount(), "the first request holds the only slot from inside the query")
+
+	// The slot is taken, so this one is refused — with the router's own
+	// NotFound bytes, byte-identical to an unregistered path.
+	busy := capture(e2eStackGet(t, router, e2eStackAttestURL(e2eStackTestNonce)))
+	absent := capture(e2eStackGet(t, router, e2eStackAbsentPath))
+	assert.Equal(t, http.StatusNotFound, busy.status)
+	assert.Equal(t, absent.status, busy.status)
+	assert.Equal(t, absent.header, busy.header)
+	assert.Equal(t, absent.body, busy.body)
+	assert.Equal(t, 1, fake.queryCount(), "a request refused for lack of a slot must run no query")
+	assert.Equal(t, 1, e2eStackCountReason(t, logs, "observe_busy"),
+		"the refusal reason is logged for the operator")
+
+	// Refusal logging is rate limited, so a flood cannot fill the log.
+	secondBusy := capture(e2eStackGet(t, router, e2eStackAttestURL(e2eStackTestNonce)))
+	assert.Equal(t, absent.body, secondBusy.body)
+	assert.Equal(t, 1, fake.queryCount())
+	assert.Equal(t, 1, e2eStackCountReason(t, logs, "observe_busy"),
+		"a repeat inside the log window is suppressed")
+
+	// Releasing the holder completes it normally and frees the slot.
+	releaseAll()
+	select {
+	case got := <-first:
+		assert.Equal(t, http.StatusOK, got.status, "body: %s", string(got.body))
+	case <-time.After(10 * time.Second):
+		t.Fatal("the first request never completed after its query was released")
+	}
+
+	third := e2eStackGet(t, router, e2eStackAttestURL(e2eStackTestNonce))
+	require.Equal(t, http.StatusOK, third.Code, "body: %s", third.Body.String())
+	assert.Equal(t, 2, fake.queryCount(), "the released slot is reusable")
+}
+
+// A slot that leaked on any non-success exit would turn one bad query into a
+// permanently refusing endpoint, so both failure exits are covered.
+func TestE2EStack_ObserveSlotReleasedOnErrorAndTimeout(t *testing.T) {
+	t.Run("query error", func(t *testing.T) {
+		db, fake := newE2EStackFakeDB(t, "bridge_test", true)
+		fake.setQueryErr(errors.New("connection terminated"))
+		router := buildE2EStackRouter(t, true, E2EStackHandlerConfig{
+			DB: db, DatabaseURL: e2eStackTestDBURL, MaxInFlightObserveQueries: 1,
+			Logger: e2eStackLogger(&e2eStackSyncBuffer{}),
+		})
+
+		failed := capture(e2eStackGet(t, router, e2eStackAttestURL(e2eStackTestNonce)))
+		absent := capture(e2eStackGet(t, router, e2eStackAbsentPath))
+		assert.Equal(t, absent.body, failed.body)
+		require.Equal(t, 1, fake.queryCount())
+
+		fake.setQueryErr(nil)
+		recovered := e2eStackGet(t, router, e2eStackAttestURL(e2eStackTestNonce))
+		require.Equal(t, http.StatusOK, recovered.Code, "body: %s", recovered.Body.String())
+		assert.Equal(t, 2, fake.queryCount(), "the failed query released its slot")
+	})
+
+	t.Run("context timeout", func(t *testing.T) {
+		db, fake := newE2EStackFakeDB(t, "bridge_test", true)
+		entered := make(chan struct{}, 4)
+		release := make(chan struct{})
+		var releaseOnce sync.Once
+		releaseAll := func() { releaseOnce.Do(func() { close(release) }) }
+		defer releaseAll()
+		fake.blockQueries(entered, release)
+
+		router := buildE2EStackRouter(t, true, E2EStackHandlerConfig{
+			DB: db, DatabaseURL: e2eStackTestDBURL, MaxInFlightObserveQueries: 1,
+			Logger: e2eStackLogger(&e2eStackSyncBuffer{}),
+		})
+
+		ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+		defer cancel()
+		timedOut := capture(e2eStackGetWithContext(ctx, router, e2eStackAttestURL(e2eStackTestNonce)))
+		absent := capture(e2eStackGet(t, router, e2eStackAbsentPath))
+		assert.Equal(t, absent.body, timedOut.body)
+		assert.Equal(t, absent.header, timedOut.header)
+		e2eStackWaitEntered(t, entered, "the timed-out request")
+		require.Equal(t, 1, fake.queryCount())
+
+		// The abandoned query released its slot, so the endpoint still answers.
+		releaseAll()
+		recovered := e2eStackGet(t, router, e2eStackAttestURL(e2eStackTestNonce))
+		require.Equal(t, http.StatusOK, recovered.Code, "body: %s", recovered.Body.String())
+		assert.Equal(t, 2, fake.queryCount(), "the timed-out query released its slot")
+	})
+}
+
+// The default cap is part of the cross-implementation contract: Go, Hocuspocus,
+// and Next.js must all allow the same number of concurrent observe queries.
+func TestE2EStack_DefaultObserveCapMatchesSharedVector(t *testing.T) {
+	vector := loadE2EStackVector(t)
+	limit := vector.Contract.ObserveConcurrency.MaxInFlightPerProcess
+	require.Positive(t, limit, "the shared vector must pin an observe concurrency cap")
+	assert.Equal(t, limit, e2eStackMaxInFlightObserveQueries, "the Go default drifted from the shared vector")
+	assert.Equal(t, "observe_busy", vector.Contract.ObserveConcurrency.RefusalReason)
+
+	// A production construction (no MaxInFlightObserveQueries) gets exactly
+	// that many slots, and so does a non-positive override.
+	db, fake := newE2EStackFakeDB(t, "bridge_test", true)
+	for name, cfg := range map[string]E2EStackHandlerConfig{
+		"unset": {DB: db, DatabaseURL: e2eStackTestDBURL},
+		"zero":  {DB: db, DatabaseURL: e2eStackTestDBURL, MaxInFlightObserveQueries: 0},
+		"negative": {
+			DB: db, DatabaseURL: e2eStackTestDBURL, MaxInFlightObserveQueries: -1,
+		},
+	} {
+		assert.Equal(t, limit, cap(NewE2EStackHandler(cfg).observeSlots), "%s config", name)
+	}
+
+	// And behaviourally: exactly `limit` requests fit, the next is refused with
+	// the contract's reason and runs no query.
+	logs := &e2eStackSyncBuffer{}
+	entered := make(chan struct{}, limit+2)
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseAll := func() { releaseOnce.Do(func() { close(release) }) }
+	defer releaseAll()
+	fake.blockQueries(entered, release)
+
+	router := buildE2EStackRouter(t, true, E2EStackHandlerConfig{
+		DB: db, DatabaseURL: e2eStackTestDBURL, Logger: e2eStackLogger(logs),
+	})
+
+	done := make(chan int, limit)
+	for i := 0; i < limit; i++ {
+		go func() {
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, e2eStackAttestURL(e2eStackTestNonce), nil))
+			done <- rec.Code
+		}()
+	}
+	for i := 0; i < limit; i++ {
+		e2eStackWaitEntered(t, entered, fmt.Sprintf("request %d", i+1))
+	}
+	require.Equal(t, limit, fake.queryCount(), "every allowed request is inside its query")
+
+	over := capture(e2eStackGet(t, router, e2eStackAttestURL(e2eStackTestNonce)))
+	absent := capture(e2eStackGet(t, router, e2eStackAbsentPath))
+	assert.Equal(t, absent.body, over.body, "the %dth concurrent request is refused", limit+1)
+	assert.Equal(t, limit, fake.queryCount(), "the refused request ran no query")
+	assert.Equal(t, 1, e2eStackCountReason(t, logs, vector.Contract.ObserveConcurrency.RefusalReason))
+
+	releaseAll()
+	for i := 0; i < limit; i++ {
+		select {
+		case code := <-done:
+			assert.Equal(t, http.StatusOK, code)
+		case <-time.After(10 * time.Second):
+			t.Fatal("a held request never completed")
+		}
+	}
 }

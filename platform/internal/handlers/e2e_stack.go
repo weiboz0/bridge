@@ -22,9 +22,10 @@ import (
 )
 
 const (
-	e2eStackObserveTimeout = 2 * time.Second
-	e2eStackLogInterval    = 10 * time.Second
-	e2eStackObserveQuery   = `SELECT current_database(), EXISTS (SELECT 1 FROM pg_locks l JOIN pg_database d ON d.oid = l.database WHERE d.datname = current_database() AND l.locktype = 'advisory' AND l.classid = $1::int8::oid AND l.objid = $2::int8::oid AND l.objsubid = 1 AND l.granted)`
+	e2eStackObserveTimeout            = 2 * time.Second
+	e2eStackLogInterval               = 10 * time.Second
+	e2eStackMaxInFlightObserveQueries = 2
+	e2eStackObserveQuery              = `SELECT current_database(), EXISTS (SELECT 1 FROM pg_locks l JOIN pg_database d ON d.oid = l.database WHERE d.datname = current_database() AND l.locktype = 'advisory' AND l.classid = $1::int8::oid AND l.objid = $2::int8::oid AND l.objsubid = 1 AND l.granted)`
 )
 
 var e2eStackNoncePattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
@@ -35,15 +36,17 @@ var (
 )
 
 // E2EStackHandlerConfig supplies the dependencies for the opt-in stack
-// attestation endpoint. InstanceID, Clock, Logger, and NotFound are seams for
-// tests; production callers leave them nil for safe defaults.
+// attestation endpoint. InstanceID, Clock, Logger, NotFound, and
+// MaxInFlightObserveQueries are seams for tests; production callers leave them
+// at their safe defaults.
 type E2EStackHandlerConfig struct {
-	DB          *sql.DB
-	DatabaseURL string
-	NotFound    http.Handler
-	Clock       func() time.Time
-	InstanceID  func() string
-	Logger      *slog.Logger
+	DB                        *sql.DB
+	DatabaseURL               string
+	NotFound                  http.Handler
+	Clock                     func() time.Time
+	InstanceID                func() string
+	Logger                    *slog.Logger
+	MaxInFlightObserveQueries int
 }
 
 // E2EStackHandler proves that this API process can see a gate-held advisory
@@ -55,6 +58,7 @@ type E2EStackHandler struct {
 	clock              func() time.Time
 	instanceID         func() string
 	logger             *slog.Logger
+	observeSlots       chan struct{}
 
 	logMu   sync.Mutex
 	lastLog map[string]time.Time
@@ -80,6 +84,10 @@ func NewE2EStackHandler(cfg E2EStackHandlerConfig) *E2EStackHandler {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	maxInFlightObserveQueries := cfg.MaxInFlightObserveQueries
+	if maxInFlightObserveQueries <= 0 {
+		maxInFlightObserveQueries = e2eStackMaxInFlightObserveQueries
+	}
 
 	return &E2EStackHandler{
 		db:                 cfg.DB,
@@ -88,6 +96,7 @@ func NewE2EStackHandler(cfg E2EStackHandlerConfig) *E2EStackHandler {
 		clock:              clock,
 		instanceID:         instanceID,
 		logger:             logger,
+		observeSlots:       make(chan struct{}, maxInFlightObserveQueries),
 		lastLog:            make(map[string]time.Time),
 	}
 }
@@ -118,6 +127,13 @@ func (h *E2EStackHandler) Attest(w http.ResponseWriter, r *http.Request) {
 	}
 	if h.db == nil {
 		h.refuse(w, r, "observe_query_error")
+		return
+	}
+	select {
+	case h.observeSlots <- struct{}{}:
+		defer func() { <-h.observeSlots }()
+	default:
+		h.refuse(w, r, "observe_busy")
 		return
 	}
 

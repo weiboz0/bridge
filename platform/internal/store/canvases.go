@@ -141,10 +141,12 @@ const (
 )
 
 // canvasStoreTestHooks is nil in production. It lets the store tests hold an
-// operation immediately after its session-row lock has supplied current state.
+// operation immediately after its session-row lock has supplied current state,
+// or observe the snapshot after ListVisibleCanvases reads its session row.
 type canvasStoreTestHooks struct {
-	beforeSessionLock func(canvasStoreOperation, int)
-	afterSessionLock  func(canvasStoreOperation, int)
+	beforeSessionLock    func(canvasStoreOperation, int)
+	afterSessionLock     func(canvasStoreOperation, int)
+	afterListSessionRead func()
 }
 
 func NewCanvasStore(db *sql.DB) *CanvasStore {
@@ -168,6 +170,12 @@ func (s *CanvasStore) beforeSessionLock(ctx context.Context, tx *sql.Tx, operati
 func (s *CanvasStore) afterSessionLock(operation canvasStoreOperation, backendPID int) {
 	if s.testHooks != nil && s.testHooks.afterSessionLock != nil {
 		s.testHooks.afterSessionLock(operation, backendPID)
+	}
+}
+
+func (s *CanvasStore) afterListSessionRead() {
+	if s.testHooks != nil && s.testHooks.afterListSessionRead != nil {
+		s.testHooks.afterListSessionRead()
 	}
 }
 
@@ -493,6 +501,7 @@ func (s *CanvasStore) ListVisibleCanvases(ctx context.Context, sessionID, userID
 	if state == nil {
 		return []Canvas{}, nil
 	}
+	s.afterListSessionRead()
 
 	rows, err := tx.QueryContext(ctx,
 		`SELECT `+canvasColumns+` FROM session_canvases WHERE session_id = $1 ORDER BY created_at, id`, sessionID,

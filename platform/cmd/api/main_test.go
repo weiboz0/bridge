@@ -1,6 +1,10 @@
 package main
 
 import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -428,4 +432,73 @@ func TestE2EStackFlag_RefusedOnExposedHostWithoutOptIn(t *testing.T) {
 			exposure: "exposedish",
 		},
 	})
+}
+
+// Plan 094 R2-15: the exposure value is normalized the SAME way in Go,
+// Hocuspocus, and the Next.js route. `hostExposureCases` in the shared vector
+// is the single source of truth for that normalization; the table above states
+// the intent in Go terms, and this test binds it to the file the other two
+// implementations assert. A divergence here is exactly the R2-15 defect: two
+// services refusing to boot while the internet-facing one keeps serving.
+func TestE2EStackFlag_ExposureNormalizationMatchesSharedVector(t *testing.T) {
+	path := filepath.Join("..", "..", "..", "scripts", "tests", "e2e-stack-vector.json")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("the shared contract vector must exist at %s: %v", path, err)
+	}
+	var vector struct {
+		Contract struct {
+			HostExposure struct {
+				Name          string `json:"name"`
+				ExposedValue  string `json:"exposedValue"`
+				Normalization string `json:"normalization"`
+			} `json:"hostExposure"`
+			TunnelOptIn struct {
+				Name         string `json:"name"`
+				EnabledValue string `json:"enabledValue"`
+			} `json:"tunnelOptIn"`
+		} `json:"contract"`
+		HostExposureCases []struct {
+			Value   string `json:"value"`
+			Exposed bool   `json:"exposed"`
+		} `json:"hostExposureCases"`
+	}
+	if err := json.Unmarshal(raw, &vector); err != nil {
+		t.Fatalf("parse %s: %v", path, err)
+	}
+	if len(vector.HostExposureCases) == 0 {
+		t.Fatal("the shared vector must pin the host-exposure cases")
+	}
+	if vector.Contract.HostExposure.Name != "BRIDGE_HOST_EXPOSURE" {
+		t.Errorf("unexpected exposure variable name %q", vector.Contract.HostExposure.Name)
+	}
+	if vector.Contract.HostExposure.ExposedValue != "exposed" {
+		t.Errorf("unexpected exposed value %q", vector.Contract.HostExposure.ExposedValue)
+	}
+
+	for _, row := range vector.HostExposureCases {
+		t.Run(fmt.Sprintf("%q", row.Value), func(t *testing.T) {
+			// Flag on, not production, no opt-in: the ONLY thing that can
+			// refuse is the exposure value.
+			err := validateE2EStackEnv(true, false, row.Value, false)
+			if row.Exposed && err == nil {
+				t.Fatalf("%q is exposed in the shared vector but Go booted without the opt-in", row.Value)
+			}
+			if !row.Exposed && err != nil {
+				t.Fatalf("%q is not exposed in the shared vector but Go refused: %v", row.Value, err)
+			}
+			if row.Exposed && !strings.Contains(err.Error(), vector.Contract.TunnelOptIn.Name) {
+				t.Errorf("the refusal must name %s, got: %v", vector.Contract.TunnelOptIn.Name, err)
+			}
+
+			// The opt-in itself is NOT normalized: it must be exactly "true".
+			if err := validateE2EStackEnv(true, false, row.Value, true); err != nil {
+				t.Errorf("the recorded opt-in must allow %q, got: %v", row.Value, err)
+			}
+			// And the flag being off keeps every value dormant.
+			if err := validateE2EStackEnv(false, false, row.Value, false); err != nil {
+				t.Errorf("a disabled flag must not refuse %q, got: %v", row.Value, err)
+			}
+		})
+	}
 }

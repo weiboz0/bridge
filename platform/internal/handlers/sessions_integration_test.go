@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -1836,4 +1837,146 @@ func TestSessionHandler_ListPublicSessions_MalformedCursor400(t *testing.T) {
 	// errors -> handler maps to 400.
 	w := fx.doRequest(t, http.MethodGet, "/api/sessions/public?cursor=%40%40%40", nil, fx.claims(fx.otherUser, false))
 	assert.Equal(t, http.StatusBadRequest, w.Code, "body=%s", w.Body.String())
+}
+
+// --- Plan 094 R2-18: a degraded end is an audit event, not only a flag ---
+
+// captureSlogDefault redirects the process-wide slog default (which the end
+// handler logs through) into a JSON buffer, and restores it afterwards.
+func captureSlogDefault(t *testing.T) *e2eStackSyncBuffer {
+	t.Helper()
+	sink := &e2eStackSyncBuffer{}
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(sink, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	return sink
+}
+
+const degradedArchiveWarning = "session ended with degraded whiteboard archive"
+
+func degradedArchiveWarnings(t *testing.T, sink *e2eStackSyncBuffer) []map[string]any {
+	t.Helper()
+	records := []map[string]any{}
+	for _, line := range strings.Split(strings.TrimSpace(sink.String()), "\n") {
+		if line == "" {
+			continue
+		}
+		var record map[string]any
+		require.NoError(t, json.Unmarshal([]byte(line), &record), "log line is not JSON: %s", line)
+		if record["msg"] == degradedArchiveWarning {
+			assert.Equal(t, slog.LevelWarn.String(), record["level"], "the degraded end is a warning")
+			records = append(records, record)
+		}
+	}
+	return records
+}
+
+// R2-18: a successful degraded end previously wrote nothing to the server log,
+// so the only trace was the response warning and the database flag. Every
+// degraded-success path must now leave exactly one warn record naming the
+// session and a FIXED reason category — never a control URL, which a
+// CanvasControl error may embed.
+func TestEndSession_DegradedEndIsLoggedWithoutSecrets(t *testing.T) {
+	const controlURL = "http://control-user:hunter2@hocuspocus.internal:4000/internal/canvas/freeze"
+	secrets := []string{controlURL, "hunter2", "control-user", "hocuspocus.internal"}
+
+	for _, tc := range []struct {
+		name    string
+		reason  string
+		control func(fx *sessionFixture) CanvasControl
+	}{
+		{
+			name:    "canvas control unconfigured",
+			reason:  "canvas_control_unconfigured",
+			control: func(*sessionFixture) CanvasControl { return nil },
+		},
+		{
+			name:   "freeze failed",
+			reason: "freeze_failed",
+			control: func(*sessionFixture) CanvasControl {
+				return &fakeCanvasControl{err: fmt.Errorf("post %s: connection refused", controlURL)}
+			},
+		},
+		{
+			name:   "freeze deadline exceeded",
+			reason: "freeze_timeout",
+			control: func(*sessionFixture) CanvasControl {
+				return &fakeCanvasControl{err: fmt.Errorf("freeze %s: %w", controlURL, context.DeadlineExceeded)}
+			},
+		},
+		{
+			// The confirmed transaction rolls back because the bundle names a
+			// canvas this session does not have, so the honest false result is
+			// recorded by a second transaction.
+			name:   "snapshot count mismatch",
+			reason: "snapshot_count_mismatch",
+			control: func(*sessionFixture) CanvasControl {
+				return &fakeCanvasControl{bundle: realtime.FreezeBundle{Snapshots: []realtime.CanvasSnapshot{
+					{CanvasID: "00000000-0000-4000-8000-0000000000aa", State: []byte("orphan")},
+				}}}
+			},
+		},
+		{
+			// A competing degraded end lands while this one holds the freeze,
+			// so the confirmed update matches no row.
+			name:   "already ended under another operation",
+			reason: "session_end_in_progress",
+			control: func(fx *sessionFixture) CanvasControl {
+				return &fakeCanvasControl{onFreeze: func(request realtime.FreezeRequest) {
+					_, err := fx.db.ExecContext(context.Background(), `
+						UPDATE sessions SET canvas_freeze_until = clock_timestamp() - interval '1 millisecond'
+						WHERE id = $1 AND canvas_freeze_token = $2::uuid`, request.SessionID, request.FreezeToken)
+					require.NoError(t, err)
+					prep, err := fx.h.Sessions.PrepareSessionEnd(context.Background(), request.SessionID)
+					require.NoError(t, err)
+					_, err = fx.h.Sessions.CompleteSessionDegraded(context.Background(), request.SessionID, prep.Token)
+					require.NoError(t, err)
+				}}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fx := newSessionFixture(t, t.Name())
+			fx.h.CanvasControl = tc.control(fx)
+			sink := captureSlogDefault(t)
+
+			w := fx.doRequest(t, http.MethodPost, "/api/sessions/"+fx.sessionID+"/end", nil, fx.claims(fx.teacher, false))
+			require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+			var durable sql.NullBool
+			require.NoError(t, fx.db.QueryRowContext(context.Background(),
+				`SELECT whiteboard_server_archive_complete FROM sessions WHERE id = $1`, fx.sessionID).Scan(&durable))
+			require.True(t, durable.Valid)
+			require.False(t, durable.Bool, "this path must be a degraded end")
+
+			records := degradedArchiveWarnings(t, sink)
+			require.Len(t, records, 1, "a degraded end logs exactly one warning; got: %s", sink.String())
+			assert.Equal(t, fx.sessionID, records[0]["sessionId"])
+			assert.Equal(t, tc.reason, records[0]["reason"], "the reason must be the fixed category for this path")
+
+			logged := sink.String()
+			for _, secret := range secrets {
+				assert.NotContains(t, logged, secret, "the terminal audit log must never disclose %q", secret)
+			}
+			assert.NotRegexp(t, `https?://`, logged, "no control URL may reach the log")
+		})
+	}
+
+	t.Run("confirmed end logs no degraded warning", func(t *testing.T) {
+		fx := newSessionFixture(t, t.Name())
+		fx.h.CanvasControl = &fakeCanvasControl{}
+		sink := captureSlogDefault(t)
+
+		w := fx.doRequest(t, http.MethodPost, "/api/sessions/"+fx.sessionID+"/end", nil, fx.claims(fx.teacher, false))
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+		var durable sql.NullBool
+		require.NoError(t, fx.db.QueryRowContext(context.Background(),
+			`SELECT whiteboard_server_archive_complete FROM sessions WHERE id = $1`, fx.sessionID).Scan(&durable))
+		require.True(t, durable.Valid)
+		require.True(t, durable.Bool)
+
+		assert.Empty(t, degradedArchiveWarnings(t, sink),
+			"a confirmed archive must not be reported as degraded")
+	})
 }
