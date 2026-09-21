@@ -208,11 +208,70 @@ func TestCanvasHandler_MutationAuthAndEndedArchive(t *testing.T) {
 		{http.MethodPost, "/api/sessions/" + fx.session.ID + "/canvases", map[string]string{"title": "Late", "visibility": "host"}},
 		{http.MethodPatch, "/api/sessions/" + fx.session.ID + "/canvases/" + canvas.ID, map[string]string{"title": "Late"}},
 		{http.MethodDelete, "/api/sessions/" + fx.session.ID + "/canvases/" + canvas.ID, nil},
-		{http.MethodPatch, "/api/sessions/" + fx.session.ID + "/canvas-settings", map[string]string{"canvasFloor": "participants"}},
 	} {
 		w := fx.request(t, tc.method, tc.path, tc.body, fx.claims(fx.student))
 		require.Equal(t, http.StatusConflict, w.Code, w.Body.String())
 	}
+	// The floor route is teacher-only, so the student above is never its
+	// authorized caller: authorization answers first, and only the teacher
+	// reaches the ended-session conflict.
+	settings := "/api/sessions/" + fx.session.ID + "/canvas-settings"
+	floor := map[string]string{"canvasFloor": "participants"}
+	w := fx.request(t, http.MethodPatch, settings, floor, fx.claims(fx.student))
+	require.Equal(t, http.StatusForbidden, w.Code, w.Body.String())
+	w = fx.request(t, http.MethodPatch, settings, floor, fx.claims(fx.teacher))
+	require.Equal(t, http.StatusConflict, w.Code, w.Body.String())
+}
+
+// Plan 094 Phase 4 acceptance: once the session is ended, no mutating canvas
+// endpoint may succeed again.  The caller here is the owning participant who
+// is still `present` — the most privileged live mutator there is — so a 409
+// proves the terminal state, not authorization, is doing the work.
+//
+// The teacher-only floor route keeps its deliberate ordering: authorization
+// answers before the terminal-state conflict, so a non-teacher still gets 403
+// there and only the teacher reaches the 409.
+func TestCanvases_MutatingEndpointsReject_WhenEnded(t *testing.T) {
+	fx := newCanvasHandlerFixture(t)
+	created := fx.request(t, http.MethodPost, "/api/sessions/"+fx.session.ID+"/canvases", map[string]string{"title": "Owned board", "visibility": "private"}, fx.claims(fx.student))
+	require.Equal(t, http.StatusCreated, created.Code, created.Body.String())
+	var canvas store.Canvas
+	require.NoError(t, json.Unmarshal(created.Body.Bytes(), &canvas))
+
+	_, err := fx.h.Sessions.EndSession(context.Background(), fx.session.ID)
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		name, method, path string
+		body               any
+	}{
+		{"create", http.MethodPost, "/api/sessions/" + fx.session.ID + "/canvases", map[string]string{"title": "Late", "visibility": "host"}},
+		{"patch canvas", http.MethodPatch, "/api/sessions/" + fx.session.ID + "/canvases/" + canvas.ID, map[string]string{"title": "Late"}},
+		{"delete canvas", http.MethodDelete, "/api/sessions/" + fx.session.ID + "/canvases/" + canvas.ID, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := fx.request(t, tc.method, tc.path, tc.body, fx.claims(fx.student))
+			require.Equal(t, http.StatusConflict, w.Code, w.Body.String())
+		})
+	}
+
+	settings := "/api/sessions/" + fx.session.ID + "/canvas-settings"
+	floor := map[string]string{"canvasFloor": "participants"}
+	nonTeacher := fx.request(t, http.MethodPatch, settings, floor, fx.claims(fx.student))
+	require.Equal(t, http.StatusForbidden, nonTeacher.Code, nonTeacher.Body.String())
+	teacher := fx.request(t, http.MethodPatch, settings, floor, fx.claims(fx.teacher))
+	require.Equal(t, http.StatusConflict, teacher.Code, teacher.Body.String())
+
+	// The rejections are real: nothing was created, renamed, deleted, or
+	// re-floored behind them.
+	var count int
+	require.NoError(t, fx.db.QueryRowContext(context.Background(), `SELECT count(*) FROM session_canvases WHERE session_id = $1`, fx.session.ID).Scan(&count))
+	assert.Equal(t, 1, count, "a rejected create must not insert a canvas row")
+	var title, storedFloor string
+	require.NoError(t, fx.db.QueryRowContext(context.Background(), `SELECT title FROM session_canvases WHERE id = $1`, canvas.ID).Scan(&title))
+	require.NoError(t, fx.db.QueryRowContext(context.Background(), `SELECT canvas_floor FROM sessions WHERE id = $1`, fx.session.ID).Scan(&storedFloor))
+	assert.Equal(t, "Owned board", title)
+	assert.Equal(t, "private", storedFloor)
 }
 
 func TestCanvasMutations_BlockBehindEndLifecycleLock(t *testing.T) {

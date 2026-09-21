@@ -81,7 +81,7 @@ func TestMintToken_NoSecret_503(t *testing.T) {
 	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
 }
 
-func TestCanvasMint_OwnerWrite(t *testing.T) {
+func TestMintToken_Canvas_OwnerWrite(t *testing.T) {
 	fx := newCanvasHandlerFixture(t)
 	canvas, err := fx.h.Canvases.CreateCanvas(context.Background(), store.CreateCanvasInput{SessionID: fx.session.ID, OwnerID: fx.student.ID, Title: "Owner board", Visibility: "private"})
 	require.NoError(t, err)
@@ -163,7 +163,7 @@ func TestInternalCanvasAuth_RequiresSessionIDBeforeAnyAuthorizationRead(t *testi
 	}
 }
 
-func TestCanvasMint_HostReadWhenHostVisible(t *testing.T) {
+func TestMintToken_Canvas_HostReadWhenHostVisible(t *testing.T) {
 	fx := newCanvasHandlerFixture(t)
 	canvas, err := fx.h.Canvases.CreateCanvas(context.Background(), store.CreateCanvasInput{SessionID: fx.session.ID, OwnerID: fx.student.ID, Title: "Host board", Visibility: "host"})
 	require.NoError(t, err)
@@ -175,71 +175,188 @@ func TestCanvasMint_HostReadWhenHostVisible(t *testing.T) {
 	assert.True(t, claims.ReadOnly)
 }
 
-func TestCanvasMintMatrix(t *testing.T) {
-	fx := newCanvasHandlerFixture(t)
-	present := fx.addUser(t, "present")
-	left := fx.addUser(t, "left")
-	invitee := fx.addUser(t, "invitee")
-	require.NoError(t, func() error {
-		_, err := fx.h.Sessions.JoinSession(context.Background(), fx.session.ID, present.ID)
-		return err
-	}())
-	require.NoError(t, func() error {
-		_, err := fx.h.Sessions.JoinSession(context.Background(), fx.session.ID, left.ID)
-		return err
-	}())
-	require.NoError(t, func() error {
-		_, err := fx.h.Sessions.LeaveSession(context.Background(), fx.session.ID, left.ID)
-		return err
-	}())
-	require.NoError(t, func() error {
-		_, err := fx.h.Sessions.AddParticipant(context.Background(), fx.session.ID, invitee.ID, fx.teacher.ID)
-		return err
-	}())
-	makeCanvas := func(visibility string) *store.Canvas {
-		canvas, err := fx.h.Canvases.CreateCanvas(context.Background(), store.CreateCanvasInput{SessionID: fx.session.ID, OwnerID: fx.student.ID, Title: visibility, Visibility: visibility})
-		require.NoError(t, err)
-		return canvas
-	}
-	private, host, participants, session := makeCanvas("private"), makeCanvas("host"), makeCanvas("participants"), makeCanvas("session")
-	h := newRealtimeHandlerForCanvasFixture(fx)
-	mint := func(t *testing.T, canvas *store.Canvas, user *store.RegisteredUser, want int, readOnly bool) {
-		t.Helper()
-		code, response := callMintToken(t, h, "canvas:"+canvas.ID, fx.claims(user), fx.session.ID)
-		require.Equal(t, want, code)
-		if want == http.StatusOK {
-			claims, err := auth.VerifyRealtimeToken(rtSecret, response.Token)
-			require.NoError(t, err)
-			require.Equal(t, readOnly, claims.ReadOnly)
-		}
-	}
-	t.Run("HostDeniedWhenPrivate", func(t *testing.T) { mint(t, private, fx.teacher, http.StatusForbidden, false) })
-	t.Run("ParticipantReadWhenParticipantsVisible", func(t *testing.T) { mint(t, participants, present, http.StatusOK, true) })
-	t.Run("NonParticipantDeniedWhenParticipantsVisible", func(t *testing.T) { mint(t, participants, fx.outsider, http.StatusForbidden, false) })
-	t.Run("MemberDeniedWhenHostVisible", func(t *testing.T) { mint(t, host, present, http.StatusForbidden, false) })
-	t.Run("NonMemberDenied", func(t *testing.T) { mint(t, private, fx.outsider, http.StatusForbidden, false) })
-	t.Run("HostReadsParticipantsAndSessionLevels", func(t *testing.T) {
-		mint(t, participants, fx.teacher, http.StatusOK, true)
-		mint(t, session, fx.teacher, http.StatusOK, true)
-	})
-
-	require.NoError(t, func() error {
-		_, err := fx.db.ExecContext(context.Background(), "UPDATE sessions SET visibility = 'public' WHERE id = $1", fx.session.ID)
-		return err
-	}())
-	t.Run("SessionVisiblePublicAllowsAnyAuthed", func(t *testing.T) { mint(t, session, fx.outsider, http.StatusOK, true) })
-	require.NoError(t, func() error { _, err := fx.h.Sessions.EndSession(context.Background(), fx.session.ID); return err }())
-	t.Run("EndedArchive_OwnerRead", func(t *testing.T) { mint(t, private, fx.student, http.StatusOK, true) })
-	t.Run("TeacherReadWhenHostVisible", func(t *testing.T) { mint(t, host, fx.teacher, http.StatusOK, true) })
-	t.Run("FormerParticipantReadNotInvitee", func(t *testing.T) {
-		mint(t, participants, left, http.StatusOK, true)
-		mint(t, participants, invitee, http.StatusForbidden, false)
-	})
-	t.Run("OutsiderDenied", func(t *testing.T) { mint(t, session, fx.outsider, http.StatusForbidden, false) })
-	t.Run("AllReadOnly", func(t *testing.T) { mint(t, participants, present, http.StatusOK, true) })
+// canvasMintFixture wires the Plan 094 mint matrix onto one canvas fixture.
+// Roles: the session teacher, the owning student (a present participant via
+// the base fixture), a second present participant, a participant who joined
+// and then left, an invited user who never joined, and the non-member
+// outsider — plus one student-owned canvas per visibility level.
+//
+// Each acceptance test below builds its own fixture so the live, public, and
+// ended phases of the matrix cannot leak state between cases.
+type canvasMintFixture struct {
+	*canvasHandlerFixture
+	realtime      *RealtimeHandler
+	present       *store.RegisteredUser
+	left          *store.RegisteredUser
+	invitee       *store.RegisteredUser
+	private       *store.Canvas
+	hostCanvas    *store.Canvas
+	participants  *store.Canvas
+	sessionCanvas *store.Canvas
 }
 
-func TestCanvasMint_SessionVisibleClassBoundDeniesOutsider(t *testing.T) {
+func newCanvasMintFixture(t *testing.T) *canvasMintFixture {
+	t.Helper()
+	ctx := context.Background()
+	fx := newCanvasHandlerFixture(t)
+	mx := &canvasMintFixture{canvasHandlerFixture: fx, realtime: newRealtimeHandlerForCanvasFixture(fx)}
+	mx.present = fx.addUser(t, "present")
+	mx.left = fx.addUser(t, "left")
+	mx.invitee = fx.addUser(t, "invitee")
+	_, err := fx.h.Sessions.JoinSession(ctx, fx.session.ID, mx.present.ID)
+	require.NoError(t, err)
+	_, err = fx.h.Sessions.JoinSession(ctx, fx.session.ID, mx.left.ID)
+	require.NoError(t, err)
+	_, err = fx.h.Sessions.LeaveSession(ctx, fx.session.ID, mx.left.ID)
+	require.NoError(t, err)
+	_, err = fx.h.Sessions.AddParticipant(ctx, fx.session.ID, mx.invitee.ID, fx.teacher.ID)
+	require.NoError(t, err)
+	mx.private = mx.makeCanvas(t, "private")
+	mx.hostCanvas = mx.makeCanvas(t, "host")
+	mx.participants = mx.makeCanvas(t, "participants")
+	mx.sessionCanvas = mx.makeCanvas(t, "session")
+	return mx
+}
+
+func (mx *canvasMintFixture) makeCanvas(t *testing.T, visibility string) *store.Canvas {
+	t.Helper()
+	canvas, err := mx.h.Canvases.CreateCanvas(context.Background(), store.CreateCanvasInput{
+		SessionID: mx.session.ID, OwnerID: mx.student.ID, Title: visibility, Visibility: visibility,
+	})
+	require.NoError(t, err)
+	return canvas
+}
+
+// mint asserts the mint status for one (canvas, user) pair and, on success,
+// the exact `readOnly` claim the signed token carries.
+func (mx *canvasMintFixture) mint(t *testing.T, canvas *store.Canvas, user *store.RegisteredUser, want int, readOnly bool) {
+	t.Helper()
+	code, response := callMintToken(t, mx.realtime, "canvas:"+canvas.ID, mx.claims(user), mx.session.ID)
+	require.Equal(t, want, code)
+	if want == http.StatusOK {
+		claims, err := auth.VerifyRealtimeToken(rtSecret, response.Token)
+		require.NoError(t, err)
+		require.Equal(t, readOnly, claims.ReadOnly)
+	}
+}
+
+func (mx *canvasMintFixture) makeSessionPublic(t *testing.T) {
+	t.Helper()
+	_, err := mx.db.ExecContext(context.Background(), "UPDATE sessions SET visibility = 'public' WHERE id = $1", mx.session.ID)
+	require.NoError(t, err)
+}
+
+func (mx *canvasMintFixture) endSession(t *testing.T) {
+	t.Helper()
+	_, err := mx.h.Sessions.EndSession(context.Background(), mx.session.ID)
+	require.NoError(t, err)
+}
+
+// `private` mints only for its owner — the teacher's admit tier is `host`,
+// which is looser than `private`.
+func TestMintToken_Canvas_HostDeniedWhenPrivate(t *testing.T) {
+	mx := newCanvasMintFixture(t)
+	mx.mint(t, mx.private, mx.teacher, http.StatusForbidden, false)
+}
+
+func TestMintToken_Canvas_ParticipantReadWhenParticipantsVisible(t *testing.T) {
+	mx := newCanvasMintFixture(t)
+	mx.mint(t, mx.participants, mx.present, http.StatusOK, true)
+}
+
+// A user who never joined holds no `present` participant row, so the
+// `participants` level denies them even though the session itself is
+// reachable.
+func TestMintToken_Canvas_NonParticipantDeniedWhenParticipantsVisible(t *testing.T) {
+	mx := newCanvasMintFixture(t)
+	mx.mint(t, mx.participants, mx.outsider, http.StatusForbidden, false)
+}
+
+// Admit-tier compare, not a scalar ordering: a `participants`-eligible member
+// must NOT read a `host`-only canvas.
+func TestMintToken_Canvas_MemberDeniedWhenHostVisible(t *testing.T) {
+	mx := newCanvasMintFixture(t)
+	mx.mint(t, mx.hostCanvas, mx.present, http.StatusForbidden, false)
+}
+
+func TestMintToken_Canvas_NonMemberDenied(t *testing.T) {
+	mx := newCanvasMintFixture(t)
+	mx.mint(t, mx.private, mx.outsider, http.StatusForbidden, false)
+}
+
+// The teacher's `host` admit tier is tighter than both `participants` and
+// `session`, so it reads both — read-only, never write.
+func TestMintToken_Canvas_HostReadsParticipantsAndSessionLevels(t *testing.T) {
+	mx := newCanvasMintFixture(t)
+	mx.mint(t, mx.participants, mx.teacher, http.StatusOK, true)
+	mx.mint(t, mx.sessionCanvas, mx.teacher, http.StatusOK, true)
+}
+
+// Decision 11: in a public, class-less live session a `session`-visibility
+// board is exactly as public as the room.
+func TestMintToken_Canvas_SessionVisiblePublicAllowsAnyAuthed(t *testing.T) {
+	mx := newCanvasMintFixture(t)
+	mx.makeSessionPublic(t)
+	mx.mint(t, mx.sessionCanvas, mx.outsider, http.StatusOK, true)
+}
+
+// Decision 8: after the end the owner keeps access but loses the write bit.
+func TestMintToken_Canvas_EndedArchive_OwnerRead(t *testing.T) {
+	mx := newCanvasMintFixture(t)
+	mx.endSession(t)
+	mx.mint(t, mx.private, mx.student, http.StatusOK, true)
+}
+
+func TestMintToken_Canvas_EndedArchive_TeacherReadWhenHostVisible(t *testing.T) {
+	mx := newCanvasMintFixture(t)
+	mx.endSession(t)
+	mx.mint(t, mx.hostCanvas, mx.teacher, http.StatusOK, true)
+}
+
+// "Former participant" is a `present` or `left` row — an invitee who never
+// joined is not one.
+func TestMintToken_Canvas_EndedArchive_FormerParticipantReadNotInvitee(t *testing.T) {
+	mx := newCanvasMintFixture(t)
+	mx.endSession(t)
+	mx.mint(t, mx.participants, mx.left, http.StatusOK, true)
+	mx.mint(t, mx.participants, mx.invitee, http.StatusForbidden, false)
+}
+
+// Decision 11's public breadth does not survive the end: a viewer who really
+// could read the `session` board while the public room was live is not a
+// former participant, so the archive shuts them out.
+func TestMintToken_Canvas_EndedArchive_PublicViewerDenied(t *testing.T) {
+	mx := newCanvasMintFixture(t)
+	mx.makeSessionPublic(t)
+	mx.mint(t, mx.sessionCanvas, mx.outsider, http.StatusOK, true)
+	mx.endSession(t)
+	mx.mint(t, mx.sessionCanvas, mx.outsider, http.StatusForbidden, false)
+}
+
+// The archive admits only the owner, the teacher (visibility ≥ `host`), and
+// former participants (visibility ≥ `participants`).  A non-member holds none
+// of those roles, so every level denies them.
+func TestMintToken_Canvas_EndedArchive_OutsiderDenied(t *testing.T) {
+	mx := newCanvasMintFixture(t)
+	mx.endSession(t)
+	for _, canvas := range []*store.Canvas{mx.private, mx.hostCanvas, mx.participants, mx.sessionCanvas} {
+		mx.mint(t, canvas, mx.outsider, http.StatusForbidden, false)
+	}
+}
+
+// Everyone is read-only in the archive — including the owner, who was the one
+// writer while the session was live.
+func TestMintToken_Canvas_EndedArchive_AllReadOnly(t *testing.T) {
+	mx := newCanvasMintFixture(t)
+	mx.mint(t, mx.private, mx.student, http.StatusOK, false)
+	mx.endSession(t)
+	mx.mint(t, mx.private, mx.student, http.StatusOK, true)
+	mx.mint(t, mx.hostCanvas, mx.teacher, http.StatusOK, true)
+	mx.mint(t, mx.participants, mx.present, http.StatusOK, true)
+	mx.mint(t, mx.participants, mx.left, http.StatusOK, true)
+}
+
+func TestMintToken_Canvas_SessionVisibleClassBoundDeniesOutsider(t *testing.T) {
 	fx := newCanvasHandlerFixture(t)
 	ctx := context.Background()
 	orgs, courses, classes := store.NewOrgStore(fx.db), store.NewCourseStore(fx.db), store.NewClassStore(fx.db)
@@ -262,7 +379,7 @@ func TestCanvasMint_SessionVisibleClassBoundDeniesOutsider(t *testing.T) {
 	require.Equal(t, http.StatusForbidden, code)
 }
 
-func TestCanvasMint_OtherSessionMemberDenied(t *testing.T) {
+func TestMintToken_Canvas_OtherSessionMemberDenied(t *testing.T) {
 	fx := newCanvasHandlerFixture(t)
 	other, err := fx.h.Sessions.CreateSession(context.Background(), store.CreateSessionInput{TeacherID: fx.teacher.ID, Title: "Other"})
 	require.NoError(t, err)

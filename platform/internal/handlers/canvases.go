@@ -241,12 +241,15 @@ func (h *CanvasHandler) PatchCanvasSettings(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusNotFound, "Session not found")
 		return
 	}
-	if session.Status == "ended" {
-		writeError(w, http.StatusConflict, "Session has ended")
-		return
-	}
+	// Authorization precedes the terminal-state conflict: this route is
+	// teacher-only, so every other represented user gets 403 whether the
+	// session is live or ended, exactly as GetCanvasSettings answers them.
 	if session.TeacherID != claims.UserID {
 		writeError(w, http.StatusForbidden, "Not authorized")
+		return
+	}
+	if session.Status == "ended" {
+		writeError(w, http.StatusConflict, "Session has ended")
 		return
 	}
 	var body struct {
