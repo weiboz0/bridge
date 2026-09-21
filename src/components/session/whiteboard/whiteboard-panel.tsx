@@ -42,11 +42,14 @@ function clearArchiveFallbackWarning(sessionId: string): void {
 }
 
 /**
- * A canvas mutation can race the end of the session: the server answers 409
- * once teardown starts (`session_end_in_progress`) and after it finishes.
- * Distinguishing the two gives the user an accurate reason instead of a
- * generic failure. The body is parsed defensively — it may not be JSON —
- * and every other status keeps the caller's generic fallback message.
+ * A 409 on a canvas mutation can mean several distinct things: the server
+ * answers it once teardown starts (`session_end_in_progress`), after
+ * teardown finishes (`session_ended`), and independently when the
+ * per-session whiteboard limit is reached (`canvas_cap_reached`). Only these
+ * three known codes get session/limit-specific copy — anything else (an
+ * unrecognized code, a missing code, or a non-JSON body) keeps the caller's
+ * generic fallback message, so a 409 we don't understand never asserts a
+ * specific — and possibly false — reason.
  */
 async function whiteboardMutationErrorMessage(response: Response, fallback: string): Promise<string> {
   if (response.status !== 409) return fallback;
@@ -57,11 +60,18 @@ async function whiteboardMutationErrorMessage(response: Response, fallback: stri
       code = (body as Record<string, unknown>).code;
     }
   } catch {
-    // Body may not be JSON; fall through to the generic 409 message below.
+    // Body may not be JSON; fall through to the generic fallback below.
   }
-  return code === "session_end_in_progress"
-    ? "This session is ending, so whiteboards can no longer be changed."
-    : "This session has ended, so whiteboards can no longer be changed.";
+  switch (code) {
+    case "session_end_in_progress":
+      return "This session is ending, so whiteboards can no longer be changed.";
+    case "session_ended":
+      return "This session has ended, so whiteboards can no longer be changed.";
+    case "canvas_cap_reached":
+      return "This session has reached its whiteboard limit.";
+    default:
+      return fallback;
+  }
 }
 
 const ExcalidrawBoard = dynamic(

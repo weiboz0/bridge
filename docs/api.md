@@ -95,8 +95,8 @@ The canvas metadata endpoints require authentication and a session UUID.
 - **`DELETE /api/sessions/{id}/canvases/{canvasId}`** deletes an owner canvas and its persisted document while live.
 
 Authorization is answered before session state on every canvas mutation: a caller who may not perform it gets the same `403` (or `404` for a missing canvas) whether the session is live, ending, or ended, so an outsider holding a session UUID cannot learn its lifecycle state.
-For an **authorized** caller, canvas mutations return `409` after the session ends, and while an end lease is live they return `409` with
-`code: "session_end_in_progress"`; the internal realtime recheck instead
+For an **authorized** caller, canvas mutations return `409` with `code: "session_ended"` after the session ends, `409` with `code: "canvas_cap_reached"` when the per-session whiteboard limit is hit, and while an end lease is live `409` with
+`code: "session_end_in_progress"`. Clients must branch on `code`, never on the bare status: a `409` is not always an ended session; the internal realtime recheck instead
 returns retryable `409` with `code: "session_freezing"` and does not convert a
 writable connection to a permanent reader.
 

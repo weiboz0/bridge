@@ -252,6 +252,8 @@ func TestCanvases_MutatingEndpointsReject_WhenEnded(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			w := fx.request(t, tc.method, tc.path, tc.body, fx.claims(fx.student))
 			require.Equal(t, http.StatusConflict, w.Code, w.Body.String())
+			// R2-26: the reason is machine-readable, not just a status.
+			require.JSONEq(t, `{"error":"Session has ended","code":"session_ended"}`, w.Body.String())
 		})
 	}
 
@@ -261,6 +263,7 @@ func TestCanvases_MutatingEndpointsReject_WhenEnded(t *testing.T) {
 	require.Equal(t, http.StatusForbidden, nonTeacher.Code, nonTeacher.Body.String())
 	teacher := fx.request(t, http.MethodPatch, settings, floor, fx.claims(fx.teacher))
 	require.Equal(t, http.StatusConflict, teacher.Code, teacher.Body.String())
+	require.JSONEq(t, `{"error":"Session has ended","code":"session_ended"}`, teacher.Body.String())
 
 	// The rejections are real: nothing was created, renamed, deleted, or
 	// re-floored behind them.
@@ -272,6 +275,118 @@ func TestCanvases_MutatingEndpointsReject_WhenEnded(t *testing.T) {
 	require.NoError(t, fx.db.QueryRowContext(context.Background(), `SELECT canvas_floor FROM sessions WHERE id = $1`, fx.session.ID).Scan(&storedFloor))
 	assert.Equal(t, "Owned board", title)
 	assert.Equal(t, "private", storedFloor)
+}
+
+// Plan 094 R2-26: a canvas 409 has three distinct causes, and a client must be
+// able to tell them apart.  R2-22 had left the whiteboard panel a binary rule —
+// either `session_end_in_progress` or "this session has ended" — so a LIVE
+// session that had merely hit its whiteboard cap told the user the session was
+// over.  Each cause therefore carries a stable machine-readable `code` next to
+// its unchanged human-readable `error` string, including the ended 409 that
+// PatchCanvasSettings writes itself without going through
+// writeCanvasMutationError.
+func TestCanvases_ConflictResponsesCarryStableCodes(t *testing.T) {
+	type conflictRow struct {
+		name string
+		// arrange puts the session into the state that produces the conflict.
+		arrange func(t *testing.T, fx *canvasHandlerFixture)
+		// act issues the one request whose 409 body is pinned.
+		act      func(t *testing.T, fx *canvasHandlerFixture) *httptest.ResponseRecorder
+		wantBody string
+		wantCode string
+	}
+
+	create := func(t *testing.T, fx *canvasHandlerFixture) *httptest.ResponseRecorder {
+		t.Helper()
+		return fx.request(t, http.MethodPost, "/api/sessions/"+fx.session.ID+"/canvases", map[string]string{"title": "Late board", "visibility": "private"}, fx.claims(fx.student))
+	}
+	end := func(t *testing.T, fx *canvasHandlerFixture) {
+		t.Helper()
+		_, err := fx.h.Sessions.EndSession(context.Background(), fx.session.ID)
+		require.NoError(t, err)
+	}
+
+	rows := []conflictRow{
+		{
+			name: "end in progress",
+			arrange: func(t *testing.T, fx *canvasHandlerFixture) {
+				t.Helper()
+				prep, err := fx.h.Sessions.PrepareSessionEnd(context.Background(), fx.session.ID)
+				require.NoError(t, err)
+				require.NotEmpty(t, prep.Token)
+			},
+			act:      create,
+			wantBody: `{"error":"Session end in progress","code":"session_end_in_progress"}`,
+			wantCode: "session_end_in_progress",
+		},
+		{
+			name:     "ended create",
+			arrange:  end,
+			act:      create,
+			wantBody: `{"error":"Session has ended","code":"session_ended"}`,
+			wantCode: "session_ended",
+		},
+		{
+			name:    "ended canvas settings patch",
+			arrange: end,
+			act: func(t *testing.T, fx *canvasHandlerFixture) *httptest.ResponseRecorder {
+				t.Helper()
+				return fx.request(t, http.MethodPatch, "/api/sessions/"+fx.session.ID+"/canvas-settings", map[string]string{"canvasFloor": "host"}, fx.claims(fx.teacher))
+			},
+			wantBody: `{"error":"Session has ended","code":"session_ended"}`,
+			wantCode: "session_ended",
+		},
+		{
+			name: "canvas cap reached on a live session",
+			arrange: func(t *testing.T, fx *canvasHandlerFixture) {
+				t.Helper()
+				// Fill the session exactly to its cap, the same way the
+				// concurrent-cap test does, leaving the session LIVE.
+				for i := 0; i < store.MaxSessionCanvases; i++ {
+					_, err := fx.h.Canvases.CreateCanvas(context.Background(), store.CreateCanvasInput{SessionID: fx.session.ID, OwnerID: fx.student.ID, Title: fmt.Sprintf("seed-%d", i), Visibility: "private"})
+					require.NoError(t, err)
+				}
+				var status string
+				require.NoError(t, fx.db.QueryRowContext(context.Background(), `SELECT status FROM sessions WHERE id = $1`, fx.session.ID).Scan(&status))
+				require.Equal(t, "live", status, "the cap conflict must be answered by a session that has NOT ended")
+			},
+			act:      create,
+			wantBody: `{"error":"Session canvas cap reached","code":"canvas_cap_reached"}`,
+			wantCode: "canvas_cap_reached",
+		},
+	}
+
+	observed := map[string]string{}
+	for _, tc := range rows {
+		t.Run(tc.name, func(t *testing.T) {
+			fx := newCanvasHandlerFixture(t)
+			tc.arrange(t, fx)
+			w := tc.act(t, fx)
+			require.Equal(t, http.StatusConflict, w.Code, w.Body.String())
+			require.JSONEq(t, tc.wantBody, w.Body.String())
+			var body map[string]string
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+			require.Len(t, body, 2, "a conflict body carries exactly `error` and `code`")
+			require.Equal(t, tc.wantCode, body["code"])
+			observed[tc.name] = body["code"]
+		})
+	}
+
+	// Every cause was actually reached, and the three codes are pairwise
+	// distinct: a client branching on `code` can never mistake a live session at
+	// its whiteboard cap for one that has ended.
+	require.Len(t, observed, len(rows))
+	distinct := map[string]struct{}{}
+	for _, code := range observed {
+		distinct[code] = struct{}{}
+	}
+	require.Len(t, distinct, 3, "the three 409 causes must be distinguishable")
+	for _, code := range []string{"session_end_in_progress", "session_ended", "canvas_cap_reached"} {
+		require.Contains(t, distinct, code)
+	}
+	// Both ended 409s — the store-driven one and the one PatchCanvasSettings
+	// writes itself — agree, so a client needs only one branch for "ended".
+	require.Equal(t, observed["ended create"], observed["ended canvas settings patch"])
 }
 
 func TestCanvasMutations_BlockBehindEndLifecycleLock(t *testing.T) {
@@ -606,7 +721,10 @@ func TestCanvases_AuthorizationPrecedesTerminalState(t *testing.T) {
 					case "frozen":
 						require.JSONEq(t, `{"error":"Session end in progress","code":"session_end_in_progress"}`, w.Body.String())
 					case "ended":
-						require.JSONEq(t, `{"error":"Session has ended"}`, w.Body.String())
+						// R2-26: the ended 409 carries a stable `code` too, so a
+						// client can tell it apart from the cap-reached 409 that a
+						// LIVE session answers with the same status.
+						require.JSONEq(t, `{"error":"Session has ended","code":"session_ended"}`, w.Body.String())
 					}
 				})
 			}

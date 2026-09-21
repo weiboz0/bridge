@@ -222,7 +222,7 @@ func (h *CanvasHandler) PatchCanvasSettings(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if session.Status == "ended" {
-		writeError(w, http.StatusConflict, "Session has ended")
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "Session has ended", "code": "session_ended"})
 		return
 	}
 	var body struct {
@@ -264,9 +264,9 @@ func (h *CanvasHandler) writeCanvasMutationError(w http.ResponseWriter, err erro
 	case errors.Is(err, store.ErrSessionEndInProgress):
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "Session end in progress", "code": "session_end_in_progress"})
 	case errors.Is(err, store.ErrSessionEnded):
-		writeError(w, http.StatusConflict, "Session has ended")
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "Session has ended", "code": "session_ended"})
 	case errors.Is(err, store.ErrCanvasCapReached):
-		writeError(w, http.StatusConflict, "Session canvas cap reached")
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "Session canvas cap reached", "code": "canvas_cap_reached"})
 	case errors.Is(err, store.ErrCanvasVisibilityTighten), errors.Is(err, store.ErrCanvasBelowFloor), errors.Is(err, store.ErrCanvasFloorTooLoose), errors.Is(err, store.ErrCanvasTitleRequired), errors.Is(err, store.ErrCanvasTitleTooLong):
 		writeError(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, store.ErrCanvasFloorUnauthorized):

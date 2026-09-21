@@ -428,55 +428,97 @@ describe("WhiteboardPanel — plan 094 phase 9 settings cutover", () => {
     expect(window.sessionStorage.getItem(`whiteboard-archive-fallback:${SESSION_ID}`)).toBeNull();
   });
 
-  // Plan 094 R2-22: a canvas mutation can race the end of the session. The
-  // server answers 409 once teardown starts (`session_end_in_progress`) and
-  // after it finishes; a generic "Unable to ..." hid both from the user.
-  it("whiteboard panel explains a 409 while the session is ending", async () => {
-    const canvas = {
-      id: "22222222-2222-4222-8222-222222222222",
-      sessionId: SESSION_ID,
-      ownerId: "teacher-id",
-      title: "Owner board",
-      visibility: "private",
-    };
-    const ENDING = "This session is ending, so whiteboards can no longer be changed.";
-    const endInProgress = () => json({ error: "Session end in progress", code: "session_end_in_progress" }, 409);
+  // Plan 094 R2-22 and R2-26: a canvas mutation answers 409 for three distinct
+  // reasons — an end lease is live (`session_end_in_progress`), the session has
+  // ended (`session_ended`), and the per-session whiteboard cap is full
+  // (`canvas_cap_reached`) on a session that is very much still running. The
+  // panel therefore branches on the `code`, never on the bare status.
+  const CONFLICT_CANVAS = {
+    id: "22222222-2222-4222-8222-222222222222",
+    sessionId: SESSION_ID,
+    ownerId: "teacher-id",
+    title: "Owner board",
+    visibility: "private",
+  };
 
-    // Create.
+  /**
+   * Drives the two mutations that surface a server message — create and an
+   * owner visibility raise — against the same failure response, and returns the
+   * text each one put in front of the user.
+   */
+  async function mutationMessages(failure: () => Response): Promise<{ create: string; update: string }> {
     const fetchMock = vi.mocked(fetch);
+
+    fetchMock.mockReset();
     fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = requestURL(input);
-      if (url.endsWith("/canvases") && init?.method === "POST") return Promise.resolve(endInProgress());
+      if (url.endsWith("/canvases") && init?.method === "POST") return Promise.resolve(failure());
       if (url.endsWith("/canvases")) return Promise.resolve(json({ items: [] }));
       throw new Error(`unexpected endpoint ${url}`);
     });
     const created = render(<WhiteboardPanel sessionId={SESSION_ID} />);
     fireEvent.click(await screen.findByRole("button", { name: "New whiteboard" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent(ENDING);
+    const create = (await screen.findByRole("alert")).textContent ?? "";
     created.unmount();
 
-    // Visibility update.
     fetchMock.mockReset();
     fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = requestURL(input);
-      if (url.endsWith(`/canvases/${canvas.id}`) && init?.method === "PATCH") return Promise.resolve(endInProgress());
-      if (url.endsWith("/canvases")) return Promise.resolve(json({ items: [canvas] }));
+      if (url.endsWith(`/canvases/${CONFLICT_CANVAS.id}`) && init?.method === "PATCH") return Promise.resolve(failure());
+      if (url.endsWith("/canvases")) return Promise.resolve(json({ items: [CONFLICT_CANVAS] }));
       throw new Error(`unexpected endpoint ${url}`);
     });
-    render(<WhiteboardPanel sessionId={SESSION_ID} />);
+    const updated = render(<WhiteboardPanel sessionId={SESSION_ID} />);
     fireEvent.click(await screen.findByRole("button", { name: /owner board/i }));
     fireEvent.change(
       screen.getByText("Visibility").parentElement?.querySelector("select") as HTMLSelectElement,
       { target: { value: "host" } },
     );
     fireEvent.click(screen.getByRole("button", { name: "Raise visibility" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent(ENDING);
+    const update = (await screen.findByRole("alert")).textContent ?? "";
+    updated.unmount();
+
+    return { create, update };
+  }
+
+  it("whiteboard panel explains a 409 while the session is ending", async () => {
+    const ENDING = "This session is ending, so whiteboards can no longer be changed.";
+    const messages = await mutationMessages(() =>
+      json({ error: "Session end in progress", code: "session_end_in_progress" }, 409),
+    );
+    expect(messages.create).toContain(ENDING);
+    expect(messages.update).toContain(ENDING);
   });
 
   it("whiteboard panel explains a 409 after the session ended", async () => {
+    // ONLY the `session_ended` code earns this wording now.
     const ENDED = "This session has ended, so whiteboards can no longer be changed.";
+    const messages = await mutationMessages(() => json({ error: "Session has ended", code: "session_ended" }, 409));
+    expect(messages.create).toContain(ENDED);
+    expect(messages.update).toContain(ENDED);
+  });
+
+  it("whiteboard panel explains a 409 when the whiteboard limit is reached", async () => {
+    const LIMIT = "This session has reached its whiteboard limit.";
+    const messages = await mutationMessages(() =>
+      json({ error: "Session canvas cap reached", code: "canvas_cap_reached" }, 409),
+    );
+    expect(messages.create).toContain(LIMIT);
+    expect(messages.update).toContain(LIMIT);
+    // The session is live: saying it ended would be a false statement.
+    for (const message of [messages.create, messages.update]) {
+      expect(message.toLowerCase()).not.toContain("session has ended");
+    }
+  });
+
+  it("whiteboard panel never claims the session ended for a 409 it does not recognise", async () => {
+    // Regression guard for R2-26. The previous rule was binary — anything that
+    // was not `session_end_in_progress` read "This session has ended, …" — so a
+    // LIVE session sitting at its whiteboard limit was told it had ended, a
+    // statement that was simply untrue. An unrecognised 409 now keeps the
+    // caller's generic message rather than asserting a reason nobody sent.
     for (const [label, conflict] of [
-      ["a different code", () => json({ error: "Session ended", code: "session_ended" }, 409)],
+      ["an unknown code", () => json({ error: "Something new", code: "some_future_reason" }, 409)],
       ["no code at all", () => json({ error: "Session ended" }, 409)],
       [
         "a non-JSON body",
@@ -484,18 +526,13 @@ describe("WhiteboardPanel — plan 094 phase 9 settings cutover", () => {
       ],
       ["an empty body", () => new Response(null, { status: 409 })],
     ] as const) {
-      const fetchMock = vi.mocked(fetch);
-      fetchMock.mockReset();
-      fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-        const url = requestURL(input);
-        if (url.endsWith("/canvases") && init?.method === "POST") return Promise.resolve(conflict());
-        if (url.endsWith("/canvases")) return Promise.resolve(json({ items: [] }));
-        throw new Error(`unexpected endpoint ${url}`);
-      });
-      const { unmount } = render(<WhiteboardPanel sessionId={SESSION_ID} />);
-      fireEvent.click(await screen.findByRole("button", { name: "New whiteboard" }));
-      expect(await screen.findByRole("alert"), label).toHaveTextContent(ENDED);
-      unmount();
+      const messages = await mutationMessages(conflict);
+      expect(messages.create, label).toContain("Unable to create whiteboard");
+      expect(messages.update, label).toContain("Unable to update whiteboard visibility");
+      for (const message of [messages.create, messages.update]) {
+        expect(message.toLowerCase(), label).not.toContain("session has ended");
+        expect(message.toLowerCase(), label).not.toContain("this session");
+      }
     }
   });
 
