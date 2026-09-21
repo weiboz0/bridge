@@ -53,6 +53,7 @@ Compatibility notes:
 - `POST /api/sessions/{id}/join` still returns `studentId` in the response payload when applicable.
 - `GET /api/sessions/{id}/help-queue` still returns the raised-hand queue, but internally it is backed by `help_requested_at` rather than a `"needs_help"` participant status.
 - `POST /api/sessions/{id}/end` ends a session (moved from `PATCH /api/sessions/{id}` in Plan 030b).
+  The session teacher or a platform administrator may end it, as on the sibling teacher-only session routes; ending a session reads no canvas content and grants the administrator no canvas access.
 - `GET /api/sessions/by-class/{classId}` and `GET /api/sessions/active/{classId}` remain available as compatibility wrappers for class-scoped surfaces.
 
 ### Ad-hoc (orphan) sessions — Plan 090
@@ -79,8 +80,8 @@ The canvas metadata endpoints require authentication and a session UUID.
   Equal or tighter visibility is rejected.
 - **`DELETE /api/sessions/{id}/canvases/{canvasId}`** deletes an owner canvas and its persisted document while live.
 
-All canvas mutations return `409` after the session ends.
-While an end lease is live, canvas mutations return `409` with
+Authorization is answered before session state on every canvas mutation: a caller who may not perform it gets the same `403` (or `404` for a missing canvas) whether the session is live, ending, or ended, so an outsider holding a session UUID cannot learn its lifecycle state.
+For an **authorized** caller, canvas mutations return `409` after the session ends, and while an end lease is live they return `409` with
 `code: "session_end_in_progress"`; the internal realtime recheck instead
 returns retryable `409` with `code: "session_freezing"` and does not convert a
 writable connection to a permanent reader.

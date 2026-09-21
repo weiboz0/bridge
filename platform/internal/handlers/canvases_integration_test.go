@@ -499,6 +499,210 @@ func TestCanvasSettings_ExactAuthorizationAndMissingEndedMatrix(t *testing.T) {
 	require.Equal(t, http.StatusConflict, fx.request(t, http.MethodPatch, path, map[string]string{"canvasFloor": "host"}, fx.claims(fx.teacher)).Code)
 }
 
+// Plan 094 R2-3: every canvas mutation answers authorization BEFORE the
+// terminal-state conflict, so a caller who was never authorized to mutate
+// learns nothing about the session's lifecycle from the response.  Before this
+// change an outsider's create returned 409 on a freezing or ended session and
+// 403 only while it was live, and a non-owner update/delete returned 409 on an
+// ended session, which is exactly the live/ended oracle this pins shut.
+func TestCanvases_AuthorizationPrecedesTerminalState(t *testing.T) {
+	const missingSession = "00000000-0000-4000-8000-000000000000"
+	const missingCanvas = "00000000-0000-4000-8000-0000000000ff"
+
+	type mutationRow struct {
+		name, method, path string
+		body               any
+		claims             *auth.Claims
+		want               map[string]int
+	}
+
+	for _, state := range []string{"live", "frozen", "ended"} {
+		t.Run(state, func(t *testing.T) {
+			ctx := context.Background()
+			fx := newCanvasHandlerFixture(t)
+			invitee := fx.addUser(t, "invitee")
+			_, err := fx.h.Sessions.AddParticipant(ctx, fx.session.ID, invitee.ID, fx.teacher.ID)
+			require.NoError(t, err)
+			departed := fx.addUser(t, "departed")
+			_, err = fx.h.Sessions.JoinSession(ctx, fx.session.ID, departed.ID)
+			require.NoError(t, err)
+			_, err = fx.h.Sessions.LeaveSession(ctx, fx.session.ID, departed.ID)
+			require.NoError(t, err)
+			canvas, err := fx.h.Canvases.CreateCanvas(ctx, store.CreateCanvasInput{
+				SessionID: fx.session.ID, OwnerID: fx.student.ID, Title: "Owned board", Visibility: "private",
+			})
+			require.NoError(t, err)
+
+			switch state {
+			case "frozen":
+				// The real production lease, taken exactly as EndSession takes it.
+				prep, prepErr := fx.h.Sessions.PrepareSessionEnd(ctx, fx.session.ID)
+				require.NoError(t, prepErr)
+				require.NotEmpty(t, prep.Token)
+			case "ended":
+				_, endErr := fx.h.Sessions.EndSession(ctx, fx.session.ID)
+				require.NoError(t, endErr)
+			}
+
+			createPath := "/api/sessions/" + fx.session.ID + "/canvases"
+			canvasPath := createPath + "/" + canvas.ID
+			missingCanvasPath := createPath + "/" + missingCanvas
+			missingSessionCreate := "/api/sessions/" + missingSession + "/canvases"
+			missingSessionCanvas := missingSessionCreate + "/" + canvas.ID
+			newBoard := map[string]string{"title": "New board", "visibility": "private"}
+			rename := map[string]string{"title": "Renamed"}
+
+			forbidden := map[string]int{"live": http.StatusForbidden, "frozen": http.StatusForbidden, "ended": http.StatusForbidden}
+			missing := map[string]int{"live": http.StatusNotFound, "frozen": http.StatusNotFound, "ended": http.StatusNotFound}
+			okCreate := map[string]int{"live": http.StatusCreated, "frozen": http.StatusConflict, "ended": http.StatusConflict}
+			okUpdate := map[string]int{"live": http.StatusOK, "frozen": http.StatusConflict, "ended": http.StatusConflict}
+			okDelete := map[string]int{"live": http.StatusNoContent, "frozen": http.StatusConflict, "ended": http.StatusConflict}
+
+			// Unauthorized callers first: none of them may change anything, and
+			// none of them may learn the lifecycle state from the status code.
+			rejected := []mutationRow{
+				{"outsider create", http.MethodPost, createPath, newBoard, fx.claims(fx.outsider), forbidden},
+				{"invited-only create", http.MethodPost, createPath, newBoard, fx.claims(invitee), forbidden},
+				{"left participant create", http.MethodPost, createPath, newBoard, fx.claims(departed), forbidden},
+				{"outsider update", http.MethodPatch, canvasPath, rename, fx.claims(fx.outsider), forbidden},
+				{"invited-only update", http.MethodPatch, canvasPath, rename, fx.claims(invitee), forbidden},
+				{"left participant update", http.MethodPatch, canvasPath, rename, fx.claims(departed), forbidden},
+				{"session teacher update of another owner's canvas", http.MethodPatch, canvasPath, rename, fx.claims(fx.teacher), forbidden},
+				{"outsider delete", http.MethodDelete, canvasPath, nil, fx.claims(fx.outsider), forbidden},
+				{"invited-only delete", http.MethodDelete, canvasPath, nil, fx.claims(invitee), forbidden},
+				{"left participant delete", http.MethodDelete, canvasPath, nil, fx.claims(departed), forbidden},
+				{"session teacher delete of another owner's canvas", http.MethodDelete, canvasPath, nil, fx.claims(fx.teacher), forbidden},
+				{"owner update of missing canvas", http.MethodPatch, missingCanvasPath, rename, fx.claims(fx.student), missing},
+				{"owner delete of missing canvas", http.MethodDelete, missingCanvasPath, nil, fx.claims(fx.student), missing},
+				{"outsider update of missing canvas", http.MethodPatch, missingCanvasPath, rename, fx.claims(fx.outsider), missing},
+				{"outsider delete of missing canvas", http.MethodDelete, missingCanvasPath, nil, fx.claims(fx.outsider), missing},
+				{"teacher create on missing session", http.MethodPost, missingSessionCreate, newBoard, fx.claims(fx.teacher), missing},
+				{"outsider create on missing session", http.MethodPost, missingSessionCreate, newBoard, fx.claims(fx.outsider), missing},
+				{"owner update on missing session", http.MethodPatch, missingSessionCanvas, rename, fx.claims(fx.student), missing},
+				{"owner delete on missing session", http.MethodDelete, missingSessionCanvas, nil, fx.claims(fx.student), missing},
+			}
+			for _, tc := range rejected {
+				t.Run(tc.name, func(t *testing.T) {
+					w := fx.request(t, tc.method, tc.path, tc.body, tc.claims)
+					require.Equal(t, tc.want[state], w.Code, w.Body.String())
+					require.NotContains(t, w.Body.String(), "session_end_in_progress", "an unauthorized caller must not be told a lease is held")
+				})
+			}
+			assertCanvasStateUnchanged(t, fx, canvas.ID, 1, "Owned board")
+
+			// Authorized callers still meet the terminal state, in exactly the
+			// order the lifecycle requires.
+			authorized := []mutationRow{
+				{"teacher create", http.MethodPost, createPath, map[string]string{"title": "Teacher board", "visibility": "private"}, fx.claims(fx.teacher), okCreate},
+				{"present participant create", http.MethodPost, createPath, newBoard, fx.claims(fx.student), okCreate},
+				{"owner update", http.MethodPatch, canvasPath, rename, fx.claims(fx.student), okUpdate},
+				{"owner delete", http.MethodDelete, canvasPath, nil, fx.claims(fx.student), okDelete},
+			}
+			for _, tc := range authorized {
+				t.Run(tc.name, func(t *testing.T) {
+					w := fx.request(t, tc.method, tc.path, tc.body, tc.claims)
+					require.Equal(t, tc.want[state], w.Code, w.Body.String())
+					switch state {
+					case "frozen":
+						require.JSONEq(t, `{"error":"Session end in progress","code":"session_end_in_progress"}`, w.Body.String())
+					case "ended":
+						require.JSONEq(t, `{"error":"Session has ended"}`, w.Body.String())
+					}
+				})
+			}
+
+			if state == "live" {
+				var remaining int
+				require.NoError(t, fx.db.QueryRowContext(ctx, `SELECT count(*) FROM session_canvases WHERE session_id = $1`, fx.session.ID).Scan(&remaining))
+				assert.Equal(t, 2, remaining, "two authorized creates landed and the owner's own canvas was deleted")
+				var deleted int
+				require.NoError(t, fx.db.QueryRowContext(ctx, `SELECT count(*) FROM session_canvases WHERE id = $1`, canvas.ID).Scan(&deleted))
+				assert.Zero(t, deleted, "the owner's delete must remove the row")
+				return
+			}
+			assertCanvasStateUnchanged(t, fx, canvas.ID, 1, "Owned board")
+		})
+	}
+}
+
+// assertCanvasStateUnchanged proves the rejections above were real: no canvas
+// was inserted, renamed, or deleted behind them, and the floor is untouched.
+func assertCanvasStateUnchanged(t *testing.T, fx *canvasHandlerFixture, canvasID string, wantCount int, wantTitle string) {
+	t.Helper()
+	ctx := context.Background()
+	var count int
+	require.NoError(t, fx.db.QueryRowContext(ctx, `SELECT count(*) FROM session_canvases WHERE session_id = $1`, fx.session.ID).Scan(&count))
+	assert.Equal(t, wantCount, count, "a rejected mutation must not insert or delete a canvas row")
+	var title string
+	require.NoError(t, fx.db.QueryRowContext(ctx, `SELECT title FROM session_canvases WHERE id = $1`, canvasID).Scan(&title))
+	assert.Equal(t, wantTitle, title, "a rejected mutation must not rename a canvas")
+	var floor string
+	require.NoError(t, fx.db.QueryRowContext(ctx, `SELECT canvas_floor FROM sessions WHERE id = $1`, fx.session.ID).Scan(&floor))
+	assert.Equal(t, "private", floor)
+}
+
+// Plan 094 R2-3, stated as the property itself: an authenticated user who holds
+// nothing but a session UUID gets byte-identical answers whether that session
+// is live, freezing, or ended.  Before the fix, create answered 403 live but
+// 409 while freezing and after end.
+func TestCanvases_OutsiderCannotDistinguishSessionState(t *testing.T) {
+	const missingCanvas = "00000000-0000-4000-8000-0000000000ff"
+	type observation struct {
+		Code int
+		Body string
+	}
+	observed := map[string]map[string]observation{}
+
+	for _, state := range []string{"live", "frozen", "ended"} {
+		t.Run(state, func(t *testing.T) {
+			ctx := context.Background()
+			fx := newCanvasHandlerFixture(t)
+			canvas, err := fx.h.Canvases.CreateCanvas(ctx, store.CreateCanvasInput{
+				SessionID: fx.session.ID, OwnerID: fx.student.ID, Title: "Owned board", Visibility: "private",
+			})
+			require.NoError(t, err)
+			switch state {
+			case "frozen":
+				_, prepErr := fx.h.Sessions.PrepareSessionEnd(ctx, fx.session.ID)
+				require.NoError(t, prepErr)
+			case "ended":
+				_, endErr := fx.h.Sessions.EndSession(ctx, fx.session.ID)
+				require.NoError(t, endErr)
+			}
+
+			createPath := "/api/sessions/" + fx.session.ID + "/canvases"
+			canvasPath := createPath + "/" + canvas.ID
+			missingCanvasPath := createPath + "/" + missingCanvas
+			record := func(name, method, path string, body any) {
+				w := fx.request(t, method, path, body, fx.claims(fx.outsider))
+				observed[state][name] = observation{Code: w.Code, Body: w.Body.String()}
+			}
+			observed[state] = map[string]observation{}
+			record("create", http.MethodPost, createPath, map[string]string{"title": "No", "visibility": "private"})
+			record("update", http.MethodPatch, canvasPath, map[string]string{"title": "No"})
+			record("delete", http.MethodDelete, canvasPath, nil)
+			record("update missing canvas", http.MethodPatch, missingCanvasPath, map[string]string{"title": "No"})
+			record("delete missing canvas", http.MethodDelete, missingCanvasPath, nil)
+
+			// Nothing the outsider sent may have changed the database.
+			assertCanvasStateUnchanged(t, fx, canvas.ID, 1, "Owned board")
+		})
+	}
+
+	require.Len(t, observed, 3)
+	for _, operation := range []string{"create", "update", "delete", "update missing canvas", "delete missing canvas"} {
+		t.Run(operation, func(t *testing.T) {
+			live := observed["live"][operation]
+			require.NotZero(t, live.Code)
+			assert.Equal(t, live, observed["frozen"][operation], "a freezing session must answer an outsider exactly as a live one does")
+			assert.Equal(t, live, observed["ended"][operation], "an ended session must answer an outsider exactly as a live one does")
+		})
+	}
+	assert.Equal(t, http.StatusForbidden, observed["live"]["create"].Code)
+	assert.Equal(t, http.StatusForbidden, observed["live"]["update"].Code)
+	assert.Equal(t, http.StatusForbidden, observed["live"]["delete"].Code)
+}
+
 func TestCanvasHandler_CreateCanvas_DeniesInvitedAndUnrepresentedAdministrator(t *testing.T) {
 	fx := newCanvasHandlerFixture(t)
 	invitee := fx.addUser(t, fmt.Sprintf("invitee-%d", time.Now().UnixNano()))

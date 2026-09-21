@@ -807,38 +807,46 @@ func (s *SessionStore) RevokeInviteToken(ctx context.Context, sessionID string) 
 		sessionID))
 }
 
-// CanAccessSession checks whether a user may access a session.
-// Returns (allowed, reason, err) where reason is one of:
-// "teacher", "class_member", "participant", "not_found", "ended", "no_access".
-func (s *SessionStore) CanAccessSession(ctx context.Context, sessionID, userID string) (bool, string, error) {
-	var status, teacherID, visibility string
-	var classID *string
-	err := s.db.QueryRowContext(ctx,
+type sessionAccessQuerier interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+type sessionAccessState struct {
+	ID, Status, TeacherID, Visibility string
+	ClassID                           *string
+}
+
+func loadSessionAccessState(ctx context.Context, q sessionAccessQuerier, sessionID string) (*sessionAccessState, error) {
+	state := &sessionAccessState{ID: sessionID}
+	err := q.QueryRowContext(ctx,
 		`SELECT status, teacher_id, class_id, visibility FROM sessions WHERE id = $1`, sessionID,
-	).Scan(&status, &teacherID, &classID, &visibility)
+	).Scan(&state.Status, &state.TeacherID, &state.ClassID, &state.Visibility)
 	if err == sql.ErrNoRows {
-		return false, "not_found", nil
+		return nil, nil
 	}
 	if err != nil {
-		return false, "", err
+		return nil, err
 	}
+	return state, nil
+}
 
-	if status == "ended" {
+func evaluateSessionAccess(ctx context.Context, q sessionAccessQuerier, state *sessionAccessState, userID string) (bool, string, error) {
+	if state.Status == "ended" {
 		return false, "ended", nil
 	}
 
-	if teacherID == userID {
+	if state.TeacherID == userID {
 		return true, "teacher", nil
 	}
 
 	// Check class membership if session belongs to a class
-	if classID != nil {
+	if state.ClassID != nil {
 		var exists bool
-		err = s.db.QueryRowContext(ctx,
+		err := q.QueryRowContext(ctx,
 			`SELECT EXISTS(
 				SELECT 1 FROM class_memberships
 				WHERE class_id = $1 AND user_id = $2
-			)`, *classID, userID,
+			)`, *state.ClassID, userID,
 		).Scan(&exists)
 		if err != nil {
 			return false, "", err
@@ -850,11 +858,11 @@ func (s *SessionStore) CanAccessSession(ctx context.Context, sessionID, userID s
 
 	// Check participant row (invited or present)
 	var participantExists bool
-	err = s.db.QueryRowContext(ctx,
+	err := q.QueryRowContext(ctx,
 		`SELECT EXISTS(
 			SELECT 1 FROM session_participants
 			WHERE session_id = $1 AND user_id = $2 AND status IN ('invited', 'present')
-		)`, sessionID, userID,
+		)`, state.ID, userID,
 	).Scan(&participantExists)
 	if err != nil {
 		return false, "", err
@@ -867,11 +875,25 @@ func (s *SessionStore) CanAccessSession(ctx context.Context, sessionID, userID s
 	// session must never be reachable via the public clause — that would let
 	// any authenticated user (any org) into another org's class session.
 	// Class membership above is the only path into a class-bound session.
-	if status == "live" && visibility == "public" && classID == nil {
+	if state.Status == "live" && state.Visibility == "public" && state.ClassID == nil {
 		return true, "public", nil
 	}
 
 	return false, "no_access", nil
+}
+
+// CanAccessSession checks whether a user may access a session.
+// Returns (allowed, reason, err) where reason is one of:
+// "teacher", "class_member", "participant", "public", "not_found", "ended", "no_access".
+func (s *SessionStore) CanAccessSession(ctx context.Context, sessionID, userID string) (bool, string, error) {
+	state, err := loadSessionAccessState(ctx, s.db, sessionID)
+	if err != nil {
+		return false, "", err
+	}
+	if state == nil {
+		return false, "not_found", nil
+	}
+	return evaluateSessionAccess(ctx, s.db, state, userID)
 }
 
 // JoinSessionByToken validates the invite token and adds the user as a

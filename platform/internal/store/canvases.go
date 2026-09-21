@@ -26,6 +26,7 @@ var (
 	ErrCanvasFloorTooLoose       = errors.New("session canvas floor may not be session")
 	ErrCanvasFloorUnauthorized   = errors.New("only the session host may set the canvas floor")
 	ErrCanvasCreatorUnauthorized = errors.New("only the session teacher or present participant may create a canvas")
+	ErrCanvasOwnerUnauthorized   = errors.New("only the canvas owner may mutate a canvas")
 	ErrCanvasSessionMismatch     = errors.New("canvas does not belong to supplied session")
 	ErrCanvasUserNotFound        = errors.New("canvas authorization user not found")
 )
@@ -103,21 +104,15 @@ func (s *CanvasStore) AuthorizeCanvasDocument(ctx context.Context, canvasID, ses
 	if participant.Valid {
 		result.ParticipantStatus = &participant.String
 	}
-	result.SessionAccess = result.TeacherID == userID
-	if !result.SessionAccess && result.SessionStatus == "live" {
-		if classID != nil {
-			var member bool
-			if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM class_memberships WHERE class_id=$1 AND user_id=$2)`, *classID, userID).Scan(&member); err != nil {
-				return nil, err
-			}
-			result.SessionAccess = member
-		}
-		if !result.SessionAccess && result.ParticipantStatus != nil && (*result.ParticipantStatus == "invited" || *result.ParticipantStatus == "present") {
-			result.SessionAccess = true
-		}
-		if !result.SessionAccess && classID == nil && visibility == "public" {
-			result.SessionAccess = true
-		}
+	state := &sessionAccessState{ID: sessionID, Status: result.SessionStatus, TeacherID: result.TeacherID, ClassID: classID, Visibility: visibility}
+	result.SessionAccess, _, err = evaluateSessionAccess(ctx, tx, state, userID)
+	if err != nil {
+		return nil, err
+	}
+	if result.SessionStatus == "ended" {
+		// Archive eligibility separately preserves the teacher's host-level
+		// access after end; CanAccessSession intentionally denies ended sessions.
+		result.SessionAccess = result.TeacherID == userID
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
@@ -134,7 +129,6 @@ type CreateCanvasInput struct {
 
 type CanvasStore struct {
 	db        *sql.DB
-	sessions  *SessionStore
 	testHooks *canvasStoreTestHooks
 }
 
@@ -154,7 +148,7 @@ type canvasStoreTestHooks struct {
 }
 
 func NewCanvasStore(db *sql.DB) *CanvasStore {
-	return &CanvasStore{db: db, sessions: NewSessionStore(db)}
+	return &CanvasStore{db: db}
 }
 
 func (s *CanvasStore) beforeSessionLock(ctx context.Context, tx *sql.Tx, operation canvasStoreOperation) (int, error) {
@@ -236,12 +230,6 @@ func (s *CanvasStore) CreateCanvas(ctx context.Context, input CreateCanvasInput)
 		return nil, err
 	}
 	s.afterSessionLock(canvasStoreOperationCreate, backendPID)
-	if status == "ended" {
-		return nil, ErrSessionEnded
-	}
-	if freezing {
-		return nil, ErrSessionEndInProgress
-	}
 	if teacherID != input.OwnerID {
 		var present bool
 		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM session_participants WHERE session_id=$1 AND user_id=$2 AND status='present')`, input.SessionID, input.OwnerID).Scan(&present); err != nil {
@@ -250,6 +238,12 @@ func (s *CanvasStore) CreateCanvas(ctx context.Context, input CreateCanvasInput)
 		if !present {
 			return nil, ErrCanvasCreatorUnauthorized
 		}
+	}
+	if status == "ended" {
+		return nil, ErrSessionEnded
+	}
+	if freezing {
+		return nil, ErrSessionEndInProgress
 	}
 
 	var count int
@@ -361,21 +355,23 @@ func (s *CanvasStore) UpdateCanvas(ctx context.Context, sessionID, canvasID, own
 		return nil, err
 	}
 	s.afterSessionLock(canvasStoreOperationSetVisibility, backendPID)
+	var canvasOwner, current string
+	if err := tx.QueryRowContext(ctx,
+		`SELECT owner_id, visibility FROM session_canvases WHERE id = $1 AND session_id = $2`,
+		canvasID, sessionID,
+	).Scan(&canvasOwner, &current); err == sql.ErrNoRows {
+		return nil, nil
+	} else if err != nil {
+		return nil, err
+	}
+	if canvasOwner != ownerID {
+		return nil, ErrCanvasOwnerUnauthorized
+	}
 	if status == "ended" {
 		return nil, ErrSessionEnded
 	}
 	if freezing {
 		return nil, ErrSessionEndInProgress
-	}
-
-	var current string
-	if err := tx.QueryRowContext(ctx,
-		`SELECT visibility FROM session_canvases WHERE id = $1 AND session_id = $2 AND owner_id = $3`,
-		canvasID, sessionID, ownerID,
-	).Scan(&current); err == sql.ErrNoRows {
-		return nil, nil
-	} else if err != nil {
-		return nil, err
 	}
 
 	if visibility != nil {
@@ -482,18 +478,23 @@ func (s *CanvasStore) SetSessionCanvasFloor(ctx context.Context, sessionID, host
 }
 
 // ListVisibleCanvases applies the session access rules before returning canvas
-// metadata. Live session visibility delegates session-level access to
-// SessionStore; ended sessions deliberately use archive-specific rules.
+// metadata. Live session visibility uses the shared session-access core;
+// ended sessions deliberately use archive-specific rules.
 func (s *CanvasStore) ListVisibleCanvases(ctx context.Context, sessionID, userID string) ([]Canvas, error) {
-	session, err := s.sessions.GetSession(ctx, sessionID)
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
 	if err != nil {
 		return nil, err
 	}
-	if session == nil {
+	defer tx.Rollback()
+	state, err := loadSessionAccessState(ctx, tx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	if state == nil {
 		return []Canvas{}, nil
 	}
 
-	rows, err := s.db.QueryContext(ctx,
+	rows, err := tx.QueryContext(ctx,
 		`SELECT `+canvasColumns+` FROM session_canvases WHERE session_id = $1 ORDER BY created_at, id`, sessionID,
 	)
 	if err != nil {
@@ -513,18 +514,18 @@ func (s *CanvasStore) ListVisibleCanvases(ctx context.Context, sessionID, userID
 		return nil, err
 	}
 
-	participant, err := s.sessions.GetSessionParticipant(ctx, sessionID, userID)
-	if err != nil {
+	var participant sql.NullString
+	if err := tx.QueryRowContext(ctx, `SELECT status FROM session_participants WHERE session_id = $1 AND user_id = $2`, sessionID, userID).Scan(&participant); err != nil && err != sql.ErrNoRows {
 		return nil, err
 	}
-	present := participant != nil && participant.Status == "present"
-	formerParticipant := participant != nil && (participant.Status == "present" || participant.Status == "left")
+	present := participant.Valid && participant.String == "present"
+	formerParticipant := participant.Valid && (participant.String == "present" || participant.String == "left")
 
 	visible := []Canvas{}
-	if session.Status == "ended" {
+	if state.Status == "ended" {
 		for _, canvas := range all {
 			if canvas.OwnerID == userID ||
-				(session.TeacherID == userID && canvas.Visibility != "private") ||
+				(state.TeacherID == userID && canvas.Visibility != "private") ||
 				(formerParticipant && (canvas.Visibility == "participants" || canvas.Visibility == "session")) {
 				visible = append(visible, canvas)
 			}
@@ -532,13 +533,13 @@ func (s *CanvasStore) ListVisibleCanvases(ctx context.Context, sessionID, userID
 		return visible, nil
 	}
 
-	sessionAllowed, _, err := s.sessions.CanAccessSession(ctx, sessionID, userID)
+	sessionAllowed, _, err := evaluateSessionAccess(ctx, tx, state, userID)
 	if err != nil {
 		return nil, err
 	}
 	for _, canvas := range all {
 		if canvas.OwnerID == userID ||
-			(session.TeacherID == userID && canvas.Visibility != "private") ||
+			(state.TeacherID == userID && canvas.Visibility != "private") ||
 			(present && (canvas.Visibility == "participants" || canvas.Visibility == "session")) ||
 			(sessionAllowed && canvas.Visibility == "session") {
 			visible = append(visible, canvas)
@@ -563,6 +564,17 @@ func (s *CanvasStore) DeleteCanvas(ctx context.Context, sessionID, canvasID, own
 		return false, nil
 	} else if err != nil {
 		return false, err
+	}
+	var canvasOwner string
+	if err := tx.QueryRowContext(ctx,
+		`SELECT owner_id FROM session_canvases WHERE id = $1 AND session_id = $2`, canvasID, sessionID,
+	).Scan(&canvasOwner); err == sql.ErrNoRows {
+		return false, nil
+	} else if err != nil {
+		return false, err
+	}
+	if canvasOwner != ownerID {
+		return false, ErrCanvasOwnerUnauthorized
 	}
 	if status == "ended" {
 		return false, ErrSessionEnded

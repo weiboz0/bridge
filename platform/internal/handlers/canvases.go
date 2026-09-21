@@ -29,27 +29,6 @@ func (h *CanvasHandler) Routes(r chi.Router) {
 	r.With(ValidateUUIDParam("id"), ValidateUUIDParam("canvasID")).Delete("/api/sessions/{id}/canvases/{canvasID}", h.DeleteCanvas)
 }
 
-func (h *CanvasHandler) sessionForMutation(w http.ResponseWriter, r *http.Request) (*store.LiveSession, bool) {
-	if h.Sessions == nil || h.Canvases == nil {
-		writeError(w, http.StatusInternalServerError, "Canvas handler misconfigured")
-		return nil, false
-	}
-	session, err := h.Sessions.GetSession(r.Context(), chi.URLParam(r, "id"))
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "Database error")
-		return nil, false
-	}
-	if session == nil {
-		writeError(w, http.StatusNotFound, "Session not found")
-		return nil, false
-	}
-	if session.Status == "ended" {
-		writeError(w, http.StatusConflict, "Session has ended")
-		return nil, false
-	}
-	return session, true
-}
-
 func (h *CanvasHandler) CreateCanvas(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
@@ -145,9 +124,6 @@ func (h *CanvasHandler) UpdateCanvas(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
-	if _, ok := h.sessionForMutation(w, r); !ok {
-		return
-	}
 	canvas, err := h.Canvases.GetCanvas(r.Context(), chi.URLParam(r, "id"), chi.URLParam(r, "canvasID"))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Database error")
@@ -192,9 +168,6 @@ func (h *CanvasHandler) DeleteCanvas(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
 		writeError(w, http.StatusUnauthorized, "Unauthorized")
-		return
-	}
-	if _, ok := h.sessionForMutation(w, r); !ok {
 		return
 	}
 	canvas, err := h.Canvases.GetCanvas(r.Context(), chi.URLParam(r, "id"), chi.URLParam(r, "canvasID"))
@@ -299,6 +272,8 @@ func (h *CanvasHandler) writeCanvasMutationError(w http.ResponseWriter, err erro
 	case errors.Is(err, store.ErrCanvasFloorUnauthorized):
 		writeError(w, http.StatusForbidden, "Not authorized")
 	case errors.Is(err, store.ErrCanvasCreatorUnauthorized):
+		writeError(w, http.StatusForbidden, "Not authorized")
+	case errors.Is(err, store.ErrCanvasOwnerUnauthorized):
 		writeError(w, http.StatusForbidden, "Not authorized")
 	default:
 		writeError(w, http.StatusInternalServerError, "Database error")

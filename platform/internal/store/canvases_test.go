@@ -844,3 +844,157 @@ func TestCanvasStore_MutationsRejectEndedSession(t *testing.T) {
 	_, err = canvases.DeleteCanvas(ctx, session.ID, canvas.ID, teacherID)
 	assert.ErrorIs(t, err, ErrSessionEnded)
 }
+
+// Plan 094 R2-7: AuthorizeCanvasDocument used to re-implement the session
+// access rule inline because it must run inside the lifecycle-locked
+// transaction. It now calls the same evaluator CanAccessSession calls, and this
+// test is what pins the two together: for every live row of the shared matrix
+// the canvas authorizer's SessionAccess equals CanAccessSession's verdict for
+// the same user and session — including the Plan-090 cross-org row, where a
+// hand-rolled copy that reached the public clause before the class check would
+// hand another organization's class session to an outsider.
+//
+// Ended sessions deliberately diverge: CanAccessSession denies everyone with
+// "ended", while the archive keeps the host's session-level access. That
+// difference is asserted here rather than left implicit.
+func TestAuthorizeCanvasDocument_SessionAccessMatchesCanAccessSession(t *testing.T) {
+	db := canvasTestDB(t)
+	ctx := context.Background()
+	canvases := NewCanvasStore(db)
+	sessions := NewSessionStore(db)
+
+	matrix := buildSessionAccessMatrix(t, db)
+	live, endedRows := 0, 0
+	for _, tc := range matrix {
+		if tc.canvasID == "" {
+			continue // the unknown-session row has no canvas document to authorize
+		}
+		if tc.live {
+			live++
+		} else {
+			endedRows++
+		}
+		t.Run(tc.name, func(t *testing.T) {
+			access, err := canvases.AuthorizeCanvasDocument(ctx, tc.canvasID, tc.sessionID, tc.userID)
+			require.NoError(t, err)
+			require.NotNil(t, access)
+
+			if !tc.live {
+				require.Equal(t, "ended", access.SessionStatus)
+				assert.Equal(t, tc.teacher, access.SessionAccess,
+					"after end, session-level access is the host's archive right and nobody else's")
+				return
+			}
+			require.Equal(t, "live", access.SessionStatus)
+			allowed, reason, err := sessions.CanAccessSession(ctx, tc.sessionID, tc.userID)
+			require.NoError(t, err)
+			require.Equal(t, tc.allowed, allowed, "matrix row disagrees with CanAccessSession (%s)", reason)
+			assert.Equal(t, allowed, access.SessionAccess,
+				"the canvas authorizer must reach the same verdict as the shared session-access rule")
+		})
+	}
+	require.Greater(t, live, 0, "the matrix must contain live rows")
+	require.Greater(t, endedRows, 0, "the matrix must contain ended rows")
+}
+
+// ListVisibleCanvases reads the session state and evaluates access on one
+// snapshot (R2-6). A session-visible canvas is therefore offered to exactly the
+// callers the shared rule allows, and to nobody else.
+func TestListVisibleCanvases_SessionScopedVisibilityFollowsSharedRule(t *testing.T) {
+	db := canvasTestDB(t)
+	ctx := context.Background()
+	canvases := NewCanvasStore(db)
+	sessions := NewSessionStore(db)
+
+	for _, tc := range buildSessionAccessMatrix(t, db) {
+		if !tc.live || tc.canvasID == "" {
+			continue
+		}
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := db.ExecContext(ctx, `UPDATE session_canvases SET visibility = 'session' WHERE id = $1`, tc.canvasID)
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				db.ExecContext(ctx, `UPDATE session_canvases SET visibility = 'private' WHERE id = $1`, tc.canvasID)
+			})
+			allowed, _, err := sessions.CanAccessSession(ctx, tc.sessionID, tc.userID)
+			require.NoError(t, err)
+			require.Equal(t, tc.allowed, allowed)
+
+			visible, err := canvases.ListVisibleCanvases(ctx, tc.sessionID, tc.userID)
+			require.NoError(t, err)
+			found := false
+			for _, canvas := range visible {
+				if canvas.ID == tc.canvasID {
+					found = true
+				}
+			}
+			// The host owns every matrix canvas, so ownership alone would show
+			// it to them; everyone else sees it only through the shared rule.
+			if tc.teacher {
+				assert.True(t, found, "the owner always sees their own canvas")
+				return
+			}
+			assert.Equal(t, allowed, found, "a session-visible canvas follows the shared session-access rule")
+		})
+	}
+}
+
+// Plan 094 R2-3 at the store boundary: the canvas-ownership decision is made
+// before the ended/freezing conflict, so a caller who does not own the canvas
+// is told the same thing in every lifecycle state, and a canvas id that does
+// not exist is "not found" rather than a lifecycle conflict.
+func TestCanvasStore_MutationsDenyNonOwnerBeforeTerminalState(t *testing.T) {
+	const missingCanvas = "00000000-0000-4000-8000-0000000000ff"
+	for _, state := range []string{"live", "frozen", "ended"} {
+		t.Run(state, func(t *testing.T) {
+			db := canvasTestDB(t)
+			ctx := context.Background()
+			canvases := NewCanvasStore(db)
+			sessions := NewSessionStore(db)
+			users := NewUserStore(db)
+			suffix := strings.ReplaceAll(t.Name(), "/", "-")
+			_, teacherID := setupSessionTest(t, db, suffix)
+			owner := createTestUser(t, db, users, suffix+"-owner")
+
+			session, err := sessions.CreateSession(ctx, CreateSessionInput{TeacherID: teacherID, Title: "owner guard"})
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				db.ExecContext(ctx, "DELETE FROM session_participants WHERE session_id = $1", session.ID)
+				db.ExecContext(ctx, "DELETE FROM sessions WHERE id = $1", session.ID)
+			})
+			_, err = sessions.JoinSession(ctx, session.ID, owner.ID)
+			require.NoError(t, err)
+			canvas, err := canvases.CreateCanvas(ctx, CreateCanvasInput{
+				SessionID: session.ID, OwnerID: owner.ID, Title: "owned", Visibility: "private",
+			})
+			require.NoError(t, err)
+
+			switch state {
+			case "frozen":
+				_, err = acquireSessionFreezeLease(ctx, db, session.ID, uuid.NewString())
+				require.NoError(t, err)
+			case "ended":
+				_, err = sessions.EndSession(ctx, session.ID)
+				require.NoError(t, err)
+			}
+
+			// The session host is not this canvas's owner.
+			_, err = canvases.UpdateCanvas(ctx, session.ID, canvas.ID, teacherID, strPtr("stolen"), nil)
+			assert.ErrorIs(t, err, ErrCanvasOwnerUnauthorized)
+			deleted, err := canvases.DeleteCanvas(ctx, session.ID, canvas.ID, teacherID)
+			assert.ErrorIs(t, err, ErrCanvasOwnerUnauthorized)
+			assert.False(t, deleted)
+
+			updated, err := canvases.UpdateCanvas(ctx, session.ID, missingCanvas, owner.ID, strPtr("ghost"), nil)
+			require.NoError(t, err, "a missing canvas is absence, not a lifecycle conflict")
+			assert.Nil(t, updated)
+			deleted, err = canvases.DeleteCanvas(ctx, session.ID, missingCanvas, owner.ID)
+			require.NoError(t, err, "a missing canvas is absence, not a lifecycle conflict")
+			assert.False(t, deleted)
+
+			var title string
+			require.NoError(t, db.QueryRowContext(ctx, `SELECT title FROM session_canvases WHERE id = $1`, canvas.ID).Scan(&title))
+			assert.Equal(t, "owned", title, "no rejected mutation may change the canvas")
+		})
+	}
+}
