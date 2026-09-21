@@ -1,7 +1,7 @@
 # Plan 094 — Excalidraw whiteboards in live sessions
 
 **Branch:** `feat/094-session-whiteboard`
-**Status:** Phases 1a through 12 are complete; Phase 13 (closing) is in progress — findings reconciled and residual gaps closed on 2026-09-21; the full pinned-E2E gate, the Tier-A code-review gate, and the plan-wide report remain.
+**Status:** Phases 1a through 12 and Phase 14 (E2E stack attestation) are implemented; Phase 13 (closing) is in progress. Remaining: code-review consensus (Round 1 on `8ce0a6e` requested changes; nine of ten findings fixed, R2-1 open until the attestation has run against a live stack), the full pinned-E2E gate on the merge commit, and the plan-wide report.
 Earlier status, kept for history: Phases 1a through 6 are complete.
 Spec 013 passed its exact-commit Sol + Fable 5 design gate; the user approved the remediation scope widening on 2026-08-11.
 The Spec 013 remediation plan gate reached consensus at exact substantive commit `fdaf90af2a6c9500396ced27f2ca0df4be780645`.
@@ -1404,6 +1404,39 @@ _Plan-wide report pending later phases._
 - `[FIXED] [spec-review]` Corrected the prior factual error that counted the legacy class-nested redirect as a third `StudentSession` rendering caller; reviewer confirmation is pending.
 - `[GREEN evidence]` `bunx eslint src/components/session/student/student-session.tsx` → 0 problems. `bunx tsc --noEmit` → clean. `bunx --bun vitest run tests/unit/sessions-room-page.test.tsx tests/unit/whiteboard-archive.test.tsx` → 17/17 passed (existing room/archive redirect coverage; no new test added since it was already covering this behavior). `git diff --check` → clean. No service, migration, E2E, or live provider ran.
 - **GREEN:** `bunx --bun vitest run tests/unit/use-yjs-provider.test.ts` passed 15/15 (the new "constructs the real pinned canvas provider with delay at least minDelay" test plus the 14 existing reconnect-policy/bridge tests). `bunx --bun eslint src/lib/yjs/use-yjs-provider.ts` and `bunx --bun tsc --noEmit` both passed clean. `git diff` scope confirmed to only `src/lib/yjs/use-yjs-provider.ts` (plus this plan file). No service, E2E, database, migration, or live provider ran.
+
+### Phase 14 — E2E stack attestation (2026-09-21; Terra backend, Sonnet route, Opus tests, orchestrator gate)
+
+- `[PLAN GATE]` The Phase 14 revision cleared its Tier-A plan gate at `6ca8d47` in Round 3: `[codex]`, `[opus]`, and `[glm]` APPROVE WITH NITS, `[claude-self]` APPROVE, no open blocker.
+  Round 1 found the draft could attest one Hocuspocus while browsers wrote to another, and that it wrongly relaxed the `AGENTS.md` “never kill a process” safeguard; Round 2 found the lock could be stranded on a pooled connection and that one request per origin proves nothing about a second backend.
+  One GLM pass returned text that was not a review and asserted an approval; it was discarded rather than counted, and GLM was re-dispatched.
+- `[CONTRACT FIRST]` `scripts/tests/e2e-stack-vector.json` (`7f34e7f`) pins the flag, nonce pattern, reserved lock class `0x42523245`, key derivation, observe query, fingerprint, paths, and refusal shapes before any implementation, and is asserted verbatim by Go, Bun, Vitest, and the gate selftests.
+  Deviation from the plan text: the vector carries direct low-word boundary cases (`0`, `2^31-1`) for key composition instead of nonces that hash to them, because finding such nonces would require inverting SHA-256.
+- `[MECHANISM PROBED]` On `bridge_test`, a one-key `pg_advisory_xact_lock` taken in an open transaction on one reserved connection stayed on the same backend, was visible to a second session in `pg_locks`, was not visible under another objid or in the `hashtext` key space, and was gone after `ROLLBACK`.
+  The durable proof is `scripts/tests/check-e2e-stack.live.test.mjs`, which runs in the gate.
+- `[IMPLEMENTED]` Gate: `scripts/check-e2e-stack.mjs` plus `attest_e2e_stack` in `ci-local.sh`, ordered before the demo-seed restore, exporting `E2E_BASE_URL` and three instance ids to Playwright (`456f015`).
+  Go: flag-gated `GET /api/health/e2e-stack`, dual `_test` proof on the pool's own connection string, refusals delegated to the router's NotFound, production and exposed-host start-time refusals (`ad8ab1f`).
+  Hocuspocus: an `onRequest` hook on the client-facing port, registered only under the flag, whose refusals fall through to the library's default `200`; the success path rejects with no value, a convention confirmed in the installed library source (`817cce6`).
+  Next.js: `/api/e2e-stack`, outside every proxied prefix, reading the literal `process.env.NEXT_PUBLIC_HOCUSPOCUS_URL` (`eded1fd`).
+  Seed setup: re-attests as its first statement with a fresh nonce and the gate's instance ids, failing closed when the gate did not attest (`c2741eb`).
+- `[DEFECTS FOUND BY THE TEST WORK — all fixed]` The verifier reported an expired hold deadline as *lock lost — the stack was not at fault, re-run* even when a service had simply hung; it now re-reads its own lock and lets the per-service timeouts stand, and the test that had pinned the wrong behaviour was corrected.
+  The Next.js route's database-name parser skipped the scheme and single-segment checks the other two implementations make, and its exported pure functions did not validate the nonce; both now match.
+  The verifier also gained an *unchecked* class, because reporting Hocuspocus as *no realtime origin* when Next.js itself had not attested pointed the operator at the wrong variable.
+- `[TESTS]` Every name in the phase's named-test list exists and passes.
+  Go: eleven unit tests through a test-local `database/sql` driver (no new dependency) so query counts and the non-`_test` live name are deterministic, three live integration tests, the flag and configuration tests, and the lock-class disjointness test.
+  Bun: twelve hook tests, including a child-process import proving the hook is absent without the flag, and eight live verifier regressions.
+  Vitest: fifteen route tests, including a genuine `vi.resetModules()` re-evaluation for the instance id, and the seed-attestation tests.
+  Gate selftests: 29 new, 131 total.
+- `[LIMITATIONS]` `TestE2EStack_LockInAnotherDatabaseIsNotSeen` uses a foreign lock class and a foreign objid rather than a literal second database, because creating one needs DDL; the `d.datname = current_database()` clause is pinned byte-for-byte by the shared-vector test.
+  Bun has no in-process module re-evaluation seam, so the Hocuspocus instance-id test pins the `globalThis` cache with two independent factories instead.
+  The Go parsed-name proof reuses `ValidateE2ECanvasControlFailureDatabaseURL`, which does not reject multi-host or `?host=` forms as the gate's validator does; the live `current_database()` check is the actual proof of destination.
+  `[UNVERIFIED]` Whether `notFound()` from a Next.js route handler is byte-identical to a genuinely absent route, and the whole attestation end to end, can only be confirmed against a running stack; the verifier requires only a non-attesting answer either way.
+- `[PROCESS NOTES]` Two test agents sharing `bridge_test` collided once: Vitest's truncating teardown landed between the two inserts of a Go store test and left an orphan user row that made that test fail deterministically.
+  The next gate run cleared it, because the Vitest tier truncates `users` before the Go tier; no manual delete was needed. The underlying fragility — that test cleans up by id rather than by email — is outside this plan's scope.
+  An accidental `git commit -a` swept eight uncommitted code files into a plan-only commit; it was local and unpushed, was undone with a soft reset that preserved every change, and the plan was re-committed alone.
+  Two forwarding agents reported instruction-like text inside plugin tool output, one line about auto-approving destructive git commands; nothing acted on it.
+- `[GREEN evidence]` `bash scripts/ci-local.sh --fast` on the complete Phase 14 tree: lint ratchet, type-check, all guards, 131 guard selftests, Vitest 966 passed and 11 skipped, Bun 105 pass, every Go package green against the validated `bridge_test`.
+  This is a `--fast` run and is not merge evidence; the attestation itself has never yet run against a live stack.
 
 ### Phase 13 — finding reconciliation, residual gaps, and documentation (2026-09-21; orchestrator)
 
