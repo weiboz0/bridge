@@ -48,6 +48,32 @@ restore_e2e_demo_seed() {
   psql -v ON_ERROR_STOP=1 -d "$GATE_DATABASE_URL" -f "$REPO_ROOT/scripts/seed_problem_demo.sql"
 }
 
+# Proves the separately running stack behind E2E_BASE_URL is connected to the
+# gate's validated _test database before the seed or Playwright mutate
+# anything (Plan 094 Phase 14).  The verifier holds an advisory lock through
+# GATE_DATABASE_URL and all three services must observe it on their own pools.
+# A child cannot export into this shell, so the per-process instance ids come
+# back on one machine-readable line and are re-checked by e2e/seed.setup.ts.
+attest_e2e_stack() {
+  local out line pair
+  E2E_STACK_INSTANCE_GO="" E2E_STACK_INSTANCE_NEXT="" E2E_STACK_INSTANCE_HOCUSPOCUS=""
+  if ! out="$(E2E_BASE_URL="$E2E_BASE_URL" CHECK_E2E_STACK_DATABASE_URL="$GATE_DATABASE_URL" \
+    node "$REPO_ROOT/scripts/check-e2e-stack.mjs")"; then
+    [[ -n "$out" ]] && printf '%s\n' "$out"
+    return 1
+  fi
+  printf '%s\n' "$out"
+  line="$(printf '%s\n' "$out" | grep -m1 '^E2E_STACK_INSTANCES ')" || return 1
+  for pair in ${line#E2E_STACK_INSTANCES }; do
+    case "$pair" in
+      go=*) E2E_STACK_INSTANCE_GO="${pair#go=}" ;;
+      next=*) E2E_STACK_INSTANCE_NEXT="${pair#next=}" ;;
+      hocuspocus=*) E2E_STACK_INSTANCE_HOCUSPOCUS="${pair#hocuspocus=}" ;;
+    esac
+  done
+  [[ -n "$E2E_STACK_INSTANCE_GO" && -n "$E2E_STACK_INSTANCE_NEXT" && -n "$E2E_STACK_INSTANCE_HOCUSPOCUS" ]]
+}
+
 load_persistent_e2e_base_url() {
   [[ -n "${E2E_BASE_URL:-}" ]] && return
   # Do not source .env: it is data, not trusted shell.  Dotenv leaves an
@@ -84,6 +110,20 @@ run_e2e_gate() {
     return
   fi
 
+  # Attestation comes first: a stack on the wrong database must be refused
+  # before the seed restore, and long before Playwright.
+  export E2E_BASE_URL
+  echo ""
+  echo "══ e2e stack attestation"
+  if attest_e2e_stack; then
+    echo "── e2e stack attestation OK"
+  else
+    echo "── e2e stack attestation FAILED" >&2
+    rm -f "$ATTESTATION"
+    FAILED+=("e2e (stack attestation)")
+    return
+  fi
+
   echo ""
   echo "══ e2e demo seed restore"
   if restore_e2e_demo_seed; then
@@ -96,6 +136,10 @@ run_e2e_gate() {
   step "e2e" env \
     DATABASE_URL="$GATE_DATABASE_URL" \
     TEST_DATABASE_URL="$GATE_DATABASE_URL" \
+    E2E_BASE_URL="$E2E_BASE_URL" \
+    E2E_STACK_INSTANCE_GO="$E2E_STACK_INSTANCE_GO" \
+    E2E_STACK_INSTANCE_NEXT="$E2E_STACK_INSTANCE_NEXT" \
+    E2E_STACK_INSTANCE_HOCUSPOCUS="$E2E_STACK_INSTANCE_HOCUSPOCUS" \
     ANTHROPIC_API_KEY= \
     OPENAI_API_KEY= \
     GEMINI_API_KEY= \

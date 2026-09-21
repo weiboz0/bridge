@@ -86,9 +86,15 @@ Always pause and surface to the user, regardless of operating mode.
 
 - **Processes and ports** — never kill a process.
   **Never run E2E without a pinned `E2E_BASE_URL`**: `e2e/playwright.config.ts` declares no `webServer`
-  and defaults to `http://localhost:3003`, which on the primary dev machine is a *different* service,
-  while `e2e/seed.setup.ts` creates classes and enrolls users.
+  and refuses to evaluate without one, because the code default port 3003 is a *different* service on the
+  primary dev machine while `e2e/seed.setup.ts` creates classes and enrolls users.
   Bridge's own stack is on `NEXTJS_PORT` / `PLATFORM_PORT` per `.env`.
+  **A pinned URL is not enough: a full gate also requires an attested stack.**
+  `scripts/check-e2e-stack.mjs` holds an advisory lock in the gate's validated `_test` database, and the Go API,
+  Next.js, and Hocuspocus must each observe it through their own pools before the demo seed or Playwright run;
+  `e2e/seed.setup.ts` re-checks before its first write.
+  The user starts the stack, with `BRIDGE_E2E_STACK=1`, as exactly one process per service with live reload off
+  and no load balancing; an attestation failure is a pause, never something to work around.
 
 - **History and remote** — `git push --force`, `reset --hard` on shared history,
   a direct commit to `main`, `git branch -D` with unmerged commits,
@@ -101,7 +107,7 @@ Always pause and surface to the user, regardless of operating mode.
 
 - **Governance docs** — `AGENTS.md`, the `CLAUDE.md` pointer,
   `docs/{coding-agent,development-workflow,reviewers}.md`, `.githooks/`,
-  `scripts/check-test-database-url.mjs`, `scripts/tests/test-guards.sh`, and `scripts/ci-local.sh`,
+  `scripts/check-test-database-url.mjs`, `scripts/check-e2e-stack.mjs`, `scripts/tests/test-guards.sh`, and `scripts/ci-local.sh`,
   unless declared in the plan's `## File scope` at gate time.
   The hook and the gate script are governance: weakening either removes the only pre-merge check Bridge has.
 

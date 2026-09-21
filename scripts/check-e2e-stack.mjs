@@ -1,0 +1,345 @@
+#!/usr/bin/env node
+// Proves that the running E2E stack is connected to the gate's validated _test
+// database before anything mutates it (Plan 094 Phase 14).
+//
+// ci-local.sh validates ITS database URL, but Playwright drives a separately
+// running stack chosen by E2E_BASE_URL, and e2e/seed.setup.ts creates classes,
+// enrolls users, and ends sessions. This verifier holds a transaction-scoped
+// advisory lock in the validated database and requires the Go API, Next.js,
+// and Hocuspocus — each on the origin E2E traffic really uses — to observe
+// that lock through their own pools. A clone, a standby, or another cluster
+// holding its own bridge_test cannot show it.
+//
+// The protocol is pinned in scripts/tests/e2e-stack-vector.json and asserted
+// by Go, Bun, Vitest, and scripts/tests/test-guards.sh.
+//
+// Import-safe: importing this module does no work and opens no connection.
+// e2e/seed.setup.ts imports verifyE2EStack() for its own fresh-nonce re-check.
+
+import { createHash, randomBytes } from "node:crypto";
+import { pathToFileURL } from "node:url";
+
+export const E2E_STACK_LOCK_CLASS = 0x42523245;
+export const NONCE_PATTERN = /^[0-9a-f]{64}$/;
+export const SERVICES = ["next", "go", "hocuspocus"];
+export const INSTANCE_ENV = {
+  go: "E2E_STACK_INSTANCE_GO",
+  next: "E2E_STACK_INSTANCE_NEXT",
+  hocuspocus: "E2E_STACK_INSTANCE_HOCUSPOCUS",
+};
+
+const PATHS = { go: "/api/health/e2e-stack", next: "/api/e2e-stack", hocuspocus: "/e2e-stack" };
+const FINGERPRINT_PATTERN = /^[0-9a-f]{64}$/;
+// Instance ids are exported through a shell environment block, so they are
+// restricted to characters that need no quoting.
+const INSTANCE_PATTERN = /^[A-Za-z0-9._-]{1,128}$/;
+const DEFAULT_SAMPLES = 5;
+const DEFAULT_FETCH_TIMEOUT_MS = 5_000;
+const DEFAULT_HOLD_DEADLINE_MS = 30_000;
+
+export function deriveObjid(nonce) {
+  if (!NONCE_PATTERN.test(nonce)) throw new Error("nonce must be 64 lowercase hex characters");
+  const digest = createHash("sha256").update(nonce, "ascii").digest("hex");
+  return Number.parseInt(digest.slice(0, 8), 16) & 0x7fffffff;
+}
+
+/** The one-key advisory lock key as a decimal string (it exceeds 2^53). */
+export function composeKey(objid) {
+  if (!Number.isInteger(objid) || objid < 0 || objid > 0x7fffffff) {
+    throw new Error("objid must be a non-negative 31-bit integer");
+  }
+  return ((BigInt(E2E_STACK_LOCK_CLASS) << 32n) | BigInt(objid)).toString();
+}
+
+export function fingerprint(nonce, database) {
+  if (!NONCE_PATTERN.test(nonce)) throw new Error("nonce must be 64 lowercase hex characters");
+  return createHash("sha256")
+    .update(Buffer.concat([Buffer.from(nonce, "ascii"), Buffer.from([0]), Buffer.from(database, "utf8")]))
+    .digest("hex");
+}
+
+/** ws→http, wss→https; anything else (including http itself) is not a realtime URL. */
+export function realtimeOriginFrom(realtimeUrl) {
+  if (typeof realtimeUrl !== "string" || realtimeUrl === "") return null;
+  let parsed;
+  try {
+    parsed = new URL(realtimeUrl);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") return null;
+  if (parsed.username || parsed.password) return null;
+  return `${parsed.protocol === "wss:" ? "https:" : "http:"}//${parsed.host}`;
+}
+
+/** The verifier never opens a connection to anything but a parsed _test name. */
+export function testDatabaseName(databaseUrl) {
+  let parsed;
+  try {
+    parsed = new URL(databaseUrl);
+  } catch {
+    throw new Error("the attestation database URL is not a URL");
+  }
+  if (parsed.protocol !== "postgres:" && parsed.protocol !== "postgresql:") {
+    throw new Error("the attestation database URL is not a PostgreSQL URL");
+  }
+  const name = decodeURIComponent(parsed.pathname.replace(/^\//, ""));
+  if (!name || name.includes("/") || !name.endsWith("_test")) {
+    throw new Error("the attestation database name must end in _test");
+  }
+  return name;
+}
+
+export const REMEDIATION = {
+  "not attested":
+    "start all three services with BRIDGE_E2E_STACK=1 against the gate's _test database, or point E2E_BASE_URL at such a stack; each service's rate-limited refusal log says whether the flag, the database name, or the lock was the reason",
+  mismatch:
+    "the service is connected to a database with a different name than the gate's; restart it against the gate's _test database",
+  "multiple instances":
+    "run exactly one process per service with live reload off (no air, no file-watch restarts), reached without load balancing; a service restarted mid-check also reads as a second instance",
+  "no realtime origin":
+    "set NEXT_PUBLIC_HOCUSPOCUS_URL to a ws:// or wss:// URL and rebuild/restart Next.js — it is baked into the client bundle at build time, and without it browsers fall back to port 4000",
+  "lock lost":
+    "the gate's own lock-holding transaction died mid-check (reaped backend, pooler, or idle_in_transaction_session_timeout); the stack was not at fault — re-run",
+  unchecked:
+    "Hocuspocus could not be checked because Next.js did not attest, and only an attested Next.js reports the realtime origin browsers use; fix Next.js first",
+  unreachable: "the service did not answer; check that it is running and that E2E_BASE_URL is right",
+  redirect: "the origin redirected; point E2E_BASE_URL at the final origin — redirects are never followed",
+  timeout: "the service did not answer in time; check that it is running and not overloaded",
+};
+
+async function defaultConnect(databaseUrl) {
+  // Imported lazily so importing this module never loads a driver or connects.
+  const { default: postgres } = await import("postgres");
+  const sql = postgres(databaseUrl, { max: 1, idle_timeout: 0, connect_timeout: 5, onnotice: () => {} });
+  // One reserved backend carries BEGIN, the lock, both re-reads, and ROLLBACK.
+  // A transaction-scoped lock is released by rollback or by disconnect, so it
+  // cannot be stranded and needs no unlock that could land on another backend.
+  const reserved = await sql.reserve();
+  return {
+    begin: () => reserved`BEGIN`,
+    backendPid: async () => (await reserved`SELECT pg_backend_pid() AS pid`)[0].pid,
+    lock: (key) => reserved`SELECT pg_advisory_xact_lock(${key}::bigint)`,
+    currentDatabase: async () => (await reserved`SELECT current_database() AS name`)[0].name,
+    ownLockGranted: async (objid) =>
+      (
+        await reserved`
+          SELECT EXISTS (
+            SELECT 1 FROM pg_locks l JOIN pg_database d ON d.oid = l.database
+            WHERE d.datname = current_database() AND l.locktype = 'advisory'
+              AND l.classid = ${E2E_STACK_LOCK_CLASS}::int8::oid AND l.objid = ${objid}::int8::oid
+              AND l.objsubid = 1 AND l.granted AND l.pid = pg_backend_pid()
+          ) AS granted`
+      )[0].granted === true,
+    rollback: () => reserved`ROLLBACK`,
+    close: async () => {
+      try {
+        reserved.release();
+      } finally {
+        await sql.end({ timeout: 2 });
+      }
+    },
+  };
+}
+
+function classifyThrown(error) {
+  const name = error?.name ?? "";
+  if (name === "TimeoutError" || name === "AbortError") return "timeout";
+  return "unreachable";
+}
+
+async function sampleOnce({ url, expected, fetchImpl, fetchTimeoutMs, deadlineSignal }) {
+  let response;
+  try {
+    response = await fetchImpl(url, {
+      method: "GET",
+      redirect: "manual",
+      cache: "no-store",
+      headers: { Connection: "close", "Cache-Control": "no-store", Accept: "application/json" },
+      signal: AbortSignal.any([AbortSignal.timeout(fetchTimeoutMs), deadlineSignal]),
+    });
+  } catch (error) {
+    return { failure: classifyThrown(error) };
+  }
+  if (response.status >= 300 && response.status < 400) return { failure: "redirect" };
+  // A refusal is deliberately indistinguishable from the path not existing:
+  // Go and Next.js answer their ordinary 404, Hocuspocus its default 200 text.
+  if (response.status !== 200) return { failure: "not attested" };
+  let body;
+  try {
+    body = await response.json();
+  } catch {
+    return { failure: "not attested" };
+  }
+  if (!body || typeof body !== "object" || !FINGERPRINT_PATTERN.test(body.fingerprint ?? "")) {
+    return { failure: "not attested" };
+  }
+  if (typeof body.instance !== "string" || !INSTANCE_PATTERN.test(body.instance)) {
+    return { failure: "not attested" };
+  }
+  if (body.fingerprint !== expected) return { failure: "mismatch" };
+  return { instance: body.instance, realtimeUrl: body.realtimeUrl };
+}
+
+async function sampleService({ service, origin, nonce, samples, ...rest }) {
+  const url = `${origin}${PATHS[service]}?nonce=${nonce}`;
+  let instance;
+  let realtimeUrl;
+  for (let i = 0; i < samples; i += 1) {
+    const result = await sampleOnce({ url, ...rest });
+    if (result.failure) return { service, failure: result.failure };
+    if (instance !== undefined && result.instance !== instance) return { service, failure: "multiple instances" };
+    if (i > 0 && result.realtimeUrl !== realtimeUrl) return { service, failure: "multiple instances" };
+    instance = result.instance;
+    realtimeUrl = result.realtimeUrl;
+  }
+  return { service, instance, realtimeUrl };
+}
+
+/**
+ * @returns {Promise<{ok: boolean, baseUrl: string, realtimeOrigin: string|null,
+ *   instances: Record<string,string>, failures: {service: string, class: string}[]}>}
+ */
+export async function verifyE2EStack({
+  baseUrl,
+  databaseUrl,
+  expectedInstances,
+  nonce = randomBytes(32).toString("hex"),
+  samples = DEFAULT_SAMPLES,
+  fetchTimeoutMs = DEFAULT_FETCH_TIMEOUT_MS,
+  holdDeadlineMs = DEFAULT_HOLD_DEADLINE_MS,
+  fetchImpl = globalThis.fetch,
+  connect = defaultConnect,
+} = {}) {
+  let base;
+  try {
+    base = new URL(baseUrl);
+  } catch {
+    throw new Error("E2E_BASE_URL is not a URL");
+  }
+  if (base.protocol !== "http:" && base.protocol !== "https:") throw new Error("E2E_BASE_URL must be http or https");
+  const origin = base.origin;
+  const parsedName = testDatabaseName(databaseUrl);
+  const objid = deriveObjid(nonce);
+
+  const result = { ok: false, baseUrl: origin, realtimeOrigin: null, instances: {}, failures: [] };
+  const deadline = AbortSignal.timeout(holdDeadlineMs);
+  const connection = await connect(databaseUrl);
+  try {
+    await connection.begin();
+    const pid = await connection.backendPid();
+    await connection.lock(composeKey(objid));
+    const liveName = await connection.currentDatabase();
+    if (!liveName.endsWith("_test") || liveName !== parsedName) {
+      throw new Error("the attestation database is not the parsed _test database");
+    }
+    if ((await connection.backendPid()) !== pid || !(await connection.ownLockGranted(objid))) {
+      result.failures.push({ service: "gate", class: "lock lost" });
+      return result;
+    }
+
+    const expected = fingerprint(nonce, liveName);
+    const shared = { nonce, samples, expected, fetchImpl, fetchTimeoutMs, deadlineSignal: deadline };
+    const outcomes = [];
+    const next = await sampleService({ service: "next", origin, ...shared });
+    outcomes.push(next);
+    outcomes.push(await sampleService({ service: "go", origin, ...shared }));
+    // Hocuspocus is attested on the origin the BROWSER is handed, which only
+    // the attested Next.js process knows; it is never taken from configuration.
+    if (!next.failure) {
+      const realtimeOrigin = realtimeOriginFrom(next.realtimeUrl);
+      if (!realtimeOrigin) {
+        outcomes.push({ service: "hocuspocus", failure: "no realtime origin" });
+      } else {
+        result.realtimeOrigin = realtimeOrigin;
+        outcomes.push(await sampleService({ service: "hocuspocus", origin: realtimeOrigin, ...shared }));
+      }
+    } else {
+      // Its origin is only known from an attested Next.js, so it could not be
+      // checked at all; blaming NEXT_PUBLIC_HOCUSPOCUS_URL here would mislead.
+      outcomes.push({ service: "hocuspocus", failure: "unchecked" });
+    }
+
+    // If our own transaction died, every service correctly saw no lock; say so
+    // instead of blaming a stack that may be perfectly configured.
+    if (deadline.aborted || (await connection.backendPid()) !== pid || !(await connection.ownLockGranted(objid))) {
+      result.failures = [{ service: "gate", class: "lock lost" }];
+      return result;
+    }
+
+    for (const outcome of outcomes) {
+      if (outcome.failure) result.failures.push({ service: outcome.service, class: outcome.failure });
+      else result.instances[outcome.service] = outcome.instance;
+    }
+    if (expectedInstances) {
+      for (const service of SERVICES) {
+        const want = expectedInstances[service];
+        const got = result.instances[service];
+        if (got !== undefined && want !== got && !result.failures.some((f) => f.service === service)) {
+          result.failures.push({ service, class: "multiple instances" });
+        }
+      }
+    }
+    result.ok = result.failures.length === 0 && SERVICES.every((s) => result.instances[s]);
+    return result;
+  } finally {
+    // Rollback releases the lock; a failed rollback is covered by close(),
+    // because a transaction-scoped lock cannot outlive its connection.
+    try {
+      await connection.rollback();
+    } catch {
+      /* the connection is closed below */
+    }
+    await connection.close();
+  }
+}
+
+export function formatReport(result) {
+  const lines = [`E2E stack target: ${result.baseUrl}`];
+  lines.push(`E2E realtime origin: ${result.realtimeOrigin ?? "(not derived)"}`);
+  if (result.ok) {
+    lines.push("E2E stack attested: next, go, and hocuspocus each observed the gate's lock.");
+    return lines;
+  }
+  for (const failure of result.failures) {
+    lines.push(`E2E stack NOT attested — ${failure.service}: ${failure.class}`);
+    lines.push(`  → ${REMEDIATION[failure.class] ?? "see docs/testing.md"}`);
+  }
+  return lines;
+}
+
+/** One machine-readable line ci-local.sh captures; a child cannot export into its parent. */
+export function instancesLine(instances) {
+  return `E2E_STACK_INSTANCES ${SERVICES.map((s) => `${s}=${instances[s]}`).join(" ")}`;
+}
+
+export function expectedInstancesFromEnv(env) {
+  const values = Object.fromEntries(SERVICES.map((s) => [s, env[INSTANCE_ENV[s]]]));
+  return SERVICES.every((s) => values[s]) ? values : undefined;
+}
+
+async function main() {
+  const baseUrl = process.env.E2E_BASE_URL;
+  const databaseUrl = process.env.CHECK_E2E_STACK_DATABASE_URL;
+  if (!baseUrl || !databaseUrl) {
+    console.error("check-e2e-stack: E2E_BASE_URL and CHECK_E2E_STACK_DATABASE_URL are required");
+    return 2;
+  }
+  let result;
+  try {
+    result = await verifyE2EStack({ baseUrl, databaseUrl });
+  } catch (error) {
+    // Never echo the database URL: postgres errors can embed it.
+    console.error(`check-e2e-stack: ${error?.code ?? error?.name ?? "error"}: verification could not run`);
+    if (error instanceof Error && !/postgres(ql)?:\/\//i.test(error.message)) console.error(`  ${error.message}`);
+    return 1;
+  }
+  for (const line of formatReport(result)) (result.ok ? console.log : console.error)(line);
+  if (!result.ok) return 1;
+  console.log(instancesLine(result.instances));
+  return 0;
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  process.exitCode = await main();
+}

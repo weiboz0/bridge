@@ -102,7 +102,9 @@ DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test bun run test
 cd platform
 DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test make test-integration
 
-# E2E tests (Playwright — requires all services running)
+# E2E tests (Playwright — requires all three services running as ONE process each, live reload off,
+# started with BRIDGE_E2E_STACK=1 against the _test database, plus a pinned E2E_BASE_URL; add
+# ALLOW_E2E_STACK_OVER_TUNNEL=true on an exposed host. See docs/testing.md "The E2E hazard".)
 bun run test:e2e
 
 # Go contract tests (requires both Next.js and Go servers running)

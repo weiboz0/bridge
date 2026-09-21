@@ -272,7 +272,20 @@ DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test bun run test:watch
 
 ## Running E2E Tests (Playwright)
 
-Playwright tests hit a live stack: Next.js (3003) + Go platform (8002) + Hocuspocus (4000). Start all three, then:
+Playwright tests hit a live stack: Next.js + Go platform + Hocuspocus, on whatever ports your `.env` sets
+(the code defaults 3003 / 8002 / 4000 belong to other services on the primary dev machine).
+The seed setup **writes** — it creates classes, enrolls users, and ends sessions — so the stack must prove it is
+on the test database before anything runs:
+
+- start all three against the same `_test` database with `BRIDGE_E2E_STACK=1`
+  (plus `ALLOW_E2E_STACK_OVER_TUNNEL=true` if `BRIDGE_HOST_EXPOSURE=exposed`);
+- set `NEXT_PUBLIC_HOCUSPOCUS_URL` to the real `ws://`/`wss://` URL;
+- run exactly one process per service, with live reload off (`go run ./cmd/api/`, not `air`);
+- pin `E2E_BASE_URL` in `.env` or the shell.
+
+`bash scripts/ci-local.sh` attests the stack before it seeds or runs Playwright, and `e2e/seed.setup.ts`
+re-checks before its first write; `docs/testing.md` “The E2E hazard” explains the protocol and the failure
+classes. Then:
 
 ```bash
 bun run test:e2e              # headless

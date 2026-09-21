@@ -96,6 +96,12 @@ The documented defaults (3003 / 8002) are **not** what the primary dev machine r
 occupy those ports there. Never assume; read `.env`.
 This is why E2E requires a pinned `E2E_BASE_URL` (`docs/testing.md`).
 
+A pinned URL names a stack; it does not prove which database that stack writes to.
+The gate therefore requires every database-holding service to observe, through its own pool, a transaction-scoped advisory lock the gate holds in its validated `_test` database, on the origin E2E traffic actually uses.
+Live shared state was chosen over metadata (a database name or `system_identifier` survives clones and standbys) and over a proof table (Bridge has no test-only migration path, so a table would reach production).
+The lock is the one-key form with reserved class `0x42523245`, structurally disjoint from the two-key session-lifecycle locks and from the one-key `hashtext` lock in `store/sessions.go`.
+The E2E stack is defined as one process per service, without load balancing; the user starts it, and an agent never starts, stops, or signals services.
+
 ## §10 — Session whiteboards are persisted, visibility-floored realtime documents
 
 Each whiteboard has a durable owner and a `canvas:{uuid}` Yjs document.

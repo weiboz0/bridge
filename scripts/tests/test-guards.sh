@@ -224,14 +224,22 @@ done
 E2E_GATE_FUNCTIONS="$FIXTURES/e2e-gate-functions.sh"
 sed -n '/^restore_e2e_demo_seed() {/,/^}$/p' "$REPO_ROOT/scripts/ci-local.sh" > "$E2E_GATE_FUNCTIONS"
 sed -n '/^load_persistent_e2e_base_url() {/,/^}$/p' "$REPO_ROOT/scripts/ci-local.sh" >> "$E2E_GATE_FUNCTIONS"
+sed -n '/^attest_e2e_stack() {/,/^}$/p' "$REPO_ROOT/scripts/ci-local.sh" >> "$E2E_GATE_FUNCTIONS"
 sed -n '/^run_e2e_gate() {/,/^}$/p' "$REPO_ROOT/scripts/ci-local.sh" >> "$E2E_GATE_FUNCTIONS"
 
 run_e2e_gate_case() {
-  local fast="$1" base_url="$2" loaded_base_url="$3" restore_rc="$4" expected="$5" gate_rc
-  local trace="$FIXTURES/e2e-gate-trace"
+  local fast="$1" base_url="$2" loaded_base_url="$3" restore_rc="$4" expected="$5" attest_rc="${6:-0}" gate_rc
+  local trace="$FIXTURES/e2e-gate-trace" attestation="$FIXTURES/e2e-gate-attestation"
   : > "$trace"
+  : > "$attestation"
   # shellcheck disable=SC1090
   source "$E2E_GATE_FUNCTIONS"
+  ATTESTATION="$attestation"
+  attest_e2e_stack() {
+    echo attest >> "$trace"
+    E2E_STACK_INSTANCE_GO="g" E2E_STACK_INSTANCE_NEXT="n" E2E_STACK_INSTANCE_HOCUSPOCUS="h"
+    return "$attest_rc"
+  }
   restore_e2e_demo_seed() { echo restore >> "$trace"; return "$restore_rc"; }
   load_persistent_e2e_base_url() {
     [[ -n "${E2E_BASE_URL:-}" ]] && return
@@ -258,12 +266,12 @@ expect 0 "fast gate never restores fixtures or starts E2E" \
   run_e2e_gate_case 1 "http://pinned.test" "http://dotenv.test" 0 "|"
 expect 0 "unpinned gate refuses after persistent lookup but before fixture restoration" \
   run_e2e_gate_case 0 "" "" 0 "load |e2e (E2E_BASE_URL unset)"
-expect 0 "full pinned gate restores fixtures before E2E" \
-  run_e2e_gate_case 0 "http://pinned.test" "http://dotenv.test" 0 "restore step:e2e |"
+expect 0 "full pinned gate attests the stack, then restores fixtures, then runs E2E" \
+  run_e2e_gate_case 0 "http://pinned.test" "http://dotenv.test" 0 "attest restore step:e2e |"
 expect 0 "persistent E2E URL restores fixtures before E2E when shell is unset" \
-  run_e2e_gate_case 0 "" "http://dotenv.test" 0 "load restore step:e2e |"
+  run_e2e_gate_case 0 "" "http://dotenv.test" 0 "load attest restore step:e2e |"
 expect 0 "failed fixture restoration blocks E2E fail-closed" \
-  run_e2e_gate_case 0 "http://pinned.test" "http://dotenv.test" 1 "restore |e2e demo seed restore"
+  run_e2e_gate_case 0 "http://pinned.test" "http://dotenv.test" 1 "attest restore |e2e demo seed restore"
 
 restore_e2e_seed_uses_validated_url() {
   local trace="$FIXTURES/e2e-seed-command"
@@ -355,6 +363,218 @@ e2e_env_assignments_are_exact() {
 expect 0 "E2E command has one exact empty-or-gate assignment per protected variable" \
   e2e_env_assignments_are_exact
 
+# ── 14b. E2E stack attestation (Plan 094 Phase 14) ──────────────────────────
+expect 0 "failed stack attestation blocks the seed restore and Playwright" \
+  run_e2e_gate_case 0 "http://pinned.test" "http://dotenv.test" 0 "attest |e2e (stack attestation)" 1
+
+failed_attestation_removes_stale_attestation() {
+  run_e2e_gate_case 0 "http://pinned.test" "http://dotenv.test" 0 "attest |e2e (stack attestation)" 1 || return 1
+  [[ ! -e "$FIXTURES/e2e-gate-attestation" ]]
+}
+expect 0 "failed stack attestation removes a stale gate attestation" \
+  failed_attestation_removes_stale_attestation
+
+attest_function_case() {
+  # $1 = fake verifier stdout, $2 = fake verifier rc, $3 = expected rc,
+  # $4 = expected "go|next|hocuspocus" ids after the call.
+  local stdout="$1" fake_rc="$2" want_rc="$3" want_ids="$4" rc=0 trace="$FIXTURES/attest-node-trace"
+  : > "$trace"
+  # shellcheck disable=SC1090
+  source "$E2E_GATE_FUNCTIONS"
+  REPO_ROOT="$REPO_ROOT"
+  E2E_BASE_URL="http://pinned.test:3100"
+  GATE_DATABASE_URL="postgresql://guard:guard@127.0.0.1:5432/bridge_test"
+  node() { printf '%s|%s|%s\n' "$E2E_BASE_URL" "$CHECK_E2E_STACK_DATABASE_URL" "$1" >> "$trace"; printf '%s' "$stdout"; return "$fake_rc"; }
+  attest_e2e_stack >/dev/null 2>&1 || rc=$?
+  [[ "$rc" == "$want_rc" ]] || return 1
+  [[ "$E2E_STACK_INSTANCE_GO|$E2E_STACK_INSTANCE_NEXT|$E2E_STACK_INSTANCE_HOCUSPOCUS" == "$want_ids" ]] || return 1
+  [[ "$(cat "$trace")" == "http://pinned.test:3100|$GATE_DATABASE_URL|$REPO_ROOT/scripts/check-e2e-stack.mjs" ]]
+}
+expect 0 "attestation passes only the pinned URL and the validated gate database to the verifier, and captures all three instance ids" \
+  attest_function_case $'E2E stack target: http://pinned.test:3100\nE2E_STACK_INSTANCES next=n-1 go=g-1 hocuspocus=h-1\n' 0 0 "g-1|n-1|h-1"
+expect 0 "a verifier failure fails the attestation and exports no instance ids" \
+  attest_function_case $'E2E stack NOT attested — go: not attested\n' 1 1 "||"
+expect 0 "a verifier success without the machine-readable instance line fails closed" \
+  attest_function_case $'E2E stack attested\n' 0 1 "||"
+expect 0 "a verifier success missing one instance id fails closed" \
+  attest_function_case $'E2E_STACK_INSTANCES next=n-1 go=g-1\n' 0 1 "g-1|n-1|"
+
+e2e_block="$(sed -n '/step "e2e" env \\/,/bun run test:e2e/p' "$REPO_ROOT/scripts/ci-local.sh")"
+if [[ "$e2e_block" == *'    E2E_BASE_URL="$E2E_BASE_URL" \'* \
+  && "$e2e_block" == *'    E2E_STACK_INSTANCE_GO="$E2E_STACK_INSTANCE_GO" \'* \
+  && "$e2e_block" == *'    E2E_STACK_INSTANCE_NEXT="$E2E_STACK_INSTANCE_NEXT" \'* \
+  && "$e2e_block" == *'    E2E_STACK_INSTANCE_HOCUSPOCUS="$E2E_STACK_INSTANCE_HOCUSPOCUS" \'* ]]; then
+  ok "the pinned URL and all three instance ids reach the Playwright child environment"
+else
+  bad "the pinned URL and all three instance ids reach the Playwright child environment"
+fi
+
+attest_line="$(rg -n '^  if attest_e2e_stack; then$' "$REPO_ROOT/scripts/ci-local.sh" | cut -d: -f1 || true)"
+restore_line="$(rg -n '^  if restore_e2e_demo_seed; then$' "$REPO_ROOT/scripts/ci-local.sh" | cut -d: -f1 || true)"
+if [[ -n "$attest_line" && -n "$restore_line" && "$attest_line" -lt "$restore_line" ]]; then
+  ok "stack attestation is ordered before the demo-seed restore in the gate source"
+else
+  bad "stack attestation is ordered before the demo-seed restore in the gate source"
+fi
+
+# The verifier's own logic, driven through injected database and fetch mocks:
+# no network, no database, no driver import.
+E2E_STACK_SELFTEST="$FIXTURES/e2e-stack-selftest.mjs"
+cat > "$E2E_STACK_SELFTEST" <<'NODE'
+import { readFileSync } from "node:fs";
+const [, , modulePath, vectorPath, scenario] = process.argv;
+const m = await import(modulePath);
+const vector = JSON.parse(readFileSync(vectorPath, "utf8"));
+const nonce = vector.cases[0].nonce;
+const good = m.fingerprint(nonce, "bridge_test");
+const fail = (why) => { console.error(why); process.exit(1); };
+
+function connection(options = {}) {
+  const trace = [];
+  let locked = false;
+  return {
+    trace,
+    connect: async () => ({
+      begin: async () => trace.push("begin"),
+      backendPid: async () => 7,
+      lock: async (key) => { locked = true; trace.push(`lock:${key}`); },
+      currentDatabase: async () => options.database ?? "bridge_test",
+      ownLockGranted: async () => (options.loseLock && trace.includes("sampled") ? false : locked),
+      rollback: async () => trace.push("rollback"),
+      close: async () => trace.push("close"),
+    }),
+  };
+}
+function fetcher(overrides, trace) {
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    calls.push({ url, init });
+    if (!trace.includes("sampled")) trace.push("sampled");
+    const parsed = new URL(url);
+    const service = parsed.port === "4100" ? "hocuspocus" : parsed.pathname.startsWith("/api/health") ? "go" : "next";
+    const nth = calls.filter((c) => c.url === url).length;
+    const reply = overrides[service]?.(nth) ?? {
+      status: 200,
+      body: { fingerprint: good, instance: `${service}-1`, ...(service === "next" ? { realtimeUrl: "ws://localhost:4100" } : {}) },
+    };
+    if (reply.throw) throw reply.throw;
+    return { status: reply.status, json: async () => { if (reply.body === undefined) throw new Error("not json"); return reply.body; } };
+  };
+  return { fetchImpl, calls };
+}
+async function run(overrides = {}, connectionOptions = {}, extra = {}) {
+  const conn = connection(connectionOptions);
+  const { fetchImpl, calls } = fetcher(overrides, conn.trace);
+  const result = await m.verifyE2EStack({
+    baseUrl: "http://localhost:3100/ignored/path", databaseUrl: "postgresql://guard@127.0.0.1/bridge_test",
+    nonce, fetchImpl, connect: conn.connect, ...extra,
+  });
+  return { result, trace: conn.trace, calls };
+}
+const classes = (r) => r.result.failures.map((f) => `${f.service}:${f.class}`).join("|");
+const released = (r) => r.trace.at(-2) === "rollback" && r.trace.at(-1) === "close";
+function expectFailure(r, want) {
+  if (r.result.ok) fail("expected failure, got ok");
+  if (classes(r) !== want) fail(`expected ${want}, got ${classes(r)}`);
+  if (!released(r)) fail("transaction was not rolled back and closed");
+  const report = m.formatReport(r.result).join("\n");
+  for (const f of r.result.failures) {
+    if (!report.includes(`${f.service}: ${f.class}`) || !report.includes(m.REMEDIATION[f.class])) fail(`report lacks class-specific remediation for ${f.class}`);
+  }
+}
+
+const scenarios = {
+  async vector() {
+    for (const c of vector.cases) {
+      const objid = m.deriveObjid(c.nonce);
+      if (objid !== c.objid || m.composeKey(objid) !== c.key || m.fingerprint(c.nonce, c.database) !== c.fingerprint) fail(`vector mismatch for ${c.nonce}`);
+    }
+    for (const b of vector.composeKeyBoundaries) if (m.composeKey(b.objid) !== b.key) fail("key boundary mismatch");
+    if (m.E2E_STACK_LOCK_CLASS !== vector.contract.lockClass) fail("lock class drift");
+    if (m.NONCE_PATTERN.source !== vector.contract.noncePattern) fail("nonce pattern drift");
+    const d = vector.disjointFrom;
+    if ([d.sessionLifecycleLockClass, d.classReplacementLockClass, ...d.hashtextOneKeyHighWords].includes(m.E2E_STACK_LOCK_CLASS)) fail("lock class collides");
+  },
+  async success() {
+    const r = await run();
+    if (!r.result.ok) fail(`expected ok, got ${classes(r)}`);
+    if (r.calls.length !== 15) fail(`expected 15 samples, got ${r.calls.length}`);
+    if (!r.calls.every((c) => c.init.redirect === "manual" && c.init.headers.Connection === "close")) fail("samples must not follow redirects or reuse connections");
+    if (r.trace[0] !== "begin" || !r.trace[1].startsWith("lock:") || r.trace[1] !== `lock:${vector.cases[0].key}`) fail("lock must be taken inside the transaction with the vector key");
+    if (!released(r)) fail("not released on success");
+    if (r.result.realtimeOrigin !== "http://localhost:4100") fail("realtime origin must come from the Next.js report");
+    if (!r.calls.some((c) => c.url.startsWith("http://localhost:4100/e2e-stack?nonce="))) fail("hocuspocus must be fetched on the derived origin");
+    if (r.calls.some((c) => c.url.includes("/ignored/path"))) fail("only the base origin may be used");
+    if (m.instancesLine(r.result.instances) !== "E2E_STACK_INSTANCES next=next-1 go=go-1 hocuspocus=hocuspocus-1") fail("instance line shape");
+    const report = m.formatReport(r.result).join("\n");
+    if (!report.includes("E2E stack target: http://localhost:3100") || !report.includes("E2E realtime origin: http://localhost:4100")) fail("target and derived origin must be printed");
+  },
+  async notAttested404() { expectFailure(await run({ go: () => ({ status: 404 }) }), "go:not attested"); },
+  async hocuspocusDefault200() { expectFailure(await run({ hocuspocus: () => ({ status: 200 }) }), "hocuspocus:not attested"); },
+  async malformedFingerprint() { expectFailure(await run({ go: () => ({ status: 200, body: { fingerprint: "XYZ", instance: "g" } }) }), "go:not attested"); },
+  async unsafeInstance() { expectFailure(await run({ go: () => ({ status: 200, body: { fingerprint: good, instance: "g 1;rm" } }) }), "go:not attested"); },
+  async mismatch() { expectFailure(await run({ go: () => ({ status: 200, body: { fingerprint: "0".repeat(64), instance: "g" } }) }), "go:mismatch"); },
+  async multipleInstances() { expectFailure(await run({ go: (n) => ({ status: 200, body: { fingerprint: good, instance: n > 2 ? "g-2" : "g-1" } }) }), "go:multiple instances"); },
+  async noRealtimeOrigin() { expectFailure(await run({ next: () => ({ status: 200, body: { fingerprint: good, instance: "n" } }) }), "hocuspocus:no realtime origin"); },
+  async nonWebsocketRealtime() { expectFailure(await run({ next: () => ({ status: 200, body: { fingerprint: good, instance: "n", realtimeUrl: "http://localhost:4100" } }) }), "hocuspocus:no realtime origin"); },
+  async nextDownLeavesHocuspocusUnchecked() { expectFailure(await run({ next: () => ({ status: 404 }) }), "next:not attested|hocuspocus:unchecked"); },
+  async redirect() { expectFailure(await run({ go: () => ({ status: 302 }) }), "go:redirect"); },
+  async timeout() { expectFailure(await run({ go: () => ({ throw: Object.assign(new Error("t"), { name: "TimeoutError" }) }) }), "go:timeout"); },
+  async unreachable() { expectFailure(await run({ go: () => ({ throw: new TypeError("fetch failed") }) }), "go:unreachable"); },
+  async lockLost() { expectFailure(await run({ go: () => ({ status: 404 }) }, { loseLock: true }), "gate:lock lost"); },
+  async seedInstanceMismatch() { expectFailure(await run({}, {}, { expectedInstances: { go: "go-1", next: "next-OTHER", hocuspocus: "hocuspocus-1" } }), "next:multiple instances"); },
+  async seedInstanceMatch() { const r = await run({}, {}, { expectedInstances: { go: "go-1", next: "next-1", hocuspocus: "hocuspocus-1" } }); if (!r.result.ok) fail(classes(r)); },
+  async nonTestUrlNeverConnects() {
+    let connected = false;
+    try { await m.verifyE2EStack({ baseUrl: "http://x", databaseUrl: "postgresql://u@h/bridge", connect: async () => { connected = true; throw new Error("x"); } }); } catch { /* expected */ }
+    if (connected) fail("connected to a non-_test database");
+  },
+  async liveNameMustMatchParsedName() {
+    const conn = connection({ database: "other_test" });
+    try { await m.verifyE2EStack({ baseUrl: "http://x", databaseUrl: "postgresql://u@h/bridge_test", nonce, fetchImpl: async () => fail("must not sample"), connect: conn.connect }); fail("accepted a different live database"); } catch { /* expected */ }
+    if (!released({ trace: conn.trace })) fail("not released after a live-name refusal");
+  },
+  async importIsInert() { if (process.exitCode !== undefined) fail("importing the module ran the CLI"); },
+};
+if (!scenarios[scenario]) fail(`unknown scenario ${scenario}`);
+await scenarios[scenario]();
+NODE
+
+# `command` bypasses the node() stubs earlier cases leave defined: expect runs
+# its cases in this shell, not a subshell.
+e2e_stack_selftest() { command node "$E2E_STACK_SELFTEST" "$REPO_ROOT/scripts/check-e2e-stack.mjs" "$REPO_ROOT/scripts/tests/e2e-stack-vector.json" "$1"; }
+expect 0 "verifier key derivation, fingerprint, lock class, and nonce pattern match the shared vector" e2e_stack_selftest vector
+expect 0 "verifier success: lock inside the transaction, five samples per origin, no redirects, target and derived origin printed, rollback then close" e2e_stack_selftest success
+expect 0 "a 404 is reported per service as not attested with its remediation" e2e_stack_selftest notAttested404
+expect 0 "Hocuspocus's default unhandled 200 is reported as not attested" e2e_stack_selftest hocuspocusDefault200
+expect 0 "a malformed fingerprint is not attested" e2e_stack_selftest malformedFingerprint
+expect 0 "an instance id unsafe for a shell environment is not attested" e2e_stack_selftest unsafeInstance
+expect 0 "a fingerprint mismatch blocks" e2e_stack_selftest mismatch
+expect 0 "a changing instance id on one origin blocks as multiple instances" e2e_stack_selftest multipleInstances
+expect 0 "a missing realtime URL blocks as no realtime origin with its own remediation" e2e_stack_selftest noRealtimeOrigin
+expect 0 "a non-websocket realtime URL blocks as no realtime origin" e2e_stack_selftest nonWebsocketRealtime
+expect 0 "Hocuspocus is reported unchecked, not misconfigured, when Next.js did not attest" e2e_stack_selftest nextDownLeavesHocuspocusUnchecked
+expect 0 "a redirect blocks and is never followed" e2e_stack_selftest redirect
+expect 0 "a timeout blocks" e2e_stack_selftest timeout
+expect 0 "an unreachable service blocks" e2e_stack_selftest unreachable
+expect 0 "a dead verifier transaction is reported as lock lost, not as a foreign stack" e2e_stack_selftest lockLost
+expect 0 "seed-setup instance ids differing from the gate's block" e2e_stack_selftest seedInstanceMismatch
+expect 0 "seed-setup instance ids equal to the gate's pass" e2e_stack_selftest seedInstanceMatch
+expect 0 "the verifier never connects to a database whose parsed name is not _test" e2e_stack_selftest nonTestUrlNeverConnects
+expect 0 "the verifier refuses when the live database differs from the parsed name, and still releases" e2e_stack_selftest liveNameMustMatchParsedName
+expect 0 "importing the verifier opens no connection and does not run the CLI" e2e_stack_selftest importIsInert
+
+if rg -Fq 'const { default: postgres } = await import("postgres");' "$REPO_ROOT/scripts/check-e2e-stack.mjs" \
+  && ! rg -q '^import .*"postgres"' "$REPO_ROOT/scripts/check-e2e-stack.mjs" \
+  && rg -Fq 'max: 1,' "$REPO_ROOT/scripts/check-e2e-stack.mjs" \
+  && rg -Fq 'await sql.reserve()' "$REPO_ROOT/scripts/check-e2e-stack.mjs" \
+  && rg -Fq 'pg_advisory_xact_lock(${key}::bigint)' "$REPO_ROOT/scripts/check-e2e-stack.mjs" \
+  && ! rg -q 'pg_advisory_lock\(|pg_advisory_unlock' "$REPO_ROOT/scripts/check-e2e-stack.mjs"; then
+  ok "verifier loads its driver lazily and holds a one-key transaction-scoped lock on one reserved connection"
+else
+  bad "verifier loads its driver lazily and holds a one-key transaction-scoped lock on one reserved connection"
+fi
+
 # ── 15. validator and governance hardening cannot silently regress ──────────
 if rg -q 'max: 1,' "$VALIDATOR" \
   && rg -q 'connect_timeout: 5,' "$VALIDATOR" \
@@ -423,7 +643,8 @@ fi
 governance_block="$(sed -n '/\*\*Governance docs\*\*/,/The hook and the gate script/p' "$REPO_ROOT/AGENTS.md")"
 if [[ "$governance_block" == *'scripts/check-test-database-url.mjs'* \
   && "$governance_block" == *'scripts/tests/test-guards.sh'* \
-  && "$governance_block" == *'scripts/ci-local.sh'* ]]; then
+  && "$governance_block" == *'scripts/ci-local.sh'* \
+  && "$governance_block" == *'scripts/check-e2e-stack.mjs'* ]]; then
   ok "AGENTS governance safeguard names every test gate artifact"
 else
   bad "AGENTS governance safeguard names every test gate artifact"

@@ -79,6 +79,45 @@ a failed restore blocks Playwright.
 This recovery is limited to the gate's `_test` target and restores the documented demo login identities,
 course, and memberships that `e2e/auth.setup.ts` requires before its own fixture class/enrollment setup.
 
+### The stack must prove it is on the test database
+
+Validating the gate's own URL says nothing about the stack Playwright drives: pinning `DATABASE_URL` for
+the Playwright process does not reconfigure a running service, and the seed setup creates classes, enrolls
+users, and ends sessions.
+So before the seed restore, `ci-local.sh` runs `scripts/check-e2e-stack.mjs`, which:
+
+1. opens one reserved connection through the validated `GATE_DATABASE_URL`, begins a transaction, and takes a
+   one-key `pg_advisory_xact_lock` whose key carries a reserved Bridge lock class and a fresh random nonce;
+2. asks each service — five times, on fresh connections — for an attestation, and accepts it only if that
+   service saw the lock **through its own pool** and returned `sha256(nonce ‖ 0 ‖ current_database())`;
+3. rolls back. A transaction-scoped lock is released by rollback or disconnect, so it cannot be stranded.
+
+Each service is asked on the origin E2E traffic really uses: Next.js at `/api/e2e-stack`, the Go API at
+`/api/health/e2e-stack` *through* the Next.js proxy, and Hocuspocus at `/e2e-stack` on the websocket origin
+that the attested Next.js reports from its build-time `NEXT_PUBLIC_HOCUSPOCUS_URL`.
+A cloned database, a standby, or another cluster with its own `bridge_test` cannot show the gate's lock.
+
+To run a full gate, start the stack yourself like this:
+
+- `BRIDGE_E2E_STACK=1` on **all three** services; without it the endpoints do not exist.
+- The same `_test` database the gate uses, on all three.
+- `NEXT_PUBLIC_HOCUSPOCUS_URL` set to the real `ws://` or `wss://` URL when Next.js is built or started.
+  Unset, browsers fall back to port 4000, which on the primary dev machine is a foreign service.
+- Exactly **one process per service**, reached without load balancing, with live reload **off**
+  (no `air`, no file-watch restarts). Every attestation carries a per-process instance id; a changing id
+  fails the gate as *multiple instances*. A single-upstream reverse proxy is fine.
+- On a host declared `BRIDGE_HOST_EXPOSURE=exposed`, also `ALLOW_E2E_STACK_OVER_TUNNEL=true`.
+
+A refusal is deliberately indistinguishable from the endpoint not existing (Go and Next.js answer their
+ordinary 404; Hocuspocus its ordinary default response), so the gate prints a failure class and a
+remediation line per service — *not attested*, *mismatch*, *multiple instances*, *no realtime origin*,
+*unchecked*, *lock lost*, *unreachable*, *redirect*, *timeout* — and each service logs the actual reason
+(flag, database name, or lock), at most once per ten seconds and never with the URL.
+`e2e/seed.setup.ts` repeats the check with a fresh nonce before its first write, and compares instance ids
+with the gate's. Load-balanced stacks and restarts during a run are unsupported, not merely discouraged.
+The protocol is pinned in `scripts/tests/e2e-stack-vector.json` and asserted by Go, Bun, Vitest, and the gate
+selftests.
+
 ## Session whiteboard tiers
 
 The whiteboard contract is split by what each tier can prove.

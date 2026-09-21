@@ -67,6 +67,19 @@ Any authenticated user — not only teachers — may host an orphan (`classId: n
 - **Role-neutral surface:** `/sessions` (browse), `/sessions/{id}` (room — host or participant, resolved by which of `teacher-page`/`student-page` the caller is authorized for), served by `PortalShell portalRole={null}`, which admits any authenticated user (see `authenticated` on `/api/me/portal-access`).
 - **Abuse — deferred, not solved.** Auth, the concurrent cap, and host-only controls are the in-scope mitigations. Reporting, bans, per-window rate limits, and content moderation are explicitly out of scope for Plan 090 and tracked there as follow-ups.
 
+### E2E stack attestation — test-only, not part of the product API
+
+Three surfaces exist **only** when a service is started with `BRIDGE_E2E_STACK=1`; otherwise the paths do not exist.
+They take no session and are tenant-independent.
+
+- **`GET /api/health/e2e-stack?nonce=<64 hex>`** (Go, reached through the `/api/health/:path*` proxy) → `{ "fingerprint", "instance" }`.
+- **`GET /api/e2e-stack?nonce=<64 hex>`** (Next.js) → `{ "fingerprint", "instance", "realtimeUrl"? }`.
+- **`GET /e2e-stack?nonce=<64 hex>`** (Hocuspocus, on the client-facing websocket port) → `{ "fingerprint", "instance" }`.
+
+A service answers only while `scripts/check-e2e-stack.mjs` holds its advisory lock in a database whose parsed and live names both end in `_test`.
+Every other outcome is indistinguishable from the path not existing: the ordinary 404 on Go and Next.js, the ordinary default response on Hocuspocus.
+Successful responses are `Cache-Control: no-store`. See `docs/testing.md` “The E2E hazard”.
+
 ### Whiteboard canvases — Plan 094
 
 Whiteboards are durable Yjs documents scoped as `canvas:{canvasId}`.

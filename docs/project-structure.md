@@ -33,7 +33,8 @@
 > `e2e/playwright.config.ts` therefore refuses to evaluate without an `E2E_BASE_URL` from the shell or
 > `.env`. See `docs/testing.md`.
 
-All three services must be running for E2E tests.
+All three services must be running for E2E tests — one process each, live reload off, started with
+`BRIDGE_E2E_STACK=1` against the gate's `_test` database so `ci-local.sh` can attest them (`docs/testing.md`).
 
 Ports are configurable via `.env` (see the override env vars above). On
 localhost the port vars are self-contained: `GO_API_URL` / `GO_INTERNAL_API_URL`
