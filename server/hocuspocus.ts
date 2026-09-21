@@ -8,6 +8,7 @@ import { messageYjsSyncStep2, messageYjsUpdate } from "y-protocols/sync";
 import * as Y from "yjs";
 import { loadDocumentState, storeDocumentState } from "./documents";
 import { serverDb } from "./db";
+import { createE2EStackAttestation } from "./e2e-stack";
 import {
   loadAttemptYjsState,
   storeAttemptYjsState,
@@ -143,8 +144,11 @@ function validateRealtimeAuthEnv(): void {
   console.log(`[hocuspocus] realtime auth mode: JWT only; exposure=${BRIDGE_HOST_EXPOSURE || "localhost (default)"}`);
 }
 
+const e2eStackAttestation = createE2EStackAttestation();
+
 if (import.meta.main) {
   validateRealtimeAuthEnv();
+  e2eStackAttestation.assertBootAllowed();
 }
 
 interface AuthContext {
@@ -507,6 +511,7 @@ export async function storeCanvasYjsState(canvasId: string, yjsState: string): P
 export const hocuspocusHooks = {
   port: HOCUSPOCUS_PORT,
   debounce: 30000, // Save to DB every 30 seconds (also saves on disconnect)
+  ...(e2eStackAttestation.enabled ? { onRequest: e2eStackAttestation.onRequest } : {}),
 
   async onAuthenticate({ token, documentName, connectionConfig }) {
     // noop documents don't carry collaboration content — short-circuit
