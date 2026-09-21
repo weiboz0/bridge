@@ -75,7 +75,10 @@ Always pause and surface to the user, regardless of operating mode.
   so there is no separate test-only migration path and an inherited `DATABASE_URL` silently targets production.
   `scripts/check-test-database-url.mjs`, `scripts/tests/test-guards.sh`, and
   `scripts/ci-local.sh` require a parsed and live-validated `_test` database name before tests run.
-  Migrating that throwaway container is the one narrow exception.
+  Migrating that throwaway container is one narrow exception.
+  The other is `scripts/ci-local.sh` reapplying the canonical `scripts/seed_problem_demo.sql` immediately before a full pinned E2E run,
+  only through the parsed and live-validated `_test` `GATE_DATABASE_URL`;
+  running any seed by hand, or against any other target, remains a pause.
 
 - **Auth and tenancy** — `platform/internal/middleware` session verification, org-tenancy scoping,
   Hocuspocus signed tokens, admin impersonation.

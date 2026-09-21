@@ -115,6 +115,7 @@ The Hocuspocus connection receives that signed `readOnly` claim and rechecks mut
 
 The neutral `/sessions/{id}/whiteboards` archive is deliberately client-read-only even while the session remains live: it suppresses local binding writes and mutation controls, while the Go mint and Hocuspocus checks remain authoritative.
 The accepted MVP limitations are that an owner cannot tighten an accidental share, a departed live viewer can retain a read token until its short TTL, and the host has no per-canvas takedown control.
+The custom binding writes the whole scene last-writer-wins, which is sound because a canvas has exactly one writer; the same owner drawing in two tabs at once will overwrite rather than merge.
 That retention is bounded by the token, not by the socket: Hocuspocus closes every established canvas connection, writable or read-only, when its JWT expires, so a reader must re-mint and pass current authorization to continue.
 
 Canvas authorization has no independent platform-administrator or impersonator bypass, unlike other realtime document types.

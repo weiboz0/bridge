@@ -14,6 +14,7 @@ import {
   doublePrecision,
   primaryKey,
   customType,
+  check,
   type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
@@ -268,6 +269,13 @@ export const sessions = pgTable(
   (table) => [
     index("sessions_class_idx").on(table.classId),
     index("sessions_class_status_idx").on(table.classId, table.status),
+    // Mirrors drizzle/0028: the freeze lease is a token/expiry pair, never half
+    // set. Declared here so a future `drizzle-kit generate` cannot emit a DROP
+    // for it — Bridge has no down-migrations.
+    check(
+      "sessions_canvas_freeze_lease_pair",
+      sql`(${table.canvasFreezeToken} IS NULL) = (${table.canvasFreezeUntil} IS NULL)`,
+    ),
   ]
 );
 
