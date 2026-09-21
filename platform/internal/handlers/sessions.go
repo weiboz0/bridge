@@ -555,7 +555,10 @@ func (h *SessionHandler) EndSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "Not found")
 		return
 	}
-	if session.TeacherID != claims.UserID {
+	// A platform admin may end any session, as on the sibling teacher-only
+	// routes. Ending reads no canvas content, so this is not the private-canvas
+	// bypass that Spec 013 rules out for canvas authorization.
+	if !claims.IsPlatformAdmin && session.TeacherID != claims.UserID {
 		writeError(w, http.StatusForbidden, "Only the session teacher can end the session")
 		return
 	}
@@ -571,7 +574,6 @@ func (h *SessionHandler) EndSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	confirmed := false
 	durablyEnded := false
 	completeAfterCommit := false
 	var durableEnd store.SessionEndResult
@@ -585,7 +587,6 @@ func (h *SessionHandler) EndSession(w http.ResponseWriter, r *http.Request) {
 				snapshots = append(snapshots, store.CanvasSnapshot{CanvasID: entry.CanvasID, YjsState: base64.StdEncoding.EncodeToString(entry.State)})
 			}
 			if confirmedEnd, completeErr := h.Sessions.CompleteSessionConfirmedResult(r.Context(), sessionID, prep.Token, snapshots); completeErr == nil {
-				confirmed = true
 				durablyEnded = true
 				completeAfterCommit = true
 				durableEnd = confirmedEnd
@@ -656,7 +657,11 @@ func (h *SessionHandler) EndSession(w http.ResponseWriter, r *http.Request) {
 	ended := *session
 	ended.Status = "ended"
 	ended.EndedAt = durableEnd.EndedAt
-	archiveComplete := confirmed
+	archiveComplete := false
+	if durableEnd.WhiteboardServerArchiveComplete != nil {
+		archiveComplete = *durableEnd.WhiteboardServerArchiveComplete
+	}
+	// A missing durable value is legacy/unknown state, so report incomplete.
 	response := map[string]any{"whiteboardServerArchiveComplete": archiveComplete}
 	// Preserve the established top-level session representation for callers
 	// while adding stable Phase-9 metadata.
@@ -671,7 +676,7 @@ func (h *SessionHandler) EndSession(w http.ResponseWriter, r *http.Request) {
 	response["startedAt"] = forEnd.StartedAt
 	response["endedAt"] = forEnd.EndedAt
 	response["visibility"] = forEnd.Visibility
-	if !confirmed {
+	if !archiveComplete {
 		response["warning"] = "whiteboard_server_archive_incomplete"
 	}
 	writeJSON(w, http.StatusOK, response)

@@ -207,7 +207,7 @@ func (h *RealtimeHandler) MintToken(w http.ResponseWriter, r *http.Request) {
 		token, err = auth.SignRealtimeTokenWithReadOnly(h.HocuspocusTokenSecret, claims.UserID, access.Role, body.DocumentName, access.ReadOnly, ttl)
 	}
 	if err != nil {
-		slog.Error("canvas authorization state query failed", "error", err)
+		slog.Error("realtime token signing failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "Token sign failed")
 		return
 	}

@@ -1329,6 +1329,193 @@ func TestSessionHandler_EndSession_NonTeacher403(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, w.Code)
 }
 
+// Plan 094 R2-2: ending a session is an ordinary teacher-only operation that a
+// platform administrator may also perform, exactly as on the sibling
+// teacher-only session routes.  The intermediate branch state denied the
+// administrator with 403 and left the session live.
+func TestEndSession_PlatformAdminCanEnd(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	require.NotEqual(t, fx.teacher.ID, fx.otherUser.ID, "the administrator must not be the session teacher")
+	admin := fx.claims(fx.otherUser, true)
+	require.Empty(t, admin.ImpersonatedBy, "this administrator is not impersonating the teacher")
+	fx.h.CanvasControl = &fakeCanvasControl{}
+
+	w := fx.doRequest(t, http.MethodPost, "/api/sessions/"+fx.sessionID+"/end", nil, admin)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	assert.Equal(t, "ended", body["status"])
+	assert.Equal(t, fx.teacher.ID, body["teacherId"], "ending does not reassign the host")
+	assert.Equal(t, true, body["whiteboardServerArchiveComplete"])
+	_, warned := body["warning"]
+	assert.False(t, warned)
+
+	var status string
+	var archiveComplete sql.NullBool
+	require.NoError(t, fx.db.QueryRowContext(context.Background(),
+		`SELECT status, whiteboard_server_archive_complete FROM sessions WHERE id = $1`, fx.sessionID).Scan(&status, &archiveComplete))
+	assert.Equal(t, "ended", status, "the administrator's end must be durable")
+	require.True(t, archiveComplete.Valid)
+	assert.True(t, archiveComplete.Bool)
+}
+
+// Plan 094 R2-2, the other half: readmitting the administrator to the end route
+// must not readmit them to canvas content.  Spec 013's no-bypass rule is about
+// private canvases, and it still holds before and after the end.
+func TestEndSession_PlatformAdminGainsNoCanvasAccess(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	ctx := context.Background()
+	canvases := store.NewCanvasStore(fx.db)
+	canvas, err := canvases.CreateCanvas(ctx, store.CreateCanvasInput{
+		SessionID: fx.sessionID, OwnerID: fx.teacher.ID, Title: "Private board", Visibility: "private",
+	})
+	require.NoError(t, err)
+	admin := fx.claims(fx.otherUser, true)
+
+	canvasRouter := chi.NewRouter()
+	(&CanvasHandler{Sessions: fx.h.Sessions, Canvases: canvases}).Routes(canvasRouter)
+	settings := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, "/api/sessions/"+fx.sessionID+"/canvas-settings", nil)
+		req = withClaims(req, admin)
+		w := httptest.NewRecorder()
+		canvasRouter.ServeHTTP(w, req)
+		return w
+	}
+	realtimeHandler := &RealtimeHandler{
+		Sessions:              fx.h.Sessions,
+		Classes:               fx.classes,
+		Orgs:                  fx.orgs,
+		Users:                 store.NewUserStore(fx.db),
+		Canvases:              canvases,
+		HocuspocusTokenSecret: rtSecret,
+	}
+
+	require.Equal(t, http.StatusForbidden, settings().Code, "canvas settings stay teacher-only for an administrator")
+	mintCode, _ := callMintToken(t, realtimeHandler, "canvas:"+canvas.ID, admin, fx.sessionID)
+	require.Equal(t, http.StatusForbidden, mintCode, "an administrator may not mint a private canvas token")
+
+	fx.h.CanvasControl = &fakeCanvasControl{}
+	end := fx.doRequest(t, http.MethodPost, "/api/sessions/"+fx.sessionID+"/end", nil, admin)
+	require.Equal(t, http.StatusOK, end.Code, end.Body.String())
+
+	require.Equal(t, http.StatusForbidden, settings().Code, "ending the session is not a canvas-settings bypass")
+	mintCode, _ = callMintToken(t, realtimeHandler, "canvas:"+canvas.ID, admin, fx.sessionID)
+	require.Equal(t, http.StatusForbidden, mintCode, "ending the session is not an archive-read bypass")
+}
+
+// Plan 094 R2-4: the end response is shaped from the DURABLE archive column,
+// never from what this request locally managed to do.
+//
+// Interleaving: request A takes its lease, A's lease expires, B ends the
+// session CONFIRMED (durable true), then A's confirmed transition finds no live
+// row, falls to the degraded path, and reads the durable true back.  A must
+// report true with no warning.  Shaping the response from A's own local
+// `confirmed` flag reported false plus the incomplete-archive warning while the
+// database said the archive was complete.
+func TestEndSession_ResponseReflectsDurableArchiveFlagNotLocalAttempt(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	ctx := context.Background()
+	var competitorEndedAt time.Time
+	fx.h.CanvasControl = &fakeCanvasControl{onFreeze: func(request realtime.FreezeRequest) {
+		// A's lease expires while the control call is outstanding.
+		result, err := fx.db.ExecContext(ctx, `
+			UPDATE sessions SET canvas_freeze_until = clock_timestamp() - interval '1 millisecond'
+			WHERE id = $1 AND canvas_freeze_token = $2::uuid`, request.SessionID, request.FreezeToken)
+		require.NoError(t, err)
+		affected, err := result.RowsAffected()
+		require.NoError(t, err)
+		require.Equal(t, int64(1), affected, "the expiry must hit this request's own lease")
+
+		// B now ends the same session through the real confirmed path.
+		prep, err := fx.h.Sessions.PrepareSessionEnd(ctx, request.SessionID)
+		require.NoError(t, err)
+		require.NotEqual(t, request.FreezeToken, prep.Token)
+		confirmed, err := fx.h.Sessions.CompleteSessionConfirmedResult(ctx, request.SessionID, prep.Token, nil)
+		require.NoError(t, err)
+		require.NotNil(t, confirmed.WhiteboardServerArchiveComplete)
+		require.True(t, *confirmed.WhiteboardServerArchiveComplete)
+		require.NotNil(t, confirmed.EndedAt)
+		competitorEndedAt = *confirmed.EndedAt
+	}}
+
+	w := fx.doRequest(t, http.MethodPost, "/api/sessions/"+fx.sessionID+"/end", nil, fx.claims(fx.teacher, false))
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	var body struct {
+		Status                          string     `json:"status"`
+		EndedAt                         *time.Time `json:"endedAt"`
+		WhiteboardServerArchiveComplete bool       `json:"whiteboardServerArchiveComplete"`
+		Warning                         *string    `json:"warning"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+
+	var status string
+	var durable sql.NullBool
+	var storedEndedAt time.Time
+	require.NoError(t, fx.db.QueryRowContext(ctx,
+		`SELECT status, whiteboard_server_archive_complete, ended_at FROM sessions WHERE id = $1`, fx.sessionID).
+		Scan(&status, &durable, &storedEndedAt))
+	require.Equal(t, "ended", status)
+	require.True(t, durable.Valid)
+	require.True(t, durable.Bool, "the competing confirmed end is the durable outcome")
+
+	assert.Equal(t, durable.Bool, body.WhiteboardServerArchiveComplete, "the response flag must equal the durable column")
+	assert.Nil(t, body.Warning, "a durably complete archive must carry no incomplete-archive warning")
+	assert.Equal(t, "ended", body.Status)
+	require.NotNil(t, body.EndedAt)
+	assert.True(t, body.EndedAt.Equal(storedEndedAt), "the response must carry the durable ended_at")
+	assert.True(t, competitorEndedAt.Equal(storedEndedAt), "the durable row is the competing request's confirmed end")
+	// The row is not rewritten by the losing request.
+	var lease sql.NullString
+	require.NoError(t, fx.db.QueryRowContext(ctx, `SELECT canvas_freeze_token FROM sessions WHERE id = $1`, fx.sessionID).Scan(&lease))
+	assert.False(t, lease.Valid, "no residual lease may survive the already-ended completion")
+}
+
+// The same contract, stated as the general invariant over the three durable
+// outcomes an end can produce: the response flag and the presence of the
+// warning always agree with the row's own column.
+func TestEndSession_ResponseFlagAlwaysAgreesWithDurableColumn(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		control func(fx *sessionFixture) CanvasControl
+		want    bool
+	}{
+		{"confirmed", func(*sessionFixture) CanvasControl { return &fakeCanvasControl{} }, true},
+		{"degraded control failure", func(*sessionFixture) CanvasControl {
+			return &fakeCanvasControl{err: errors.New("control returned HTTP 503")}
+		}, false},
+		{"already ended degraded", func(fx *sessionFixture) CanvasControl {
+			return &fakeCanvasControl{onFreeze: func(request realtime.FreezeRequest) {
+				_, err := fx.db.ExecContext(context.Background(), `
+					UPDATE sessions SET canvas_freeze_until = clock_timestamp() - interval '1 millisecond'
+					WHERE id = $1 AND canvas_freeze_token = $2::uuid`, request.SessionID, request.FreezeToken)
+				require.NoError(t, err)
+				prep, err := fx.h.Sessions.PrepareSessionEnd(context.Background(), request.SessionID)
+				require.NoError(t, err)
+				_, err = fx.h.Sessions.CompleteSessionDegraded(context.Background(), request.SessionID, prep.Token)
+				require.NoError(t, err)
+			}}
+		}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fx := newSessionFixture(t, t.Name())
+			fx.h.CanvasControl = tc.control(fx)
+			w := fx.doRequest(t, http.MethodPost, "/api/sessions/"+fx.sessionID+"/end", nil, fx.claims(fx.teacher, false))
+			require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+			var body map[string]any
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+
+			var durable sql.NullBool
+			require.NoError(t, fx.db.QueryRowContext(context.Background(),
+				`SELECT whiteboard_server_archive_complete FROM sessions WHERE id = $1`, fx.sessionID).Scan(&durable))
+			require.True(t, durable.Valid)
+			assert.Equal(t, tc.want, durable.Bool)
+			assert.Equal(t, durable.Bool, body["whiteboardServerArchiveComplete"], "response flag must mirror the durable column")
+			_, warned := body["warning"]
+			assert.Equal(t, !durable.Bool, warned, "the warning is present exactly when the durable archive is incomplete")
+		})
+	}
+}
+
 // ------------------- POST /api/sessions/{id}/participants -------------------
 
 func TestSessionHandler_AddParticipant_TeacherAddsByUserId(t *testing.T) {
