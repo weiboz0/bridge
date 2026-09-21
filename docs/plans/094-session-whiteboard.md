@@ -1144,6 +1144,41 @@ R2-22. `[FIXED]` `[glm]` The whiteboard panel shows a generic error for a `409` 
 R2-23. `[FIXED]` `[glm]` `assertAttestedE2EStack` lists all three instance variables as missing when only one is. → Response: `[FIXED]` The helper names only the instance variables that are actually missing or empty, still failing closed.
 R2-24. `[WONTFIX]` `[opus]` `AuthorizeCanvasDocument` reads `session_participants` twice per call. → Response: `[WONTFIX]` One indexed read inside the same transaction. Removing it means handing pre-read participant state into the shared access evaluator, which would let a caller supply the very facts the evaluator exists to establish; keeping that function self-contained is the point of R2-7.
 
+### Plan-wide Review 2 — Round 3 (2026-09-21) — exact commit `debfe83` — **checkpoint**
+
+- **Verdicts:** `[opus]` APPROVE WITH NITS (R2-12 through R2-23 RESOLVED, R2-24 `[WONTFIX]` ACCEPTED; “No new correctness, tenancy, or safety defect found in this delta, and no test in it that cannot fail”); `[glm]` APPROVE WITH NITS, but marking two of its own six items NOT RESOLVED; `[codex]` CHANGES REQUESTED with no Must Fix, R2-12 REOPENED, R2-13 RESOLVED; `[claude-self]` APPROVE.
+- `[opus]` executed the `attest_e2e_stack` regex in a scratch shell against a glob, a `;`, a trailing `\r`, a two-line input, and a reordered line — none matched — and confirmed the snapshot test's differential control inverts on every element.
+
+**Checkpoint (third consecutive non-converged code-review round, as `docs/reviewers.md` requires).**
+
+| Round | Commit | Must Fix | Should Fix | Verdicts |
+|---|---|---|---|---|
+| 1 | `8ce0a6e` | 2 | 5 | 3 × CHANGES REQUESTED, GLM timed out |
+| 2 | `905ab94` | 0 | 8 | 2 × APPROVE WITH NITS, 1 × CHANGES REQUESTED |
+| 3 | `debfe83` | 0 | 4 | 2 × APPROVE WITH NITS, 1 × CHANGES REQUESTED |
+
+Blockers are strictly decreasing, no Must Fix has appeared since Round 1, and no reviewer in any round found a tenancy defect or a path to a false attestation; every Round 3 defect fails closed.
+One finding, R2-12, has reopened once. A second reopening of the same finding is a user-decision pause, so its fix below was made deliberately rather than quickly.
+Two of the Round 3 findings are defects the Round 2 fixes themselves introduced (R2-26, R2-27), which is the honest cost of fixing under review pressure and the reason each fix now ships with a regression that would have caught it.
+
+**Should Fix**
+
+R2-12 (REOPENED). `[codex][opus]` `connect` was the one database phase with nothing to clean up on timeout: `connection` was still unset, so `finally` skipped it, and a handshake completing later left a reserved socket open (`scripts/check-e2e-stack.mjs`).
+   → Response: `[FIXED]` The verifier keeps the connect promise and, when the deadline wins, force-closes whatever that promise later produces; `defaultConnect` ends its client if `reserve()` rejects, so a failed handshake leaves no socket. A forced close that itself times out can no longer throw out of `finally` and discard a decided result (`[opus]` nit). Selftests: a connection arriving after the deadline is force-closed and nothing else is done with it; a forced close that never returns neither hangs the gate nor loses the result.
+R2-25. `[FIXED]` `[codex]` The two TypeScript timeout wrappers release their observe slot when the race expires, although the query is not cancelled and may still be running; with a stalled database, requests time out, more are admitted, and running queries accumulate past the cap of two (`server/e2e-stack.ts:175`, `src/app/api/e2e-stack/route.ts:288`). Go is unaffected because its context timeout cancels the query.
+   → Response: `[FIXED]` Accepted — the cap limited waiting requests, not queries. In both TypeScript services the slot is now released by a once-only handler attached to the original query promise, so a request that times out keeps its slot until the abandoned query settles, and a late rejection is handled. `e2e stack holds its observe slot until the query settles, not until the request times out` and `… cannot exceed the cap however many requests time out` (Bun), and the two Vitest counterparts with a counting limiter, prove it; the test author built a pre-fix copy of the factory in a scratchpad and showed both new assertions invert against it. Side effect, noted rather than hidden: the route now starts `observe` one microtask after the call; the slot is still taken synchronously.
+R2-26. `[FIXED]` `[glm]` **Regression introduced by R2-22.** A create that hits the per-session whiteboard limit returns `409` “Session canvas cap reached” with no `code`, and the new panel logic shows “This session has ended …” — a false statement in a live session, where the old generic text was at least true (`platform/internal/handlers/canvases.go`, `whiteboard-panel.tsx`).
+   → Response: `[FIXED]` The handler emits `code: "session_ended"` (from `writeCanvasMutationError` and from `PatchCanvasSettings`) and `code: "canvas_cap_reached"`, with every status and `error` string unchanged; the panel shows session-specific copy only for codes it knows and the generic message otherwise, including a `409` with no code, an unknown code, or a non-JSON body. `TestCanvases_ConflictResponsesCarryStableCodes` pins the three exact bodies and asserts the cap row's session is still `live`; `whiteboard panel never claims the session ended for a 409 it does not recognise` is the regression guard. The three old test rows that encoded the false statement were moved to it with the opposite expectation. `docs/api.md` tells clients to branch on `code`, never on a bare `409`.
+R2-27. `[FIXED]` `[glm]` **Inaccuracy introduced by R2-17.** The reworded remediation said a service without the flag “has no endpoint at all and logs nothing”, which is true of Go and Hocuspocus but false of Next.js, whose route file always exists and logs `flag_disabled`.
+   → Response: `[FIXED]` Both the remediation and `docs/testing.md` now scope the silence to Go and Hocuspocus and say Next.js logs `flag_disabled`.
+R2-28. `[FIXED]` `[glm]` The *database timeout* remediation said “the stack was not examined”, false when the timeout fires on the post-sampling lock re-read. → Response: `[FIXED]` It now says no verdict on the stack was produced.
+
+**Nice to Have**
+
+R2-29. `[FIXED]` `[opus]` Go's `strings.TrimSpace` and JavaScript's `trim()` disagree on a few non-ASCII code points, outside every pinned row. → Response: `[FIXED]` The contract now states that only ASCII whitespace is contracted and why; no environment file should contain the others.
+R2-30. `[FIXED]` `[opus]` `tests/unit/e2e-stack-route.test.ts` holds evaluations on live 2-second timers across two further round-trips, a flake window on a loaded machine. → Response: `[FIXED]` The route test runs under fake timers restored in `finally` and never advances past the timeout, so no assertion depends on wall-clock time.
+R2-31. `[WONTFIX]` `[glm]` `snapshot_count_mismatch` could log expected and actual counts. → Response: `[WONTFIX]` The sentinel carries neither; plumbing counts through the store's error for a log line is out of proportion, and the category already routes the investigation to the bundle-versus-session mismatch.
+
 ## Post-Execution Report
 
 _Plan-wide report pending later phases._
