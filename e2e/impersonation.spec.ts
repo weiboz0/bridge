@@ -16,7 +16,7 @@ test.describe("Admin Impersonation", () => {
 
 test.describe("Sign Out", () => {
   test("sign out redirects to landing page", async ({ page }) => {
-    await loginWithCredentials(page, ACCOUNTS.teacher.email, ACCOUNTS.teacher.password);
+    await loginWithCredentials(page, ACCOUNTS.teacher.email, ACCOUNTS.teacher.password, "/teacher");
     await expect(page).toHaveURL(/\/teacher/);
 
     // Click sign out

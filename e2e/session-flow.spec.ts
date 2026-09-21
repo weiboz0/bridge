@@ -21,11 +21,11 @@ test.describe.serial("Session Flow", () => {
 
     // Login both users
     const teacherPage = await teacherContext.newPage();
-    await loginWithCredentials(teacherPage, ACCOUNTS.teacher.email, ACCOUNTS.teacher.password);
+    await loginWithCredentials(teacherPage, ACCOUNTS.teacher.email, ACCOUNTS.teacher.password, "/teacher");
     await teacherPage.close();
 
     const studentPage = await studentContext.newPage();
-    await loginWithCredentials(studentPage, ACCOUNTS.student.email, ACCOUNTS.student.password);
+    await loginWithCredentials(studentPage, ACCOUNTS.student.email, ACCOUNTS.student.password, "/student");
     await studentPage.close();
   });
 
@@ -60,13 +60,13 @@ test.describe.serial("Session Flow", () => {
     await startButton.click();
 
     // Should redirect to session dashboard
-    await page.waitForURL(/\/teacher\/classes\/.*\/session\/.*\/dashboard/, {
+    await page.waitForURL(/\/teacher\/sessions\/[0-9a-f-]{36}/, {
       timeout: 10000,
     });
 
     // Extract sessionId from the URL
     const url = page.url();
-    const match = url.match(/\/session\/([^/]+)\/dashboard/);
+    const match = url.match(/\/teacher\/sessions\/([0-9a-f-]{36})/);
     expect(match).toBeTruthy();
     sessionId = match![1];
 
@@ -90,7 +90,7 @@ test.describe.serial("Session Flow", () => {
 
     // Click the live session card to join
     await liveCard.click();
-    await page.waitForURL(/\/student\/classes\/.*\/session\//, { timeout: 10000 });
+    await page.waitForURL(/\/student\/sessions\/[0-9a-f-]{36}/, { timeout: 10000 });
 
     await page.close();
   });
@@ -101,7 +101,7 @@ test.describe.serial("Session Flow", () => {
     const page = await teacherContext.newPage();
 
     // Navigate to session dashboard
-    await page.goto(`/teacher/classes/${classId}/session/${sessionId}/dashboard`);
+    await page.goto(`/teacher/sessions/${sessionId}`);
 
     // Look for "End Session" button — must be present after the start-session test ran
     const endButton = page.getByRole("button", { name: "End Session" });
@@ -109,13 +109,7 @@ test.describe.serial("Session Flow", () => {
 
     await endButton.click();
 
-    // Should redirect back to the class detail page (no /session/ segment).
-    await page.waitForURL(
-      (url) =>
-        url.pathname.startsWith("/teacher/classes/") &&
-        !url.pathname.includes("/session/"),
-      { timeout: 10000 }
-    );
+    await page.waitForURL(`/sessions/${sessionId}/whiteboards`, { timeout: 10000 });
 
     await page.close();
   });

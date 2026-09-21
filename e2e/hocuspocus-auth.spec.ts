@@ -5,6 +5,7 @@ import { HocuspocusProvider, HocuspocusProviderWebsocket } from "@hocuspocus/pro
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const WebSocket: typeof globalThis.WebSocket = require("ws");
 import { ACCOUNTS, loginWithCredentials } from "./helpers";
+import { getFixtureState } from "./helpers/fixture-state";
 
 /**
  * Plan 053 phase 3 — Hocuspocus signed-token e2e ratchet.
@@ -77,9 +78,14 @@ async function tryConnect(
     const settle = (o: ConnectOutcome) => {
       if (settled) return;
       settled = true;
+      clearTimeout(timeout);
       try { provider.destroy(); } catch { /* noop */ }
+      try { websocketProvider.destroy(); } catch { /* noop */ }
       resolve(o);
     };
+    // Armed before the providers exist; it can only fire asynchronously, after
+    // both are constructed, so `settle` never sees them uninitialised.
+    const timeout = setTimeout(() => settle({ outcome: "timeout" }), timeoutMs);
     // HocuspocusProvider can take either a `url` (creates the WS
     // internally with `globalThis.WebSocket`) or a pre-built
     // `websocketProvider` where you can plug in a polyfill — needed
@@ -106,21 +112,17 @@ async function tryConnect(
         settle({ outcome: "authFailed", reason }),
       onClose: () => settle({ outcome: "closed" }),
     });
-    setTimeout(() => settle({ outcome: "timeout" }), timeoutMs);
+    // Supplying an external websocket provider makes the Hocuspocus provider
+    // caller-managed, so attach it explicitly before waiting for auth events.
+    provider.attach();
   });
 }
 
 test.describe("Plan 053 phase 3 — realtime token mint (HTTP)", () => {
-  test("authenticated user can mint a JWT for a unit doc-name", async ({ page }) => {
-    await loginWithCredentials(page, ACCOUNTS.teacher.email, ACCOUNTS.teacher.password);
-
-    const unitsRes = await page.request.get("/api/me/units");
-    expect(unitsRes.ok()).toBeTruthy();
-    const unitsBody = (await unitsRes.json()) as { units?: Array<{ id: string }> };
-    const unitId = unitsBody.units?.[0]?.id;
-    expect(unitId).toBeDefined();
-
-    const documentName = `chapter:${unitId}`;
+  test("authenticated user can mint a JWT for the seeded chapter doc-name", async ({ page }) => {
+    await loginWithCredentials(page, ACCOUNTS.teacher.email, ACCOUNTS.teacher.password, "/teacher");
+    const { chapterId } = getFixtureState();
+    const documentName = `chapter:${chapterId}`;
     const res = await page.request.post("/api/realtime/token", {
       data: { documentName },
       headers: { "Content-Type": "application/json" },
@@ -158,7 +160,7 @@ test.describe("Plan 053 phase 3 — realtime token mint (HTTP)", () => {
   });
 
   test("authenticated request for an unauthorized doc-name returns 403/404", async ({ page }) => {
-    await loginWithCredentials(page, ACCOUNTS.student.email, ACCOUNTS.student.password);
+    await loginWithCredentials(page, ACCOUNTS.student.email, ACCOUNTS.student.password, "/student");
     const res = await page.request.post("/api/realtime/token", {
       data: { documentName: "chapter:00000000-0000-0000-0000-000000000000" },
       headers: { "Content-Type": "application/json" },
@@ -180,16 +182,9 @@ test.describe("Plan 053 phase 3 — Hocuspocus WebSocket auth", () => {
   });
 
   test("VALID JWT — connection accepted", async ({ page }) => {
-    await loginWithCredentials(page, ACCOUNTS.teacher.email, ACCOUNTS.teacher.password);
-
-    // Resolve a unit the teacher can edit.
-    const unitsRes = await page.request.get("/api/me/units");
-    expect(unitsRes.ok()).toBeTruthy();
-    const { units } = (await unitsRes.json()) as { units?: Array<{ id: string }> };
-    const unitId = units?.[0]?.id;
-    expect(unitId).toBeDefined();
-
-    const documentName = `chapter:${unitId}`;
+    await loginWithCredentials(page, ACCOUNTS.teacher.email, ACCOUNTS.teacher.password, "/teacher");
+    const { chapterId } = getFixtureState();
+    const documentName = `chapter:${chapterId}`;
 
     // Mint via the real Go API so the JWT round-trips through the
     // production code path. Then drop into Node-side provider.

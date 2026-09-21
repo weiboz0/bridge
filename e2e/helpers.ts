@@ -14,9 +14,10 @@ export const ACCOUNTS = {
 export async function loginWithCredentials(
   page: Page,
   email: string,
-  password: string
+  password: string,
+  callbackPath = "/",
 ) {
-  await page.goto("/login");
+  await page.goto(`/login?callbackUrl=${encodeURIComponent(callbackPath)}`);
   await page.fill('input[id="email"]', email);
   await page.fill('input[id="password"]', password);
   await page.click('button[type="submit"]');
@@ -30,7 +31,13 @@ export async function logout(page: Page) {
   // Find and click sign out button
   const signOutButton = page.locator("text=Sign Out");
   if (await signOutButton.isVisible()) {
+    const cleanup = page.waitForResponse(
+      (response) =>
+        response.url().includes("/api/auth/logout-cleanup") &&
+        response.request().method() === "POST",
+    );
     await signOutButton.click();
+    await cleanup;
     await page.waitForURL("/");
   }
 }

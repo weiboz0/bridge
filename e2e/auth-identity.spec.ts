@@ -33,7 +33,7 @@ test.describe("Auth identity drift (review 002 regression)", () => {
     const page = await context.newPage();
 
     // Teacher
-    await loginWithCredentials(page, ACCOUNTS.teacher.email, ACCOUNTS.teacher.password);
+    await loginWithCredentials(page, ACCOUNTS.teacher.email, ACCOUNTS.teacher.password, "/teacher");
     await expectDiagnosticMatch(page);
     const teacherIdentity = await (await page.request.get("/api/me/identity")).json();
     expect(teacherIdentity.email).toBe(ACCOUNTS.teacher.email);
@@ -47,7 +47,7 @@ test.describe("Auth identity drift (review 002 regression)", () => {
     }
 
     // Student
-    await loginWithCredentials(page, ACCOUNTS.student.email, ACCOUNTS.student.password);
+    await loginWithCredentials(page, ACCOUNTS.student.email, ACCOUNTS.student.password, "/student");
     await expectDiagnosticMatch(page);
     const studentIdentity = await (await page.request.get("/api/me/identity")).json();
     expect(studentIdentity.email).toBe(ACCOUNTS.student.email);
@@ -56,7 +56,7 @@ test.describe("Auth identity drift (review 002 regression)", () => {
     await logout(page);
 
     // Admin
-    await loginWithCredentials(page, ACCOUNTS.admin.email, ACCOUNTS.admin.password);
+    await loginWithCredentials(page, ACCOUNTS.admin.email, ACCOUNTS.admin.password, "/admin");
     await expectDiagnosticMatch(page);
     const sessionRes = await page.request.get("/api/auth/session");
     expect(sessionRes.ok()).toBeTruthy();
@@ -69,6 +69,10 @@ test.describe("Auth identity drift (review 002 regression)", () => {
   });
 
   test("5.1b — valid signed stale token from a different user is ignored on next sign-in", async ({ browser }) => {
+    test.skip(
+      !process.env.E2E_BASE_URL?.startsWith("https://"),
+      "a __Secure- cookie is rejected by browsers on an HTTP test origin",
+    );
     test.skip(
       !process.env.NEXTAUTH_SECRET,
       "NEXTAUTH_SECRET not in env — required to mint a valid signed JWE for the stale cookie. Source .env or export it before running this spec."
@@ -97,15 +101,13 @@ test.describe("Auth identity drift (review 002 regression)", () => {
         domain: "localhost",
         path: "/",
         httpOnly: true,
-        // The cookie is named __Secure- but on HTTP localhost the browser
-        // only accepts non-Secure cookies; mirror that here.
-        secure: false,
+        secure: true,
         sameSite: "Lax",
       },
     ]);
 
     const page = await context.newPage();
-    await loginWithCredentials(page, ACCOUNTS.student.email, ACCOUNTS.student.password);
+    await loginWithCredentials(page, ACCOUNTS.student.email, ACCOUNTS.student.password, "/student");
 
     // Both layers must report the live student, NOT the planted attacker.
     await expectDiagnosticMatch(page);

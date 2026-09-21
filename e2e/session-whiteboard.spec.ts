@@ -61,9 +61,9 @@ test.describe.serial("session whiteboard live stack", () => {
     teacher = await teacherContext.newPage();
     participant = await participantContext.newPage();
     outsider = await outsiderContext.newPage();
-    await loginWithCredentials(teacher, ACCOUNTS.teacher.email, ACCOUNTS.teacher.password);
-    await loginWithCredentials(participant, ACCOUNTS.student.email, ACCOUNTS.student.password);
-    await loginWithCredentials(outsider, ACCOUNTS.student2.email, ACCOUNTS.student2.password);
+    await loginWithCredentials(teacher, ACCOUNTS.teacher.email, ACCOUNTS.teacher.password, "/teacher");
+    await loginWithCredentials(participant, ACCOUNTS.student.email, ACCOUNTS.student.password, "/student");
+    await loginWithCredentials(outsider, ACCOUNTS.student2.email, ACCOUNTS.student2.password, "/student");
   });
 
   test.afterAll(async () => {
