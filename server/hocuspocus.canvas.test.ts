@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, mock, test } from "bun:test";
 import { Connection, Document, Hocuspocus, IncomingMessage, MessageReceiver, OutgoingMessage } from "@hocuspocus/server";
 import { createHmac, randomUUID } from "node:crypto";
 import { Readable } from "node:stream";
@@ -1014,5 +1014,110 @@ describe("Phase 10 installed Hocuspocus hook RED contract", () => {
     await rechckDocumentAccess({ apiBaseUrl: "http://127.0.0.1:8002", secret, documentName, sub: "writer", sessionId: randomUUID() });
     expect(fetches).toHaveLength(2);
     expect(fetches).toEqual(expect.arrayContaining([expect.objectContaining({ redirect: "error" }), expect.objectContaining({ redirect: "error" })]));
+  });
+});
+
+/**
+ * Captures console.error / console.warn so a test can assert that the narrowed
+ * load path stays silent for a blank document and speaks up for a real failure.
+ */
+function captureConsole(): { errors: unknown[][]; warns: unknown[][]; restore: () => void } {
+  const errors: unknown[][] = [];
+  const warns: unknown[][] = [];
+  const originalError = console.error;
+  const originalWarn = console.warn;
+  console.error = (...args: unknown[]) => { errors.push(args); };
+  console.warn = (...args: unknown[]) => { warns.push(args); };
+  return {
+    errors,
+    warns,
+    restore: () => { console.error = originalError; console.warn = originalWarn; },
+  };
+}
+
+// These exercise the narrowed onLoadDocument path (server/hocuspocus.ts:584-612)
+// through module overrides, so none of them needs a database.
+describe("narrowed hocuspocus document-load logging", () => {
+  test("logs nothing when a document has no persisted Yjs state", async () => {
+    const runtime = await import("./hocuspocus") as Record<string, unknown>;
+    const hooks = registeredCanvasHooks(runtime);
+    const documentsModule = { ...await import("./documents") } as Record<string, unknown>;
+    const documentName = `session:${randomUUID()}:user:${randomUUID()}`;
+    let loads = 0;
+    mock.module("./documents", () => ({
+      ...documentsModule,
+      loadDocumentState: async () => { loads += 1; return null; },
+    }));
+
+    const document = new Y.Doc();
+    const capture = captureConsole();
+    try {
+      const loaded = await hooks.onLoadDocument({ document, documentName, context: { userId: "" } });
+      expect(loaded).toBe(document);
+      expect(loaded.getMap("content").size).toBe(0);
+    } finally {
+      capture.restore();
+      mock.module("./documents", () => documentsModule);
+    }
+
+    expect(loads).toBe(1);
+    expect(capture.errors).toEqual([]);
+    expect(capture.warns).toEqual([]);
+  });
+
+  test("logs a thrown document load failure and returns a blank non-canvas document", async () => {
+    const runtime = await import("./hocuspocus") as Record<string, unknown>;
+    const hooks = registeredCanvasHooks(runtime);
+    const documentsModule = { ...await import("./documents") } as Record<string, unknown>;
+    const documentName = `session:${randomUUID()}:user:${randomUUID()}`;
+    mock.module("./documents", () => ({
+      ...documentsModule,
+      loadDocumentState: async () => { throw new Error("document load query failed"); },
+    }));
+
+    const document = new Y.Doc();
+    const capture = captureConsole();
+    try {
+      const loaded = await hooks.onLoadDocument({ document, documentName, context: { userId: "" } });
+      expect(loaded).toBe(document);
+    } finally {
+      capture.restore();
+      mock.module("./documents", () => documentsModule);
+    }
+
+    expect(capture.errors).toHaveLength(1);
+    expect(String(capture.errors[0][0])).toContain(`Failed to load state for ${documentName}`);
+    expect(capture.errors[0][1]).toBeInstanceOf(Error);
+    expect((capture.errors[0][1] as Error).message).toBe("document load query failed");
+    expect(capture.warns).toEqual([]);
+  });
+
+  test("logs and rethrows a canvas load failure instead of serving blank canvas state", async () => {
+    const runtime = await import("./hocuspocus") as Record<string, unknown>;
+    const hooks = registeredCanvasHooks(runtime);
+    const dbModule = { ...await import("./db") } as Record<string, unknown>;
+    mock.module("./db", () => ({
+      ...dbModule,
+      serverDb: { execute: async () => { throw new Error("canvas persistence unavailable"); } },
+    }));
+    globalThis.fetch = async () => new Response(JSON.stringify({ allowed: true, readOnly: false }));
+
+    const documentName = `canvas:${randomUUID()}`;
+    const capture = captureConsole();
+    try {
+      await expect(hooks.onLoadDocument({
+        document: new Y.Doc(),
+        documentName,
+        context: { userId: "owner", sessionId: randomUUID() },
+      })).rejects.toThrow("canvas persistence unavailable");
+    } finally {
+      capture.restore();
+      mock.module("./db", () => dbModule);
+    }
+
+    expect(capture.errors).toHaveLength(1);
+    expect(String(capture.errors[0][0])).toContain(`Failed to load state for ${documentName}`);
+    expect((capture.errors[0][1] as Error).message).toBe("canvas persistence unavailable");
+    expect(capture.warns).toEqual([]);
   });
 });

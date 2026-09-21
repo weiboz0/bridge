@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 const SESSION_ID = "11111111-1111-4111-8111-111111111111";
 const excalidrawState = vi.hoisted(() => ({ props: null as Record<string, unknown> | null }));
@@ -439,5 +439,89 @@ describe("WhiteboardPanel — plan 094 phase 9 settings cutover", () => {
     const fileDrop = fireEvent.drop(board, { dataTransfer: { types: ["Files"] } });
     expect(fileDrop).toBe(false);
     expect(onChange).not.toHaveBeenCalled();
+  });
+});
+
+// Spec 013:64 — "Image insertion, image paste, and file drop are disabled";
+// spec 013:~809 — those rejections are "rejected with a visible explanation".
+const IMAGE_REJECTED_MESSAGE = "Images and files can't be added to a whiteboard.";
+
+type ExcalidrawStubProps = {
+  UIOptions?: { tools?: { image?: boolean } };
+  onPaste: (data: { files?: Record<string, unknown> }) => boolean;
+};
+
+function boardProps(): ExcalidrawStubProps {
+  expect(excalidrawState.props).not.toBeNull();
+  return excalidrawState.props as unknown as ExcalidrawStubProps;
+}
+
+describe("ExcalidrawBoard — image insertion is disabled with a visible explanation", () => {
+  beforeEach(() => {
+    excalidrawState.props = null;
+  });
+
+  it("passes UIOptions disabling the Excalidraw image tool so the toolbar file picker is unreachable", () => {
+    render(<ExcalidrawBoard scene={null} readOnly={false} onChange={vi.fn()} />);
+
+    expect(boardProps().UIOptions?.tools?.image).toBe(false);
+  });
+
+  it("renders the rejection notice inside the board wrapper when a paste carrying files is rejected", () => {
+    const { getByTestId } = render(<ExcalidrawBoard scene={null} readOnly={false} onChange={vi.fn()} />);
+    const onPaste = boardProps().onPaste;
+
+    let accepted: boolean | undefined;
+    act(() => {
+      accepted = onPaste({ files: { image: { id: "image" } } });
+    });
+    expect(accepted).toBe(false);
+
+    const notice = within(getByTestId("excalidraw-board")).getByTestId("whiteboard-image-rejected");
+    expect(notice).toHaveAttribute("role", "status");
+    expect(notice.textContent).toBe(IMAGE_REJECTED_MESSAGE);
+  });
+
+  it.each([
+    ["drop", (board: HTMLElement) => fireEvent.drop(board, { dataTransfer: { types: ["Files"] } })],
+    ["dragOver", (board: HTMLElement) => fireEvent.dragOver(board, { dataTransfer: { types: ["Files"] } })],
+  ] as const)("renders the rejection notice when a native file %s is rejected on the wrapper", (_label, dispatch) => {
+    const onChange = vi.fn();
+    const { getByTestId } = render(<ExcalidrawBoard scene={null} readOnly={false} onChange={onChange} />);
+    const board = getByTestId("excalidraw-board");
+
+    // Rejection behaviour is unchanged: preventDefault makes fireEvent return false.
+    expect(dispatch(board)).toBe(false);
+
+    const notice = within(board).getByTestId("whiteboard-image-rejected");
+    expect(notice).toHaveAttribute("role", "status");
+    expect(notice.textContent).toBe(IMAGE_REJECTED_MESSAGE);
+    expect(within(board).getByRole("status").textContent).toBe(IMAGE_REJECTED_MESSAGE);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("shows no notice on first render, for a fileless paste, or for a drag that carries no files", () => {
+    const { getByTestId, queryByTestId } = render(<ExcalidrawBoard scene={null} readOnly={false} onChange={vi.fn()} />);
+    expect(queryByTestId("whiteboard-image-rejected")).not.toBeInTheDocument();
+
+    const onPaste = boardProps().onPaste;
+    let accepted: boolean | undefined;
+    act(() => {
+      accepted = onPaste({ files: {} });
+    });
+    expect(accepted).toBe(true);
+    expect(queryByTestId("whiteboard-image-rejected")).not.toBeInTheDocument();
+
+    const board = getByTestId("excalidraw-board");
+    expect(fireEvent.dragOver(board, { dataTransfer: { types: ["text/plain"] } })).toBe(true);
+    expect(fireEvent.drop(board, { dataTransfer: { types: ["text/plain"] } })).toBe(true);
+    expect(queryByTestId("whiteboard-image-rejected")).not.toBeInTheDocument();
+  });
+
+  it("shows no notice on a read-only board when nothing was rejected", () => {
+    const { queryByTestId } = render(<ExcalidrawBoard scene={null} readOnly onChange={vi.fn()} />);
+
+    expect(queryByTestId("whiteboard-image-rejected")).not.toBeInTheDocument();
+    expect(queryByTestId("excalidraw-board")).toBeInTheDocument();
   });
 });
