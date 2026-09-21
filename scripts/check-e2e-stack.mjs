@@ -36,6 +36,10 @@ const INSTANCE_PATTERN = /^[A-Za-z0-9._-]{1,128}$/;
 const DEFAULT_SAMPLES = 5;
 const DEFAULT_FETCH_TIMEOUT_MS = 5_000;
 const DEFAULT_HOLD_DEADLINE_MS = 30_000;
+// Every database phase — BEGIN, the lock, each re-read, ROLLBACK, close — is
+// bounded too; otherwise a server that black-holes after the lock is taken
+// would hang the gate while the lock stayed held.
+const DEFAULT_DATABASE_PHASE_TIMEOUT_MS = 5_000;
 
 export function deriveObjid(nonce) {
   if (!NONCE_PATTERN.test(nonce)) throw new Error("nonce must be 64 lowercase hex characters");
@@ -92,7 +96,7 @@ export function testDatabaseName(databaseUrl) {
 
 export const REMEDIATION = {
   "not attested":
-    "start all three services with BRIDGE_E2E_STACK=1 against the gate's _test database, or point E2E_BASE_URL at such a stack; each service's rate-limited refusal log says whether the flag, the database name, or the lock was the reason",
+    "start all three services with BRIDGE_E2E_STACK=1 against the gate's _test database, or point E2E_BASE_URL at such a stack. A service started WITHOUT the flag has no endpoint at all and logs nothing, so a silent service most likely lacks the flag; one started with it logs the refusal category (database name or lock), at most once per ten seconds",
   mismatch:
     "the service is connected to a database with a different name than the gate's; restart it against the gate's _test database",
   "multiple instances":
@@ -101,9 +105,12 @@ export const REMEDIATION = {
     "set NEXT_PUBLIC_HOCUSPOCUS_URL to a ws:// or wss:// URL and rebuild/restart Next.js — it is baked into the client bundle at build time, and without it browsers fall back to port 4000",
   "lock lost":
     "the gate's own lock-holding transaction died mid-check (reaped backend, pooler, or idle_in_transaction_session_timeout); the stack was not at fault — re-run",
+  "database timeout":
+    "the gate's own connection to its _test database stopped answering; the stack was not examined — check PostgreSQL and re-run",
   unchecked:
     "Hocuspocus could not be checked because Next.js did not attest, and only an attested Next.js reports the realtime origin browsers use; fix Next.js first",
-  unreachable: "the service did not answer; check that it is running and that E2E_BASE_URL is right",
+  unreachable:
+    "the service did not answer, or a proxy in front of it answered 5xx; check that it is running and that E2E_BASE_URL is right",
   redirect: "the origin redirected; point E2E_BASE_URL at the final origin — redirects are never followed",
   timeout: "the service did not answer in time; check that it is running and not overloaded",
 };
@@ -132,14 +139,39 @@ async function defaultConnect(databaseUrl) {
           ) AS granted`
       )[0].granted === true,
     rollback: () => reserved`ROLLBACK`,
-    close: async () => {
+    // `force` destroys the socket without waiting for in-flight queries. A
+    // transaction-scoped lock cannot outlive its connection, so this releases
+    // the lock even when ROLLBACK itself never returned.
+    close: async ({ force = false } = {}) => {
       try {
-        reserved.release();
+        if (!force) reserved.release();
       } finally {
-        await sql.end({ timeout: 2 });
+        await sql.end({ timeout: force ? 0 : 2 });
       }
     },
   };
+}
+
+class DatabasePhaseTimeout extends Error {
+  constructor(phase) {
+    super(`database phase timed out: ${phase}`);
+    this.name = "DatabasePhaseTimeout";
+    this.phase = phase;
+  }
+}
+
+/**
+ * Races one database phase against a timer. The timer is deliberately NOT
+ * unref'd: if the phase never settles and nothing else holds the event loop
+ * open, an unref'd timer would let Node exit before the deadline could fire.
+ * It is always cleared in `finally`, so it never outlives the phase.
+ */
+function bounded(phase, ms, work) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new DatabasePhaseTimeout(phase)), ms);
+  });
+  return Promise.race([Promise.resolve().then(work), timeout]).finally(() => clearTimeout(timer));
 }
 
 function classifyThrown(error) {
@@ -164,6 +196,9 @@ async function sampleOnce({ url, expected, fetchImpl, fetchTimeoutMs, deadlineSi
   if (response.status >= 300 && response.status < 400) return { failure: "redirect" };
   // A refusal is deliberately indistinguishable from the path not existing:
   // Go and Next.js answer their ordinary 404, Hocuspocus its default 200 text.
+  // A 5xx is an intermediary saying the upstream is down (the Next.js proxy
+  // when Go is not running); flag/database/lock advice would mislead there.
+  if (response.status >= 500) return { failure: "unreachable" };
   if (response.status !== 200) return { failure: "not attested" };
   let body;
   try {
@@ -208,6 +243,7 @@ export async function verifyE2EStack({
   samples = DEFAULT_SAMPLES,
   fetchTimeoutMs = DEFAULT_FETCH_TIMEOUT_MS,
   holdDeadlineMs = DEFAULT_HOLD_DEADLINE_MS,
+  databasePhaseTimeoutMs = DEFAULT_DATABASE_PHASE_TIMEOUT_MS,
   fetchImpl = globalThis.fetch,
   connect = defaultConnect,
 } = {}) {
@@ -224,16 +260,22 @@ export async function verifyE2EStack({
 
   const result = { ok: false, baseUrl: origin, realtimeOrigin: null, instances: {}, failures: [] };
   const deadline = AbortSignal.timeout(holdDeadlineMs);
-  const connection = await connect(databaseUrl);
+  const db = (phase, work) => bounded(phase, databasePhaseTimeoutMs, work);
+  let connection;
+  let timedOut = false;
   try {
-    await connection.begin();
-    const pid = await connection.backendPid();
-    await connection.lock(composeKey(objid));
-    const liveName = await connection.currentDatabase();
+    connection = await db("connect", () => connect(databaseUrl));
+    await db("begin", () => connection.begin());
+    const pid = await db("backend pid", () => connection.backendPid());
+    await db("lock", () => connection.lock(composeKey(objid)));
+    const liveName = await db("current database", () => connection.currentDatabase());
     if (!liveName.endsWith("_test") || liveName !== parsedName) {
       throw new Error("the attestation database is not the parsed _test database");
     }
-    if ((await connection.backendPid()) !== pid || !(await connection.ownLockGranted(objid))) {
+    if (
+      (await db("backend pid", () => connection.backendPid())) !== pid ||
+      !(await db("own lock", () => connection.ownLockGranted(objid)))
+    ) {
       result.failures.push({ service: "gate", class: "lock lost" });
       return result;
     }
@@ -265,7 +307,10 @@ export async function verifyE2EStack({
     // hold deadline is NOT that: the lock is re-read, and if it is still held
     // the per-service timeouts stand, because a hung service is the stack's
     // fault and "re-run, the stack was fine" would be exactly wrong.
-    if ((await connection.backendPid()) !== pid || !(await connection.ownLockGranted(objid))) {
+    if (
+      (await db("backend pid", () => connection.backendPid())) !== pid ||
+      !(await db("own lock", () => connection.ownLockGranted(objid)))
+    ) {
       result.failures = [{ service: "gate", class: "lock lost" }];
       return result;
     }
@@ -285,15 +330,34 @@ export async function verifyE2EStack({
     }
     result.ok = result.failures.length === 0 && SERVICES.every((s) => result.instances[s]);
     return result;
+  } catch (error) {
+    if (!(error instanceof DatabasePhaseTimeout)) throw error;
+    // Fail closed with a class of its own: nothing about the stack was learned.
+    timedOut = true;
+    result.ok = false;
+    result.instances = {};
+    result.failures = [{ service: "gate", class: "database timeout" }];
+    return result;
   } finally {
-    // Rollback releases the lock; a failed rollback is covered by close(),
-    // because a transaction-scoped lock cannot outlive its connection.
-    try {
-      await connection.rollback();
-    } catch {
-      /* the connection is closed below */
+    // Rollback releases the lock. If rollback fails or never returns, the
+    // connection is destroyed instead: a transaction-scoped lock cannot outlive
+    // its connection, so the lock is released either way and the gate never
+    // hangs on a server that stopped answering.
+    if (connection) {
+      let force = timedOut;
+      if (!force) {
+        try {
+          await db("rollback", () => connection.rollback());
+        } catch {
+          force = true;
+        }
+      }
+      try {
+        await db("close", () => connection.close({ force }));
+      } catch {
+        if (!force) await db("close", () => connection.close({ force: true })).catch(() => {});
+      }
     }
-    await connection.close();
   }
 }
 

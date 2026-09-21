@@ -396,8 +396,12 @@ expect 0 "a verifier failure fails the attestation and exports no instance ids" 
   attest_function_case $'E2E stack NOT attested — go: not attested\n' 1 1 "||"
 expect 0 "a verifier success without the machine-readable instance line fails closed" \
   attest_function_case $'E2E stack attested\n' 0 1 "||"
-expect 0 "a verifier success missing one instance id fails closed" \
-  attest_function_case $'E2E_STACK_INSTANCES next=n-1 go=g-1\n' 0 1 "g-1|n-1|"
+expect 0 "a verifier success missing one instance id fails closed and captures none of them" \
+  attest_function_case $'E2E_STACK_INSTANCES next=n-1 go=g-1\n' 0 1 "||"
+expect 0 "an instance id with a glob character is rejected by the gate itself, not only by the verifier" \
+  attest_function_case $'E2E_STACK_INSTANCES next=n-1 go=* hocuspocus=h-1\n' 0 1 "||"
+expect 0 "an instance id with a shell metacharacter is rejected by the gate itself" \
+  attest_function_case $'E2E_STACK_INSTANCES next=n-1 go=g;id hocuspocus=h-1\n' 0 1 "||"
 
 e2e_block="$(sed -n '/step "e2e" env \\/,/bun run test:e2e/p' "$REPO_ROOT/scripts/ci-local.sh")"
 if [[ "$e2e_block" == *'    E2E_BASE_URL="$E2E_BASE_URL" \'* \
@@ -437,11 +441,17 @@ function connection(options = {}) {
     connect: async () => ({
       begin: async () => trace.push("begin"),
       backendPid: async () => 7,
-      lock: async (key) => { locked = true; trace.push(`lock:${key}`); },
+      lock: async (key) => {
+        if (options.hangLock) return new Promise(() => {});
+        locked = true; trace.push(`lock:${key}`);
+      },
       currentDatabase: async () => options.database ?? "bridge_test",
       ownLockGranted: async () => (options.loseLock && trace.includes("sampled") ? false : locked),
-      rollback: async () => trace.push("rollback"),
-      close: async () => trace.push("close"),
+      rollback: async () => {
+        if (options.hangRollback) { trace.push("rollback-hung"); return new Promise(() => {}); }
+        trace.push("rollback");
+      },
+      close: async (args) => trace.push(args?.force ? "close:force" : "close"),
     }),
   };
 }
@@ -518,6 +528,7 @@ const scenarios = {
   async noRealtimeOrigin() { expectFailure(await run({ next: () => ({ status: 200, body: { fingerprint: good, instance: "n" } }) }), "hocuspocus:no realtime origin"); },
   async nonWebsocketRealtime() { expectFailure(await run({ next: () => ({ status: 200, body: { fingerprint: good, instance: "n", realtimeUrl: "http://localhost:4100" } }) }), "hocuspocus:no realtime origin"); },
   async nextDownLeavesHocuspocusUnchecked() { expectFailure(await run({ next: () => ({ status: 404 }) }), "next:not attested|hocuspocus:unchecked"); },
+  async proxy5xxIsUnreachableNotFlagAdvice() { expectFailure(await run({ go: () => ({ status: 502 }) }), "go:unreachable"); },
   async redirect() { expectFailure(await run({ go: () => ({ status: 302 }) }), "go:redirect"); },
   async timeout() { expectFailure(await run({ go: () => ({ throw: Object.assign(new Error("t"), { name: "TimeoutError" }) }) }), "go:timeout"); },
   async unreachable() { expectFailure(await run({ go: () => ({ throw: new TypeError("fetch failed") }) }), "go:unreachable"); },
@@ -533,6 +544,26 @@ const scenarios = {
     const conn = connection({ database: "other_test" });
     try { await m.verifyE2EStack({ baseUrl: "http://x", databaseUrl: "postgresql://u@h/bridge_test", nonce, fetchImpl: async () => fail("must not sample"), connect: conn.connect }); fail("accepted a different live database"); } catch { /* expected */ }
     if (!released({ trace: conn.trace })) fail("not released after a live-name refusal");
+  },
+  async hungLockIsADatabaseTimeoutAndForceCloses() {
+    const started = Date.now();
+    const r = await run({}, { hangLock: true }, { databasePhaseTimeoutMs: 40 });
+    if (r.result.ok) fail("a hung lock acquisition must fail closed");
+    if (classes(r) !== "gate:database timeout") fail(`expected gate:database timeout, got ${classes(r)}`);
+    if (r.calls.length !== 0) fail("must not sample a stack when the gate's own database is unresponsive");
+    if (r.trace.includes("rollback")) fail("must not wait on ROLLBACK after a database timeout");
+    if (r.trace.at(-1) !== "close:force") fail(`connection must be force-closed, trace=${r.trace}`);
+    if (Date.now() - started > 2_000) fail("the gate hung on an unresponsive database");
+    if (!m.formatReport(r.result).join("\n").includes(m.REMEDIATION["database timeout"])) fail("missing remediation");
+  },
+  async hungRollbackForceClosesInsteadOfHanging() {
+    const started = Date.now();
+    const r = await run({}, { hangRollback: true }, { databasePhaseTimeoutMs: 40 });
+    // The stack attested; only the release path stalled. The lock is still
+    // released, because destroying the connection ends its transaction.
+    if (!r.result.ok) fail(`attestation itself succeeded, got ${classes(r)}`);
+    if (r.trace.at(-2) !== "rollback-hung" || r.trace.at(-1) !== "close:force") fail(`expected forced close after a hung rollback, trace=${r.trace}`);
+    if (Date.now() - started > 2_000) fail("the gate hung on a rollback that never returned");
   },
   async importIsInert() { if (process.exitCode !== undefined) fail("importing the module ran the CLI"); },
 };
@@ -554,6 +585,7 @@ expect 0 "a changing instance id on one origin blocks as multiple instances" e2e
 expect 0 "a missing realtime URL blocks as no realtime origin with its own remediation" e2e_stack_selftest noRealtimeOrigin
 expect 0 "a non-websocket realtime URL blocks as no realtime origin" e2e_stack_selftest nonWebsocketRealtime
 expect 0 "Hocuspocus is reported unchecked, not misconfigured, when Next.js did not attest" e2e_stack_selftest nextDownLeavesHocuspocusUnchecked
+expect 0 "a 5xx from an intermediary is reported as unreachable, not as a missing flag" e2e_stack_selftest proxy5xxIsUnreachableNotFlagAdvice
 expect 0 "a redirect blocks and is never followed" e2e_stack_selftest redirect
 expect 0 "a timeout blocks" e2e_stack_selftest timeout
 expect 0 "an unreachable service blocks" e2e_stack_selftest unreachable
@@ -562,6 +594,8 @@ expect 0 "seed-setup instance ids differing from the gate's block" e2e_stack_sel
 expect 0 "seed-setup instance ids equal to the gate's pass" e2e_stack_selftest seedInstanceMatch
 expect 0 "the verifier never connects to a database whose parsed name is not _test" e2e_stack_selftest nonTestUrlNeverConnects
 expect 0 "the verifier refuses when the live database differs from the parsed name, and still releases" e2e_stack_selftest liveNameMustMatchParsedName
+expect 0 "a database phase that never returns is reported as database timeout, samples nothing, and force-closes" e2e_stack_selftest hungLockIsADatabaseTimeoutAndForceCloses
+expect 0 "a ROLLBACK that never returns force-closes the connection instead of hanging the gate" e2e_stack_selftest hungRollbackForceClosesInsteadOfHanging
 expect 0 "importing the verifier opens no connection and does not run the CLI" e2e_stack_selftest importIsInert
 
 if rg -Fq 'const { default: postgres } = await import("postgres");' "$REPO_ROOT/scripts/check-e2e-stack.mjs" \

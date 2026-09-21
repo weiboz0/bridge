@@ -51,6 +51,17 @@
       "go": "the router's own NotFound response, byte-identical to an unregistered path",
       "next": "notFound() from next/navigation, identical to an absent route",
       "hocuspocus": "do not handle the request: fall through to the server's default unhandled response"
+    },
+    "hostExposure": {
+      "name": "BRIDGE_HOST_EXPOSURE",
+      "exposedValue": "exposed",
+      "normalization": "trim ASCII whitespace, then compare case-insensitively; only the exact word declares exposure",
+      "rule": "when the flag is on and the normalized value is 'exposed', the service refuses unless the tunnel opt-in is exactly 'true' — Go and Hocuspocus at start-up, Next.js per request"
+    },
+    "observeConcurrency": {
+      "maxInFlightPerProcess": 2,
+      "rule": "at most this many observe queries may be in flight per process; an excess request is refused exactly like any other refusal and runs NO query. The gate samples sequentially, so legitimate traffic never exceeds 1.",
+      "refusalReason": "observe_busy"
     }
   },
   "cases": [
@@ -128,5 +139,43 @@
       0,
       4294967295
     ]
-  }
+  },
+  "hostExposureCases": [
+    {
+      "value": "exposed",
+      "exposed": true
+    },
+    {
+      "value": "EXPOSED",
+      "exposed": true
+    },
+    {
+      "value": "Exposed",
+      "exposed": true
+    },
+    {
+      "value": "  exposed\t",
+      "exposed": true
+    },
+    {
+      "value": "\n exposed \n",
+      "exposed": true
+    },
+    {
+      "value": "",
+      "exposed": false
+    },
+    {
+      "value": "localhost",
+      "exposed": false
+    },
+    {
+      "value": "exposedish",
+      "exposed": false
+    },
+    {
+      "value": "not exposed",
+      "exposed": false
+    }
+  ]
 }

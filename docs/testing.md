@@ -111,8 +111,10 @@ To run a full gate, start the stack yourself like this:
 A refusal is deliberately indistinguishable from the endpoint not existing (Go and Next.js answer their
 ordinary 404; Hocuspocus its ordinary default response), so the gate prints a failure class and a
 remediation line per service — *not attested*, *mismatch*, *multiple instances*, *no realtime origin*,
-*unchecked*, *lock lost*, *unreachable*, *redirect*, *timeout* — and each service logs the actual reason
-(flag, database name, or lock), at most once per ten seconds and never with the URL.
+*unchecked*, *lock lost*, *database timeout*, *unreachable*, *redirect*, *timeout*.
+A service started **without** the flag has no endpoint at all and logs nothing, so a silent service most
+likely lacks the flag; a service started with it logs the refusal *category* (database name or lock) at
+most once per ten seconds, never the URL, the nonce, or the database name itself.
 `e2e/seed.setup.ts` repeats the check with a fresh nonce before its first write, and compares instance ids
 with the gate's. Load-balanced stacks and restarts during a run are unsupported, not merely discouraged.
 The protocol is pinned in `scripts/tests/e2e-stack-vector.json` and asserted by Go, Bun, Vitest, and the gate

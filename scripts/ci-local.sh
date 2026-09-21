@@ -55,7 +55,7 @@ restore_e2e_demo_seed() {
 # A child cannot export into this shell, so the per-process instance ids come
 # back on one machine-readable line and are re-checked by e2e/seed.setup.ts.
 attest_e2e_stack() {
-  local out line pair
+  local out line
   E2E_STACK_INSTANCE_GO="" E2E_STACK_INSTANCE_NEXT="" E2E_STACK_INSTANCE_HOCUSPOCUS=""
   if ! out="$(E2E_BASE_URL="$E2E_BASE_URL" CHECK_E2E_STACK_DATABASE_URL="$GATE_DATABASE_URL" \
     node "$REPO_ROOT/scripts/check-e2e-stack.mjs")"; then
@@ -64,14 +64,15 @@ attest_e2e_stack() {
   fi
   printf '%s\n' "$out"
   line="$(printf '%s\n' "$out" | grep -m1 '^E2E_STACK_INSTANCES ')" || return 1
-  for pair in ${line#E2E_STACK_INSTANCES }; do
-    case "$pair" in
-      go=*) E2E_STACK_INSTANCE_GO="${pair#go=}" ;;
-      next=*) E2E_STACK_INSTANCE_NEXT="${pair#next=}" ;;
-      hocuspocus=*) E2E_STACK_INSTANCE_HOCUSPOCUS="${pair#hocuspocus=}" ;;
-    esac
-  done
-  [[ -n "$E2E_STACK_INSTANCE_GO" && -n "$E2E_STACK_INSTANCE_NEXT" && -n "$E2E_STACK_INSTANCE_HOCUSPOCUS" ]]
+  # The ids come from network services.  The verifier already restricts them,
+  # but this shell must not depend on a regex in another file: the whole line
+  # is matched against the same alphabet before anything is split, so no glob,
+  # whitespace, or metacharacter can reach the environment block below.
+  local id='[A-Za-z0-9._-]{1,128}'
+  [[ "$line" =~ ^E2E_STACK_INSTANCES\ next=($id)\ go=($id)\ hocuspocus=($id)$ ]] || return 1
+  E2E_STACK_INSTANCE_NEXT="${BASH_REMATCH[1]}"
+  E2E_STACK_INSTANCE_GO="${BASH_REMATCH[2]}"
+  E2E_STACK_INSTANCE_HOCUSPOCUS="${BASH_REMATCH[3]}"
 }
 
 load_persistent_e2e_base_url() {
