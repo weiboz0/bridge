@@ -41,6 +41,29 @@ function clearArchiveFallbackWarning(sessionId: string): void {
   }
 }
 
+/**
+ * A canvas mutation can race the end of the session: the server answers 409
+ * once teardown starts (`session_end_in_progress`) and after it finishes.
+ * Distinguishing the two gives the user an accurate reason instead of a
+ * generic failure. The body is parsed defensively — it may not be JSON —
+ * and every other status keeps the caller's generic fallback message.
+ */
+async function whiteboardMutationErrorMessage(response: Response, fallback: string): Promise<string> {
+  if (response.status !== 409) return fallback;
+  let code: unknown;
+  try {
+    const body: unknown = await response.json();
+    if (typeof body === "object" && body !== null && "code" in body) {
+      code = (body as Record<string, unknown>).code;
+    }
+  } catch {
+    // Body may not be JSON; fall through to the generic 409 message below.
+  }
+  return code === "session_end_in_progress"
+    ? "This session is ending, so whiteboards can no longer be changed."
+    : "This session has ended, so whiteboards can no longer be changed.";
+}
+
 const ExcalidrawBoard = dynamic(
   () => import("./excalidraw-board").then((module) => module.ExcalidrawBoard),
   { ssr: false, loading: () => <div className="p-4 text-sm text-muted-foreground">Loading whiteboard…</div> },
@@ -244,7 +267,7 @@ export function WhiteboardPanel({
       body: JSON.stringify({ title: normalizedTitle, visibility: "private" }),
     });
     if (!response.ok) {
-      setError("Unable to create whiteboard");
+      setError(await whiteboardMutationErrorMessage(response, "Unable to create whiteboard"));
       return;
     }
     const created = await response.json() as WhiteboardCanvas;
@@ -260,7 +283,7 @@ export function WhiteboardPanel({
       body: JSON.stringify({ visibility }),
     });
     if (!response.ok) {
-      setError("Unable to update whiteboard visibility");
+      setError(await whiteboardMutationErrorMessage(response, "Unable to update whiteboard visibility"));
       return;
     }
     const updated = await response.json() as WhiteboardCanvas;

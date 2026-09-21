@@ -25,12 +25,15 @@ import {
   DATABASE_URL_ENV_VAR,
   E2E_STACK_LOCK_CLASS,
   E2E_STACK_NONCE_PATTERN,
+  E2E_STACK_OBSERVE_CONCURRENCY_LIMIT,
   GET,
   deriveE2EStackObjid,
   dynamic,
   e2eStackFingerprint,
   evaluateE2EStackRequest,
   getE2EStackInstanceId,
+  isExposedHost,
+  type E2EStackObserveLimiter,
   type E2EStackObserveResult,
 } from "@/app/api/e2e-stack/route";
 
@@ -90,8 +93,15 @@ interface Vector {
     successHeaders: Record<string, string>;
     paths: Record<string, string>;
     nonceQueryParam: string;
+    hostExposure: { name: string; exposedValue: string; normalization: string; rule: string };
+    observeConcurrency: {
+      maxInFlightPerProcess: number;
+      rule: string;
+      refusalReason: string;
+    };
   };
   cases: VectorCase[];
+  hostExposureCases: { value: string; exposed: boolean }[];
   composeKeyBoundaries: { objid: number; key: string }[];
   disjointFrom: {
     sessionLifecycleLockClass: number;
@@ -145,6 +155,7 @@ const MANAGED_ENV_KEYS = [
 let savedEnv: Record<string, string | undefined> = {};
 let savedInstance: string | undefined;
 let savedRefusalLog: Map<string, number> | undefined;
+let savedObserveInFlight: number | undefined;
 let warnCalls: string[] = [];
 const originalWarn = console.warn;
 
@@ -177,7 +188,9 @@ beforeEach(() => {
   savedEnv = Object.fromEntries(MANAGED_ENV_KEYS.map((key) => [key, process.env[key]]));
   savedInstance = globalThis.bridgeE2EStackInstance;
   savedRefusalLog = globalThis.bridgeE2EStackRefusalLog;
+  savedObserveInFlight = globalThis.bridgeE2EStackObserveInFlight;
   globalThis.bridgeE2EStackRefusalLog = new Map<string, number>();
+  globalThis.bridgeE2EStackObserveInFlight = undefined;
   notFoundMock.mockClear();
   executeMock.mockReset();
   executeMock.mockResolvedValue([{ database: LIVE_DATABASE, lock_seen: true }]);
@@ -197,6 +210,8 @@ afterEach(() => {
   else globalThis.bridgeE2EStackInstance = savedInstance;
   if (savedRefusalLog === undefined) delete globalThis.bridgeE2EStackRefusalLog;
   else globalThis.bridgeE2EStackRefusalLog = savedRefusalLog;
+  if (savedObserveInFlight === undefined) delete globalThis.bridgeE2EStackObserveInFlight;
+  else globalThis.bridgeE2EStackObserveInFlight = savedObserveInFlight;
   console.warn = originalWarn;
 });
 
@@ -564,6 +579,223 @@ describe("e2e-stack route", () => {
     }
     expect(observe).not.toHaveBeenCalled();
   });
+  // -------------------------------------------------------------------------
+  // R2-15: exposure normalization
+  // -------------------------------------------------------------------------
+
+  it("e2e-stack route exposure check matches the shared vector", async () => {
+    const exposure = vector.contract.hostExposure;
+    expect(exposure.name).toBe("BRIDGE_HOST_EXPOSURE");
+    expect(exposure.exposedValue).toBe("exposed");
+    expect(vector.hostExposureCases.length).toBeGreaterThan(0);
+
+    // The exported predicate answers every shared row, and an unset variable.
+    for (const row of vector.hostExposureCases) {
+      expect(isExposedHost(row.value), JSON.stringify(row.value)).toBe(row.exposed);
+    }
+    expect(isExposedHost(undefined)).toBe(false);
+
+    // Behaviourally: R2-15 was that this route compared the value EXACTLY
+    // while Go and Hocuspocus trimmed and case-folded, so "Exposed" made the
+    // two local services refuse while the internet-facing one kept serving.
+    for (const row of vector.hostExposureCases) {
+      const refused = await evaluateE2EStackRequest({
+        env: attestedEnv({ BRIDGE_HOST_EXPOSURE: row.value }),
+        nonce: NONCE,
+        observe: observing({ database: LIVE_DATABASE, lockSeen: true }),
+      });
+      if (row.exposed) {
+        expect(refused, JSON.stringify(row.value)).toEqual({
+          ok: false,
+          reason: "exposed_without_opt_in",
+        });
+      } else {
+        expect(refused.ok, JSON.stringify(row.value)).toBe(true);
+      }
+
+      // The recorded opt-in allows every value.
+      const allowed = await evaluateE2EStackRequest({
+        env: attestedEnv({ BRIDGE_HOST_EXPOSURE: row.value, [OPT_IN]: OPT_IN_ON }),
+        nonce: NONCE,
+        observe: observing({ database: LIVE_DATABASE, lockSeen: true }),
+      });
+      expect(allowed.ok, JSON.stringify(row.value)).toBe(true);
+    }
+
+    // The two spellings R2-15 named explicitly now refuse without the opt-in.
+    for (const value of ["Exposed", " exposed"]) {
+      const observe = observing({ database: LIVE_DATABASE, lockSeen: true });
+      expect(
+        await evaluateE2EStackRequest({
+          env: attestedEnv({ BRIDGE_HOST_EXPOSURE: value }),
+          nonce: NONCE,
+          observe,
+        }),
+      ).toEqual({ ok: false, reason: "exposed_without_opt_in" });
+      expect(observe).not.toHaveBeenCalled();
+    }
+
+    // The opt-in itself is deliberately NOT normalized: it must be exactly
+    // "true", so a truthy-looking value never unlocks an exposed host.
+    for (const wrong of ["TRUE", "1", " true", "True", "yes"]) {
+      expect(
+        await evaluateE2EStackRequest({
+          env: attestedEnv({ BRIDGE_HOST_EXPOSURE: "Exposed", [OPT_IN]: wrong }),
+          nonce: NONCE,
+          observe: observing({ database: LIVE_DATABASE, lockSeen: true }),
+        }),
+      ).toEqual({ ok: false, reason: "exposed_without_opt_in" });
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // R2-16: the observe query is capped per process
+  // -------------------------------------------------------------------------
+
+  it("e2e-stack route refuses when the observe cap is reached and runs no query", async () => {
+    const release = vi.fn();
+    const limiter: E2EStackObserveLimiter = { tryAcquire: () => false, release };
+    const observe = observing({ database: LIVE_DATABASE, lockSeen: true });
+
+    expect(
+      await evaluateE2EStackRequest({ env: attestedEnv(), nonce: NONCE, observe, limiter }),
+    ).toEqual({ ok: false, reason: vector.contract.observeConcurrency.refusalReason });
+
+    expect(observe).not.toHaveBeenCalled();
+    // No slot was taken, so nothing may be released on this path.
+    expect(release).not.toHaveBeenCalled();
+  });
+
+  it("e2e-stack route releases its observe slot on success, error, and timeout", async () => {
+    const counting = () => {
+      const state = { acquired: 0, released: 0 };
+      const limiter: E2EStackObserveLimiter = {
+        tryAcquire: () => {
+          state.acquired += 1;
+          return true;
+        },
+        release: () => {
+          state.released += 1;
+        },
+      };
+      return { state, limiter };
+    };
+
+    // Success.
+    {
+      const { state, limiter } = counting();
+      const result = await evaluateE2EStackRequest({
+        env: attestedEnv(),
+        nonce: NONCE,
+        observe: observing({ database: LIVE_DATABASE, lockSeen: true }),
+        limiter,
+      });
+      expect(result.ok).toBe(true);
+      expect(state).toEqual({ acquired: 1, released: 1 });
+    }
+
+    // Error.
+    {
+      const { state, limiter } = counting();
+      const result = await evaluateE2EStackRequest({
+        env: attestedEnv(),
+        nonce: NONCE,
+        observe: vi.fn(async () => {
+          throw new Error("connection terminated");
+        }),
+        limiter,
+      });
+      expect(result).toEqual({ ok: false, reason: "observe_query_failed" });
+      expect(state).toEqual({ acquired: 1, released: 1 });
+    }
+
+    // Timeout: the abandoned query must not strand its slot either.
+    {
+      const { state, limiter } = counting();
+      vi.useFakeTimers();
+      try {
+        const pending = evaluateE2EStackRequest({
+          env: attestedEnv(),
+          nonce: NONCE,
+          observe: vi.fn(() => new Promise<E2EStackObserveResult>(() => {})),
+          limiter,
+        });
+        await vi.advanceTimersByTimeAsync(2_001);
+        expect(await pending).toEqual({ ok: false, reason: "observe_query_failed" });
+      } finally {
+        vi.useRealTimers();
+      }
+      expect(state).toEqual({ acquired: 1, released: 1 });
+    }
+  });
+
+  it("e2e-stack route default limiter is process-wide and capped at the contract value", async () => {
+    const limit = vector.contract.observeConcurrency.maxInFlightPerProcess;
+    expect(limit).toBeGreaterThan(0);
+    expect(E2E_STACK_OBSERVE_CONCURRENCY_LIMIT).toBe(limit);
+
+    // The counter lives on globalThis so a dev-server module re-evaluation
+    // cannot reset an in-flight count to zero; beforeEach/afterEach save and
+    // restore it around this test.
+    globalThis.bridgeE2EStackObserveInFlight = undefined;
+
+    const resolvers: ((result: E2EStackObserveResult) => void)[] = [];
+    const observe = vi.fn(
+      () =>
+        new Promise<E2EStackObserveResult>((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+
+    // Each evaluation builds its OWN default limiter, yet they share one count.
+    const held = [];
+    for (let index = 0; index < limit; index += 1) {
+      held.push(evaluateE2EStackRequest({ env: attestedEnv(), nonce: NONCE, observe }));
+    }
+    expect(globalThis.bridgeE2EStackObserveInFlight).toBe(limit);
+    expect(observe).toHaveBeenCalledTimes(limit);
+
+    const over = await evaluateE2EStackRequest({
+      env: attestedEnv(),
+      nonce: NONCE,
+      observe,
+    });
+    expect(over).toEqual({ ok: false, reason: vector.contract.observeConcurrency.refusalReason });
+    expect(observe).toHaveBeenCalledTimes(limit);
+    expect(globalThis.bridgeE2EStackObserveInFlight).toBe(limit);
+
+    // Through the real handler, the busy refusal takes the SAME single
+    // notFound() path as every other refusal, and runs no query.
+    applyEnv(attestedEnv());
+    executeMock.mockClear();
+    notFoundMock.mockClear();
+    const busyError = await GET(request()).then(
+      () => new Error("the busy request did not refuse"),
+      (caught: unknown) => caught,
+    );
+    expect(busyError).toBeInstanceOf(NotFoundSentinel);
+    expect(notFoundMock).toHaveBeenCalledTimes(1);
+    expect(notFoundMock).toHaveBeenCalledWith();
+    expect(executeMock).not.toHaveBeenCalled();
+    // ...and it was refused for THAT reason, not another.
+    expect(warnCalls.join("\n")).toContain(vector.contract.observeConcurrency.refusalReason);
+
+    // Byte-identical to the flag-off refusal.
+    globalThis.bridgeE2EStackObserveInFlight = 0;
+    applyEnv(attestedEnv({ [FLAG]: undefined }));
+    const flagOffError = await GET(request()).then(
+      () => new Error("the flag-off request did not refuse"),
+      (caught: unknown) => caught,
+    );
+    expect((busyError as Error).message).toBe((flagOffError as Error).message);
+
+    // Releasing every held query returns the process-wide count to zero.
+    globalThis.bridgeE2EStackObserveInFlight = limit;
+    for (const resolve of resolvers) resolve({ database: LIVE_DATABASE, lockSeen: true });
+    for (const pending of held) expect((await pending).ok).toBe(true);
+    expect(globalThis.bridgeE2EStackObserveInFlight).toBe(0);
+  });
+
   it("e2e-stack route matches the shared vector", () => {
     expect(E2E_STACK_LOCK_CLASS).toBe(vector.contract.lockClass);
     expect(`0x${E2E_STACK_LOCK_CLASS.toString(16)}`).toBe(vector.contract.lockClassHex);

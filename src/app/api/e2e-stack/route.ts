@@ -50,6 +50,9 @@ const TEST_DATABASE_SUFFIX = "_test";
 const OBSERVE_QUERY_TIMEOUT_MS = 2000;
 const REFUSAL_LOG_INTERVAL_MS = 10_000;
 
+/** `contract.observeConcurrency.maxInFlightPerProcess` — at most this many observe queries run at once, per process. */
+export const E2E_STACK_OBSERVE_CONCURRENCY_LIMIT = 2;
+
 type EnvLike = Record<string, string | undefined>;
 
 export type E2EStackRefusalReason =
@@ -59,11 +62,25 @@ export type E2EStackRefusalReason =
   | "non_test_parsed_database"
   | "non_test_live_database"
   | "lock_unseen"
-  | "observe_query_failed";
+  | "observe_query_failed"
+  | "observe_busy";
 
 export interface E2EStackObserveResult {
   database: string;
   lockSeen: boolean;
+}
+
+/**
+ * The observe query's concurrency gate. `tryAcquire` returns `false` (and
+ * takes no slot) when the process is already at the cap; a caller that
+ * acquired a slot MUST call `release` exactly once, including on error or
+ * timeout. Injectable so a test can drive contention deterministically
+ * without real concurrent requests — see `contract.observeConcurrency` in
+ * `scripts/tests/e2e-stack-vector.json`.
+ */
+export interface E2EStackObserveLimiter {
+  tryAcquire: () => boolean;
+  release: () => void;
 }
 
 export interface E2EStackSuccessBody {
@@ -111,6 +128,7 @@ export function e2eStackFingerprint(nonce: string, database: string): string {
 declare global {
   var bridgeE2EStackInstance: string | undefined;
   var bridgeE2EStackRefusalLog: Map<string, number> | undefined;
+  var bridgeE2EStackObserveInFlight: number | undefined;
 }
 
 /** Per-process id, generated once and cached on `globalThis`; includes `process.pid` per the contract's single-instance topology check. */
@@ -136,6 +154,41 @@ function logRefusalReason(reason: E2EStackRefusalReason, now: () => number = Dat
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * `contract.hostExposure.normalization`: trim ASCII whitespace, then compare
+ * case-insensitively; only the exact word "exposed" declares exposure (so
+ * "exposedish" and "not exposed" do not). Matches the Go (`strings.EqualFold`
+ * + `strings.TrimSpace`) and Hocuspocus (`.trim().toLowerCase()`)
+ * implementations of the same contract — asserted against `hostExposureCases`
+ * in `scripts/tests/e2e-stack-vector.json`. The tunnel opt-in is deliberately
+ * NOT normalized this way; see `TUNNEL_OPT_IN_ENABLED_VALUE`.
+ */
+export function isExposedHost(value: string | undefined): boolean {
+  if (value === undefined) return false;
+  return value.trim().toLowerCase() === HOST_EXPOSURE_EXPOSED_VALUE;
+}
+
+/**
+ * Default observe-query concurrency gate, backed by a counter on
+ * `globalThis` for the same reason as the instance id and refusal log: dev-
+ * server module re-evaluation must not reset an in-flight count to zero
+ * while queries are still running.
+ */
+function getGlobalE2EStackObserveLimiter(): E2EStackObserveLimiter {
+  return {
+    tryAcquire: () => {
+      const current = globalThis.bridgeE2EStackObserveInFlight ?? 0;
+      if (current >= E2E_STACK_OBSERVE_CONCURRENCY_LIMIT) return false;
+      globalThis.bridgeE2EStackObserveInFlight = current + 1;
+      return true;
+    },
+    release: () => {
+      const current = globalThis.bridgeE2EStackObserveInFlight ?? 0;
+      globalThis.bridgeE2EStackObserveInFlight = Math.max(0, current - 1);
+    },
+  };
+}
 
 // Both pure functions are exported, so they validate for themselves rather than
 // rely on the handler having checked first — as the Hocuspocus and gate-side
@@ -193,6 +246,8 @@ export interface EvaluateE2EStackRequestParams {
   nonce: string | null;
   observe: (args: { lockClass: number; objid: number }) => Promise<E2EStackObserveResult>;
   now?: () => number;
+  /** Defaults to the process-wide `globalThis`-backed gate; injectable so a test can drive contention deterministically. */
+  limiter?: E2EStackObserveLimiter;
 }
 
 export async function evaluateE2EStackRequest({
@@ -200,12 +255,13 @@ export async function evaluateE2EStackRequest({
   nonce,
   observe,
   now = Date.now,
+  limiter = getGlobalE2EStackObserveLimiter(),
 }: EvaluateE2EStackRequestParams): Promise<E2EStackEvaluation> {
   if (env[E2E_STACK_FLAG] !== E2E_STACK_FLAG_ENABLED_VALUE) {
     return { ok: false, reason: "flag_disabled" };
   }
 
-  if (env[HOST_EXPOSURE_FLAG] === HOST_EXPOSURE_EXPOSED_VALUE && env[TUNNEL_OPT_IN_FLAG] !== TUNNEL_OPT_IN_ENABLED_VALUE) {
+  if (isExposedHost(env[HOST_EXPOSURE_FLAG]) && env[TUNNEL_OPT_IN_FLAG] !== TUNNEL_OPT_IN_ENABLED_VALUE) {
     return { ok: false, reason: "exposed_without_opt_in" };
   }
 
@@ -220,11 +276,20 @@ export async function evaluateE2EStackRequest({
 
   const objid = deriveE2EStackObjid(nonce);
 
+  // contract.observeConcurrency: a request that would exceed the per-process
+  // cap is refused like any other refusal and runs NO query — no slot is
+  // held, so there is nothing to release on this path.
+  if (!limiter.tryAcquire()) {
+    return { ok: false, reason: "observe_busy" };
+  }
+
   let observed: E2EStackObserveResult;
   try {
     observed = await withTimeout(observe({ lockClass: E2E_STACK_LOCK_CLASS, objid }), OBSERVE_QUERY_TIMEOUT_MS, now);
   } catch {
     return { ok: false, reason: "observe_query_failed" };
+  } finally {
+    limiter.release();
   }
 
   if (!observed.database.endsWith(TEST_DATABASE_SUFFIX)) {

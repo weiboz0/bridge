@@ -99,7 +99,14 @@ export async function assertAttestedE2EStack({
   const missing: string[] = [];
   if (!baseUrl) missing.push("E2E_BASE_URL");
   if (!databaseUrl) missing.push("DATABASE_URL");
-  if (!expectedInstances) missing.push(INSTANCE_VARS.join(", "));
+  if (!expectedInstances) {
+    // R2-23: name only the variables actually missing or empty. Listing all
+    // three sent the reader looking for two variables that were already set.
+    const blank = INSTANCE_VARS.filter((variable) => !env[variable]);
+    // Still fails CLOSED: if the verifier rejected the set without any single
+    // variable being empty, name the whole set rather than nothing.
+    missing.push(...(blank.length > 0 ? blank : INSTANCE_VARS));
+  }
 
   if (!baseUrl || !databaseUrl || !expectedInstances) {
     throw new Error(

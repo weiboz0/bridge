@@ -161,6 +161,54 @@ describe("e2e seed stack attestation", () => {
     expect(verify).not.toHaveBeenCalled();
   });
 
+  // R2-23: the refusal used to list all three instance variables whenever one
+  // was missing, sending the reader after two variables that were already set.
+  it("seed setup names only the instance variables that are actually missing", async () => {
+    const variables = Object.values(instanceEnv);
+    for (const missing of variables) {
+      for (const [label, blank] of [["absent", undefined], ["empty", ""]] as const) {
+        const env = attestedEnv();
+        if (blank === undefined) delete env[missing];
+        else env[missing] = blank;
+
+        const error = await seedLikeFlow(env).catch((thrown: unknown) => thrown as Error);
+        expect(error, `${missing} ${label}`).toBeInstanceOf(Error);
+        const message = (error as Error).message;
+
+        expect(message, `${missing} ${label}`).toContain(missing);
+        for (const present of variables.filter((name) => name !== missing)) {
+          expect(message, `${missing} ${label} must not name ${present}`).not.toContain(present);
+        }
+        // Still fails closed, and still says exactly how to fix it.
+        expect(message).toContain("refuses to write without an attested stack");
+        expect(message).toContain("scripts/ci-local.sh");
+        expect(message).toContain("docs/testing.md");
+        expect(verify).not.toHaveBeenCalled();
+        expect(mutate).not.toHaveBeenCalled();
+      }
+    }
+
+    // Two missing: exactly those two are named, and not the third.
+    const twoMissing = attestedEnv();
+    delete twoMissing[instanceEnv.go];
+    twoMissing[instanceEnv.next] = "";
+    const twoError = await seedLikeFlow(twoMissing).catch((thrown: unknown) => thrown as Error);
+    const twoMessage = (twoError as Error).message;
+    expect(twoMessage).toContain(instanceEnv.go);
+    expect(twoMessage).toContain(instanceEnv.next);
+    expect(twoMessage).not.toContain(instanceEnv.hocuspocus);
+
+    // All three missing: all three are named.
+    const allMissing = attestedEnv();
+    for (const variable of variables) delete allMissing[variable];
+    const allError = await seedLikeFlow(allMissing).catch((thrown: unknown) => thrown as Error);
+    for (const variable of variables) {
+      expect((allError as Error).message).toContain(variable);
+    }
+    expect(verify).not.toHaveBeenCalled();
+    expect(mutate).not.toHaveBeenCalled();
+  });
+
   it("seed setup passes the gate's three instance ids as expectedInstances", async () => {
     await seedLikeFlow(attestedEnv());
 

@@ -428,6 +428,123 @@ describe("WhiteboardPanel — plan 094 phase 9 settings cutover", () => {
     expect(window.sessionStorage.getItem(`whiteboard-archive-fallback:${SESSION_ID}`)).toBeNull();
   });
 
+  // Plan 094 R2-22: a canvas mutation can race the end of the session. The
+  // server answers 409 once teardown starts (`session_end_in_progress`) and
+  // after it finishes; a generic "Unable to ..." hid both from the user.
+  it("whiteboard panel explains a 409 while the session is ending", async () => {
+    const canvas = {
+      id: "22222222-2222-4222-8222-222222222222",
+      sessionId: SESSION_ID,
+      ownerId: "teacher-id",
+      title: "Owner board",
+      visibility: "private",
+    };
+    const ENDING = "This session is ending, so whiteboards can no longer be changed.";
+    const endInProgress = () => json({ error: "Session end in progress", code: "session_end_in_progress" }, 409);
+
+    // Create.
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = requestURL(input);
+      if (url.endsWith("/canvases") && init?.method === "POST") return Promise.resolve(endInProgress());
+      if (url.endsWith("/canvases")) return Promise.resolve(json({ items: [] }));
+      throw new Error(`unexpected endpoint ${url}`);
+    });
+    const created = render(<WhiteboardPanel sessionId={SESSION_ID} />);
+    fireEvent.click(await screen.findByRole("button", { name: "New whiteboard" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(ENDING);
+    created.unmount();
+
+    // Visibility update.
+    fetchMock.mockReset();
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = requestURL(input);
+      if (url.endsWith(`/canvases/${canvas.id}`) && init?.method === "PATCH") return Promise.resolve(endInProgress());
+      if (url.endsWith("/canvases")) return Promise.resolve(json({ items: [canvas] }));
+      throw new Error(`unexpected endpoint ${url}`);
+    });
+    render(<WhiteboardPanel sessionId={SESSION_ID} />);
+    fireEvent.click(await screen.findByRole("button", { name: /owner board/i }));
+    fireEvent.change(
+      screen.getByText("Visibility").parentElement?.querySelector("select") as HTMLSelectElement,
+      { target: { value: "host" } },
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Raise visibility" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(ENDING);
+  });
+
+  it("whiteboard panel explains a 409 after the session ended", async () => {
+    const ENDED = "This session has ended, so whiteboards can no longer be changed.";
+    for (const [label, conflict] of [
+      ["a different code", () => json({ error: "Session ended", code: "session_ended" }, 409)],
+      ["no code at all", () => json({ error: "Session ended" }, 409)],
+      [
+        "a non-JSON body",
+        () => new Response("<html>conflict</html>", { status: 409, headers: { "content-type": "text/html" } }),
+      ],
+      ["an empty body", () => new Response(null, { status: 409 })],
+    ] as const) {
+      const fetchMock = vi.mocked(fetch);
+      fetchMock.mockReset();
+      fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = requestURL(input);
+        if (url.endsWith("/canvases") && init?.method === "POST") return Promise.resolve(conflict());
+        if (url.endsWith("/canvases")) return Promise.resolve(json({ items: [] }));
+        throw new Error(`unexpected endpoint ${url}`);
+      });
+      const { unmount } = render(<WhiteboardPanel sessionId={SESSION_ID} />);
+      fireEvent.click(await screen.findByRole("button", { name: "New whiteboard" }));
+      expect(await screen.findByRole("alert"), label).toHaveTextContent(ENDED);
+      unmount();
+    }
+  });
+
+  it("whiteboard panel keeps the generic message for every other failure", async () => {
+    for (const [label, status] of [["server error", 500], ["forbidden", 403]] as const) {
+      const canvas = {
+        id: "22222222-2222-4222-8222-222222222222",
+        sessionId: SESSION_ID,
+        ownerId: "teacher-id",
+        title: "Owner board",
+        visibility: "private",
+      };
+      const fetchMock = vi.mocked(fetch);
+
+      fetchMock.mockReset();
+      fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = requestURL(input);
+        if (url.endsWith("/canvases") && init?.method === "POST") return Promise.resolve(json({}, status));
+        if (url.endsWith("/canvases")) return Promise.resolve(json({ items: [] }));
+        throw new Error(`unexpected endpoint ${url}`);
+      });
+      const created = render(<WhiteboardPanel sessionId={SESSION_ID} />);
+      fireEvent.click(await screen.findByRole("button", { name: "New whiteboard" }));
+      const createAlert = await screen.findByRole("alert");
+      expect(createAlert, label).toHaveTextContent("Unable to create whiteboard");
+      expect(createAlert.textContent, label).not.toContain("This session");
+      created.unmount();
+
+      fetchMock.mockReset();
+      fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = requestURL(input);
+        if (url.endsWith(`/canvases/${canvas.id}`) && init?.method === "PATCH") return Promise.resolve(json({}, status));
+        if (url.endsWith("/canvases")) return Promise.resolve(json({ items: [canvas] }));
+        throw new Error(`unexpected endpoint ${url}`);
+      });
+      const updated = render(<WhiteboardPanel sessionId={SESSION_ID} />);
+      fireEvent.click(await screen.findByRole("button", { name: /owner board/i }));
+      fireEvent.change(
+        screen.getByText("Visibility").parentElement?.querySelector("select") as HTMLSelectElement,
+        { target: { value: "host" } },
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Raise visibility" }));
+      const updateAlert = await screen.findByRole("alert");
+      expect(updateAlert, label).toHaveTextContent("Unable to update whiteboard visibility");
+      expect(updateAlert.textContent, label).not.toContain("This session");
+      updated.unmount();
+    }
+  });
+
   it("rejects image paste and file drag/drop before Excalidraw can create a non-durable image element", () => {
     const onChange = vi.fn();
     const { getByTestId } = render(<ExcalidrawBoard scene={null} readOnly={false} onChange={onChange} />);
