@@ -55,7 +55,7 @@
     "hostExposure": {
       "name": "BRIDGE_HOST_EXPOSURE",
       "exposedValue": "exposed",
-      "normalization": "trim ASCII whitespace, then compare case-insensitively; only the exact word declares exposure",
+      "normalization": "trim ASCII whitespace (space, tab, CR, LF), then compare case-insensitively; only the exact word declares exposure. Only ASCII whitespace is contracted: Go's strings.TrimSpace and JavaScript's String.prototype.trim disagree on a few non-ASCII code points (U+0085, U+FEFF), which no environment file should contain and which these cases deliberately do not pin.",
       "rule": "when the flag is on and the normalized value is 'exposed', the service refuses unless the tunnel opt-in is exactly 'true' — Go and Hocuspocus at start-up, Next.js per request"
     },
     "observeConcurrency": {

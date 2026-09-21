@@ -112,9 +112,10 @@ A refusal is deliberately indistinguishable from the endpoint not existing (Go a
 ordinary 404; Hocuspocus its ordinary default response), so the gate prints a failure class and a
 remediation line per service — *not attested*, *mismatch*, *multiple instances*, *no realtime origin*,
 *unchecked*, *lock lost*, *database timeout*, *unreachable*, *redirect*, *timeout*.
-A service started **without** the flag has no endpoint at all and logs nothing, so a silent service most
-likely lacks the flag; a service started with it logs the refusal *category* (database name or lock) at
-most once per ten seconds, never the URL, the nonce, or the database name itself.
+Without the flag the Go API and Hocuspocus have **no endpoint and log nothing**, so silence there most
+likely means the flag is missing; Next.js always has the route file and logs `flag_disabled` instead.
+A flagged service logs the refusal *category* (database name or lock) at most once per ten seconds,
+never the URL, the nonce, or the database name itself.
 `e2e/seed.setup.ts` repeats the check with a fresh nonce before its first write, and compares instance ids
 with the gate's. Load-balanced stacks and restarts during a run are unsupported, not merely discouraged.
 The protocol is pinned in `scripts/tests/e2e-stack-vector.json` and asserted by Go, Bun, Vitest, and the gate

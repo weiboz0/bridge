@@ -96,7 +96,7 @@ export function testDatabaseName(databaseUrl) {
 
 export const REMEDIATION = {
   "not attested":
-    "start all three services with BRIDGE_E2E_STACK=1 against the gate's _test database, or point E2E_BASE_URL at such a stack. A service started WITHOUT the flag has no endpoint at all and logs nothing, so a silent service most likely lacks the flag; one started with it logs the refusal category (database name or lock), at most once per ten seconds",
+    "start all three services with BRIDGE_E2E_STACK=1 against the gate's _test database, or point E2E_BASE_URL at such a stack. Without the flag the Go API and Hocuspocus have no endpoint and log nothing, so silence there most likely means the flag is missing; Next.js always has the route and logs `flag_disabled`. A flagged service logs the refusal category (database name or lock), at most once per ten seconds",
   mismatch:
     "the service is connected to a database with a different name than the gate's; restart it against the gate's _test database",
   "multiple instances":
@@ -106,7 +106,7 @@ export const REMEDIATION = {
   "lock lost":
     "the gate's own lock-holding transaction died mid-check (reaped backend, pooler, or idle_in_transaction_session_timeout); the stack was not at fault — re-run",
   "database timeout":
-    "the gate's own connection to its _test database stopped answering; the stack was not examined — check PostgreSQL and re-run",
+    "the gate's own connection to its _test database stopped answering, so no verdict on the stack was produced (it may or may not have been sampled) — check PostgreSQL and re-run",
   unchecked:
     "Hocuspocus could not be checked because Next.js did not attest, and only an attested Next.js reports the realtime origin browsers use; fix Next.js first",
   unreachable:
@@ -122,7 +122,15 @@ async function defaultConnect(databaseUrl) {
   // One reserved backend carries BEGIN, the lock, both re-reads, and ROLLBACK.
   // A transaction-scoped lock is released by rollback or by disconnect, so it
   // cannot be stranded and needs no unlock that could land on another backend.
-  const reserved = await sql.reserve();
+  let reserved;
+  try {
+    reserved = await sql.reserve();
+  } catch (error) {
+    // The client exists even though no connection was handed back; end it so a
+    // failed handshake never leaves a socket behind.
+    await sql.end({ timeout: 0 }).catch(() => {});
+    throw error;
+  }
   return {
     begin: () => reserved`BEGIN`,
     backendPid: async () => (await reserved`SELECT pg_backend_pid() AS pid`)[0].pid,
@@ -264,7 +272,22 @@ export async function verifyE2EStack({
   let connection;
   let timedOut = false;
   try {
-    connection = await db("connect", () => connect(databaseUrl));
+    // connect() is the one phase with nothing to clean up if it times out:
+    // `connection` is still unset, so the `finally` below would skip it. Keep
+    // the promise, and if it settles AFTER the deadline, dispose of whatever it
+    // produced instead of leaving a reserved socket open.
+    const connecting = Promise.resolve().then(() => connect(databaseUrl));
+    try {
+      connection = await db("connect", () => connecting);
+    } catch (error) {
+      if (error instanceof DatabasePhaseTimeout) {
+        connecting.then(
+          (late) => Promise.resolve(late?.close?.({ force: true })).catch(() => {}),
+          () => {},
+        );
+      }
+      throw error;
+    }
     await db("begin", () => connection.begin());
     const pid = await db("backend pid", () => connection.backendPid());
     await db("lock", () => connection.lock(composeKey(objid)));
@@ -352,6 +375,9 @@ export async function verifyE2EStack({
           force = true;
         }
       }
+      // Nothing here may throw out of `finally`: that would discard a result
+      // already decided, and the process exits regardless, which ends the
+      // connection and with it the transaction-scoped lock.
       try {
         await db("close", () => connection.close({ force }));
       } catch {

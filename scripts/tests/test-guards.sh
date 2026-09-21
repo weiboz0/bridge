@@ -436,9 +436,7 @@ const fail = (why) => { console.error(why); process.exit(1); };
 function connection(options = {}) {
   const trace = [];
   let locked = false;
-  return {
-    trace,
-    connect: async () => ({
+  const built = () => ({
       begin: async () => trace.push("begin"),
       backendPid: async () => 7,
       lock: async (key) => {
@@ -451,8 +449,20 @@ function connection(options = {}) {
         if (options.hangRollback) { trace.push("rollback-hung"); return new Promise(() => {}); }
         trace.push("rollback");
       },
-      close: async (args) => trace.push(args?.force ? "close:force" : "close"),
-    }),
+      close: async (args) => {
+        if (options.hangClose) { trace.push(args?.force ? "close:force-hung" : "close-hung"); return new Promise(() => {}); }
+        trace.push(args?.force ? "close:force" : "close");
+      },
+    });
+  return {
+    trace,
+    // `connectDelayMs` models a handshake that completes only AFTER the
+    // verifier's connect deadline has already fired.
+    connect: async () => {
+      if (options.connectDelayMs) await new Promise((resolve) => setTimeout(resolve, options.connectDelayMs));
+      trace.push("connected");
+      return built();
+    },
   };
 }
 function fetcher(overrides, trace) {
@@ -510,7 +520,7 @@ const scenarios = {
     if (!r.result.ok) fail(`expected ok, got ${classes(r)}`);
     if (r.calls.length !== 15) fail(`expected 15 samples, got ${r.calls.length}`);
     if (!r.calls.every((c) => c.init.redirect === "manual" && c.init.headers.Connection === "close")) fail("samples must not follow redirects or reuse connections");
-    if (r.trace[0] !== "begin" || !r.trace[1].startsWith("lock:") || r.trace[1] !== `lock:${vector.cases[0].key}`) fail("lock must be taken inside the transaction with the vector key");
+    if (r.trace[0] !== "connected" || r.trace[1] !== "begin" || r.trace[2] !== `lock:${vector.cases[0].key}`) fail("lock must be taken inside the transaction with the vector key");
     if (!released(r)) fail("not released on success");
     if (r.result.realtimeOrigin !== "http://localhost:4100") fail("realtime origin must come from the Next.js report");
     if (!r.calls.some((c) => c.url.startsWith("http://localhost:4100/e2e-stack?nonce="))) fail("hocuspocus must be fetched on the derived origin");
@@ -556,6 +566,27 @@ const scenarios = {
     if (Date.now() - started > 2_000) fail("the gate hung on an unresponsive database");
     if (!m.formatReport(r.result).join("\n").includes(m.REMEDIATION["database timeout"])) fail("missing remediation");
   },
+  async lateConnectionIsDisposedAfterAConnectTimeout() {
+    const conn = connection({ connectDelayMs: 120 });
+    const result = await m.verifyE2EStack({
+      baseUrl: "http://localhost:3100", databaseUrl: "postgresql://guard@127.0.0.1/bridge_test", nonce,
+      fetchImpl: async () => fail("must not sample after a connect timeout"),
+      connect: conn.connect, databasePhaseTimeoutMs: 30,
+    });
+    if (result.ok || result.failures.map((f) => `${f.service}:${f.class}`).join("|") !== "gate:database timeout") fail("a connect timeout must fail closed as gate:database timeout");
+    if (conn.trace.includes("connected")) fail("test invalid: the connection arrived before the deadline");
+    // The handshake completes later; the verifier must dispose of that
+    // connection instead of leaving a reserved socket open.
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    if (conn.trace.join(",") !== "connected,close:force") fail(`a late connection must be force-closed and nothing else, trace=${conn.trace}`);
+  },
+  async hungForcedCloseDoesNotDiscardTheResult() {
+    const started = Date.now();
+    const r = await run({}, { hangRollback: true, hangClose: true }, { databasePhaseTimeoutMs: 40 });
+    if (!r.result.ok) fail(`the attestation had already succeeded, got ${classes(r)}`);
+    if (r.trace.at(-1) !== "close:force-hung") fail(`expected a forced close attempt, trace=${r.trace}`);
+    if (Date.now() - started > 2_000) fail("the gate hung on a forced close that never returned");
+  },
   async hungRollbackForceClosesInsteadOfHanging() {
     const started = Date.now();
     const r = await run({}, { hangRollback: true }, { databasePhaseTimeoutMs: 40 });
@@ -596,6 +627,8 @@ expect 0 "the verifier never connects to a database whose parsed name is not _te
 expect 0 "the verifier refuses when the live database differs from the parsed name, and still releases" e2e_stack_selftest liveNameMustMatchParsedName
 expect 0 "a database phase that never returns is reported as database timeout, samples nothing, and force-closes" e2e_stack_selftest hungLockIsADatabaseTimeoutAndForceCloses
 expect 0 "a ROLLBACK that never returns force-closes the connection instead of hanging the gate" e2e_stack_selftest hungRollbackForceClosesInsteadOfHanging
+expect 0 "a connection that arrives after the connect deadline is force-closed, never left open" e2e_stack_selftest lateConnectionIsDisposedAfterAConnectTimeout
+expect 0 "a forced close that never returns neither hangs the gate nor discards a decided result" e2e_stack_selftest hungForcedCloseDoesNotDiscardTheResult
 expect 0 "importing the verifier opens no connection and does not run the CLI" e2e_stack_selftest importIsInert
 
 if rg -Fq 'const { default: postgres } = await import("postgres");' "$REPO_ROOT/scripts/check-e2e-stack.mjs" \
