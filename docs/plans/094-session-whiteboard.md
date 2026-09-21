@@ -917,13 +917,51 @@ No implementation, Round-4 plan edit, migration, service, E2E, or remote action 
 14. `[FIXED]` `[claude-self]` `docs/testing.md:38-42` still recommends `bun run --env-file=/dev/null test` although the Phase-6 contract replaced that claim with five explicit empty provider keys; `student-session.tsx:102` also retains stale effect dependencies.
     → Response: `[FIXED]` The `student-session.tsx` effect dependencies were corrected in Phase 11. Phase 13 (2026-09-21) replaced the stale `--env-file=/dev/null` advice in `docs/testing.md` with the five explicit empty provider keys.
 15. `[FIXED]` `[claude-self][opus][glm]` Minor cleanup remains around the dead canvas `plain_text` column/write path, the generic `/settings` route name, duplicate session lookup on list, the owner foreign-key delete policy, and the broadened blank-attempt load log.
-    → Response: `[FIXED]` Four of five fixed, one declined. `plain_text` was removed from migration 0028 and the probe sentinels; only `canvas-settings` is registered (`TestCanvasSettings_AtomicRouteCutoverRejectsLegacySettingsRoute`); `ListCanvases` performs one visibility query; the load log now fires only on a thrown error and canvas load errors rethrow — that last item was untested until Phase 13 added the three “narrowed hocuspocus document-load logging” tests. The owner foreign-key delete policy is `[WONTFIX]` by Spec 013 “Canvas API corrections”: it “keeps the existing data-retention behavior”.
+    → Response: `[FIXED]` Four of five fixed, one declined. `plain_text` was removed from migration 0028 and the probe sentinels; only `canvas-settings` is registered (`TestCanvasSettings_AtomicRouteCutoverRejectsLegacySettingsRoute`); the duplicate list lookup was claimed fixed here but `[codex]` correctly disputed it in Plan-wide Review 2 — `ListVisibleCanvases` still reads the session through both `GetSession` and `CanAccessSession`, tracked as finding R2-6 below; the load log now fires only on a thrown error and canvas load errors rethrow — that last item was untested until Phase 13 added the three “narrowed hocuspocus document-load logging” tests. The owner foreign-key delete policy is `[WONTFIX]` by Spec 013 “Canvas API corrections”: it “keeps the existing data-retention behavior”.
 
 Reconciliation (Phase 13, 2026-09-21): every response above was verified against code and tests at the review commit by a read-only audit, not taken from the post-execution entries; findings 5, 9, 14, and 15 had real residual gaps that Phase 13 closed.
 The responses stay subject to confirmation by the Plan-wide Review 2 reviewers below.
 
 The review converged strongly on the binding and missing-contract findings.
 The atomic end transition, public-session create policy, admin visibility, and newly required end-session/E2E files cross the frozen scope or trust model, so the hard safeguard pauses implementation until those decisions and scope additions are explicit.
+
+### Plan-wide Review 2 — Round 1 (2026-09-21) — exact commit `8ce0a6e`
+
+- **Reviewers:** Claude self-review (Fable 5.1 substituting in slot 1), Codex (`gpt-5.6-sol`, high), independent Claude (Opus 5, fresh context), GLM 5.2.
+- **Verdicts:** `[claude-self]` CHANGES REQUESTED; `[codex]` CHANGES REQUESTED; `[opus]` CHANGES REQUESTED; `[glm]` **no verdict** — the run timed out after 20 minutes with no output on the 136-file diff (its `limit.output` was 128000, so this was not the empty-review failure mode).
+  GLM is neither substituted nor waived; it is re-dispatched on the Round 2 commit with a prompt narrowed to an explicit file list.
+- **Disclosed deviation:** this round ran before the full pinned-E2E gate because no separately started Bridge stack was available; `ci-local.sh --fast` was green on the reviewed tree. A full gate on the exact merge commit is still required.
+- **No reviewer found** a private or cross-org canvas read, a read-only-token write, a post-end mutation, or a migration/probe mismatch. `[codex]` confirmed Review 1 responses 1–14 and disputed 15; `[opus]` confirmed 1–15, scoping 11 to canvases only.
+- Codex ran with `danger-full-access`; the working tree was verified clean after its run.
+
+**Must Fix**
+
+R2-1. `[OPEN]` `[codex][opus]` The gate never proves the running stack uses the test database (`scripts/ci-local.sh:51-63,73`, `e2e/playwright.config.ts:4`, `e2e/seed.setup.ts:100`).
+   `GATE_DATABASE_URL` is parsed and live-validated as `_test`, but pinning `DATABASE_URL` for Playwright does not reconfigure an already-running service, and `E2E_BASE_URL` is now adopted silently from `.env` with no check that the target is Bridge at all.
+   A stack mistakenly pointed at development or production data that contains the demo identities would have classes created, students enrolled, and live sessions ended while the gate passes.
+   `[opus]` adds that line 63 assigns `E2E_BASE_URL` without `export`.
+R2-2. `[OPEN]` `[opus]` `EndSession` dropped the platform-administrator path with no recorded decision and no test (`platform/internal/handlers/sessions.go:558`, removed in `ae19222`).
+   Spec 013 scopes the no-bypass rule to private canvases and says the end handler authorizes “under the existing tenancy rules”, which on `main` admit an administrator; sibling teacher-only routes at `sessions.go:1007,1099,1145,1180` still do.
+   Orchestrator note: an administrator impersonating the teacher can still end the session, so “no other route” overstates it, but the change is an undocumented trust-model tightening either way.
+
+**Should Fix**
+
+R2-3. `[OPEN]` `[codex][opus][claude-self]` Create, update, and delete canvas still answer the ended-session 409 before authorization (`handlers/canvases.go:32-51,148,197`, `store/canvases.go:228-241`), the opposite of the ordering `52eacce` restored on `PatchCanvasSettings` (which all three reviewers judged correct).
+   An unrelated authenticated user holding a cross-org session UUID can distinguish live from ended sessions.
+R2-4. `[OPEN]` `[codex][opus]` `EndSession` shapes its response from the local `confirmed` flag rather than `durableEnd.WhiteboardServerArchiveComplete` (`handlers/sessions.go:587,659`, `store/session_lifecycle.go:384`).
+   When request A's lease expires and request B ends the session confirmed first, A answers `false` plus the incomplete-archive warning although the durable value is `true`.
+R2-5. `[OPEN]` `[opus]` The gate runs `scripts/seed_problem_demo.sql` unattended while `AGENTS.md` still lists `scripts/seed_*.sql` as an always-pause safeguard with migration of the throwaway container as the only exception.
+   It runs only after the live `_test` validation, so this is a governance/code inconsistency rather than a data risk.
+R2-6. `[OPEN]` `[codex]` `ListVisibleCanvases` reads the session twice (`store/canvases.go:488,535`, `store/sessions.go:813`) and can combine different snapshots across a concurrent end; Review 1 response 15 wrongly claimed this fixed.
+R2-7. `[OPEN]` `[claude-self]` `AuthorizeCanvasDocument` re-implements `CanAccessSession` inline (`store/canvases.go:106-121`) because it must run inside the lifecycle-locked transaction.
+   The two rules match today (`[opus]` checked the same), but nothing pins them together, and Decision 9 requires the named helper precisely because a hand-rolled copy is how Plan 090's cross-org leak happened.
+   One shared core taking a querier would also resolve R2-6.
+
+**Nice to Have**
+
+R2-8. `[OPEN]` `[opus]` `realtime_token.go:206` logs a token-signing failure as “canvas authorization state query failed”.
+R2-9. `[OPEN]` `[opus]` `src/lib/db/schema.ts:255-268` omits the `sessions_canvas_freeze_lease_pair` CHECK that `drizzle/0028` adds; a future `drizzle-kit generate` could emit a DROP, and Bridge has no down-migrations.
+R2-10. `[OPEN]` `[opus]` The full-scene last-writer-wins binding means two tabs of the same owner clobber rather than merge; add it to the accepted MVP limitations in `decisions.md` §10.
 
 ## Post-Execution Report
 
