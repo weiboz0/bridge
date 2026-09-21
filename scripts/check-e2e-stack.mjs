@@ -261,8 +261,11 @@ export async function verifyE2EStack({
     }
 
     // If our own transaction died, every service correctly saw no lock; say so
-    // instead of blaming a stack that may be perfectly configured.
-    if (deadline.aborted || (await connection.backendPid()) !== pid || !(await connection.ownLockGranted(objid))) {
+    // instead of blaming a stack that may be perfectly configured.  An expired
+    // hold deadline is NOT that: the lock is re-read, and if it is still held
+    // the per-service timeouts stand, because a hung service is the stack's
+    // fault and "re-run, the stack was fine" would be exactly wrong.
+    if ((await connection.backendPid()) !== pid || !(await connection.ownLockGranted(objid))) {
       result.failures = [{ service: "gate", class: "lock lost" }];
       return result;
     }
