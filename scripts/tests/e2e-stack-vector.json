@@ -1,0 +1,132 @@
+{
+  "_comment": "Shared cross-implementation contract for the Plan 094 Phase 14 E2E stack attestation. Asserted verbatim by Go, Bun, Vitest, and the gate selftests so the four implementations cannot drift. Do not edit a value without changing all four.",
+  "contract": {
+    "flag": {
+      "name": "BRIDGE_E2E_STACK",
+      "enabledValue": "1"
+    },
+    "tunnelOptIn": {
+      "name": "ALLOW_E2E_STACK_OVER_TUNNEL",
+      "enabledValue": "true"
+    },
+    "noncePattern": "^[0-9a-f]{64}$",
+    "lockClass": 1112683077,
+    "lockClassHex": "0x42523245",
+    "objsubid": 1,
+    "keyDerivation": "h = sha256(ASCII bytes of the nonce string); objid = parseInt(h.hex[0..8], 16) & 0x7fffffff; key = (lockClass << 32) | objid, a positive bigint",
+    "gateLockStatement": "SELECT pg_advisory_xact_lock($1::bigint)  -- inside an open transaction on ONE reserved connection",
+    "observeQuery": "SELECT current_database(), EXISTS (SELECT 1 FROM pg_locks l JOIN pg_database d ON d.oid = l.database WHERE d.datname = current_database() AND l.locktype = 'advisory' AND l.classid = $1::int8::oid AND l.objid = $2::int8::oid AND l.objsubid = 1 AND l.granted)",
+    "observeQueryParams": [
+      "lockClass",
+      "objid"
+    ],
+    "fingerprint": "lowercase hex sha256( ASCII(nonce) || 0x00 || UTF-8(current_database()) )",
+    "testDatabaseSuffix": "_test",
+    "successBody": {
+      "go": [
+        "fingerprint",
+        "instance"
+      ],
+      "hocuspocus": [
+        "fingerprint",
+        "instance"
+      ],
+      "next": [
+        "fingerprint",
+        "instance",
+        "realtimeUrl"
+      ]
+    },
+    "successHeaders": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json"
+    },
+    "paths": {
+      "go": "/api/health/e2e-stack",
+      "next": "/api/e2e-stack",
+      "hocuspocus": "/e2e-stack"
+    },
+    "nonceQueryParam": "nonce",
+    "refusal": {
+      "go": "the router's own NotFound response, byte-identical to an unregistered path",
+      "next": "notFound() from next/navigation, identical to an absent route",
+      "hocuspocus": "do not handle the request: fall through to the server's default unhandled response"
+    }
+  },
+  "cases": [
+    {
+      "nonce": "0000000000000000000000000000000000000000000000000000000000000000",
+      "database": "bridge_test",
+      "objid": 1625316305,
+      "key": "4778937428152966097",
+      "fingerprint": "9adefb3bebe51a83b4a75e9c7644af28043a4187d157e5ad1735ce4366cc56bd"
+    },
+    {
+      "nonce": "0000000000000000000000000000000000000000000000000000000000000000",
+      "database": "Ünï_test",
+      "objid": 1625316305,
+      "key": "4778937428152966097",
+      "fingerprint": "d96299d9a502dff353f56b6a76391cae59c7d1cec9d73f0b4f4248efe862bf64"
+    },
+    {
+      "nonce": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "database": "bridge_test",
+      "objid": 1594331378,
+      "key": "4778937428121981170",
+      "fingerprint": "8b9a31d4fa0bc41f2f13fde44cc775b2fdbed593b3208e9bb7d46a39c6163df9"
+    },
+    {
+      "nonce": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "database": "Ünï_test",
+      "objid": 1594331378,
+      "key": "4778937428121981170",
+      "fingerprint": "199edb8d1a6ef47e1d81c5e3fe1a6e9ad7c26eabbba8314131a8464fdadf24e2"
+    },
+    {
+      "nonce": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "database": "bridge_test",
+      "objid": 682520174,
+      "key": "4778937427210169966",
+      "fingerprint": "d6ca491821b2a94505c0398e70e217361003b8850974c16333a80cb9e4adab1a"
+    },
+    {
+      "nonce": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "database": "Ünï_test",
+      "objid": 682520174,
+      "key": "4778937427210169966",
+      "fingerprint": "376651b2a3529118730d3d8da868e54f8efbeb2d5c59acf92f20813e4e727448"
+    },
+    {
+      "nonce": "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
+      "database": "bridge_test",
+      "objid": 1856938640,
+      "key": "4778937428384588432",
+      "fingerprint": "a29ad7e40228c3b3653b5882d685fb1c88d45197458988eacd71d0d3e6c11ac0"
+    },
+    {
+      "nonce": "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
+      "database": "Ünï_test",
+      "objid": 1856938640,
+      "key": "4778937428384588432",
+      "fingerprint": "8d472f1eaefba1d6047e93a1179c231416f93ceaee71919d7a59af2f110395f0"
+    }
+  ],
+  "composeKeyBoundaries": [
+    {
+      "objid": 0,
+      "key": "4778937426527649792"
+    },
+    {
+      "objid": 2147483647,
+      "key": "4778937428675133439"
+    }
+  ],
+  "disjointFrom": {
+    "sessionLifecycleLockClass": 1112687687,
+    "classReplacementLockClass": 1112687436,
+    "hashtextOneKeyHighWords": [
+      0,
+      4294967295
+    ]
+  }
+}
