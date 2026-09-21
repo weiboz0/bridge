@@ -72,6 +72,20 @@ Phase 7 is complete; Phases 8 through 13 are authorized for phase-by-phase imple
 **`.env.example`** · **`docs/setup.md`** · **`docs/project-structure.md`** (server-only control configuration and ports) ·
 **`docs/reviewers.md`** + **`docs/development-workflow.md`** + **`docs/coding-agent.md`** (permanent review-gate and dispatch contracts).
 
+**PHASE-14 E2E STACK ATTESTATION SCOPE (user-authorized 2026-09-21 via the “Build attestation now” decision on Plan-wide Review 2 finding R2-1):**
+**`scripts/check-e2e-stack.mjs`** (new gate-side verifier) · `scripts/ci-local.sh` + `scripts/tests/test-guards.sh` (already scoped) ·
+**`platform/internal/handlers/e2e_stack.go`** + **`platform/internal/handlers/e2e_stack_test.go`** + **`platform/internal/handlers/e2e_stack_integration_test.go`** (new flag-gated attestation endpoint) ·
+`platform/internal/realtime/canvas_control.go` + its test, `platform/internal/config/config.go` + its test, `platform/cmd/api/main.go` (already scoped) ·
+**`server/e2e-stack.ts`** + **`server/e2e-stack.test.ts`** (new Hocuspocus-side attestation) · `server/canvas-lifecycle.ts` + its test (already scoped; registers the control route) ·
+**`src/app/api/e2e-stack/route.ts`** (new Next.js attestation route, outside every Go-proxied prefix) + **`tests/unit/e2e-stack-route.test.ts`** (new) · `tests/unit/shadow-routes.test.ts` (already scoped) ·
+`e2e/seed.setup.ts` (already scoped; re-verifies before its first mutation) · `package.json` (already scoped; adds the new Bun test file to `test`) ·
+`AGENTS.md`, `docs/testing.md`, `docs/setup.md`, `docs/project-structure.md`, `.env.example`, `docs/architecture/decisions.md` (already scoped).
+
+**SCOPE-AUDIT CORRECTION (2026-09-21):** a mechanical audit of `git diff --name-only main...HEAD` against this section found five files changed on the branch under the 2026-08-10 blanket authorization but never listed here:
+**`e2e/playwright.config.ts`** · **`tests/unit/playwright-config.test.ts`** · **`tests/unit/vitest.playwright-config.config.ts`** (the Phase-13 fail-closed Playwright configuration and its isolated regression) ·
+**`tests/unit/realtime-jwt.test.ts`** · **`tests/unit/use-yjs-provider-hook.test.tsx`** (Phase-10 TypeScript JWT and provider-hook regressions).
+They are listed now so the declared scope equals the branch diff; no file's content changes because of this correction.
+
 The existing broad entries for `drizzle/**`, `src/lib/db/schema.ts`, `platform/cmd/api/main.go`, `platform/internal/handlers/realtime_token*`, `server/hocuspocus*`, whiteboard frontend files, schema-probe files, documentation, and tests remain authoritative for remediation changes in those paths.
 
 Scope-widening (Spec 013 remediation) authorized by the user 2026-08-11 via “approved” after the Sol + Fable 5 design gate passed.
@@ -610,6 +624,44 @@ That recheck is now defense in depth: the confirmed path gains the lifecycle lea
   The recovery failure blocks Playwright, and the E2E command pins both database variables and blanks all five provider keys.
   Mocked governance selftests first failed against the absent branch, then proved fast no-op, persistent-URL recovery ordering, shell precedence, missing-URL refusal, restore-failure blocking, validated-URL-only seed invocation, validation-before-restore ordering, and provider-key isolation; no database, E2E, service, migration, or `.env` read was performed for this change.
 
+### Phase 14 — E2E stack attestation *(Terra backend + Sonnet route; tests by Opus; gate script by the orchestrator)*
+
+**Problem (Plan-wide Review 2, R2-1).** `ci-local.sh` proves that *its own* `GATE_DATABASE_URL` is a live `_test` database, but the E2E tier drives a separately running stack selected by `E2E_BASE_URL`, and pinning `DATABASE_URL` for Playwright does not reconfigure a running service.
+`e2e/seed.setup.ts` creates classes, enrolls users, and ends live sessions, so a stack pointed at development or production data would be mutated while the gate reports green.
+Phase 13 made this easier to reach unattended by adopting `E2E_BASE_URL` from `.env`.
+
+**Design.** The gate accepts a stack only when every database-holding service proves, live and per request, that it is connected to the *same database in the same PostgreSQL cluster* the gate validated.
+
+- *Fingerprint.* `sha256(nonce ‖ 0x00 ‖ current_database() ‖ 0x00 ‖ system_identifier)`, lowercase hex, where `system_identifier` comes from `pg_control_system()` (readable by the application role; verified on `bridge_test`).
+  The database name alone is insufficient — a second cluster can also hold a `bridge_test` — and the nonce (64 lowercase hex characters, generated per gate run, rejected otherwise) makes a recorded answer unreplayable.
+  Each service computes it with one bounded query on **its own** connection pool at request time, so the proof describes the connection that will actually serve E2E traffic, not a configuration string.
+- *Opt-in.* `BRIDGE_E2E_STACK=1` (exactly `1`) exposes the attestation; unset, every surface below answers 404 and no query runs.
+  A service refuses to attest — 503, logged with the reason, never the URL — unless the parsed `DATABASE_URL` name **and** the live `current_database()` both end in `_test`, reusing the dual-proof shape of `NewE2ECanvasControlFailureInjection`.
+  The Go API additionally refuses to start with the flag under `APP_ENV=production`, mirroring the `DEV_SKIP_AUTH` guard.
+- *Surfaces.*
+  Go: `GET /api/health/e2e-stack?nonce=…` (reachable through the existing `/api/health/:path*` proxy) returns `{"go":{"fingerprint":…},"hocuspocus":{"fingerprint":…}}`.
+  It obtains the Hocuspocus fingerprint over the existing bearer-authenticated control listener (`POST /internal/e2e-stack/attestation`, same verified-loopback/HTTPS transport rules and deadline as the freeze client); a control failure is reported as a missing `hocuspocus` member, never as success.
+  Next.js: `GET /api/e2e-stack?nonce=…`, a route outside every `GO_PROXY_ROUTES` prefix, fingerprints the legacy TypeScript API's own `db`.
+  The endpoints take no session: they disclose only a salted hash, only under the flag, only for a `_test` database.
+- *Gate.* New `scripts/check-e2e-stack.mjs`, called by `run_e2e_gate` after the URL is resolved and **before** the demo-seed restore and Playwright: it prints the adopted target, generates the nonce, computes the expected fingerprint through the already parsed-and-live-validated `GATE_DATABASE_URL`, fetches both endpoints with bounded timeouts and `redirect: "error"`, and requires all three service fingerprints to equal the expected value.
+  Any mismatch, missing member, non-200, redirect, or timeout records a named gate failure, removes a stale attestation, and returns before the seed or Playwright run.
+  `E2E_BASE_URL` is exported (the `[opus]` nit), and the success attestation JSON gains `"stack_attested": true`; `pre-merge-guard.sh` is unchanged because it already requires a non-fast, clean, exact-commit run.
+- *Time-of-check to time-of-use.* The gate exports the nonce and expected fingerprint to Playwright, and `e2e/seed.setup.ts` re-verifies all three fingerprints as its first step, before its first mutating request; a stack restarted against another database between the two checks therefore fails before anything is written.
+- *Who starts the stack.* With the attestation in place the safety of an E2E run no longer depends on who launched the services.
+  The orchestrator may start Bridge's three services itself with `BRIDGE_E2E_STACK=1`, still without reading or editing `.env`, and may stop **only** the processes it started; it never stops or signals a process it did not start, and an attestation failure is a pause, not something to work around.
+  This supersedes the Phase-12 wording that required a user-started stack; the requirement for a user-provisioned `HOCUSPOCUS_CONTROL_SECRET` stands.
+
+**Out of scope for this phase.** Attesting non-database dependencies (object storage, LLM providers — the gate already blanks all five provider keys), and any production health surface.
+
+**Integration tests (NAMED — required).**
+Go: `TestE2EStack_DisabledReturns404AndRunsNoQuery`, `TestE2EStack_RejectsMalformedNonce`, `TestE2EStack_RefusesNonTestParsedName`, `TestE2EStack_RefusesNonTestLiveName`, `TestE2EStack_FingerprintMatchesIndependentComputation` (against the live `_test` database), `TestE2EStack_HocuspocusFailureOmitsMemberNeverSucceeds`, `TestE2EStack_NeverLogsOrReturnsDatabaseURL`, `TestConfig_E2EStackFlagRefusedInProduction`.
+Bun: `e2e stack attestation is absent without the flag`, `e2e stack attestation requires the control bearer`, `e2e stack attestation refuses a non-test live database`, `e2e stack fingerprint matches the shared vector`.
+Vitest: `e2e-stack route returns 404 without the flag`, `e2e-stack route refuses a non-test database`, `e2e-stack route fingerprint matches the shared vector`, and the shadow-route census still passes.
+A single shared fixture vector (nonce, database name, system identifier → expected hex) is asserted in Go, Bun, Vitest, and the gate selftests so the four implementations cannot drift.
+Gate selftests in `scripts/tests/test-guards.sh` (mocked `psql`/`fetch`, no network, no database): mismatch blocks seed and Playwright; missing `hocuspocus` member blocks; non-200, redirect, and timeout each block; malformed fingerprint blocks; `--fast` performs no attestation; success orders attestation → seed → Playwright; the target URL is printed; `E2E_BASE_URL` reaches the child environment; a failure removes a stale attestation.
+
+**Documentation.** `AGENTS.md` “Processes and ports” (the stale “defaults to `http://localhost:3003`” sentence is corrected and the attestation requirement stated), `docs/testing.md` “The E2E hazard”, `docs/setup.md`, `docs/project-structure.md`, `.env.example` (`BRIDGE_E2E_STACK`), and `decisions.md` §9.
+
 ### Phase 13 — Documentation, cross-phase verification, and shipping evidence *(orchestrator)*
 
 - Update `docs/api.md`, `docs/architecture/decisions.md`, `docs/testing.md`, `docs/setup.md`, `docs/project-structure.md`, `.env.example`, and `README.md` for status-first lifecycle semantics, confirmed/degraded guarantees, control transport/config, replacement warnings, admission bounds, single-Hocuspocus limitation, no independent administrator/impersonator bypass for private canvases, and operator behavior; verify the Phase-9 config docs remain synchronized with the final implementation.
@@ -639,6 +691,8 @@ That recheck is now defense in depth: the confirmed path gains the lifecycle lea
 | A half-open control request, response writer, mutation authorization, or cancelled waiter strands a fence or leaks memory. | Owned deadlines and abort settlement, eight-admission pre-allocation cap, reader references, token/generation identity cleanup, and controlled half-open/saturation tests. |
 | Replacement session creation silently ends a whiteboard session without archive status or scheduled cleanup. | Class guard plus sorted lifecycle locks, durable incomplete result, same scheduled completion/events, returned replacement metadata, and teacher warning without a realtime dependency. |
 | Canvas-specific transport hardening breaks existing attempt/chapter/session documents. | Preserve the shared 100 MiB websocket cap and enforce the 1 MiB limit only after parsing a canvas mutation; test every supported namespace. |
+| The E2E tier mutates a stack that is not connected to the validated test database (R2-1). | Phase 14: per-request, nonce-salted database-and-cluster fingerprints from all three services, verified by the gate before the seed and by `seed.setup.ts` before its first mutation; flag-gated, `_test`-only, fail-closed. |
+| The attestation surface itself becomes an information leak or a production footgun. | 404 unless `BRIDGE_E2E_STACK=1`; refuses non-`_test` parsed or live names; discloses only a salted hash; Go refuses the flag under `APP_ENV=production`; never logs or returns the database URL. |
 | Governance edits weaken or ambiguously cap review gates. | Executable text checks require the exact Sol + Fable design roster, exact-commit binding, uncapped consensus for all gates, complete canonical mirroring, and no contradictory numeric cap. |
 
 ## Out of scope
@@ -841,6 +895,12 @@ No implementation, Round-4 plan edit, migration, service, E2E, or remote action 
 - `[glm]` retains **APPROVE WITH NITS** from Round 1; it had no blocker and no later response invalidated its findings.
 - The Round-3 `[OPEN]` settings-cutover finding is now `[FIXED]` by reviewer confirmation.
 - All four Tier-A roster slots approve the same final substantive plan state with no open material finding; Phase 7 is authorized.
+
+### Phase 14 revision — plan gate pending (2026-09-21)
+
+Plan-wide Review 2 finding R2-1 (`[codex]` Must Fix, `[opus]` Should Fix) requires a design the approved plan did not contain, and the user chose to build it inside Plan 094.
+This revision adds Phase 14, its File scope, its named integration tests, two risk rows, and a scope-audit correction listing five already-changed files.
+It is a material revision, so it must clear the Tier-A plan-review gate at its exact commit before any Phase 14 code is written; the unrelated Review 2 fixes (R2-2 through R2-10) stay inside the previously approved scope and proceed independently.
 
 ## Code Review
 
