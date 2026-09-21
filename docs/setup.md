@@ -215,6 +215,12 @@ starts and calls `process.exit(1)` on any misconfig — mirrors the Go API's
   Set `HOCUSPOCUS_INTERNAL_URL` only for an explicit override: HTTP is allowed
   only on canonical numeric `127.0.0.0/8` or IPv6 `::1` loopback hosts, while remote listeners require verified HTTPS.
   This URL and secret are server-only; do not put either in `NEXT_PUBLIC_*`.
+  If the listener is down or the secret is wrong, sessions still end — the database
+  transition is authoritative — but the end is recorded as degraded and the teacher is
+  warned that the latest whiteboard changes may not have been archived.
+  Run exactly one Hocuspocus process: the canvas freeze fence and its admission and
+  memory bounds are in-process state, so a second instance voids the confirmed-archive
+  guarantee (`docs/architecture/decisions.md` §11).
 - `BRIDGE_HOST_EXPOSURE` — same semantics as the Go API (see "Host Exposure
   Declaration" above). Allowed values: `""` / `"localhost"` (default) and
   `"exposed"`. Unrecognized values fail loud at boot.

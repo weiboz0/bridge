@@ -28,9 +28,10 @@
 > fronted by nginx on 3100) because **other, unrelated services occupy 3003 and 8002 there**.
 > Never kill a process on those ports assuming it's a stale Bridge instance.
 >
-> This matters most for E2E: `e2e/playwright.config.ts` defaults `baseURL` to `http://localhost:3003`
-> and its seed fixture *creates classes and enrolls users*, so an unpinned run aims mutating setup
-> logic at whatever is listening there. Always export `E2E_BASE_URL`. See `docs/testing.md`.
+> This matters most for E2E: its seed fixture *creates classes and enrolls users*, so an unpinned run
+> would aim mutating setup logic at whatever is listening on the default port.
+> `e2e/playwright.config.ts` therefore refuses to evaluate without an `E2E_BASE_URL` from the shell or
+> `.env`. See `docs/testing.md`.
 
 All three services must be running for E2E tests.
 
@@ -47,6 +48,7 @@ The canvas lifecycle listener is separate from the WebSocket port.
 The Go API uses the numeric-loopback URL derived from `HOCUSPOCUS_CONTROL_PORT` unless `HOCUSPOCUS_INTERNAL_URL` overrides it.
 An override may use HTTP only on a canonical numeric IPv4 or IPv6 loopback address; non-loopback deployments require normally verified HTTPS.
 This control URL and bearer are server-only and must never be exposed through Next.js or a browser configuration variable.
+Hocuspocus is a single-instance service: run one process per deployment.
 
 ## Running the Services
 

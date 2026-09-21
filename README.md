@@ -10,7 +10,7 @@ Bridge combines a browser-based coding environment, real-time classroom collabor
 - **Ad-hoc sessions** — Any signed-in user can host a session, make it public or unlisted, and browse or join public ones by link at `/sessions`
 - **Multi-language editor** — Monaco Editor with Python (Pyodide), JavaScript (iframe sandbox), and Blockly (K-5)
 - **Real-time collaboration** — Teachers see all student code live via Yjs + Hocuspocus
-- **Session whiteboards** — Persisted Excalidraw boards sync through Yjs during a session and remain available through a read-only archive after it ends
+- **Session whiteboards** — Persisted Excalidraw boards sync through Yjs during a session and remain available through a read-only archive after it ends. Owners choose who can see each board, the host sets a minimum visibility floor, and ending a session always succeeds — the teacher is warned if the final whiteboard changes could not be archived. Requires a single Hocuspocus process
 - **AI tutor** — Socratic AI assistant that hints, never solves. Teacher-controlled per student. Supports 7 LLM providers (Anthropic, OpenAI, DashScope, Gemini, OpenRouter, Ark, Ollama)
 - **Course & class management** — Courses → Topics → Classes with join codes
 - **Organization system** — Schools, tutoring centers, bootcamps with role-based access (admin, org_admin, teacher, student, parent)

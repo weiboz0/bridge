@@ -34,10 +34,10 @@ $ bun --eval 'console.log(process.env.ANTHROPIC_API_KEY?.slice(0,12))'
 sk-ant-api03            # still present
 ```
 
-To run the suite without billing anything:
+To run the suite without billing anything, blank all five provider keys explicitly:
 
 ```
-bun run --env-file=/dev/null test
+ANTHROPIC_API_KEY= OPENAI_API_KEY= GEMINI_API_KEY= DASHSCOPE_API_KEY= OPENROUTER_API_KEY= bun run test
 ```
 
 `ci-local.sh` explicitly exports all five provider keys as empty values for Vitest and E2E:
@@ -78,6 +78,26 @@ The seed is skipped for `--fast`, an absent E2E URL, a rejected database target,
 a failed restore blocks Playwright.
 This recovery is limited to the gate's `_test` target and restores the documented demo login identities,
 course, and memberships that `e2e/auth.setup.ts` requires before its own fixture class/enrollment setup.
+
+## Session whiteboard tiers
+
+The whiteboard contract is split by what each tier can prove.
+
+- **Go** (`platform/internal/{handlers,store,realtime}`) owns authorization and lifecycle:
+  the mint matrix (`TestMintToken_Canvas_*`), creator and settings authorization with no administrator
+  or impersonator bypass, the status-first end with confirmed and degraded persistence, implicit
+  replacement ends, and the advisory-lock ordering proofs. These need the `_test` database.
+- **Bun** (`server/canvas-lifecycle.test.ts`, `server/hocuspocus.canvas.test.ts`) owns the realtime
+  process: the freeze fence, the eight-admission cap, the 500 ms authorization deadline, size and ledger
+  bounds, JWT-expiry closes for readers and writers, and the control listener. No database or network.
+  These assume the supported topology of exactly one Hocuspocus process.
+- **Vitest** (`tests/unit/whiteboard-*.test.tsx`, `tests/unit/excalidraw-yjs.test.ts`,
+  `src/lib/whiteboard/**`) owns the client: echo suppression, local-only `appState`, the host floor
+  control, loosening confirmation, image and file rejection, and the replacement and degraded-archive
+  warnings.
+- **Playwright** (`e2e/session-whiteboard.spec.ts`) owns the live path across all three services.
+  It needs the control secret provisioned on both server processes; the degraded-archive assertion
+  additionally needs the stack started with `BRIDGE_E2E_CANVAS_CONTROL_FAILURE=1` and is skipped otherwise.
 
 ## Database
 

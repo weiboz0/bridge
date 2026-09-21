@@ -92,6 +92,14 @@ after an end, an optional durable `whiteboardServerArchiveComplete` boolean.
 PATCH accepts exactly `{ "canvasFloor": "private" | "host" | "participants" }`.
 The older `/settings` route has no compatibility alias.
 
+Ending a session is status-first: the database transition is authoritative and
+succeeds even when Hocuspocus is unavailable, times out, or answers malformed.
+`whiteboardServerArchiveComplete: true` is a confirmed end — the archive holds
+the final state the responding Hocuspocus process had under an active freeze
+fence. `false` is a degraded end — no new write is authorized, but changes that
+existed only in an unavailable or already-authorized in-flight path may be
+missing from the archive.
+
 An explicit successful end has the ordinary top-level session fields plus
 `whiteboardServerArchiveComplete`.
 When that value is `false`, it also has
@@ -105,6 +113,12 @@ Canvas documents are read through the existing realtime-token mint endpoint usin
 Canvas mint requests additionally require the selected canvas's canonical `sessionId`; the server uses it only to acquire the lifecycle lock before authorization, then verifies the exact canvas/session binding.
 The signed canvas token carries the authoritative `sessionId` for locked admission and mutation rechecks, while its `readOnly` claim is enforced by Hocuspocus rather than merely by the browser UI.
 Non-canvas mint requests and tokens retain their existing shape.
+Hocuspocus closes every established canvas connection, writable or read-only, when its token expires; the client re-mints and is re-authorized against current state.
+
+Realtime canvas writes are bounded rather than cached.
+Every mutation-bearing frame is rechecked against Go with a 500 ms deadline; a document admits at most eight active-plus-queued mutations and closes the ninth with a retryable `1013`, and a canvas update larger than 1 MiB is rejected.
+The freeze, admission, and memory accounting live in one process, so Bridge supports a single Hocuspocus instance — see `docs/architecture/decisions.md` §11.
+Excalidraw binary files are not persisted: image insertion, image paste, and file drop are disabled in the client.
 
 Live access follows the visibility ladder: owner at `private`; teacher at `host` and wider; a `present` participant at `participants` and wider; and any caller allowed into the live session at `session`.
 For a public class-less session, that last live level intentionally includes any authenticated caller.
