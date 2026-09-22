@@ -501,7 +501,7 @@ live("a forced close destroys the raw socket even when the server never complete
 }, 15_000); // postgres-js needs its full connect_timeout (5 s) to give up
 
 live("a forced close of an established connection destroys its socket and the server drops the lock", async () => {
-  const nonce = "6".repeat(64);
+  const nonce = "8".repeat(64); // unused elsewhere: a stranded lock from another test must not block this one
   const objid = deriveObjid(nonce);
   const connection = await defaultConnect(DATABASE_URL);
   await connection.begin();
