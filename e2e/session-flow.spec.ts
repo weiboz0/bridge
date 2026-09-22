@@ -127,8 +127,10 @@ test.describe.serial("Session Flow", () => {
 
     await expect(pastSessionsHeading).toBeVisible();
 
-    // Verify there's at least one past session entry with duration and student count
-    const sessionEntry = page.locator("text=students").first();
+    // The past-session entry is a link like "… 0 min · 1 students Ended".
+    // Match it directly rather than the bare word "students", which also
+    // appears in hidden roster spans on this page.
+    const sessionEntry = page.getByRole("link", { name: /\d+ students/i }).first();
     await expect(sessionEntry).toBeVisible({ timeout: 5000 });
 
     await page.close();
