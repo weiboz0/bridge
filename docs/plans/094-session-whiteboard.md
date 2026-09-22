@@ -1212,6 +1212,8 @@ R2-35. `[FIXED]` The E2E-stack attestation could not reach Hocuspocus behind a *
 
 This is a **material revision to attestation behaviour**, so the `ddb17f3` code-review consensus is invalidated and the Tier-A code-review gate re-runs on the new commit before merge. R2-1 remains `[OPEN]` (the attestation still has not completed a run against a live stack — this fix is a precondition for that run on this machine).
 
+**Re-review consensus (2026-09-22) — `4c785ec`:** `[codex]` APPROVE (no findings), `[opus]` APPROVE (no findings; verified the URL edge cases, the segment-boundary matcher behind the flag/lock/`_test` gates, and that the tests fail against the old matcher), `[glm]` APPROVE (one non-blocking nit: the `deploy/nginx/bridge.conf:31-32` comment that Hocuspocus "ignores the /hocuspocus path" is now stale for the HTTP attestation endpoint — that file is outside Phase 14 File scope, left for a later docs touch), `[claude-self]` APPROVE. Code-review consensus re-established at `4c785ec`; R2-1 still `[OPEN]` pending the live-stack run.
+
 ## Post-Execution Report
 
 _Plan-wide report pending later phases._
