@@ -5,9 +5,13 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,8 +21,38 @@ import (
 
 	"github.com/weiboz0/bridge/platform/internal/auth"
 	"github.com/weiboz0/bridge/platform/internal/events"
+	"github.com/weiboz0/bridge/platform/internal/realtime"
 	"github.com/weiboz0/bridge/platform/internal/store"
 )
+
+type fakeCanvasControl struct {
+	bundle                     realtime.FreezeBundle
+	err                        error
+	onFreeze                   func(realtime.FreezeRequest)
+	onComplete                 func(string, string)
+	onUnfreeze                 func(string, string)
+	freeze, complete, unfreeze int
+}
+
+func (f *fakeCanvasControl) Freeze(_ context.Context, request realtime.FreezeRequest) (realtime.FreezeBundle, error) {
+	f.freeze++
+	if f.onFreeze != nil {
+		f.onFreeze(request)
+	}
+	return f.bundle, f.err
+}
+func (f *fakeCanvasControl) Complete(_ context.Context, sessionID, token string) {
+	f.complete++
+	if f.onComplete != nil {
+		f.onComplete(sessionID, token)
+	}
+}
+func (f *fakeCanvasControl) Unfreeze(_ context.Context, sessionID, token string) {
+	f.unfreeze++
+	if f.onUnfreeze != nil {
+		f.onUnfreeze(sessionID, token)
+	}
+}
 
 // sessionFixture is the world a session integration test runs against.
 type sessionFixture struct {
@@ -55,7 +89,6 @@ func newSessionFixture(t *testing.T, suffix string) *sessionFixture {
 	ctx := context.Background()
 
 	orgs := store.NewOrgStore(db)
-	users := store.NewUserStore(db)
 	courses := store.NewCourseStore(db)
 	classes := store.NewClassStore(db)
 	sessions := store.NewSessionStore(db)
@@ -87,10 +120,9 @@ func newSessionFixture(t *testing.T, suffix string) *sessionFixture {
 	})
 
 	mkUser := func(label string) *store.RegisteredUser {
-		u, err := users.RegisterUser(ctx, store.RegisterInput{
+		u := insertFixtureUser(t, db, store.RegisterInput{
 			Name: "User " + label, Email: label + "@example.com", Password: "testpassword123",
 		})
-		require.NoError(t, err)
 		t.Cleanup(func() {
 			db.ExecContext(ctx, "DELETE FROM session_topics WHERE session_id IN (SELECT id FROM sessions WHERE teacher_id = $1)", u.ID)
 			db.ExecContext(ctx, "DELETE FROM session_participants WHERE session_id IN (SELECT id FROM sessions WHERE teacher_id = $1)", u.ID)
@@ -946,10 +978,543 @@ func TestSessionHandler_EndSession_ViaPost(t *testing.T) {
 	assert.Equal(t, "ended", session.Status)
 }
 
+func TestEndSession_DegradedWhenHocuspocusUnavailableWarnsTeacher(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	// Phase 9 must treat control unavailability as a degraded successful end,
+	// not as a failed session end.  The public response is the handoff contract
+	// for the warning UI and must expose the durable false value explicitly.
+	w := fx.doRequest(t, http.MethodPost, "/api/sessions/"+fx.sessionID+"/end", nil, fx.claims(fx.teacher, false))
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	require.Equal(t, false, body["whiteboardServerArchiveComplete"])
+	require.Equal(t, "whiteboard_server_archive_incomplete", body["warning"])
+	_, hasWarningCode := body["warningCode"]
+	require.False(t, hasWarningCode)
+
+	var status string
+	require.NoError(t, fx.db.QueryRowContext(context.Background(), `SELECT status FROM sessions WHERE id = $1`, fx.sessionID).Scan(&status))
+	require.Equal(t, "ended", status)
+}
+
+func TestEndSession_DatabaseFailureLeavesLiveClearsLeaseAndEmitsNoEvent(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	// The durable end statement is the only failing step.  Cleanup must use the
+	// operation token to release the live lease, unfreeze Hocuspocus, and avoid
+	// publishing a false session_ended event.
+	trigger := "plan094_reject_end_" + strings.ReplaceAll(fx.sessionID, "-", "")
+	function := trigger + "_fn"
+	_, err := fx.db.ExecContext(context.Background(), fmt.Sprintf(`
+		CREATE FUNCTION %s() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN RAISE EXCEPTION 'planned durable end failure'; END; $$;
+		CREATE TRIGGER %s BEFORE UPDATE OF status ON sessions
+		FOR EACH ROW WHEN (NEW.id = '%s'::uuid AND NEW.status = 'ended')
+		EXECUTE FUNCTION %s();`, function, trigger, fx.sessionID, function))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = fx.db.ExecContext(context.Background(), fmt.Sprintf(`DROP TRIGGER IF EXISTS %s ON sessions; DROP FUNCTION IF EXISTS %s();`, trigger, function))
+	})
+
+	event := make(chan struct{}, 1)
+	unsubscribe := fx.h.Broadcaster.Subscribe(fx.sessionID, func(name string, _ interface{}) {
+		if name == "session_ended" {
+			select {
+			case event <- struct{}{}:
+			default:
+			}
+		}
+	})
+	defer unsubscribe()
+	unfrozen := make(chan struct{}, 1)
+	fx.h.CanvasControl = &fakeCanvasControl{onUnfreeze: func(_, _ string) {
+		select {
+		case unfrozen <- struct{}{}:
+		default:
+		}
+	}}
+
+	w := fx.doRequest(t, http.MethodPost, "/api/sessions/"+fx.sessionID+"/end", nil, fx.claims(fx.teacher, false))
+	require.Equal(t, http.StatusInternalServerError, w.Code, w.Body.String())
+	select {
+	case <-unfrozen:
+	case <-time.After(time.Second):
+		t.Fatal("failed durable end did not unfreeze its matching operation")
+	}
+	var status string
+	var token sql.NullString
+	require.NoError(t, fx.db.QueryRowContext(context.Background(), `SELECT status, canvas_freeze_token FROM sessions WHERE id = $1`, fx.sessionID).Scan(&status, &token))
+	assert.Equal(t, "live", status)
+	assert.False(t, token.Valid, "cleanup must clear its own lease after durable failure")
+	select {
+	case <-event:
+		t.Fatal("session_ended emitted despite the durable transition failure")
+	default:
+	}
+}
+
+func TestEndSession_ConfirmedBundlePersistsBeforeCommit(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	canvases := store.NewCanvasStore(fx.db)
+	canvas, err := canvases.CreateCanvas(context.Background(), store.CreateCanvasInput{SessionID: fx.sessionID, OwnerID: fx.teacher.ID, Title: "captured", Visibility: "private"})
+	require.NoError(t, err)
+	control := &fakeCanvasControl{bundle: realtime.FreezeBundle{Snapshots: []realtime.CanvasSnapshot{{CanvasID: canvas.ID, State: []byte("final")}}}}
+	fx.h.CanvasControl = control
+	w := fx.doRequest(t, http.MethodPost, "/api/sessions/"+fx.sessionID+"/end", nil, fx.claims(fx.teacher, false))
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	require.Equal(t, true, body["whiteboardServerArchiveComplete"])
+	_, warned := body["warning"]
+	require.False(t, warned)
+	var state string
+	require.NoError(t, fx.db.QueryRowContext(context.Background(), `SELECT yjs_state FROM session_canvases WHERE id=$1`, canvas.ID).Scan(&state))
+	require.Equal(t, "ZmluYWw=", state)
+}
+
+func TestEndSession_LeaseExpiryUsesSeparateDegradedTransaction(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	fx.h.CanvasControl = &fakeCanvasControl{onFreeze: func(request realtime.FreezeRequest) {
+		_, err := fx.db.ExecContext(context.Background(), `
+			UPDATE sessions
+			SET canvas_freeze_until = clock_timestamp() - interval '1 millisecond'
+			WHERE id = $1 AND canvas_freeze_token = $2::uuid`, request.SessionID, request.FreezeToken)
+		require.NoError(t, err)
+	}}
+
+	w := fx.doRequest(t, http.MethodPost, "/api/sessions/"+fx.sessionID+"/end", nil, fx.claims(fx.teacher, false))
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	require.Equal(t, false, body["whiteboardServerArchiveComplete"])
+	require.Equal(t, "whiteboard_server_archive_incomplete", body["warning"])
+
+	var status string
+	var archiveComplete bool
+	require.NoError(t, fx.db.QueryRowContext(context.Background(), `SELECT status, whiteboard_server_archive_complete FROM sessions WHERE id = $1`, fx.sessionID).Scan(&status, &archiveComplete))
+	require.Equal(t, "ended", status)
+	require.False(t, archiveComplete)
+}
+
+func TestPostCommitSettlementUsesFreshContextForExplicitAndReplacementEnds(t *testing.T) {
+	t.Run("explicit end", func(t *testing.T) {
+		fx := newSessionFixture(t, t.Name())
+		schedules := store.NewScheduleStore(fx.db)
+		fx.h.Schedules = schedules
+		schedule, err := schedules.CreateSchedule(context.Background(), store.CreateScheduleInput{
+			ClassID: fx.classID, TeacherID: fx.teacher.ID,
+			ScheduledStart: time.Now().Add(time.Hour), ScheduledEnd: time.Now().Add(2 * time.Hour),
+		})
+		require.NoError(t, err)
+		_, err = fx.db.ExecContext(context.Background(), `UPDATE scheduled_sessions SET status = 'in_progress' WHERE id = $1`, schedule.ID)
+		require.NoError(t, err)
+		_, err = fx.db.ExecContext(context.Background(), `UPDATE sessions SET scheduled_session_id = $2 WHERE id = $1`, fx.sessionID, schedule.ID)
+		require.NoError(t, err)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		unsubscribe := fx.h.Broadcaster.Subscribe(fx.sessionID, func(event string, _ interface{}) {
+			require.Equal(t, "session_ended", event)
+			var status string
+			require.NoError(t, fx.db.QueryRowContext(context.Background(), `SELECT status FROM sessions WHERE id = $1`, fx.sessionID).Scan(&status))
+			require.Equal(t, "ended", status, "event must follow the durable transition")
+			cancel()
+		})
+		defer unsubscribe()
+		completed := make(chan error, 1)
+		fx.h.CanvasControl = &fakeCanvasControl{onComplete: func(sessionID, _ string) {
+			completedSchedule, err := schedules.GetSchedule(context.Background(), schedule.ID)
+			if err != nil {
+				completed <- err
+				return
+			}
+			if sessionID != fx.sessionID || completedSchedule.Status != "completed" {
+				completed <- fmt.Errorf("complete ran before schedule settlement: session=%s schedule=%s", sessionID, completedSchedule.Status)
+				return
+			}
+			completed <- nil
+		}}
+
+		req := httptest.NewRequest(http.MethodPost, "/api/sessions/"+fx.sessionID+"/end", nil)
+		req = req.WithContext(auth.ContextWithClaims(ctx, fx.claims(fx.teacher, false)))
+		w := httptest.NewRecorder()
+		fx.router.ServeHTTP(w, req)
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+		select {
+		case err := <-completed:
+			require.NoError(t, err)
+		case <-time.After(time.Second):
+			t.Fatal("post-commit terminal completion did not run")
+		}
+	})
+
+	t.Run("replacement end", func(t *testing.T) {
+		fx := newSessionFixture(t, t.Name())
+		schedules := store.NewScheduleStore(fx.db)
+		schedule, err := schedules.CreateSchedule(context.Background(), store.CreateScheduleInput{
+			ClassID: fx.classID, TeacherID: fx.teacher.ID,
+			ScheduledStart: time.Now().Add(time.Hour), ScheduledEnd: time.Now().Add(2 * time.Hour),
+		})
+		require.NoError(t, err)
+		_, err = fx.db.ExecContext(context.Background(), `UPDATE scheduled_sessions SET status = 'in_progress' WHERE id = $1`, schedule.ID)
+		require.NoError(t, err)
+		_, err = fx.db.ExecContext(context.Background(), `UPDATE sessions SET scheduled_session_id = $2, canvas_freeze_token = $3::uuid, canvas_freeze_until = clock_timestamp() + interval '15 seconds' WHERE id = $1`, fx.sessionID, schedule.ID, "11111111-1111-4111-8111-111111111111")
+		require.NoError(t, err)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		broadcaster := events.NewBroadcaster()
+		eventDelivered := make(chan error, 1)
+		unsubscribe := broadcaster.Subscribe(fx.sessionID, func(event string, _ interface{}) {
+			if event != "session_ended" {
+				eventDelivered <- fmt.Errorf("unexpected replacement event %q", event)
+				return
+			}
+			settled, err := schedules.GetSchedule(context.Background(), schedule.ID)
+			if err != nil {
+				eventDelivered <- err
+				return
+			}
+			if settled.Status != "completed" {
+				eventDelivered <- fmt.Errorf("replacement event preceded schedule settlement: %s", settled.Status)
+				return
+			}
+			eventDelivered <- nil
+		})
+		defer unsubscribe()
+		completed := make(chan error, 1)
+		control := &fakeCanvasControl{onComplete: func(sessionID, _ string) {
+			settled, err := schedules.GetSchedule(context.Background(), schedule.ID)
+			if err != nil {
+				completed <- err
+				return
+			}
+			select {
+			case err := <-eventDelivered:
+				if err != nil {
+					completed <- err
+					return
+				}
+			default:
+				completed <- fmt.Errorf("replacement complete ran before event delivery")
+				return
+			}
+			if sessionID != fx.sessionID || settled.Status != "completed" {
+				completed <- fmt.Errorf("replacement complete ran before schedule settlement: session=%s schedule=%s", sessionID, settled.Status)
+				return
+			}
+			completed <- nil
+		}}
+
+		settleReplacedSessions(ctx, []store.ReplacedSession{{ID: fx.sessionID, ClearedFreezeToken: ptr("11111111-1111-4111-8111-111111111111")}}, schedules, broadcaster, control)
+		select {
+		case err := <-completed:
+			require.NoError(t, err)
+		case <-time.After(time.Second):
+			t.Fatal("replacement terminal completion did not run")
+		}
+	})
+}
+
+func TestEndSession_ControlFailuresAreDurablyDegradedAndTerminalized(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"timeout", context.DeadlineExceeded},
+		{"transport", errors.New("connection reset by peer")},
+		{"non-2xx", errors.New("control returned HTTP 503")},
+		{"malformed bundle", errors.New("invalid canvas control bundle")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fx := newSessionFixture(t, t.Name())
+			completed := make(chan error, 1)
+			fx.h.CanvasControl = &fakeCanvasControl{
+				err: tc.err,
+				onComplete: func(sessionID, _ string) {
+					if sessionID != fx.sessionID {
+						completed <- fmt.Errorf("completed unexpected session %q", sessionID)
+						return
+					}
+					var status string
+					if err := fx.db.QueryRowContext(context.Background(), `SELECT status FROM sessions WHERE id=$1`, sessionID).Scan(&status); err != nil {
+						completed <- err
+						return
+					}
+					if status != "ended" {
+						completed <- fmt.Errorf("terminal cleanup observed status %q before durable end", status)
+						return
+					}
+					completed <- nil
+				},
+			}
+			w := fx.doRequest(t, http.MethodPost, "/api/sessions/"+fx.sessionID+"/end", nil, fx.claims(fx.teacher, false))
+			require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+			var body map[string]any
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+			require.Equal(t, false, body["whiteboardServerArchiveComplete"])
+			require.Equal(t, "whiteboard_server_archive_incomplete", body["warning"])
+			select {
+			case err := <-completed:
+				require.NoError(t, err)
+			case <-time.After(time.Second):
+				t.Fatal("durable degraded end did not asynchronously complete its matching control token")
+			}
+		})
+	}
+}
+
+func TestEndSession_ResponseUsesDurableEndedAtAndTopLevelContract(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	completed := make(chan error, 1)
+	fx.h.CanvasControl = &fakeCanvasControl{onComplete: func(sessionID, _ string) {
+		var status string
+		if err := fx.db.QueryRowContext(context.Background(), `SELECT status FROM sessions WHERE id=$1`, sessionID).Scan(&status); err != nil {
+			completed <- err
+			return
+		}
+		if status != "ended" {
+			completed <- fmt.Errorf("terminal complete observed status %q", status)
+			return
+		}
+		completed <- nil
+	}}
+	w := fx.doRequest(t, http.MethodPost, "/api/sessions/"+fx.sessionID+"/end", nil, fx.claims(fx.teacher, false))
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	var response struct {
+		ID                              string     `json:"id"`
+		Status                          string     `json:"status"`
+		EndedAt                         *time.Time `json:"endedAt"`
+		WhiteboardServerArchiveComplete bool       `json:"whiteboardServerArchiveComplete"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	require.Equal(t, fx.sessionID, response.ID)
+	require.Equal(t, "ended", response.Status)
+	require.NotNil(t, response.EndedAt)
+	require.True(t, response.WhiteboardServerArchiveComplete, "an exact empty freeze bundle is a confirmed archive")
+	var stored time.Time
+	require.NoError(t, fx.db.QueryRowContext(context.Background(), `SELECT ended_at FROM sessions WHERE id=$1`, fx.sessionID).Scan(&stored))
+	require.True(t, response.EndedAt.Equal(stored), "response must use the durable transaction timestamp")
+	select {
+	case err := <-completed:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("terminal complete did not run asynchronously after the durable response handoff")
+	}
+}
+
+func TestEndSession_LateFreezeResponseCannotReinstallLease(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	// A control response can race a replacement operation after this request
+	// has already acquired its lease.  The stale token must become the stable
+	// retryable conflict, not a generic database 500 that hides the live owner.
+	fx.h.CanvasControl = &fakeCanvasControl{onFreeze: func(request realtime.FreezeRequest) {
+		_, err := fx.db.ExecContext(context.Background(), `
+			UPDATE sessions
+			SET canvas_freeze_token = '11111111-1111-4111-8111-111111111111',
+			    canvas_freeze_until = clock_timestamp() + interval '15 seconds'
+			WHERE id = $1`, request.SessionID)
+		require.NoError(t, err)
+	}}
+	w := fx.doRequest(t, http.MethodPost, "/api/sessions/"+fx.sessionID+"/end", nil, fx.claims(fx.teacher, false))
+	require.Equal(t, http.StatusConflict, w.Code, w.Body.String())
+	require.JSONEq(t, `{"error":"Session end in progress","code":"session_end_in_progress"}`, w.Body.String())
+
+	var status string
+	require.NoError(t, fx.db.QueryRowContext(context.Background(), `SELECT status FROM sessions WHERE id = $1`, fx.sessionID).Scan(&status))
+	require.Equal(t, "live", status, "a stale control token must not end a different live operation")
+}
+
 func TestSessionHandler_EndSession_NonTeacher403(t *testing.T) {
 	fx := newSessionFixture(t, t.Name())
 	w := fx.doRequest(t, http.MethodPost, "/api/sessions/"+fx.sessionID+"/end", nil, fx.claims(fx.student, false))
 	assert.Equal(t, http.StatusForbidden, w.Code)
+}
+
+// Plan 094 R2-2: ending a session is an ordinary teacher-only operation that a
+// platform administrator may also perform, exactly as on the sibling
+// teacher-only session routes.  The intermediate branch state denied the
+// administrator with 403 and left the session live.
+func TestEndSession_PlatformAdminCanEnd(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	require.NotEqual(t, fx.teacher.ID, fx.otherUser.ID, "the administrator must not be the session teacher")
+	admin := fx.claims(fx.otherUser, true)
+	require.Empty(t, admin.ImpersonatedBy, "this administrator is not impersonating the teacher")
+	fx.h.CanvasControl = &fakeCanvasControl{}
+
+	w := fx.doRequest(t, http.MethodPost, "/api/sessions/"+fx.sessionID+"/end", nil, admin)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	assert.Equal(t, "ended", body["status"])
+	assert.Equal(t, fx.teacher.ID, body["teacherId"], "ending does not reassign the host")
+	assert.Equal(t, true, body["whiteboardServerArchiveComplete"])
+	_, warned := body["warning"]
+	assert.False(t, warned)
+
+	var status string
+	var archiveComplete sql.NullBool
+	require.NoError(t, fx.db.QueryRowContext(context.Background(),
+		`SELECT status, whiteboard_server_archive_complete FROM sessions WHERE id = $1`, fx.sessionID).Scan(&status, &archiveComplete))
+	assert.Equal(t, "ended", status, "the administrator's end must be durable")
+	require.True(t, archiveComplete.Valid)
+	assert.True(t, archiveComplete.Bool)
+}
+
+// Plan 094 R2-2, the other half: readmitting the administrator to the end route
+// must not readmit them to canvas content.  Spec 013's no-bypass rule is about
+// private canvases, and it still holds before and after the end.
+func TestEndSession_PlatformAdminGainsNoCanvasAccess(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	ctx := context.Background()
+	canvases := store.NewCanvasStore(fx.db)
+	canvas, err := canvases.CreateCanvas(ctx, store.CreateCanvasInput{
+		SessionID: fx.sessionID, OwnerID: fx.teacher.ID, Title: "Private board", Visibility: "private",
+	})
+	require.NoError(t, err)
+	admin := fx.claims(fx.otherUser, true)
+
+	canvasRouter := chi.NewRouter()
+	(&CanvasHandler{Sessions: fx.h.Sessions, Canvases: canvases}).Routes(canvasRouter)
+	settings := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, "/api/sessions/"+fx.sessionID+"/canvas-settings", nil)
+		req = withClaims(req, admin)
+		w := httptest.NewRecorder()
+		canvasRouter.ServeHTTP(w, req)
+		return w
+	}
+	realtimeHandler := &RealtimeHandler{
+		Sessions:              fx.h.Sessions,
+		Classes:               fx.classes,
+		Orgs:                  fx.orgs,
+		Users:                 store.NewUserStore(fx.db),
+		Canvases:              canvases,
+		HocuspocusTokenSecret: rtSecret,
+	}
+
+	require.Equal(t, http.StatusForbidden, settings().Code, "canvas settings stay teacher-only for an administrator")
+	mintCode, _ := callMintToken(t, realtimeHandler, "canvas:"+canvas.ID, admin, fx.sessionID)
+	require.Equal(t, http.StatusForbidden, mintCode, "an administrator may not mint a private canvas token")
+
+	fx.h.CanvasControl = &fakeCanvasControl{}
+	end := fx.doRequest(t, http.MethodPost, "/api/sessions/"+fx.sessionID+"/end", nil, admin)
+	require.Equal(t, http.StatusOK, end.Code, end.Body.String())
+
+	require.Equal(t, http.StatusForbidden, settings().Code, "ending the session is not a canvas-settings bypass")
+	mintCode, _ = callMintToken(t, realtimeHandler, "canvas:"+canvas.ID, admin, fx.sessionID)
+	require.Equal(t, http.StatusForbidden, mintCode, "ending the session is not an archive-read bypass")
+}
+
+// Plan 094 R2-4: the end response is shaped from the DURABLE archive column,
+// never from what this request locally managed to do.
+//
+// Interleaving: request A takes its lease, A's lease expires, B ends the
+// session CONFIRMED (durable true), then A's confirmed transition finds no live
+// row, falls to the degraded path, and reads the durable true back.  A must
+// report true with no warning.  Shaping the response from A's own local
+// `confirmed` flag reported false plus the incomplete-archive warning while the
+// database said the archive was complete.
+func TestEndSession_ResponseReflectsDurableArchiveFlagNotLocalAttempt(t *testing.T) {
+	fx := newSessionFixture(t, t.Name())
+	ctx := context.Background()
+	var competitorEndedAt time.Time
+	fx.h.CanvasControl = &fakeCanvasControl{onFreeze: func(request realtime.FreezeRequest) {
+		// A's lease expires while the control call is outstanding.
+		result, err := fx.db.ExecContext(ctx, `
+			UPDATE sessions SET canvas_freeze_until = clock_timestamp() - interval '1 millisecond'
+			WHERE id = $1 AND canvas_freeze_token = $2::uuid`, request.SessionID, request.FreezeToken)
+		require.NoError(t, err)
+		affected, err := result.RowsAffected()
+		require.NoError(t, err)
+		require.Equal(t, int64(1), affected, "the expiry must hit this request's own lease")
+
+		// B now ends the same session through the real confirmed path.
+		prep, err := fx.h.Sessions.PrepareSessionEnd(ctx, request.SessionID)
+		require.NoError(t, err)
+		require.NotEqual(t, request.FreezeToken, prep.Token)
+		confirmed, err := fx.h.Sessions.CompleteSessionConfirmedResult(ctx, request.SessionID, prep.Token, nil)
+		require.NoError(t, err)
+		require.NotNil(t, confirmed.WhiteboardServerArchiveComplete)
+		require.True(t, *confirmed.WhiteboardServerArchiveComplete)
+		require.NotNil(t, confirmed.EndedAt)
+		competitorEndedAt = *confirmed.EndedAt
+	}}
+
+	w := fx.doRequest(t, http.MethodPost, "/api/sessions/"+fx.sessionID+"/end", nil, fx.claims(fx.teacher, false))
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	var body struct {
+		Status                          string     `json:"status"`
+		EndedAt                         *time.Time `json:"endedAt"`
+		WhiteboardServerArchiveComplete bool       `json:"whiteboardServerArchiveComplete"`
+		Warning                         *string    `json:"warning"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+
+	var status string
+	var durable sql.NullBool
+	var storedEndedAt time.Time
+	require.NoError(t, fx.db.QueryRowContext(ctx,
+		`SELECT status, whiteboard_server_archive_complete, ended_at FROM sessions WHERE id = $1`, fx.sessionID).
+		Scan(&status, &durable, &storedEndedAt))
+	require.Equal(t, "ended", status)
+	require.True(t, durable.Valid)
+	require.True(t, durable.Bool, "the competing confirmed end is the durable outcome")
+
+	assert.Equal(t, durable.Bool, body.WhiteboardServerArchiveComplete, "the response flag must equal the durable column")
+	assert.Nil(t, body.Warning, "a durably complete archive must carry no incomplete-archive warning")
+	assert.Equal(t, "ended", body.Status)
+	require.NotNil(t, body.EndedAt)
+	assert.True(t, body.EndedAt.Equal(storedEndedAt), "the response must carry the durable ended_at")
+	assert.True(t, competitorEndedAt.Equal(storedEndedAt), "the durable row is the competing request's confirmed end")
+	// The row is not rewritten by the losing request.
+	var lease sql.NullString
+	require.NoError(t, fx.db.QueryRowContext(ctx, `SELECT canvas_freeze_token FROM sessions WHERE id = $1`, fx.sessionID).Scan(&lease))
+	assert.False(t, lease.Valid, "no residual lease may survive the already-ended completion")
+}
+
+// The same contract, stated as the general invariant over the three durable
+// outcomes an end can produce: the response flag and the presence of the
+// warning always agree with the row's own column.
+func TestEndSession_ResponseFlagAlwaysAgreesWithDurableColumn(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		control func(fx *sessionFixture) CanvasControl
+		want    bool
+	}{
+		{"confirmed", func(*sessionFixture) CanvasControl { return &fakeCanvasControl{} }, true},
+		{"degraded control failure", func(*sessionFixture) CanvasControl {
+			return &fakeCanvasControl{err: errors.New("control returned HTTP 503")}
+		}, false},
+		{"already ended degraded", func(fx *sessionFixture) CanvasControl {
+			return &fakeCanvasControl{onFreeze: func(request realtime.FreezeRequest) {
+				_, err := fx.db.ExecContext(context.Background(), `
+					UPDATE sessions SET canvas_freeze_until = clock_timestamp() - interval '1 millisecond'
+					WHERE id = $1 AND canvas_freeze_token = $2::uuid`, request.SessionID, request.FreezeToken)
+				require.NoError(t, err)
+				prep, err := fx.h.Sessions.PrepareSessionEnd(context.Background(), request.SessionID)
+				require.NoError(t, err)
+				_, err = fx.h.Sessions.CompleteSessionDegraded(context.Background(), request.SessionID, prep.Token)
+				require.NoError(t, err)
+			}}
+		}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fx := newSessionFixture(t, t.Name())
+			fx.h.CanvasControl = tc.control(fx)
+			w := fx.doRequest(t, http.MethodPost, "/api/sessions/"+fx.sessionID+"/end", nil, fx.claims(fx.teacher, false))
+			require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+			var body map[string]any
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+
+			var durable sql.NullBool
+			require.NoError(t, fx.db.QueryRowContext(context.Background(),
+				`SELECT whiteboard_server_archive_complete FROM sessions WHERE id = $1`, fx.sessionID).Scan(&durable))
+			require.True(t, durable.Valid)
+			assert.Equal(t, tc.want, durable.Bool)
+			assert.Equal(t, durable.Bool, body["whiteboardServerArchiveComplete"], "response flag must mirror the durable column")
+			_, warned := body["warning"]
+			assert.Equal(t, !durable.Bool, warned, "the warning is present exactly when the durable archive is incomplete")
+		})
+	}
 }
 
 // ------------------- POST /api/sessions/{id}/participants -------------------
@@ -1272,4 +1837,146 @@ func TestSessionHandler_ListPublicSessions_MalformedCursor400(t *testing.T) {
 	// errors -> handler maps to 400.
 	w := fx.doRequest(t, http.MethodGet, "/api/sessions/public?cursor=%40%40%40", nil, fx.claims(fx.otherUser, false))
 	assert.Equal(t, http.StatusBadRequest, w.Code, "body=%s", w.Body.String())
+}
+
+// --- Plan 094 R2-18: a degraded end is an audit event, not only a flag ---
+
+// captureSlogDefault redirects the process-wide slog default (which the end
+// handler logs through) into a JSON buffer, and restores it afterwards.
+func captureSlogDefault(t *testing.T) *e2eStackSyncBuffer {
+	t.Helper()
+	sink := &e2eStackSyncBuffer{}
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(sink, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	return sink
+}
+
+const degradedArchiveWarning = "session ended with degraded whiteboard archive"
+
+func degradedArchiveWarnings(t *testing.T, sink *e2eStackSyncBuffer) []map[string]any {
+	t.Helper()
+	records := []map[string]any{}
+	for _, line := range strings.Split(strings.TrimSpace(sink.String()), "\n") {
+		if line == "" {
+			continue
+		}
+		var record map[string]any
+		require.NoError(t, json.Unmarshal([]byte(line), &record), "log line is not JSON: %s", line)
+		if record["msg"] == degradedArchiveWarning {
+			assert.Equal(t, slog.LevelWarn.String(), record["level"], "the degraded end is a warning")
+			records = append(records, record)
+		}
+	}
+	return records
+}
+
+// R2-18: a successful degraded end previously wrote nothing to the server log,
+// so the only trace was the response warning and the database flag. Every
+// degraded-success path must now leave exactly one warn record naming the
+// session and a FIXED reason category — never a control URL, which a
+// CanvasControl error may embed.
+func TestEndSession_DegradedEndIsLoggedWithoutSecrets(t *testing.T) {
+	const controlURL = "http://control-user:hunter2@hocuspocus.internal:4000/internal/canvas/freeze"
+	secrets := []string{controlURL, "hunter2", "control-user", "hocuspocus.internal"}
+
+	for _, tc := range []struct {
+		name    string
+		reason  string
+		control func(fx *sessionFixture) CanvasControl
+	}{
+		{
+			name:    "canvas control unconfigured",
+			reason:  "canvas_control_unconfigured",
+			control: func(*sessionFixture) CanvasControl { return nil },
+		},
+		{
+			name:   "freeze failed",
+			reason: "freeze_failed",
+			control: func(*sessionFixture) CanvasControl {
+				return &fakeCanvasControl{err: fmt.Errorf("post %s: connection refused", controlURL)}
+			},
+		},
+		{
+			name:   "freeze deadline exceeded",
+			reason: "freeze_timeout",
+			control: func(*sessionFixture) CanvasControl {
+				return &fakeCanvasControl{err: fmt.Errorf("freeze %s: %w", controlURL, context.DeadlineExceeded)}
+			},
+		},
+		{
+			// The confirmed transaction rolls back because the bundle names a
+			// canvas this session does not have, so the honest false result is
+			// recorded by a second transaction.
+			name:   "snapshot count mismatch",
+			reason: "snapshot_count_mismatch",
+			control: func(*sessionFixture) CanvasControl {
+				return &fakeCanvasControl{bundle: realtime.FreezeBundle{Snapshots: []realtime.CanvasSnapshot{
+					{CanvasID: "00000000-0000-4000-8000-0000000000aa", State: []byte("orphan")},
+				}}}
+			},
+		},
+		{
+			// A competing degraded end lands while this one holds the freeze,
+			// so the confirmed update matches no row.
+			name:   "already ended under another operation",
+			reason: "session_end_in_progress",
+			control: func(fx *sessionFixture) CanvasControl {
+				return &fakeCanvasControl{onFreeze: func(request realtime.FreezeRequest) {
+					_, err := fx.db.ExecContext(context.Background(), `
+						UPDATE sessions SET canvas_freeze_until = clock_timestamp() - interval '1 millisecond'
+						WHERE id = $1 AND canvas_freeze_token = $2::uuid`, request.SessionID, request.FreezeToken)
+					require.NoError(t, err)
+					prep, err := fx.h.Sessions.PrepareSessionEnd(context.Background(), request.SessionID)
+					require.NoError(t, err)
+					_, err = fx.h.Sessions.CompleteSessionDegraded(context.Background(), request.SessionID, prep.Token)
+					require.NoError(t, err)
+				}}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fx := newSessionFixture(t, t.Name())
+			fx.h.CanvasControl = tc.control(fx)
+			sink := captureSlogDefault(t)
+
+			w := fx.doRequest(t, http.MethodPost, "/api/sessions/"+fx.sessionID+"/end", nil, fx.claims(fx.teacher, false))
+			require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+			var durable sql.NullBool
+			require.NoError(t, fx.db.QueryRowContext(context.Background(),
+				`SELECT whiteboard_server_archive_complete FROM sessions WHERE id = $1`, fx.sessionID).Scan(&durable))
+			require.True(t, durable.Valid)
+			require.False(t, durable.Bool, "this path must be a degraded end")
+
+			records := degradedArchiveWarnings(t, sink)
+			require.Len(t, records, 1, "a degraded end logs exactly one warning; got: %s", sink.String())
+			assert.Equal(t, fx.sessionID, records[0]["sessionId"])
+			assert.Equal(t, tc.reason, records[0]["reason"], "the reason must be the fixed category for this path")
+
+			logged := sink.String()
+			for _, secret := range secrets {
+				assert.NotContains(t, logged, secret, "the terminal audit log must never disclose %q", secret)
+			}
+			assert.NotRegexp(t, `https?://`, logged, "no control URL may reach the log")
+		})
+	}
+
+	t.Run("confirmed end logs no degraded warning", func(t *testing.T) {
+		fx := newSessionFixture(t, t.Name())
+		fx.h.CanvasControl = &fakeCanvasControl{}
+		sink := captureSlogDefault(t)
+
+		w := fx.doRequest(t, http.MethodPost, "/api/sessions/"+fx.sessionID+"/end", nil, fx.claims(fx.teacher, false))
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+		var durable sql.NullBool
+		require.NoError(t, fx.db.QueryRowContext(context.Background(),
+			`SELECT whiteboard_server_archive_complete FROM sessions WHERE id = $1`, fx.sessionID).Scan(&durable))
+		require.True(t, durable.Valid)
+		require.True(t, durable.Bool)
+
+		assert.Empty(t, degradedArchiveWarnings(t, sink),
+			"a confirmed archive must not be reported as degraded")
+	})
 }

@@ -1,4 +1,4 @@
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
 import { api } from "@/lib/api-client";
 import { ApiError } from "@/lib/api-error";
@@ -78,10 +78,13 @@ export default async function SessionRoomPage({
               <CardTitle>Session ended</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3 text-sm">
-              <p className="text-muted-foreground">
-                This session is no longer live. A read-only review surface for
-                ended sessions is coming in a future update.
+            <p className="text-muted-foreground">
+                This session is no longer live. Its whiteboards remain available
+                in the read-only archive.
               </p>
+              <Link href={`/sessions/${sessionId}/whiteboards`} className="text-primary underline">
+                View whiteboard archive
+              </Link>
               <Link href="/sessions" className="text-primary underline">
                 Back to sessions
               </Link>
@@ -91,18 +94,9 @@ export default async function SessionRoomPage({
       );
     }
 
-    // Go's teacher-page hardcodes returnPath to "/teacher" for a class-less
-    // session (see handlers/sessions.go GetTeacherPage) — a portal path this
-    // neutral route's host may not have a role for. Override it to /sessions
-    // so "End Session" doesn't bounce a class-less host through a role gate.
-    // Class-bound returnPath (a class detail page) is left untouched.
-    const returnPath = teacherPayload.classId ? teacherPayload.returnPath : "/sessions";
-
     return (
       <TeacherDashboard
         sessionId={sessionId}
-        classId={teacherPayload.classId}
-        returnPath={returnPath}
         editorMode={(teacherPayload.editorMode as EditorMode) ?? "python"}
         courseTopics={teacherPayload.courseTopics}
         inviteToken={teacherPayload.session.inviteToken ?? null}
@@ -115,7 +109,22 @@ export default async function SessionRoomPage({
   try {
     studentPayload = await api<StudentPagePayload>(`/api/sessions/${sessionId}/student-page`);
   } catch (err) {
-    if (err instanceof ApiError && (err.status === 404 || err.status === 403)) {
+    if (err instanceof ApiError && err.status === 404) {
+      // GetStudentPage returns 404 for two distinct cases with the same HTTP
+      // status: a session that truly does not exist ("Not found") and an
+      // existing session that has ended ("Session has ended"), including for
+      // former participants. Only the latter has an archive to redirect to —
+      // a genuinely missing session must still 404 at the page level. The
+      // real Go handler puts the distinguishing text in the JSON body; check
+      // both it and `message` so a caller that only sets one still resolves.
+      const body = err.body as { error?: string } | undefined;
+      const sessionEnded = body?.error === "Session has ended" || /session (has )?ended/i.test(err.message);
+      if (sessionEnded) {
+        redirect(`/sessions/${sessionId}/whiteboards`);
+      }
+      notFound();
+    }
+    if (err instanceof ApiError && err.status === 403) {
       notFound();
     }
     throw err;

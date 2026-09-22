@@ -3,24 +3,199 @@ package store
 import (
 	"context"
 	"database/sql"
+	"fmt"
+	"net/url"
 	"os"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/jackc/pgx/v5"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
+const testDatabaseTimeout = 5 * time.Second
+
+func TestValidateTestDatabaseURL(t *testing.T) {
+	tests := []struct {
+		name string
+		url  string
+		want string
+	}{
+		{
+			name: "accepts test database with safe query options",
+			url:  "postgresql://work@127.0.0.1:5432/bridge_test?sslmode=disable&application_name=store-tests",
+			want: "bridge_test",
+		},
+		{
+			name: "accepts bare test database with default SSL negotiation",
+			url:  "postgresql://work@127.0.0.1:5432/bridge_test",
+			want: "bridge_test",
+		},
+		{
+			name: "accepts same host preferred SSL fallback",
+			url:  "postgresql://work@127.0.0.1:5432/bridge_test?sslmode=prefer",
+			want: "bridge_test",
+		},
+		{
+			name: "accepts same host allowed SSL fallback",
+			url:  "postgresql://work@127.0.0.1:5432/bridge_test?sslmode=allow",
+			want: "bridge_test",
+		},
+		{
+			name: "accepts percent decoded test database",
+			url:  "postgresql://work@127.0.0.1:5432/bridge%5Ftest?sslmode=disable",
+			want: "bridge_test",
+		},
+		{
+			name: "rejects non test database",
+			url:  "postgresql://work@127.0.0.1:5432/bridge",
+		},
+		{
+			name: "rejects literal fragment",
+			url:  "postgresql://work@127.0.0.1:5432/bridge_test#fragment",
+		},
+		{
+			name: "rejects encoded fragment",
+			url:  "postgresql://work@127.0.0.1:5432/bridge_test%23fragment",
+		},
+		{
+			name: "rejects authority multi host",
+			url:  "postgresql://work@host-one,host-two:5432/bridge_test",
+		},
+		{
+			name: "rejects query multi host list",
+			url:  "postgresql://work@127.0.0.1:5432/bridge_test?host=host-one,host-two",
+		},
+		{
+			name: "rejects repeated query hosts",
+			url:  "postgresql://work@127.0.0.1:5432/bridge_test?host=host-one&host=host-two",
+		},
+		{
+			name: "rejects single host override",
+			url:  "postgresql://work@127.0.0.1:5432/bridge_test?host=other",
+		},
+		{
+			name: "rejects case insensitive host override",
+			url:  "postgresql://work@127.0.0.1:5432/bridge_test?HOST=other",
+		},
+		{
+			name: "rejects port override",
+			url:  "postgresql://work@127.0.0.1:5432/bridge_test?port=5433",
+		},
+		{
+			name: "rejects dbname override",
+			url:  "postgresql://work@127.0.0.1:5432/bridge_test?dbname=bridge",
+		},
+		{
+			name: "rejects database override",
+			url:  "postgresql://work@127.0.0.1:5432/bridge_test?database=bridge",
+		},
+		{
+			name: "rejects service routing",
+			url:  "postgresql://work@127.0.0.1:5432/bridge_test?service=unsafe",
+		},
+		{
+			name: "rejects target session routing",
+			url:  "postgresql://work@127.0.0.1:5432/bridge_test?target_session_attrs=read-write",
+		},
+		{
+			name: "rejects load balance routing",
+			url:  "postgresql://work@127.0.0.1:5432/bridge_test?load_balance_hosts=enable",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			databaseName, err := validateTestDatabaseURL(tt.url)
+			if tt.want == "" {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, databaseName)
+		})
+	}
+}
+
 func testDB(t *testing.T) *sql.DB {
 	t.Helper()
-	url := os.Getenv("DATABASE_URL")
-	if url == "" {
+	dbURL := os.Getenv("DATABASE_URL")
+	if dbURL == "" {
 		t.Skip("DATABASE_URL not set -- skipping integration test")
 	}
-	db, err := sql.Open("pgx", url)
+	_, err := validateTestDatabaseURL(dbURL)
+	require.NoError(t, err, "DATABASE_URL must target a single _test database")
+
+	db, err := sql.Open("pgx", dbURL)
 	require.NoError(t, err)
-	t.Cleanup(func() { db.Close() })
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+
+	pingCtx, pingCancel := context.WithTimeout(context.Background(), testDatabaseTimeout)
+	defer pingCancel()
+	require.NoError(t, db.PingContext(pingCtx), "test database ping failed")
+
+	databaseCtx, databaseCancel := context.WithTimeout(context.Background(), testDatabaseTimeout)
+	defer databaseCancel()
+	var liveDatabase string
+	require.NoError(t, db.QueryRowContext(databaseCtx, "SELECT current_database()").Scan(&liveDatabase), "test database name query failed")
+	require.True(t, strings.HasSuffix(liveDatabase, "_test"), "connected database must end in _test")
 	return db
+}
+
+func validateTestDatabaseURL(rawURL string) (string, error) {
+	if rawURL == "" {
+		return "", fmt.Errorf("database URL is empty")
+	}
+	if strings.Contains(rawURL, "#") || strings.Contains(strings.ToLower(rawURL), "%23") {
+		return "", fmt.Errorf("database URL must not contain a fragment")
+	}
+
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return "", fmt.Errorf("database URL is invalid: %w", err)
+	}
+	if parsed.Scheme != "postgres" && parsed.Scheme != "postgresql" {
+		return "", fmt.Errorf("database URL must use a PostgreSQL scheme")
+	}
+	if parsed.Host == "" || strings.Contains(parsed.Host, ",") || strings.Contains(parsed.Hostname(), ",") {
+		return "", fmt.Errorf("database URL must name one host")
+	}
+	for key := range parsed.Query() {
+		switch strings.ToLower(key) {
+		case "host", "hostaddr", "port", "dbname", "database", "service", "servicefile", "target_session_attrs", "load_balance_hosts":
+			return "", fmt.Errorf("database URL must not override connection routing")
+		}
+	}
+
+	escapedPath := strings.TrimPrefix(parsed.EscapedPath(), "/")
+	databaseName, err := url.PathUnescape(escapedPath)
+	if err != nil {
+		return "", fmt.Errorf("database URL path is invalid: %w", err)
+	}
+	if databaseName == "" || strings.Contains(databaseName, "/") {
+		return "", fmt.Errorf("database URL must name one database")
+	}
+	config, err := pgx.ParseConfig(rawURL)
+	if err != nil {
+		return "", fmt.Errorf("database URL pgx configuration is invalid: %w", err)
+	}
+	if config.Host == "" {
+		return "", fmt.Errorf("database URL must resolve to one host")
+	}
+	for _, fallback := range config.Fallbacks {
+		if fallback.Host != config.Host || fallback.Port != config.Port {
+			return "", fmt.Errorf("database URL must resolve to one host")
+		}
+	}
+	if config.Database == "" || !strings.HasSuffix(config.Database, "_test") {
+		return "", fmt.Errorf("database URL database must end in _test")
+	}
+	return config.Database, nil
 }
 
 // createTestOrg is a helper that creates an org and registers cleanup.

@@ -4,6 +4,19 @@ Bridge dispatches coding work by **domain**, not by complexity.
 The orchestrator (Opus 5) stays in session for planning, review, and coordination, then hands
 implementation to a subagent whose model matches what the code *is* — not how hard it looks.
 
+## Permanent review-gate contract
+
+Every committed design spec under `docs/specs/**` passes a design-review gate before its implementation plan is drafted or revised from it.
+The design gate has exactly two required reviewers: Codex Sol (`gpt-5.6-sol`, reasoning effort high) and Claude Code (`claude-fable-5`).
+Design reviews are read-only and bind every verdict to the exact substantive commit.
+Both reviewers receive read-only prompts and must approve the same exact substantive commit with no open blocker.
+Record `[sol]` and `[fable]` findings and exact-commit verdicts in the spec; a material revision invalidates both approvals.
+
+The design gate, plan-review gate, and code-review gate are uncapped consensus loops with no numeric round cap.
+Consensus requires every required reviewer to return `APPROVE` or `APPROVE WITH NITS` with no open blocker.
+An unavailable required reviewer pauses the gate and is never silently substituted, replaced, or waived.
+After every three consecutive non-converged substantive rounds, surface a checkpoint; repeated reopening or two checkpoints without net blocker reduction requires a genuine user-decision pause.
+
 ## Dispatch table
 
 | Domain | Agent | Dispatch | Why |

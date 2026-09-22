@@ -1,6 +1,7 @@
 -- Demo seed for the Problem / Attempt workflow (plans 024–026, 028).
 --
 -- Creates:
+--   • Bridge Demo School and the complete documented demo-login contract
 --   • 1 course (under Bridge Demo School, authored by eve@demo.edu)
 --   • 2 topics (Warm-ups, Arrays)
 --   • 4 problems with starter code + description
@@ -23,9 +24,87 @@
 --   60XXX      = new_classroom
 --
 -- Apply:
---   psql postgresql://work@127.0.0.1:5432/bridge -f scripts/seed_problem_demo.sql
+--   psql -v ON_ERROR_STOP=1 postgresql://work@127.0.0.1:5432/bridge -f scripts/seed_problem_demo.sql
+--
+-- The platform-admin demo account has the same known password as the other
+-- fixtures, so it is independently inserted only when current_database()
+-- ends in _test.  It is intentionally absent from every non-test database.
 
+\set ON_ERROR_STOP on
 BEGIN;
+
+-- ---------- Demo organization + login identities ----------
+--
+-- The E2E seed authenticates these accounts before it can create its fixture
+-- class.  Fixed IDs make the rest of this script's FKs stable, and the
+-- cost-10 bcrypt value is for the documented password "bridge123".
+
+INSERT INTO organizations (
+  id, name, slug, type, status, contact_email, contact_name,
+  domain, settings, verified_at, created_at, updated_at
+)
+VALUES (
+  'd386983b-6da4-4cb8-8057-f2aa70d27c07',
+  'Bridge Demo School',
+  'bridge-demo-school',
+  'school',
+  'active',
+  'eve@demo.edu',
+  'Eve Teacher',
+  'demo.edu',
+  '{}'::jsonb,
+  now(), now(), now()
+)
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO users (
+  id, name, email, password_hash, is_platform_admin, status,
+  intended_role, created_at, updated_at
+)
+VALUES
+  ('d0d3b031-a483-4214-97fb-48c9584f4dcb', 'Eve Teacher', 'eve@demo.edu', '$2b$10$aVBKufQtz1XPk5FG9awGW.HTUJkrg0Cr.P4t5zz0m6CM/H69awj2i', false, 'active', 'teacher', now(), now()),
+  ('242fea26-1527-4a10-b208-af4cad1e1102', 'Alice Student', 'alice@demo.edu', '$2b$10$aVBKufQtz1XPk5FG9awGW.HTUJkrg0Cr.P4t5zz0m6CM/H69awj2i', false, 'active', 'student', now(), now()),
+  ('179aee9f-cce3-46f1-ac5f-f5cfbeb0531b', 'Bob Student', 'bob@demo.edu', '$2b$10$aVBKufQtz1XPk5FG9awGW.HTUJkrg0Cr.P4t5zz0m6CM/H69awj2i', false, 'active', 'student', now(), now()),
+  ('00000000-0000-0000-0000-0000000e0004', 'Frank Org Admin', 'frank@demo.edu', '$2b$10$aVBKufQtz1XPk5FG9awGW.HTUJkrg0Cr.P4t5zz0m6CM/H69awj2i', false, 'active', NULL, now(), now()),
+  ('00000000-0000-0000-0000-0000000e0005', 'Diana Parent', 'diana@demo.edu', '$2b$10$aVBKufQtz1XPk5FG9awGW.HTUJkrg0Cr.P4t5zz0m6CM/H69awj2i', false, 'active', NULL, now(), now())
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO auth_providers (id, user_id, provider, provider_user_id, created_at)
+VALUES
+  ('00000000-0000-0000-0000-0000000f0001', 'd0d3b031-a483-4214-97fb-48c9584f4dcb', 'email', 'eve@demo.edu', now()),
+  ('00000000-0000-0000-0000-0000000f0002', '242fea26-1527-4a10-b208-af4cad1e1102', 'email', 'alice@demo.edu', now()),
+  ('00000000-0000-0000-0000-0000000f0003', '179aee9f-cce3-46f1-ac5f-f5cfbeb0531b', 'email', 'bob@demo.edu', now()),
+  ('00000000-0000-0000-0000-0000000f0004', '00000000-0000-0000-0000-0000000e0004', 'email', 'frank@demo.edu', now()),
+  ('00000000-0000-0000-0000-0000000f0005', '00000000-0000-0000-0000-0000000e0005', 'email', 'diana@demo.edu', now())
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO org_memberships (id, org_id, user_id, role, status, invited_by, created_at)
+VALUES
+  ('00000000-0000-0000-0000-0000000b0001', 'd386983b-6da4-4cb8-8057-f2aa70d27c07', 'd0d3b031-a483-4214-97fb-48c9584f4dcb', 'teacher', 'active', NULL, now()),
+  ('00000000-0000-0000-0000-0000000b0002', 'd386983b-6da4-4cb8-8057-f2aa70d27c07', 'd0d3b031-a483-4214-97fb-48c9584f4dcb', 'org_admin', 'active', NULL, now()),
+  ('00000000-0000-0000-0000-0000000b0003', 'd386983b-6da4-4cb8-8057-f2aa70d27c07', '242fea26-1527-4a10-b208-af4cad1e1102', 'student', 'active', NULL, now()),
+  ('00000000-0000-0000-0000-0000000b0004', 'd386983b-6da4-4cb8-8057-f2aa70d27c07', '179aee9f-cce3-46f1-ac5f-f5cfbeb0531b', 'student', 'active', NULL, now()),
+  ('00000000-0000-0000-0000-0000000b0005', 'd386983b-6da4-4cb8-8057-f2aa70d27c07', '00000000-0000-0000-0000-0000000e0004', 'org_admin', 'active', NULL, now()),
+  ('00000000-0000-0000-0000-0000000b0006', 'd386983b-6da4-4cb8-8057-f2aa70d27c07', '00000000-0000-0000-0000-0000000e0005', 'parent', 'active', NULL, now())
+ON CONFLICT (id) DO NOTHING;
+
+-- The known-password platform-admin fixture is test-only by construction.
+-- It uses SELECT WHERE rather than a procedural side effect, so unsafe
+-- databases make no user or credential row and the transaction stays intact.
+INSERT INTO users (
+  id, name, email, password_hash, is_platform_admin, status,
+  intended_role, created_at, updated_at
+)
+SELECT
+  '00000000-0000-0000-0000-0000000e0006', 'E2E Admin', 'admin@e2e.test', '$2b$10$aVBKufQtz1XPk5FG9awGW.HTUJkrg0Cr.P4t5zz0m6CM/H69awj2i', true, 'active', NULL, now(), now()
+WHERE current_database() ~ '_test$'
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO auth_providers (id, user_id, provider, provider_user_id, created_at)
+SELECT
+  '00000000-0000-0000-0000-0000000f0006', '00000000-0000-0000-0000-0000000e0006', 'email', 'admin@e2e.test', now()
+WHERE current_database() ~ '_test$'
+ON CONFLICT (id) DO NOTHING;
 
 -- ---------- Course ----------
 
@@ -44,23 +123,21 @@ ON CONFLICT (id) DO NOTHING;
 
 -- ---------- Topics ----------
 
-INSERT INTO topics (id, course_id, title, description, sort_order, lesson_content)
+INSERT INTO topics (id, course_id, title, description, sort_order)
 VALUES
   (
     '00000000-0000-0000-0000-000000010001',
     '00000000-0000-0000-0000-0000000aa001',
     'Warm-ups',
     'Simple I/O: read from input(), print a result.',
-    0,
-    '{}'::jsonb
+    0
   ),
   (
     '00000000-0000-0000-0000-000000010002',
     '00000000-0000-0000-0000-0000000aa001',
     'Arrays',
     'Work with lists of numbers.',
-    1,
-    '{}'::jsonb
+    1
   )
 ON CONFLICT (id) DO NOTHING;
 
@@ -183,7 +260,7 @@ VALUES
   ('00000000-0000-0000-0000-000000304004', '00000000-0000-0000-0000-000000020004', NULL, 'Hidden: end of list', E'1 5 7 2 8 11\n19', '4 5',              false, 3)
 ON CONFLICT (id) DO NOTHING;
 
--- ---------- Teaching units — one per topic ----------
+-- ---------- Chapters — one per topic ----------
 -- Unit UUID scheme: 0000000a10NN where NN = topic sort_order (01, 02)
 -- scope = 'org', scope_id = Bridge Demo School
 -- topic_id links back to the topic so /api/units/by-topic/{topicId} works.
@@ -194,7 +271,7 @@ ON CONFLICT (id) DO NOTHING;
 -- NOTHING so re-runs are no-ops even if migration 0017 already created a unit
 -- for these topics with a different (random) UUID.
 
-INSERT INTO teaching_units (
+INSERT INTO chapters (
   id, scope, scope_id, title, slug, summary, grade_level,
   subject_tags, standards_tags, estimated_minutes,
   status, created_by, topic_id
@@ -228,11 +305,11 @@ VALUES
   )
 ON CONFLICT (topic_id) WHERE topic_id IS NOT NULL DO NOTHING;
 
--- Unit documents: one doc per unit, with problem-ref blocks for each topic problem.
--- We look up the actual unit_id by topic_id so this works whether the unit came
+-- Chapter documents: one doc per chapter, with problem-ref blocks for each topic problem.
+-- We look up the actual chapter_id by topic_id so this works whether the chapter came
 -- from the seed above or from migration 0017 (which uses random UUIDs).
 
-INSERT INTO unit_documents (unit_id, blocks)
+INSERT INTO chapter_documents (chapter_id, blocks)
 SELECT
   tu.id,
   jsonb_build_object(
@@ -248,11 +325,11 @@ SELECT
         'pinnedRevision', NULL::text, 'visibility', 'always', 'overrideStarter', NULL::text))
     )
   )
-FROM teaching_units tu
+FROM chapters tu
 WHERE tu.topic_id = '00000000-0000-0000-0000-000000010001'
-ON CONFLICT (unit_id) DO NOTHING;
+ON CONFLICT (chapter_id) DO NOTHING;
 
-INSERT INTO unit_documents (unit_id, blocks)
+INSERT INTO chapter_documents (chapter_id, blocks)
 SELECT
   tu.id,
   jsonb_build_object(
@@ -268,9 +345,9 @@ SELECT
         'pinnedRevision', NULL::text, 'visibility', 'always', 'overrideStarter', NULL::text))
     )
   )
-FROM teaching_units tu
+FROM chapters tu
 WHERE tu.topic_id = '00000000-0000-0000-0000-000000010002'
-ON CONFLICT (unit_id) DO NOTHING;
+ON CONFLICT (chapter_id) DO NOTHING;
 
 -- ---------- Class + memberships + classroom ----------
 

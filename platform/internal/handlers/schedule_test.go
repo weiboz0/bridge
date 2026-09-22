@@ -138,7 +138,6 @@ func TestScheduleHandler_List_UsesSessionScheduledBackref(t *testing.T) {
 	suffix := strings.ToLower(strings.ReplaceAll(t.Name(), "_", "-"))
 
 	orgs := store.NewOrgStore(db)
-	users := store.NewUserStore(db)
 	courses := store.NewCourseStore(db)
 	classes := store.NewClassStore(db)
 	schedules := store.NewScheduleStore(db)
@@ -154,12 +153,11 @@ func TestScheduleHandler_List_UsesSessionScheduledBackref(t *testing.T) {
 	_, err = db.ExecContext(ctx, "UPDATE organizations SET status = 'active' WHERE id = $1", org.ID)
 	require.NoError(t, err)
 
-	teacher, err := users.RegisterUser(ctx, store.RegisterInput{
+	teacher := insertFixtureUser(t, db, store.RegisterInput{
 		Name:     "Teacher " + suffix,
 		Email:    suffix + "-teacher@example.com",
 		Password: "testpassword123",
 	})
-	require.NoError(t, err)
 
 	course, err := courses.CreateCourse(ctx, store.CreateCourseInput{
 		OrgID:      org.ID,

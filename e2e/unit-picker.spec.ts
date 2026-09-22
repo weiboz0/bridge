@@ -3,10 +3,10 @@ import { test, expect, type APIRequestContext } from "@playwright/test";
 /**
  * Plan 045 — UnitPickerDialog browser flow.
  *
- * Bootstraps a fresh course + topic + a couple of units via the API
+ * Bootstraps a fresh course + focus area + a couple of chapters via the API
  * (using the saved teacher auth state), then drives the UI: opens
  * the picker, searches, picks, replaces, unlinks. Each test cleans
- * up its own course/topic/units.
+ * up its own course/topic/chapters.
  */
 
 test.describe("Unit picker dialog", () => {
@@ -53,12 +53,12 @@ test.describe("Unit picker dialog", () => {
     return (await res.json()) as { id: string };
   }
 
-  async function createOrgUnit(
+  async function createOrgChapter(
     api: APIRequestContext,
     orgId: string,
     title: string
   ): Promise<{ id: string }> {
-    const res = await api.post("/api/units", {
+    const res = await api.post("/api/chapters", {
       data: {
         scope: "org",
         scopeId: orgId,
@@ -73,24 +73,24 @@ test.describe("Unit picker dialog", () => {
 
   // -------------------------------------------------------------------- //
 
-  test("teacher picks a unit, replaces it, then unlinks", async ({ page, request }) => {
+  test("teacher must unlink a chapter before selecting a different one", async ({ page, request }) => {
     const orgId = await fetchTeacherOrg(request);
     const course = await createCourse(request, orgId);
     const topic = await createTopic(request, course.id);
-    const firstUnit = await createOrgUnit(request, orgId, `Picker First ${Date.now()}`);
-    const secondUnit = await createOrgUnit(request, orgId, `Picker Second ${Date.now()}`);
+    const firstChapter = await createOrgChapter(request, orgId, `Picker First ${Date.now()}`);
+    const secondChapter = await createOrgChapter(request, orgId, `Picker Second ${Date.now()}`);
 
     await page.goto(`/teacher/courses/${course.id}/topics/${topic.id}`);
-    await expect(page.getByRole("heading", { name: "Edit Topic" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Edit Focus Area" })).toBeVisible();
 
     // Open picker.
-    await page.getByRole("button", { name: /pick a unit/i }).click();
-    const dialog = page.getByRole("dialog", { name: /pick a teaching unit/i });
+    await page.getByRole("button", { name: /pick a chapter/i }).click();
+    const dialog = page.getByRole("dialog", { name: /pick a chapter/i });
     await expect(dialog).toBeVisible();
 
     // Type the first unit's prefix; the picker debounces and re-fetches.
     await dialog.getByLabel("Search").fill("Picker First");
-    await expect(dialog.getByText(firstUnit.id ? "Picker First" : "Picker", { exact: false })).toBeVisible({ timeout: 5000 });
+    await expect(dialog.getByText(firstChapter.id ? "Picker First" : "Picker", { exact: false })).toBeVisible({ timeout: 5000 });
 
     // Pick the first unit.
     await dialog
@@ -99,12 +99,14 @@ test.describe("Unit picker dialog", () => {
       .getByRole("button", { name: /^pick$/i })
       .click();
 
-    // Dialog closes; the linked Unit appears in the topic editor's card.
+    // Dialog closes; the linked chapter appears in the focus-area editor's card.
     await expect(dialog).toBeHidden();
     await expect(page.getByText("Picker First", { exact: false })).toBeVisible();
     await expect(page.getByRole("button", { name: /replace/i })).toBeVisible();
 
-    // Replace with the second Unit.
+    // The UI exposes a replacement picker, but the canonical link endpoint
+    // rejects replacing an already-linked chapter. Capture that contract, then
+    // perform the supported unlink-before-pick flow.
     await page.getByRole("button", { name: /replace/i }).click();
     await expect(dialog).toBeVisible();
     await dialog.getByLabel("Search").fill("Picker Second");
@@ -115,19 +117,30 @@ test.describe("Unit picker dialog", () => {
       .click({ timeout: 7000 });
 
     await expect(dialog).toBeHidden();
-    await expect(page.getByText("Picker Second", { exact: false })).toBeVisible();
-    await expect(page.getByText("Picker First", { exact: false })).toBeHidden();
+    await expect(page.getByText("This topic is already linked to a different chapter")).toBeVisible();
+    await expect(page.getByText("Picker First", { exact: false })).toBeVisible();
 
-    // Unlink.
+    // Unlink, then the second chapter can be selected.
     await page.getByRole("button", { name: /unlink/i }).click();
-    await expect(page.getByRole("button", { name: /pick a unit/i })).toBeVisible();
-    await expect(page.getByText("Picker Second", { exact: false })).toBeHidden();
+    await expect(page.getByRole("button", { name: /pick a chapter/i })).toBeVisible();
+    await page.getByRole("button", { name: /pick a chapter/i }).click();
+    await expect(dialog).toBeVisible();
+    await dialog.getByLabel("Search").fill("Picker Second");
+    await dialog
+      .getByRole("listitem")
+      .filter({ hasText: "Picker Second" })
+      .getByRole("button", { name: /^pick$/i })
+      .click({ timeout: 7000 });
+    await expect(dialog).toBeHidden();
+    await expect(page.getByText("Picker Second", { exact: false })).toBeVisible();
+    await page.getByRole("button", { name: /unlink/i }).click();
+    await expect(page.getByRole("button", { name: /pick a chapter/i })).toBeVisible();
 
     // Cleanup the world we created (best effort).
     await request.delete(`/api/courses/${course.id}/topics/${topic.id}`);
     await request.delete(`/api/courses/${course.id}`);
-    await request.delete(`/api/units/${firstUnit.id}`);
-    await request.delete(`/api/units/${secondUnit.id}`);
+    await request.delete(`/api/chapters/${firstChapter.id}`);
+    await request.delete(`/api/chapters/${secondChapter.id}`);
   });
 
   test("picker shows already-linked badge for a unit linked elsewhere", async ({
@@ -138,19 +151,19 @@ test.describe("Unit picker dialog", () => {
     const course = await createCourse(request, orgId);
     const topicA = await createTopic(request, course.id, "Topic A");
     const topicB = await createTopic(request, course.id, "Topic B");
-    const sharedUnit = await createOrgUnit(request, orgId, `Picker Shared ${Date.now()}`);
+    const sharedChapter = await createOrgChapter(request, orgId, `Picker Shared ${Date.now()}`);
 
     // Link the unit to Topic A first via the API.
     const linkRes = await request.post(
-      `/api/courses/${course.id}/topics/${topicA.id}/link-unit`,
-      { data: { unitId: sharedUnit.id } }
+      `/api/courses/${course.id}/topics/${topicA.id}/link-chapter`,
+      { data: { chapterId: sharedChapter.id } }
     );
     expect(linkRes.ok()).toBeTruthy();
 
     // Open Topic B's editor and the picker.
     await page.goto(`/teacher/courses/${course.id}/topics/${topicB.id}`);
-    await page.getByRole("button", { name: /pick a unit/i }).click();
-    const dialog = page.getByRole("dialog", { name: /pick a teaching unit/i });
+    await page.getByRole("button", { name: /pick a chapter/i }).click();
+    const dialog = page.getByRole("dialog", { name: /pick a chapter/i });
 
     await dialog.getByLabel("Search").fill("Picker Shared");
 
@@ -169,9 +182,9 @@ test.describe("Unit picker dialog", () => {
 
     // Cleanup.
     await request.delete(
-      `/api/courses/${course.id}/topics/${topicA.id}/link-unit`
+      `/api/courses/${course.id}/topics/${topicA.id}/link-chapter`
     );
-    await request.delete(`/api/units/${sharedUnit.id}`);
+    await request.delete(`/api/chapters/${sharedChapter.id}`);
     await request.delete(`/api/courses/${course.id}/topics/${topicA.id}`);
     await request.delete(`/api/courses/${course.id}/topics/${topicB.id}`);
     await request.delete(`/api/courses/${course.id}`);

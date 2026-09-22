@@ -6,7 +6,7 @@
  *
  * Usage:
  *   import { getFixtureState } from "./helpers/fixture-state";
- *   const { classId, unitId } = getFixtureState();
+ *   const { classId, chapterId } = getFixtureState();
  */
 
 import * as fs from "node:fs";
@@ -14,7 +14,7 @@ import * as path from "node:path";
 
 export interface FixtureState {
   classId: string;
-  unitId?: string;
+  chapterId: string;
 }
 
 const STATE_PATH = path.resolve(__dirname, "../.fixture/state.json");
@@ -53,9 +53,15 @@ export function getFixtureState(): FixtureState {
         `Delete the file and re-run the seed project.`,
     );
   }
+  if (typeof state.chapterId !== "string" || !state.chapterId) {
+    throw new Error(
+      `e2e/.fixture/state.json is missing a valid 'chapterId' field. ` +
+        `Re-run the E2E seed project after applying scripts/seed_problem_demo.sql.`,
+    );
+  }
 
   return {
     classId: state.classId,
-    ...(typeof state.unitId === "string" && state.unitId ? { unitId: state.unitId } : {}),
+    chapterId: state.chapterId,
   };
 }

@@ -26,9 +26,8 @@ test.describe("Parent Portal", () => {
   // 040 phase 7 pending a real children-list product design. Locked by
   // tests/unit/nav-config.test.ts and e2e/parent.spec.ts (404 assertion).
 
-  test("parent can access reports page", async ({ page }) => {
-    await page.goto("/parent");
-    await page.getByRole("link", { name: /Reports/ }).click();
-    await expect(page).toHaveURL(/\/parent\/reports/);
+  test("legacy reports route redirects to the parent dashboard", async ({ page }) => {
+    await page.goto("/parent/reports");
+    await expect(page).toHaveURL(/\/parent(?:\?.*)?$/);
   });
 });

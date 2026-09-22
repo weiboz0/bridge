@@ -14,11 +14,12 @@ import (
 )
 
 type ScheduleHandler struct {
-	Schedules   *store.ScheduleStore
-	Sessions    *store.SessionStore
-	Orgs        *store.OrgStore
-	Classes     *store.ClassStore
-	Broadcaster *events.Broadcaster
+	Schedules     *store.ScheduleStore
+	Sessions      *store.SessionStore
+	Orgs          *store.OrgStore
+	Classes       *store.ClassStore
+	Broadcaster   *events.Broadcaster
+	CanvasControl CanvasControl
 }
 
 func (h *ScheduleHandler) Routes(r chi.Router) {
@@ -285,6 +286,7 @@ func (h *ScheduleHandler) Start(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	settleReplacedSessions(r.Context(), session.ReplacedSessions, h.Schedules, h.Broadcaster, h.CanvasControl)
 
 	writeJSON(w, http.StatusCreated, session)
 }

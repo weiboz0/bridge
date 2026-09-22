@@ -5,7 +5,7 @@ test.describe("Code Editor", () => {
 
   test("student code page loads", async ({ page }) => {
     await page.goto("/student/code");
-    await expect(page.getByRole("heading", { name: "My Code" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "My Work" })).toBeVisible();
   });
 
   test("student classes page loads", async ({ page }) => {

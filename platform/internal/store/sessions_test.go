@@ -245,6 +245,24 @@ func TestSessionStore_CreateAutoEnds(t *testing.T) {
 	assert.NotNil(t, ended.EndedAt)
 }
 
+func TestCreateSession_ReplacementEndsIncompleteAndWarns(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	sessions := NewSessionStore(db)
+	classID, teacherID := setupSessionTest(t, db, t.Name())
+	prior, err := sessions.CreateSession(ctx, CreateSessionInput{ClassID: strPtr(classID), TeacherID: teacherID, Title: "prior"})
+	require.NoError(t, err)
+	replacement, err := sessions.CreateSession(ctx, CreateSessionInput{ClassID: strPtr(classID), TeacherID: teacherID, Title: "replacement"})
+	require.NoError(t, err)
+	require.Len(t, replacement.ReplacedSessions, 1)
+	assert.Equal(t, prior.ID, replacement.ReplacedSessions[0].ID)
+	assert.False(t, replacement.ReplacedSessions[0].WhiteboardServerArchiveComplete)
+	var complete sql.NullBool
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT whiteboard_server_archive_complete FROM sessions WHERE id = $1`, prior.ID).Scan(&complete))
+	require.True(t, complete.Valid)
+	assert.False(t, complete.Bool)
+}
+
 func TestSessionStore_EndSession(t *testing.T) {
 	db := testDB(t)
 	sessions := NewSessionStore(db)
@@ -1259,4 +1277,140 @@ func TestSessionStore_CreateSession_AtomicTopicSnapshot(t *testing.T) {
 	).Scan(&stCount)
 	require.NoError(t, err)
 	assert.Equal(t, 0, stCount, "session_topics row must NOT exist after FK rollback")
+}
+
+// --- Plan 094 R2-6/R2-7: the single shared session-access rule ---
+
+// sessionAccessCase is one row of the one rule that decides session access.
+// CanAccessSession, CanvasStore.AuthorizeCanvasDocument, and ListVisibleCanvases
+// all evaluate the same core, so the matrix is built once here and reused by the
+// canvas-authorizer parity test in canvases_test.go.
+type sessionAccessCase struct {
+	name      string
+	sessionID string
+	userID    string
+	allowed   bool
+	reason    string
+	// live distinguishes rows on a live session from the ended and unknown
+	// rows, which the canvas document authorizer answers with archive rules.
+	live bool
+	// teacher is true when userID hosts sessionID; canvasID is a canvas that
+	// lives in sessionID (empty for the unknown-session row).
+	teacher  bool
+	canvasID string
+}
+
+// buildSessionAccessMatrix creates every distinct session shape the access rule
+// recognizes plus one canvas per session, and returns the expected verdict for
+// each caller. Each session carries its own cleanup keyed by primary key.
+func buildSessionAccessMatrix(t *testing.T, db *sql.DB) []sessionAccessCase {
+	t.Helper()
+	ctx := context.Background()
+	sessions := NewSessionStore(db)
+	canvases := NewCanvasStore(db)
+	users := NewUserStore(db)
+	classes := NewClassStore(db)
+
+	classID, teacherID := setupSessionTest(t, db, t.Name()+"-home")
+	otherClassID, otherOrgTeacherID := setupSessionTest(t, db, t.Name()+"-otherorg")
+	member := createTestUser(t, db, users, t.Name()+"-member")
+	_, err := classes.AddClassMember(ctx, AddClassMemberInput{ClassID: classID, UserID: member.ID, Role: "student"})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		db.ExecContext(ctx, "DELETE FROM class_memberships WHERE class_id = $1 AND user_id = $2", classID, member.ID)
+	})
+	invited := createTestUser(t, db, users, t.Name()+"-invited")
+	present := createTestUser(t, db, users, t.Name()+"-present")
+	departed := createTestUser(t, db, users, t.Name()+"-departed")
+	outsider := createTestUser(t, db, users, t.Name()+"-outsider")
+
+	newSession := func(title string, classID *string, hostID, visibility string) *LiveSession {
+		session, err := sessions.CreateSession(ctx, CreateSessionInput{
+			ClassID: classID, TeacherID: hostID, Title: title, Visibility: visibility,
+		})
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			db.ExecContext(ctx, "DELETE FROM session_participants WHERE session_id = $1", session.ID)
+			db.ExecContext(ctx, "DELETE FROM sessions WHERE id = $1", session.ID)
+		})
+		return session
+	}
+	newCanvas := func(sessionID, ownerID string) string {
+		canvas, err := canvases.CreateCanvas(ctx, CreateCanvasInput{
+			SessionID: sessionID, OwnerID: ownerID, Title: "matrix board", Visibility: "private",
+		})
+		require.NoError(t, err)
+		return canvas.ID
+	}
+
+	// Two different classes: a class-bound create replaces the class's other
+	// live sessions, so the public class-bound row needs its own class, and
+	// that class belongs to a different organization than `teacherID`.
+	classBound := newSession("class bound", strPtr(classID), teacherID, "unlisted")
+	classBoundPublic := newSession("class bound public", strPtr(otherClassID), otherOrgTeacherID, "public")
+	classLess := newSession("class less", nil, teacherID, "unlisted")
+	classLessPublic := newSession("class less public", nil, teacherID, "public")
+	ended := newSession("ended", nil, teacherID, "unlisted")
+
+	_, err = sessions.AddParticipant(ctx, classLess.ID, invited.ID, teacherID)
+	require.NoError(t, err)
+	_, err = sessions.JoinSession(ctx, classLess.ID, present.ID)
+	require.NoError(t, err)
+	_, err = sessions.JoinSession(ctx, classLess.ID, departed.ID)
+	require.NoError(t, err)
+	_, err = sessions.LeaveSession(ctx, classLess.ID, departed.ID)
+	require.NoError(t, err)
+	_, err = sessions.JoinSession(ctx, ended.ID, present.ID)
+	require.NoError(t, err)
+
+	classBoundCanvas := newCanvas(classBound.ID, teacherID)
+	classBoundPublicCanvas := newCanvas(classBoundPublic.ID, otherOrgTeacherID)
+	classLessCanvas := newCanvas(classLess.ID, teacherID)
+	classLessPublicCanvas := newCanvas(classLessPublic.ID, teacherID)
+	endedCanvas := newCanvas(ended.ID, teacherID)
+
+	_, err = sessions.EndSession(ctx, ended.ID)
+	require.NoError(t, err)
+
+	return []sessionAccessCase{
+		{name: "teacher of a class-bound session", sessionID: classBound.ID, userID: teacherID, allowed: true, reason: "teacher", live: true, teacher: true, canvasID: classBoundCanvas},
+		{name: "class member of a class-bound session", sessionID: classBound.ID, userID: member.ID, allowed: true, reason: "class_member", live: true, canvasID: classBoundCanvas},
+		{name: "non-member on a class-bound session", sessionID: classBound.ID, userID: outsider.ID, allowed: false, reason: "no_access", live: true, canvasID: classBoundCanvas},
+		{name: "invited participant", sessionID: classLess.ID, userID: invited.ID, allowed: true, reason: "participant", live: true, canvasID: classLessCanvas},
+		{name: "present participant", sessionID: classLess.ID, userID: present.ID, allowed: true, reason: "participant", live: true, canvasID: classLessCanvas},
+		{name: "left participant", sessionID: classLess.ID, userID: departed.ID, allowed: false, reason: "no_access", live: true, canvasID: classLessCanvas},
+		{name: "outsider on an unlisted class-less session", sessionID: classLess.ID, userID: outsider.ID, allowed: false, reason: "no_access", live: true, canvasID: classLessCanvas},
+		{name: "outsider on a public class-less session", sessionID: classLessPublic.ID, userID: outsider.ID, allowed: true, reason: "public", live: true, canvasID: classLessPublicCanvas},
+		// Plan 090's cross-org guard: a class-bound session is never reachable
+		// through the public clause, so a user from another organization stays
+		// out even when visibility is public.
+		{name: "cross-org user on a public class-bound session", sessionID: classBoundPublic.ID, userID: teacherID, allowed: false, reason: "no_access", live: true, canvasID: classBoundPublicCanvas},
+		{name: "outsider on a public class-bound session", sessionID: classBoundPublic.ID, userID: outsider.ID, allowed: false, reason: "no_access", live: true, canvasID: classBoundPublicCanvas},
+		{name: "teacher of an ended session", sessionID: ended.ID, userID: teacherID, allowed: false, reason: "ended", teacher: true, canvasID: endedCanvas},
+		{name: "present participant of an ended session", sessionID: ended.ID, userID: present.ID, allowed: false, reason: "ended", canvasID: endedCanvas},
+		{name: "outsider on an ended session", sessionID: ended.ID, userID: outsider.ID, allowed: false, reason: "ended", canvasID: endedCanvas},
+		{name: "unknown session", sessionID: "00000000-0000-4000-8000-000000000000", userID: outsider.ID, allowed: false, reason: "not_found"},
+	}
+}
+
+// TestCanAccessSession_FullMatrix pins every reason string the shared rule can
+// return, in one place, so the loader/evaluator split cannot quietly drop a
+// clause. The existing single-role tests above (teacher, class member,
+// token-joined participant, invited participant, revoked participant, ended,
+// no-access, not-found) stay as they are; this adds the rows none of them
+// covered: a left participant, the "public" class-less reason, and the
+// cross-org public class-bound denial.
+func TestCanAccessSession_FullMatrix(t *testing.T) {
+	db := testDB(t)
+	sessions := NewSessionStore(db)
+	ctx := context.Background()
+
+	for _, tc := range buildSessionAccessMatrix(t, db) {
+		t.Run(tc.name, func(t *testing.T) {
+			allowed, reason, err := sessions.CanAccessSession(ctx, tc.sessionID, tc.userID)
+			require.NoError(t, err)
+			assert.Equal(t, tc.allowed, allowed)
+			assert.Equal(t, tc.reason, reason)
+		})
+	}
 }

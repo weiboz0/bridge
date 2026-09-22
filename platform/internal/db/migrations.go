@@ -37,12 +37,9 @@ package db
 // against the migration source, which is fragile. Name presence catches
 // the realistic failure mode (whole `CREATE` statement missing).
 //
-// Enum-value checks are deferred. Earlier migrations declare enums
-// (auth_provider, editor_mode, grade_level, user_role in 0000;
-// signup_intent in 0021; schedule_status in 0023) but the latest
-// migration `parent_links` uses varchar+CHECK instead. When a future
-// migration adds a new enum or alters an existing one's values,
-// extend SchemaSentinels with an Enums field.
+// Plan 094 extends the probe to multi-object migrations. The latest migration
+// creates session_canvases, alters sessions, and creates canvas_visibility;
+// all three outputs are part of one atomic end-state contract.
 //
 // Bump procedure: when adding a new schema-affecting migration that
 // creates a table (most migrations do), update ExpectedSchemaProbe AND
@@ -63,64 +60,74 @@ package db
 // migration's targets. The probe still validates that the prior
 // schema state is present.
 
-// ExpectedSchemaProbe is the public table name created by the latest
+// ExpectedSchemaProbe is the primary public table created by the latest
 // schema-affecting migration. Boot-time check verifies the table
 // exists; mismatch → refuse to start.
-const ExpectedSchemaProbe = "books"
+const ExpectedSchemaProbe = "session_canvases"
 
-// SchemaSentinels enumerates the columns, named constraints, and
-// indexes that must be present on the ExpectedSchemaProbe table for
-// the schema to be considered fully migrated. Plan 076.
+// SchemaTableSentinels enumerates the objects that must exist on one table.
+// The current migration has no named constraints, but Constraints remains a
+// first-class field so future migrations keep the generic probe coverage.
+type SchemaTableSentinels struct {
+	Table             string
+	Columns           []string
+	ColumnDefinitions []SchemaColumnSentinel
+	Constraints       []string
+	Indexes           []string
+}
+
+// SchemaColumnSentinel pins physical properties that are security-relevant
+// for nullable lifecycle state, beyond mere column existence.
+type SchemaColumnSentinel struct {
+	Name     string
+	DataType string
+	Nullable bool
+}
+
+// SchemaEnumSentinel requires a PostgreSQL enum's labels in their declared
+// order. Ordering is part of the canvas visibility contract.
+type SchemaEnumSentinel struct {
+	Name   string
+	Labels []string
+}
+
+// SchemaSentinels is the complete latest-migration end-state contract. A
+// migration can create one primary table while also altering other tables or
+// defining enum types, so it intentionally models multiple objects.
 type SchemaSentinels struct {
-	// Table is the table the sentinels apply to. Always equal to
-	// ExpectedSchemaProbe; the field is here so the boot probe can
-	// take a single SchemaSentinels value rather than threading two
-	// constants together.
-	Table string
-	// Columns are the column names that must exist on Table. Order
-	// is irrelevant; all entries are checked.
-	Columns []string
-	// Constraints are the named CHECK / UNIQUE / PRIMARY KEY
-	// constraints (matched by `pg_constraint.conname`, scoped to
-	// Table via the join). FK constraints are intentionally absent
-	// (see file-level comment).
-	Constraints []string
-	// Indexes are the named btree / partial / unique indexes
-	// (matched by `pg_indexes.indexname`, scoped to Table via
-	// `pg_indexes.tablename`). Includes partial-uniques even though
-	// they enforce constraint-level invariants — they live in
-	// `pg_indexes`, not `pg_constraint`.
-	Indexes []string
+	Tables []SchemaTableSentinels
+	Enums  []SchemaEnumSentinel
 }
 
 // ExpectedSchemaSentinels is the sentinel set for the latest
-// schema-affecting migration (`drizzle/0026_books_and_chapters.sql`).
+// schema-affecting migration (`drizzle/0028_session_canvases.sql`).
 //
 // Bump rule: every PR that adds or modifies a schema-affecting
 // migration MUST update this struct. The CI parity test verifies
 // bidirectional parity with the migration source.
 var ExpectedSchemaSentinels = SchemaSentinels{
-	Table: "books",
-	Columns: []string{
-		"id",
-		"title",
-		"description",
-		"scope",
-		"scope_id",
-		"created_by",
-		"created_at",
-		"updated_at",
+	Tables: []SchemaTableSentinels{
+		{
+			Table: "session_canvases",
+			Columns: []string{
+				"id", "session_id", "owner_id", "title", "visibility", "yjs_state", "created_at", "updated_at",
+			},
+			Indexes: []string{
+				"session_canvases_session_idx", "session_canvases_session_owner_idx",
+			},
+		},
+		{
+			Table:   "sessions",
+			Columns: []string{"canvas_floor", "canvas_freeze_token", "canvas_freeze_until", "whiteboard_server_archive_complete"},
+			ColumnDefinitions: []SchemaColumnSentinel{
+				{Name: "canvas_freeze_token", DataType: "uuid", Nullable: true},
+				{Name: "canvas_freeze_until", DataType: "timestamp with time zone", Nullable: true},
+				{Name: "whiteboard_server_archive_complete", DataType: "boolean", Nullable: true},
+			},
+			Constraints: []string{"sessions_canvas_freeze_lease_pair"},
+		},
 	},
-	Constraints: []string{
-		"books_scope_id_required",
-	},
-	Indexes: []string{
-		"books_scope_idx",
-		"books_created_by_idx",
-		// chapters_book_idx is on the chapters table, not books. Plan 088
-		// added it in the same migration. checkIndexes() looks indexes up
-		// by name only (not by table), so this works under the relaxed
-		// probe.
-		"chapters_book_idx",
+	Enums: []SchemaEnumSentinel{
+		{Name: "canvas_visibility", Labels: []string{"private", "host", "participants", "session"}},
 	},
 }

@@ -128,11 +128,9 @@ func TestGetPortalAccess_ZeroRoleAuthenticated(t *testing.T) {
 	db := integrationDB(t)
 	ctx := context.Background()
 
-	users := store.NewUserStore(db)
-	u, err := users.RegisterUser(ctx, store.RegisterInput{
+	u := insertFixtureUser(t, db, store.RegisterInput{
 		Name: "Zero Role", Email: "zero-role-portal@example.com", Password: "testpassword123",
 	})
-	require.NoError(t, err)
 	t.Cleanup(func() {
 		db.ExecContext(ctx, "DELETE FROM auth_providers WHERE user_id = $1", u.ID)
 		db.ExecContext(ctx, "DELETE FROM users WHERE id = $1", u.ID)

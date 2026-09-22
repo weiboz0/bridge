@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -45,15 +46,14 @@ var createTableRE = regexp.MustCompile(`(?im)^\s*CREATE TABLE(?:\s+IF NOT EXISTS
 // default convention is 4-digit zero-padded sequence prefix.
 var migrationFilenameRE = regexp.MustCompile(`^\d{4}_.+\.sql$`)
 
-// Plan 076 — sentinel parity. The line-based regexes match the SQL
-// style used in drizzle/0024_parent_links.sql; future migrations using
-// unusual styles (multi-line CONSTRAINT names, ALTER TABLE ADD CONSTRAINT)
-// may need parser updates. Comments are stripped before matching to
-// avoid commented-out DDL like `-- CONSTRAINT old_name` registering as
-// a real declaration (DeepSeek round-1 NIT).
+// Plan 094 — multi-object sentinel parity. The regexes match
+// drizzle/0028_session_canvases.sql's CREATE TABLE, ALTER TABLE ADD COLUMN,
+// CREATE INDEX, and CREATE TYPE AS ENUM forms. Future migrations using more
+// unusual DDL styles may need parser updates. Comments are stripped first so
+// commented-out DDL does not register as a real declaration.
 var (
 	// CONSTRAINT <name> on its own line or after whitespace inside CREATE TABLE.
-	constraintNameRE = regexp.MustCompile(`(?m)^\s*CONSTRAINT\s+(\w+)\b`)
+	constraintNameRE = regexp.MustCompile(`(?im)(?:^\s*|ADD\s+)CONSTRAINT\s+(\w+)\b`)
 	// CREATE [UNIQUE] INDEX [IF NOT EXISTS] <name> ON ...
 	indexNameRE = regexp.MustCompile(`(?im)^\s*CREATE\s+(?:UNIQUE\s+)?INDEX(?:\s+IF\s+NOT\s+EXISTS)?\s+(\w+)\b`)
 	// Column lines inside CREATE TABLE: leading-whitespace + identifier + type.
@@ -244,67 +244,169 @@ func extractCreateTableBodies(content string) []string {
 }
 
 func TestExpectedSchemaSentinels_BidirectionalParity(t *testing.T) {
-	// Plan 076 — bidirectional parity. Forward direction catches a PR
-	// that adds a CONSTRAINT or CREATE INDEX without updating
-	// ExpectedSchemaSentinels. Reverse catches typos in the sentinel
-	// struct + stale entries left after a future migration drops a
-	// constraint or index. Mirrors plan 074's shadow-routes.test.ts
-	// pattern (Kimi K2.6 round-1 NIT).
-	require.Equal(t, ExpectedSchemaProbe, ExpectedSchemaSentinels.Table,
-		"ExpectedSchemaSentinels.Table (%q) does not match ExpectedSchemaProbe (%q). "+
-			"Both must point at the same latest-migration table.",
-		ExpectedSchemaSentinels.Table, ExpectedSchemaProbe,
-	)
-
 	filename, content := findLatestCreateTableMigration(t)
-	declConstraints, declIndexes, declColumns := extractDeclaredNames(content)
+	declared := extractDeclaredSchema(content)
+	require.True(t, hasTable(ExpectedSchemaSentinels, ExpectedSchemaProbe),
+		"ExpectedSchemaProbe %q must be one of ExpectedSchemaSentinels.Tables", ExpectedSchemaProbe)
+	assertTableSentinelParity(t, filename, declared.Tables, ExpectedSchemaSentinels.Tables)
+	assertEnumSentinelParity(t, filename, declared.Enums, ExpectedSchemaSentinels.Enums)
+}
 
-	sentinelConstraints := stringSet(ExpectedSchemaSentinels.Constraints)
-	declConstraintsSet := stringSet(declConstraints)
-	sentinelIndexes := stringSet(ExpectedSchemaSentinels.Indexes)
-	declIndexesSet := stringSet(declIndexes)
-	sentinelColumns := stringSet(ExpectedSchemaSentinels.Columns)
-	declColumnsSet := stringSet(declColumns)
+func TestExtractDeclaredSchema_CapturesAlterColumnAndOrderedEnum(t *testing.T) {
+	_, content := findLatestCreateTableMigration(t)
+	declared := extractDeclaredSchema(content)
+	require.Contains(t, declared.Tables, SchemaTableSentinels{
+		Table: "sessions", Columns: []string{"canvas_floor", "canvas_freeze_token", "canvas_freeze_until", "whiteboard_server_archive_complete"},
+		ColumnDefinitions: []SchemaColumnSentinel{{Name: "canvas_freeze_token", DataType: "uuid", Nullable: true}, {Name: "canvas_freeze_until", DataType: "timestamp with time zone", Nullable: true}, {Name: "whiteboard_server_archive_complete", DataType: "boolean", Nullable: true}}, Constraints: []string{"sessions_canvas_freeze_lease_pair"},
+	})
+	require.Contains(t, declared.Enums, SchemaEnumSentinel{
+		Name:   "canvas_visibility",
+		Labels: []string{"private", "host", "participants", "session"},
+	})
+}
 
-	// Forward: every name declared in DDL must be in the sentinel struct.
-	missingFromSentinels := setDiff(declConstraintsSet, sentinelConstraints)
-	require.Empty(t, missingFromSentinels,
-		"%s declares constraint(s) not in ExpectedSchemaSentinels.Constraints: %v.\n"+
-			"Add them to platform/internal/db/migrations.go.",
-		filename, missingFromSentinels,
-	)
-	missingFromSentinels = setDiff(declIndexesSet, sentinelIndexes)
-	require.Empty(t, missingFromSentinels,
-		"%s declares index(es) not in ExpectedSchemaSentinels.Indexes: %v.\n"+
-			"Add them to platform/internal/db/migrations.go.",
-		filename, missingFromSentinels,
-	)
-	missingFromSentinels = setDiff(declColumnsSet, sentinelColumns)
-	require.Empty(t, missingFromSentinels,
-		"%s declares column(s) not in ExpectedSchemaSentinels.Columns: %v.\n"+
-			"Add them to platform/internal/db/migrations.go.",
-		filename, missingFromSentinels,
-	)
+func TestExtractDeclaredSchema_LifecycleDefinitionMutationsDriftFromSentinels(t *testing.T) {
+	_, content := findLatestCreateTableMigration(t)
+	for _, mutation := range []string{
+		strings.Replace(content, "canvas_freeze_token uuid", "canvas_freeze_token text", 1),
+		strings.Replace(content, "canvas_freeze_until timestamptz", "canvas_freeze_until timestamptz NOT NULL", 1),
+	} {
+		declared := extractDeclaredSchema(mutation)
+		var sessions SchemaTableSentinels
+		for _, table := range declared.Tables {
+			if table.Table == "sessions" {
+				sessions = table
+			}
+		}
+		assert.NotEqual(t, ExpectedSchemaSentinels.Tables[1].ColumnDefinitions, sessions.ColumnDefinitions)
+	}
+}
 
-	// Reverse: every entry in the sentinel struct must appear in the DDL.
-	missingFromDecl := setDiff(sentinelConstraints, declConstraintsSet)
-	require.Empty(t, missingFromDecl,
-		"ExpectedSchemaSentinels.Constraints contains entry not declared in %s: %v.\n"+
-			"Either remove the stale entry or fix the typo in platform/internal/db/migrations.go.",
-		filename, missingFromDecl,
-	)
-	missingFromDecl = setDiff(sentinelIndexes, declIndexesSet)
-	require.Empty(t, missingFromDecl,
-		"ExpectedSchemaSentinels.Indexes contains entry not declared in %s: %v.\n"+
-			"Either remove the stale entry or fix the typo.",
-		filename, missingFromDecl,
-	)
-	missingFromDecl = setDiff(sentinelColumns, declColumnsSet)
-	require.Empty(t, missingFromDecl,
-		"ExpectedSchemaSentinels.Columns contains entry not declared in %s: %v.\n"+
-			"Either remove the stale entry or fix the typo.",
-		filename, missingFromDecl,
-	)
+var (
+	alterTableAddColumnRE     = regexp.MustCompile(`(?ims)ALTER\s+TABLE\s+"?(\w+)"?\s+ADD\s+COLUMN(?:\s+IF\s+NOT\s+EXISTS)?\s+"?(\w+)"?\s+([\w\s]+?)(?:\s*;)`)
+	alterTableAddConstraintRE = regexp.MustCompile(`(?ims)ALTER\s+TABLE\s+"?(\w+)"?\s+ADD\s+CONSTRAINT\s+(\w+)`)
+	indexTableRE              = regexp.MustCompile(`(?im)^\s*CREATE\s+(?:UNIQUE\s+)?INDEX(?:\s+IF\s+NOT\s+EXISTS)?\s+(\w+)\s+ON\s+"?(\w+)"?`)
+	createEnumRE              = regexp.MustCompile(`(?is)CREATE\s+TYPE\s+"?(\w+)"?\s+AS\s+ENUM\s*\(([^)]*)\)`)
+	enumLabelRE               = regexp.MustCompile(`'((?:''|[^'])*)'`)
+)
+
+// extractDeclaredSchema reads the latest migration as a multi-object schema
+// contract: CREATE TABLE columns/constraints, ALTER TABLE ADD COLUMN, indexes
+// by owning table, and CREATE TYPE AS ENUM labels in declaration order.
+func extractDeclaredSchema(content string) SchemaSentinels {
+	stripped := lineCommentRE.ReplaceAllString(content, "")
+	tables := make(map[string]*SchemaTableSentinels)
+	getTable := func(name string) *SchemaTableSentinels {
+		if table := tables[name]; table != nil {
+			return table
+		}
+		table := &SchemaTableSentinels{Table: name}
+		tables[name] = table
+		return table
+	}
+
+	matches := createTableRE.FindAllStringSubmatch(stripped, -1)
+	bodies := extractCreateTableBodies(stripped)
+	for i, match := range matches {
+		if i >= len(bodies) {
+			break
+		}
+		table := getTable(match[1])
+		for _, column := range columnLineRE.FindAllStringSubmatch(bodies[i], -1) {
+			ident := column[1]
+			switch strings.ToUpper(ident) {
+			case "CONSTRAINT", "PRIMARY", "UNIQUE", "CREATE", "FOREIGN", "CHECK":
+				continue
+			}
+			table.Columns = append(table.Columns, ident)
+		}
+		for _, constraint := range constraintNameRE.FindAllStringSubmatch(bodies[i], -1) {
+			table.Constraints = append(table.Constraints, constraint[1])
+		}
+	}
+	for _, match := range alterTableAddColumnRE.FindAllStringSubmatch(stripped, -1) {
+		getTable(match[1]).Columns = append(getTable(match[1]).Columns, match[2])
+		if match[1] == "sessions" && (match[2] == "canvas_freeze_token" || match[2] == "canvas_freeze_until" || match[2] == "whiteboard_server_archive_complete") {
+			definition := strings.TrimSpace(match[3])
+			nullable := !strings.Contains(strings.ToUpper(definition), "NOT NULL")
+			dataType := strings.TrimSpace(strings.TrimSuffix(strings.ToLower(strings.TrimSpace(strings.ReplaceAll(definition, "NOT NULL", ""))), ""))
+			if dataType == "timestamptz" {
+				dataType = "timestamp with time zone"
+			}
+			getTable(match[1]).ColumnDefinitions = append(getTable(match[1]).ColumnDefinitions, SchemaColumnSentinel{Name: match[2], DataType: dataType, Nullable: nullable})
+		}
+	}
+	for _, match := range alterTableAddConstraintRE.FindAllStringSubmatch(stripped, -1) {
+		getTable(match[1]).Constraints = append(getTable(match[1]).Constraints, match[2])
+	}
+	for _, match := range indexTableRE.FindAllStringSubmatch(stripped, -1) {
+		getTable(match[2]).Indexes = append(getTable(match[2]).Indexes, match[1])
+	}
+
+	var result SchemaSentinels
+	for _, table := range tables {
+		result.Tables = append(result.Tables, *table)
+	}
+	sort.Slice(result.Tables, func(i, j int) bool { return result.Tables[i].Table < result.Tables[j].Table })
+	for _, match := range createEnumRE.FindAllStringSubmatch(stripped, -1) {
+		enum := SchemaEnumSentinel{Name: match[1]}
+		for _, label := range enumLabelRE.FindAllStringSubmatch(match[2], -1) {
+			enum.Labels = append(enum.Labels, strings.ReplaceAll(label[1], "''", "'"))
+		}
+		result.Enums = append(result.Enums, enum)
+	}
+	sort.Slice(result.Enums, func(i, j int) bool { return result.Enums[i].Name < result.Enums[j].Name })
+	return result
+}
+
+func assertTableSentinelParity(t *testing.T, filename string, declared, expected []SchemaTableSentinels) {
+	t.Helper()
+	declaredByName := make(map[string]SchemaTableSentinels, len(declared))
+	for _, table := range declared {
+		declaredByName[table.Table] = table
+	}
+	expectedByName := make(map[string]SchemaTableSentinels, len(expected))
+	for _, table := range expected {
+		expectedByName[table.Table] = table
+	}
+	for name, actual := range declaredByName {
+		expectedTable, ok := expectedByName[name]
+		require.True(t, ok, "%s declares table object %q missing from ExpectedSchemaSentinels.Tables", filename, name)
+		require.Empty(t, setDiff(stringSet(actual.Columns), stringSet(expectedTable.Columns)), "%s table %q has column(s) missing from sentinels", filename, name)
+		require.Empty(t, setDiff(stringSet(actual.Constraints), stringSet(expectedTable.Constraints)), "%s table %q has constraint(s) missing from sentinels", filename, name)
+		require.Empty(t, setDiff(stringSet(actual.Indexes), stringSet(expectedTable.Indexes)), "%s table %q has index(es) missing from sentinels", filename, name)
+		require.Equal(t, actual.ColumnDefinitions, expectedTable.ColumnDefinitions, "%s table %q has lifecycle column definition drift", filename, name)
+	}
+	for name, expectedTable := range expectedByName {
+		actual, ok := declaredByName[name]
+		require.True(t, ok, "ExpectedSchemaSentinels.Tables contains stale table %q not declared in %s", name, filename)
+		require.Empty(t, setDiff(stringSet(expectedTable.Columns), stringSet(actual.Columns)), "ExpectedSchemaSentinels table %q has stale/typo column(s)", name)
+		require.Empty(t, setDiff(stringSet(expectedTable.Constraints), stringSet(actual.Constraints)), "ExpectedSchemaSentinels table %q has stale/typo constraint(s)", name)
+		require.Empty(t, setDiff(stringSet(expectedTable.Indexes), stringSet(actual.Indexes)), "ExpectedSchemaSentinels table %q has stale/typo index(es)", name)
+		require.Equal(t, actual.ColumnDefinitions, expectedTable.ColumnDefinitions, "ExpectedSchemaSentinels table %q has stale lifecycle column definitions", name)
+	}
+}
+
+func assertEnumSentinelParity(t *testing.T, filename string, declared, expected []SchemaEnumSentinel) {
+	t.Helper()
+	declaredByName := make(map[string]SchemaEnumSentinel, len(declared))
+	for _, enum := range declared {
+		declaredByName[enum.Name] = enum
+	}
+	expectedByName := make(map[string]SchemaEnumSentinel, len(expected))
+	for _, enum := range expected {
+		expectedByName[enum.Name] = enum
+	}
+	for name, actual := range declaredByName {
+		expectedEnum, ok := expectedByName[name]
+		require.True(t, ok, "%s declares enum %q missing from ExpectedSchemaSentinels.Enums", filename, name)
+		require.Equal(t, actual.Labels, expectedEnum.Labels, "%s enum %q labels must match exactly in declaration order", filename, name)
+	}
+	for name, expectedEnum := range expectedByName {
+		actual, ok := declaredByName[name]
+		require.True(t, ok, "ExpectedSchemaSentinels.Enums contains stale enum %q not declared in %s", name, filename)
+		require.Equal(t, actual.Labels, expectedEnum.Labels, "ExpectedSchemaSentinels enum %q labels are stale, typoed, or out of order", name)
+	}
 }
 
 func stringSet(xs []string) map[string]struct{} {

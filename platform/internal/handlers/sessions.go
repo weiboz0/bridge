@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/weiboz0/bridge/platform/internal/auth"
 	"github.com/weiboz0/bridge/platform/internal/events"
+	"github.com/weiboz0/bridge/platform/internal/realtime"
 	"github.com/weiboz0/bridge/platform/internal/store"
 )
 
@@ -26,15 +28,25 @@ import (
 // docs/plans/075-require-org-authority.md §Out of scope, Bucket 1.
 
 type SessionHandler struct {
-	Sessions    *store.SessionStore
-	Schedules   *store.ScheduleStore
-	Classes     *store.ClassStore
-	Courses     *store.CourseStore
-	Topics      *store.TopicStore
-	Chapters    *store.ChapterStore // Plan 044: per-topic Unit refs.
-	Orgs        *store.OrgStore
-	ParentLinks *store.ParentLinkStore // Plan 064: parent-of-participant gate for GetSessionTopics.
-	Broadcaster *events.Broadcaster
+	Sessions      *store.SessionStore
+	Schedules     *store.ScheduleStore
+	Classes       *store.ClassStore
+	Courses       *store.CourseStore
+	Topics        *store.TopicStore
+	Chapters      *store.ChapterStore // Plan 044: per-topic Unit refs.
+	Orgs          *store.OrgStore
+	ParentLinks   *store.ParentLinkStore // Plan 064: parent-of-participant gate for GetSessionTopics.
+	Broadcaster   *events.Broadcaster
+	CanvasControl CanvasControl
+}
+
+// CanvasControl is kept at the handler boundary so production can use the
+// strict HTTP client while tests can exercise durable lifecycle behavior
+// without standing up Hocuspocus.
+type CanvasControl interface {
+	Freeze(context.Context, realtime.FreezeRequest) (realtime.FreezeBundle, error)
+	Complete(context.Context, string, string)
+	Unfreeze(context.Context, string, string)
 }
 
 const maxConcurrentLiveSessionsPerHost = 5
@@ -194,6 +206,7 @@ func (h *SessionHandler) CreateSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "Failed to create session")
 		return
 	}
+	h.settleReplacedSessions(r.Context(), session.ReplacedSessions)
 	writeJSON(w, http.StatusCreated, session)
 }
 
@@ -542,26 +555,187 @@ func (h *SessionHandler) EndSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "Not found")
 		return
 	}
+	// A platform admin may end any session, as on the sibling teacher-only
+	// routes. Ending archives canvas snapshots server-side but returns none of
+	// their content and grants no canvas read, mint, or settings access, so it
+	// is not the private-canvas bypass Spec 013 rules out.
 	if !claims.IsPlatformAdmin && session.TeacherID != claims.UserID {
 		writeError(w, http.StatusForbidden, "Only the session teacher can end the session")
 		return
 	}
 
-	ended, err := h.Sessions.EndSession(r.Context(), sessionID)
+	prep, err := h.Sessions.PrepareSessionEnd(r.Context(), sessionID)
 	if err != nil {
+		if errors.Is(err, store.ErrSessionEndInProgress) {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "Session end in progress", "code": "session_end_in_progress"})
+			return
+		}
+		slog.Error("canvas end preparation failed", "sessionId", sessionID, "error", err)
 		writeError(w, http.StatusInternalServerError, "Database error")
 		return
 	}
 
-	// Complete any linked scheduled session
+	durablyEnded := false
+	completeAfterCommit := false
+	degradedArchiveReason := ""
+	var durableEnd store.SessionEndResult
+	if h.CanvasControl != nil {
+		bundle, freezeErr := h.CanvasControl.Freeze(r.Context(), realtime.FreezeRequest{
+			SessionID: sessionID, FreezeToken: prep.Token, CanvasIDs: prep.CanvasIDs,
+		})
+		if freezeErr == nil {
+			snapshots := make([]store.CanvasSnapshot, 0, len(bundle.Snapshots))
+			for _, entry := range bundle.Snapshots {
+				snapshots = append(snapshots, store.CanvasSnapshot{CanvasID: entry.CanvasID, YjsState: base64.StdEncoding.EncodeToString(entry.State)})
+			}
+			if confirmedEnd, completeErr := h.Sessions.CompleteSessionConfirmedResult(r.Context(), sessionID, prep.Token, snapshots); completeErr == nil {
+				durablyEnded = true
+				completeAfterCommit = true
+				durableEnd = confirmedEnd
+			} else if errors.Is(completeErr, store.ErrSessionSnapshotCountMismatch) || errors.Is(completeErr, store.ErrSessionEndInProgress) {
+				// The confirmed transaction rolled back. A separate transaction may
+				// safely record the honest false/no-snapshot result.
+				degradedEnd, degradedErr := h.Sessions.CompleteSessionDegraded(r.Context(), sessionID, prep.Token)
+				if degradedErr != nil {
+					if errors.Is(degradedErr, store.ErrSessionEndInProgress) {
+						h.cleanupFailedEnd(sessionID, prep.Token)
+						writeJSON(w, http.StatusConflict, map[string]string{"error": "Session end in progress", "code": "session_end_in_progress"})
+						return
+					}
+					slog.Error("canvas degraded end failed after confirmed rollback", "sessionId", sessionID, "error", degradedErr)
+					h.cleanupFailedEnd(sessionID, prep.Token)
+					writeError(w, http.StatusInternalServerError, "Database error")
+					return
+				}
+				durableEnd = degradedEnd
+				durablyEnded = true
+				completeAfterCommit = true
+				if errors.Is(completeErr, store.ErrSessionSnapshotCountMismatch) {
+					degradedArchiveReason = "snapshot_count_mismatch"
+				} else {
+					degradedArchiveReason = "session_end_in_progress"
+				}
+			} else {
+				slog.Error("canvas confirmed end failed", "sessionId", sessionID, "error", completeErr)
+				// An infrastructure failure is not evidence that an end committed.
+				// Keep the session live, clear only our own lease, and release the
+				// realtime fence best-effort.
+				h.cleanupFailedEnd(sessionID, prep.Token)
+				writeError(w, http.StatusInternalServerError, "Database error")
+				return
+			}
+		} else if errors.Is(freezeErr, context.DeadlineExceeded) {
+			degradedArchiveReason = "freeze_timeout"
+		} else {
+			// CanvasControl implementations may include a control URL in an error,
+			// so retain only a fixed category in the terminal audit log.
+			degradedArchiveReason = "freeze_failed"
+		}
+	} else {
+		degradedArchiveReason = "canvas_control_unconfigured"
+	}
+	if !durablyEnded {
+		if degradedEnd, err := h.Sessions.CompleteSessionDegraded(r.Context(), sessionID, prep.Token); err != nil {
+			slog.Error("canvas degraded end failed", "sessionId", sessionID, "error", err)
+			h.cleanupFailedEnd(sessionID, prep.Token)
+			writeError(w, http.StatusInternalServerError, "Database error")
+			return
+		} else {
+			durableEnd = degradedEnd
+		}
+		if h.CanvasControl != nil {
+			completeAfterCommit = true
+		}
+	}
+	if degradedArchiveReason != "" {
+		slog.Warn("session ended with degraded whiteboard archive", "sessionId", sessionID, "reason", degradedArchiveReason)
+	}
+
+	// Durable status is the handoff boundary. Only after it succeeds may this
+	// producer complete a schedule or tell connected clients the session ended.
+	if h.Broadcaster != nil {
+		h.Broadcaster.Emit(sessionID, "session_ended", nil)
+	}
 	if h.Schedules != nil {
-		if err := h.Schedules.CompleteScheduledSession(r.Context(), sessionID); err != nil {
+		settleCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if err := h.Schedules.CompleteScheduledSession(settleCtx, sessionID); err != nil {
 			slog.Warn("failed to complete scheduled session", "sessionId", sessionID, "error", err)
 		}
 	}
+	if completeAfterCommit && h.CanvasControl != nil {
+		// Terminal cleanup has no authority over the durable result. Keep it out
+		// of the request path so a half-open Hocuspocus socket cannot delay the
+		// schedule/event handoff or turn an ended session into a timeout.
+		go h.CanvasControl.Complete(context.Background(), sessionID, prep.Token)
+	}
+	// Do not re-read after commit: that read can fail after clients have already
+	// received an event, incorrectly turning a durable end into a 500. Shape the
+	// compatible session fields from the authorized pre-commit representation.
+	ended := *session
+	ended.Status = "ended"
+	ended.EndedAt = durableEnd.EndedAt
+	archiveComplete := false
+	if durableEnd.WhiteboardServerArchiveComplete != nil {
+		archiveComplete = *durableEnd.WhiteboardServerArchiveComplete
+	}
+	// A missing durable value is legacy/unknown state, so report incomplete.
+	response := map[string]any{"whiteboardServerArchiveComplete": archiveComplete}
+	// Preserve the established top-level session representation for callers
+	// while adding stable Phase-9 metadata.
+	forEnd := ended
+	forEnd.Status = "ended"
+	response["id"] = forEnd.ID
+	response["classId"] = forEnd.ClassID
+	response["teacherId"] = forEnd.TeacherID
+	response["title"] = forEnd.Title
+	response["status"] = forEnd.Status
+	response["settings"] = forEnd.Settings
+	response["startedAt"] = forEnd.StartedAt
+	response["endedAt"] = forEnd.EndedAt
+	response["visibility"] = forEnd.Visibility
+	if !archiveComplete {
+		response["warning"] = "whiteboard_server_archive_incomplete"
+	}
+	writeJSON(w, http.StatusOK, response)
+}
 
-	h.Broadcaster.Emit(sessionID, "session_ended", nil)
-	writeJSON(w, http.StatusOK, ended)
+// cleanupFailedEnd owns neither the response nor a later replacement lease.
+// It uses a fresh deadline because the original HTTP/control context may have
+// expired exactly when cleanup becomes necessary.
+func (h *SessionHandler) cleanupFailedEnd(sessionID, token string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	if err := h.Sessions.AbortSessionFreezeLease(ctx, sessionID, token); err != nil {
+		slog.Warn("failed to abort canvas freeze lease", "sessionId", sessionID, "error", err)
+	}
+	if h.CanvasControl != nil {
+		go h.CanvasControl.Unfreeze(context.Background(), sessionID, token)
+	}
+}
+
+func (h *SessionHandler) settleReplacedSessions(_ context.Context, replaced []store.ReplacedSession) {
+	settleReplacedSessions(context.Background(), replaced, h.Schedules, h.Broadcaster, h.CanvasControl)
+}
+
+func settleReplacedSessions(ctx context.Context, replaced []store.ReplacedSession, schedules *store.ScheduleStore, broadcaster *events.Broadcaster, control CanvasControl) {
+	for _, prior := range replaced {
+		if schedules != nil {
+			settleCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			err := schedules.CompleteScheduledSession(settleCtx, prior.ID)
+			cancel()
+			if err != nil {
+				slog.Warn("failed to complete replaced scheduled session", "sessionId", prior.ID, "error", err)
+			}
+		}
+		if broadcaster != nil {
+			broadcaster.Emit(prior.ID, "session_ended", nil)
+		}
+		if control != nil && prior.ClearedFreezeToken != nil {
+			id, token := prior.ID, *prior.ClearedFreezeToken
+			go control.Complete(context.Background(), id, token)
+		}
+	}
 }
 
 // canJoinSession reports whether the caller may join, stream events for, or

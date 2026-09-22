@@ -11,23 +11,23 @@ test.describe("Authentication", () => {
   });
 
   test("login as teacher redirects to teacher portal", async ({ page }) => {
-    await loginWithCredentials(page, ACCOUNTS.teacher.email, ACCOUNTS.teacher.password);
+    await loginWithCredentials(page, ACCOUNTS.teacher.email, ACCOUNTS.teacher.password, "/teacher");
     await expect(page).toHaveURL(/\/teacher/);
     await expect(page.getByRole("heading", { name: "Teacher Dashboard" })).toBeVisible();
   });
 
   test("login as student redirects to student portal", async ({ page }) => {
-    await loginWithCredentials(page, ACCOUNTS.student.email, ACCOUNTS.student.password);
+    await loginWithCredentials(page, ACCOUNTS.student.email, ACCOUNTS.student.password, "/student");
     await expect(page).toHaveURL(/\/student/);
   });
 
   test("login as org admin redirects to org portal", async ({ page }) => {
-    await loginWithCredentials(page, ACCOUNTS.orgAdmin.email, ACCOUNTS.orgAdmin.password);
+    await loginWithCredentials(page, ACCOUNTS.orgAdmin.email, ACCOUNTS.orgAdmin.password, "/org");
     await expect(page).toHaveURL(/\/org/);
   });
 
   test("login as parent redirects to parent portal", async ({ page }) => {
-    await loginWithCredentials(page, ACCOUNTS.parent.email, ACCOUNTS.parent.password);
+    await loginWithCredentials(page, ACCOUNTS.parent.email, ACCOUNTS.parent.password, "/parent");
     await expect(page).toHaveURL(/\/parent/);
   });
 

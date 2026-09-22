@@ -3,11 +3,16 @@ package handlers
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -38,9 +43,13 @@ func newRealtimeHandlerForFixture(fx *sessionPageFixture) *RealtimeHandler {
 	}
 }
 
-func callMintToken(t *testing.T, h *RealtimeHandler, docName string, claims *auth.Claims) (int, mintResponse) {
+func callMintToken(t *testing.T, h *RealtimeHandler, docName string, claims *auth.Claims, sessionIDs ...string) (int, mintResponse) {
 	t.Helper()
-	body, _ := json.Marshal(map[string]string{"documentName": docName})
+	payload := map[string]string{"documentName": docName}
+	if len(sessionIDs) == 1 {
+		payload["sessionId"] = sessionIDs[0]
+	}
+	body, _ := json.Marshal(payload)
 	req := httptest.NewRequest(http.MethodPost, "/api/realtime/token", bytes.NewReader(body))
 	req = withClaims(req, claims)
 	w := httptest.NewRecorder()
@@ -70,6 +79,404 @@ func TestMintToken_NoSecret_503(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.MintToken(w, req)
 	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+}
+
+func TestMintToken_Canvas_OwnerWrite(t *testing.T) {
+	fx := newCanvasHandlerFixture(t)
+	canvas, err := fx.h.Canvases.CreateCanvas(context.Background(), store.CreateCanvasInput{SessionID: fx.session.ID, OwnerID: fx.student.ID, Title: "Owner board", Visibility: "private"})
+	require.NoError(t, err)
+	h := newRealtimeHandlerForCanvasFixture(fx)
+	code, response := callMintToken(t, h, "canvas:"+canvas.ID, fx.claims(fx.student), fx.session.ID)
+	require.Equal(t, http.StatusOK, code)
+	claims, err := auth.VerifyRealtimeToken(rtSecret, response.Token)
+	require.NoError(t, err)
+	assert.False(t, claims.ReadOnly)
+}
+
+func TestCanvasMint_RequiresMatchingSessionIDAndSignsAuthoritativeBinding(t *testing.T) {
+	fx := newCanvasHandlerFixture(t)
+	canvas, err := fx.h.Canvases.CreateCanvas(context.Background(), store.CreateCanvasInput{SessionID: fx.session.ID, OwnerID: fx.student.ID, Title: "Identity board", Visibility: "private"})
+	require.NoError(t, err)
+	h := newRealtimeHandlerForCanvasFixture(fx)
+
+	call := func(body map[string]any) *httptest.ResponseRecorder {
+		body["documentName"] = "canvas:" + canvas.ID
+		encoded, err := json.Marshal(body)
+		require.NoError(t, err)
+		req := withClaims(httptest.NewRequest(http.MethodPost, "/api/realtime/token", bytes.NewReader(encoded)), fx.claims(fx.student))
+		w := httptest.NewRecorder()
+		h.MintToken(w, req)
+		return w
+	}
+	for _, tc := range []struct {
+		name string
+		body map[string]any
+		want int
+	}{
+		{"missing", map[string]any{}, http.StatusBadRequest},
+		{"malformed", map[string]any{"sessionId": "not-a-uuid"}, http.StatusBadRequest},
+		{"mismatched", map[string]any{"sessionId": "11111111-1111-4111-8111-111111111111"}, http.StatusForbidden},
+	} {
+		t.Run(tc.name, func(t *testing.T) { require.Equal(t, tc.want, call(tc.body).Code) })
+	}
+	w := call(map[string]any{"sessionId": fx.session.ID})
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	var response mintResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	parts := strings.Split(response.Token, ".")
+	require.Len(t, parts, 3)
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	require.NoError(t, err)
+	var claims map[string]any
+	require.NoError(t, json.Unmarshal(payload, &claims))
+	assert.Equal(t, fx.session.ID, claims["sessionId"])
+	verified, err := auth.VerifyRealtimeToken(rtSecret, response.Token)
+	require.NoError(t, err)
+	assert.Equal(t, "canvas:"+canvas.ID, verified.Scope)
+}
+
+func TestInternalCanvasAuth_RequiresSessionIDBeforeAnyAuthorizationRead(t *testing.T) {
+	fx := newCanvasHandlerFixture(t)
+	canvas, err := fx.h.Canvases.CreateCanvas(context.Background(), store.CreateCanvasInput{SessionID: fx.session.ID, OwnerID: fx.student.ID, Title: "Locked board", Visibility: "private"})
+	require.NoError(t, err)
+	h := newRealtimeHandlerForCanvasFixture(fx)
+	for _, tc := range []struct {
+		name string
+		body map[string]any
+		want int
+	}{
+		{"missing", map[string]any{}, http.StatusBadRequest},
+		{"malformed", map[string]any{"sessionId": "not-a-uuid"}, http.StatusBadRequest},
+		{"mismatched", map[string]any{"sessionId": "11111111-1111-4111-8111-111111111111"}, http.StatusForbidden},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.body["documentName"] = "canvas:" + canvas.ID
+			tc.body["sub"] = fx.student.ID
+			body, err := json.Marshal(tc.body)
+			require.NoError(t, err)
+			req := httptest.NewRequest(http.MethodPost, "/api/internal/realtime/auth", bytes.NewReader(body))
+			req.Header.Set("Authorization", "Bearer "+rtSecret)
+			w := httptest.NewRecorder()
+			h.InternalAuth(w, req)
+			require.Equal(t, tc.want, w.Code, w.Body.String())
+		})
+	}
+}
+
+func TestMintToken_Canvas_HostReadWhenHostVisible(t *testing.T) {
+	fx := newCanvasHandlerFixture(t)
+	canvas, err := fx.h.Canvases.CreateCanvas(context.Background(), store.CreateCanvasInput{SessionID: fx.session.ID, OwnerID: fx.student.ID, Title: "Host board", Visibility: "host"})
+	require.NoError(t, err)
+	h := newRealtimeHandlerForCanvasFixture(fx)
+	code, response := callMintToken(t, h, "canvas:"+canvas.ID, fx.claims(fx.teacher), fx.session.ID)
+	require.Equal(t, http.StatusOK, code)
+	claims, err := auth.VerifyRealtimeToken(rtSecret, response.Token)
+	require.NoError(t, err)
+	assert.True(t, claims.ReadOnly)
+}
+
+// canvasMintFixture wires the Plan 094 mint matrix onto one canvas fixture.
+// Roles: the session teacher, the owning student (a present participant via
+// the base fixture), a second present participant, a participant who joined
+// and then left, an invited user who never joined, and the non-member
+// outsider — plus one student-owned canvas per visibility level.
+//
+// Each acceptance test below builds its own fixture so the live, public, and
+// ended phases of the matrix cannot leak state between cases.
+type canvasMintFixture struct {
+	*canvasHandlerFixture
+	realtime      *RealtimeHandler
+	present       *store.RegisteredUser
+	left          *store.RegisteredUser
+	invitee       *store.RegisteredUser
+	private       *store.Canvas
+	hostCanvas    *store.Canvas
+	participants  *store.Canvas
+	sessionCanvas *store.Canvas
+}
+
+func newCanvasMintFixture(t *testing.T) *canvasMintFixture {
+	t.Helper()
+	ctx := context.Background()
+	fx := newCanvasHandlerFixture(t)
+	mx := &canvasMintFixture{canvasHandlerFixture: fx, realtime: newRealtimeHandlerForCanvasFixture(fx)}
+	mx.present = fx.addUser(t, "present")
+	mx.left = fx.addUser(t, "left")
+	mx.invitee = fx.addUser(t, "invitee")
+	_, err := fx.h.Sessions.JoinSession(ctx, fx.session.ID, mx.present.ID)
+	require.NoError(t, err)
+	_, err = fx.h.Sessions.JoinSession(ctx, fx.session.ID, mx.left.ID)
+	require.NoError(t, err)
+	_, err = fx.h.Sessions.LeaveSession(ctx, fx.session.ID, mx.left.ID)
+	require.NoError(t, err)
+	_, err = fx.h.Sessions.AddParticipant(ctx, fx.session.ID, mx.invitee.ID, fx.teacher.ID)
+	require.NoError(t, err)
+	mx.private = mx.makeCanvas(t, "private")
+	mx.hostCanvas = mx.makeCanvas(t, "host")
+	mx.participants = mx.makeCanvas(t, "participants")
+	mx.sessionCanvas = mx.makeCanvas(t, "session")
+	return mx
+}
+
+func (mx *canvasMintFixture) makeCanvas(t *testing.T, visibility string) *store.Canvas {
+	t.Helper()
+	canvas, err := mx.h.Canvases.CreateCanvas(context.Background(), store.CreateCanvasInput{
+		SessionID: mx.session.ID, OwnerID: mx.student.ID, Title: visibility, Visibility: visibility,
+	})
+	require.NoError(t, err)
+	return canvas
+}
+
+// mint asserts the mint status for one (canvas, user) pair and, on success,
+// the exact `readOnly` claim the signed token carries.
+func (mx *canvasMintFixture) mint(t *testing.T, canvas *store.Canvas, user *store.RegisteredUser, want int, readOnly bool) {
+	t.Helper()
+	code, response := callMintToken(t, mx.realtime, "canvas:"+canvas.ID, mx.claims(user), mx.session.ID)
+	require.Equal(t, want, code)
+	if want == http.StatusOK {
+		claims, err := auth.VerifyRealtimeToken(rtSecret, response.Token)
+		require.NoError(t, err)
+		require.Equal(t, readOnly, claims.ReadOnly)
+	}
+}
+
+func (mx *canvasMintFixture) makeSessionPublic(t *testing.T) {
+	t.Helper()
+	_, err := mx.db.ExecContext(context.Background(), "UPDATE sessions SET visibility = 'public' WHERE id = $1", mx.session.ID)
+	require.NoError(t, err)
+}
+
+func (mx *canvasMintFixture) endSession(t *testing.T) {
+	t.Helper()
+	_, err := mx.h.Sessions.EndSession(context.Background(), mx.session.ID)
+	require.NoError(t, err)
+}
+
+// `private` mints only for its owner — the teacher's admit tier is `host`,
+// which is looser than `private`.
+func TestMintToken_Canvas_HostDeniedWhenPrivate(t *testing.T) {
+	mx := newCanvasMintFixture(t)
+	mx.mint(t, mx.private, mx.teacher, http.StatusForbidden, false)
+}
+
+func TestMintToken_Canvas_ParticipantReadWhenParticipantsVisible(t *testing.T) {
+	mx := newCanvasMintFixture(t)
+	mx.mint(t, mx.participants, mx.present, http.StatusOK, true)
+}
+
+// A user who never joined holds no `present` participant row, so the
+// `participants` level denies them even though the session itself is
+// reachable.
+func TestMintToken_Canvas_NonParticipantDeniedWhenParticipantsVisible(t *testing.T) {
+	mx := newCanvasMintFixture(t)
+	mx.mint(t, mx.participants, mx.outsider, http.StatusForbidden, false)
+}
+
+// Admit-tier compare, not a scalar ordering: a `participants`-eligible member
+// must NOT read a `host`-only canvas.
+func TestMintToken_Canvas_MemberDeniedWhenHostVisible(t *testing.T) {
+	mx := newCanvasMintFixture(t)
+	mx.mint(t, mx.hostCanvas, mx.present, http.StatusForbidden, false)
+}
+
+func TestMintToken_Canvas_NonMemberDenied(t *testing.T) {
+	mx := newCanvasMintFixture(t)
+	mx.mint(t, mx.private, mx.outsider, http.StatusForbidden, false)
+}
+
+// The teacher's `host` admit tier is tighter than both `participants` and
+// `session`, so it reads both — read-only, never write.
+func TestMintToken_Canvas_HostReadsParticipantsAndSessionLevels(t *testing.T) {
+	mx := newCanvasMintFixture(t)
+	mx.mint(t, mx.participants, mx.teacher, http.StatusOK, true)
+	mx.mint(t, mx.sessionCanvas, mx.teacher, http.StatusOK, true)
+}
+
+// Decision 11: in a public, class-less live session a `session`-visibility
+// board is exactly as public as the room.
+func TestMintToken_Canvas_SessionVisiblePublicAllowsAnyAuthed(t *testing.T) {
+	mx := newCanvasMintFixture(t)
+	mx.makeSessionPublic(t)
+	mx.mint(t, mx.sessionCanvas, mx.outsider, http.StatusOK, true)
+}
+
+// Decision 8: after the end the owner keeps access but loses the write bit.
+func TestMintToken_Canvas_EndedArchive_OwnerRead(t *testing.T) {
+	mx := newCanvasMintFixture(t)
+	mx.endSession(t)
+	mx.mint(t, mx.private, mx.student, http.StatusOK, true)
+}
+
+func TestMintToken_Canvas_EndedArchive_TeacherReadWhenHostVisible(t *testing.T) {
+	mx := newCanvasMintFixture(t)
+	mx.endSession(t)
+	mx.mint(t, mx.hostCanvas, mx.teacher, http.StatusOK, true)
+}
+
+// "Former participant" is a `present` or `left` row — an invitee who never
+// joined is not one.
+func TestMintToken_Canvas_EndedArchive_FormerParticipantReadNotInvitee(t *testing.T) {
+	mx := newCanvasMintFixture(t)
+	mx.endSession(t)
+	mx.mint(t, mx.participants, mx.left, http.StatusOK, true)
+	mx.mint(t, mx.participants, mx.invitee, http.StatusForbidden, false)
+}
+
+// Decision 11's public breadth does not survive the end: a viewer who really
+// could read the `session` board while the public room was live is not a
+// former participant, so the archive shuts them out.
+func TestMintToken_Canvas_EndedArchive_PublicViewerDenied(t *testing.T) {
+	mx := newCanvasMintFixture(t)
+	mx.makeSessionPublic(t)
+	mx.mint(t, mx.sessionCanvas, mx.outsider, http.StatusOK, true)
+	mx.endSession(t)
+	mx.mint(t, mx.sessionCanvas, mx.outsider, http.StatusForbidden, false)
+}
+
+// The archive admits only the owner, the teacher (visibility ≥ `host`), and
+// former participants (visibility ≥ `participants`).  A non-member holds none
+// of those roles, so every level denies them.
+func TestMintToken_Canvas_EndedArchive_OutsiderDenied(t *testing.T) {
+	mx := newCanvasMintFixture(t)
+	mx.endSession(t)
+	for _, canvas := range []*store.Canvas{mx.private, mx.hostCanvas, mx.participants, mx.sessionCanvas} {
+		mx.mint(t, canvas, mx.outsider, http.StatusForbidden, false)
+	}
+}
+
+// Everyone is read-only in the archive — including the owner, who was the one
+// writer while the session was live.
+func TestMintToken_Canvas_EndedArchive_AllReadOnly(t *testing.T) {
+	mx := newCanvasMintFixture(t)
+	mx.mint(t, mx.private, mx.student, http.StatusOK, false)
+	mx.endSession(t)
+	mx.mint(t, mx.private, mx.student, http.StatusOK, true)
+	mx.mint(t, mx.hostCanvas, mx.teacher, http.StatusOK, true)
+	mx.mint(t, mx.participants, mx.present, http.StatusOK, true)
+	mx.mint(t, mx.participants, mx.left, http.StatusOK, true)
+}
+
+func TestMintToken_Canvas_SessionVisibleClassBoundDeniesOutsider(t *testing.T) {
+	fx := newCanvasHandlerFixture(t)
+	ctx := context.Background()
+	orgs, courses, classes := store.NewOrgStore(fx.db), store.NewCourseStore(fx.db), store.NewClassStore(fx.db)
+	org, err := orgs.CreateOrg(ctx, store.CreateOrgInput{Name: t.Name(), Slug: "canvas-" + strings.ToLower(strings.ReplaceAll(t.Name(), "_", "-")), Type: "school", ContactEmail: "canvas@example.com", ContactName: "Canvas"})
+	require.NoError(t, err)
+	course, err := courses.CreateCourse(ctx, store.CreateCourseInput{OrgID: org.ID, CreatedBy: fx.teacher.ID, Title: "Course", GradeLevel: "K-5"})
+	require.NoError(t, err)
+	class, err := classes.CreateClass(ctx, store.CreateClassInput{OrgID: org.ID, CourseID: course.ID, CreatedBy: fx.teacher.ID, Title: "Class"})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = fx.db.ExecContext(ctx, "DELETE FROM classes WHERE id = $1", class.ID)
+		_, _ = fx.db.ExecContext(ctx, "DELETE FROM courses WHERE id = $1", course.ID)
+		_, _ = fx.db.ExecContext(ctx, "DELETE FROM organizations WHERE id = $1", org.ID)
+	})
+	_, err = fx.db.ExecContext(ctx, "UPDATE sessions SET class_id = $1, visibility = 'public' WHERE id = $2", class.ID, fx.session.ID)
+	require.NoError(t, err)
+	canvas, err := fx.h.Canvases.CreateCanvas(ctx, store.CreateCanvasInput{SessionID: fx.session.ID, OwnerID: fx.student.ID, Title: "Class board", Visibility: "session"})
+	require.NoError(t, err)
+	code, _ := callMintToken(t, newRealtimeHandlerForCanvasFixture(fx), "canvas:"+canvas.ID, fx.claims(fx.outsider), fx.session.ID)
+	require.Equal(t, http.StatusForbidden, code)
+}
+
+func TestMintToken_Canvas_OtherSessionMemberDenied(t *testing.T) {
+	fx := newCanvasHandlerFixture(t)
+	other, err := fx.h.Sessions.CreateSession(context.Background(), store.CreateSessionInput{TeacherID: fx.teacher.ID, Title: "Other"})
+	require.NoError(t, err)
+	t.Cleanup(func() { _, _ = fx.db.ExecContext(context.Background(), "DELETE FROM sessions WHERE id = $1", other.ID) })
+	canvas, err := fx.h.Canvases.CreateCanvas(context.Background(), store.CreateCanvasInput{SessionID: other.ID, OwnerID: fx.teacher.ID, Title: "Other board", Visibility: "participants"})
+	require.NoError(t, err)
+	code, _ := callMintToken(t, newRealtimeHandlerForCanvasFixture(fx), "canvas:"+canvas.ID, fx.claims(fx.student), other.ID)
+	require.Equal(t, http.StatusForbidden, code)
+}
+
+func TestInternalAuth_CanvasReturnsCurrentReadOnly(t *testing.T) {
+	fx := newCanvasHandlerFixture(t)
+	canvas, err := fx.h.Canvases.CreateCanvas(context.Background(), store.CreateCanvasInput{SessionID: fx.session.ID, OwnerID: fx.student.ID, Title: "Board", Visibility: "host"})
+	require.NoError(t, err)
+	h := newRealtimeHandlerForCanvasFixture(fx)
+	code, response := callInternalAuth(t, h, rtSecret, "canvas:"+canvas.ID, fx.teacher.ID, fx.session.ID)
+	require.Equal(t, http.StatusOK, code)
+	require.True(t, response.Allowed)
+	require.True(t, response.ReadOnly)
+	_, err = fx.h.Sessions.EndSession(context.Background(), fx.session.ID)
+	require.NoError(t, err)
+	code, response = callInternalAuth(t, h, rtSecret, "canvas:"+canvas.ID, fx.student.ID, fx.session.ID)
+	require.Equal(t, http.StatusOK, code)
+	require.True(t, response.Allowed)
+	require.True(t, response.ReadOnly)
+}
+
+func TestCanvasDocumentIDValidation_MintAndInternalAuth(t *testing.T) {
+	fx := newCanvasHandlerFixture(t)
+	h := newRealtimeHandlerForCanvasFixture(fx)
+	for _, tc := range []struct {
+		name, id string
+		want     int
+	}{
+		{"malformed", "not-a-uuid", http.StatusBadRequest},
+		{"missing", "11111111-1111-4111-8111-111111111111", http.StatusNotFound},
+	} {
+		t.Run(tc.name+" mint", func(t *testing.T) {
+			code, _ := callMintToken(t, h, "canvas:"+tc.id, fx.claims(fx.student), fx.session.ID)
+			require.Equal(t, tc.want, code)
+		})
+		t.Run(tc.name+" internal auth", func(t *testing.T) {
+			code, _ := callInternalAuth(t, h, rtSecret, "canvas:"+tc.id, fx.student.ID, fx.session.ID)
+			require.Equal(t, tc.want, code)
+		})
+	}
+}
+
+func TestInternalAuth_CanvasBranchesAndExistingScopeReadOnly(t *testing.T) {
+	fx := newCanvasHandlerFixture(t)
+	present := fx.addUser(t, "present-internal")
+	invitee := fx.addUser(t, "invitee-internal")
+	_, err := fx.h.Sessions.JoinSession(context.Background(), fx.session.ID, present.ID)
+	require.NoError(t, err)
+	_, err = fx.h.Sessions.AddParticipant(context.Background(), fx.session.ID, invitee.ID, fx.teacher.ID)
+	require.NoError(t, err)
+	participants, err := fx.h.Canvases.CreateCanvas(context.Background(), store.CreateCanvasInput{SessionID: fx.session.ID, OwnerID: fx.student.ID, Title: "Participants", Visibility: "participants"})
+	require.NoError(t, err)
+	sessionCanvas, err := fx.h.Canvases.CreateCanvas(context.Background(), store.CreateCanvasInput{SessionID: fx.session.ID, OwnerID: fx.student.ID, Title: "Session", Visibility: "session"})
+	require.NoError(t, err)
+	require.NoError(t, func() error {
+		_, err := fx.db.ExecContext(context.Background(), "UPDATE sessions SET visibility = 'public' WHERE id = $1", fx.session.ID)
+		return err
+	}())
+	h := newRealtimeHandlerForCanvasFixture(fx)
+
+	code, response := callInternalAuth(t, h, rtSecret, "session:"+fx.session.ID+":user:"+fx.student.ID, fx.student.ID)
+	require.Equal(t, http.StatusOK, code)
+	require.True(t, response.Allowed)
+	require.False(t, response.ReadOnly)
+	for _, tc := range []struct {
+		name string
+		doc  string
+		user *store.RegisteredUser
+		want bool
+	}{
+		{"present participant", "canvas:" + participants.ID, present, true},
+		{"invitee denied", "canvas:" + participants.ID, invitee, false},
+		{"public session outsider", "canvas:" + sessionCanvas.ID, fx.outsider, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			code, response := callInternalAuth(t, h, rtSecret, tc.doc, tc.user.ID, fx.session.ID)
+			require.Equal(t, http.StatusOK, code)
+			require.Equal(t, tc.want, response.Allowed)
+			if tc.want {
+				require.True(t, response.ReadOnly)
+			}
+		})
+	}
+	other, err := fx.h.Sessions.CreateSession(context.Background(), store.CreateSessionInput{TeacherID: fx.teacher.ID, Title: "Other internal"})
+	require.NoError(t, err)
+	t.Cleanup(func() { _, _ = fx.db.ExecContext(context.Background(), "DELETE FROM sessions WHERE id = $1", other.ID) })
+	otherCanvas, err := fx.h.Canvases.CreateCanvas(context.Background(), store.CreateCanvasInput{SessionID: other.ID, OwnerID: fx.teacher.ID, Title: "Other", Visibility: "participants"})
+	require.NoError(t, err)
+	code, response = callInternalAuth(t, h, rtSecret, "canvas:"+otherCanvas.ID, fx.student.ID, other.ID)
+	require.Equal(t, http.StatusOK, code)
+	require.False(t, response.Allowed)
 }
 
 func TestRealtimeHealth_MissingSecretIsDegraded(t *testing.T) {
@@ -552,11 +959,9 @@ func TestMintToken_SessionDoc_ParentOfDifferentChild_403(t *testing.T) {
 
 	// Outsider is a parent of someone — but NOT of fx.student.
 	parent := fx.outsider
-	users := store.NewUserStore(fx.db)
-	otherChild, err := users.RegisterUser(ctx, store.RegisterInput{
+	otherChild := insertFixtureUser(t, fx.db, store.RegisterInput{
 		Name: "Other Child", Email: "other-child-" + fx.sessionID[:8] + "@example.com", Password: "testpassword123",
 	})
-	require.NoError(t, err)
 	t.Cleanup(func() {
 		fx.db.ExecContext(ctx, "DELETE FROM parent_links WHERE child_user_id = $1", otherChild.ID)
 		fx.db.ExecContext(ctx, "DELETE FROM auth_providers WHERE user_id = $1", otherChild.ID)
@@ -564,7 +969,7 @@ func TestMintToken_SessionDoc_ParentOfDifferentChild_403(t *testing.T) {
 	})
 
 	links := store.NewParentLinkStore(fx.db)
-	_, err = links.CreateLink(ctx, parent.ID, otherChild.ID, fx.admin.ID)
+	_, err := links.CreateLink(ctx, parent.ID, otherChild.ID, fx.admin.ID)
 	require.NoError(t, err)
 	_, err = fx.h.Sessions.JoinSession(ctx, fx.sessionID, fx.student.ID)
 	require.NoError(t, err)
@@ -618,9 +1023,13 @@ func TestMintToken_UnitDoc_OrgTeacherOK_StudentDenied(t *testing.T) {
 
 // --- internal auth endpoint --------------------------------------------------
 
-func callInternalAuth(t *testing.T, h *RealtimeHandler, secretHeader, docName, sub string) (int, internalAuthResponse) {
+func callInternalAuth(t *testing.T, h *RealtimeHandler, secretHeader, docName, sub string, sessionIDs ...string) (int, internalAuthResponse) {
 	t.Helper()
-	body, _ := json.Marshal(map[string]string{"documentName": docName, "sub": sub})
+	payload := map[string]string{"documentName": docName, "sub": sub}
+	if len(sessionIDs) == 1 {
+		payload["sessionId"] = sessionIDs[0]
+	}
+	body, _ := json.Marshal(payload)
 	req := httptest.NewRequest(http.MethodPost, "/api/internal/realtime/auth", bytes.NewReader(body))
 	if secretHeader != "" {
 		req.Header.Set("Authorization", "Bearer "+secretHeader)
@@ -774,4 +1183,141 @@ func TestInternalAuth_NilUsersStore_500(t *testing.T) {
 	h := &RealtimeHandler{HocuspocusTokenSecret: rtSecret /* Users intentionally nil */}
 	code, _ := callInternalAuth(t, h, rtSecret, "session:x:user:y", "u-1")
 	assert.Equal(t, http.StatusInternalServerError, code)
+}
+
+// Phase 9's control callback is intentionally separate from ordinary canvas
+// authorization.  Its only success shape proves that this exact still-live
+// lifecycle lease owns a positive amount of database-clock time; callers must
+// treat every other response as a closed gate.
+func TestFreezeAuth_SharedLockAndExactToken(t *testing.T) {
+	fx := newCanvasHandlerFixture(t)
+	h := newRealtimeHandlerForCanvasFixture(fx)
+	r := chi.NewRouter()
+	h.InternalRoutes(r)
+	const token = "11111111-1111-4111-8111-111111111111"
+	_, err := fx.db.ExecContext(context.Background(), `UPDATE sessions SET canvas_freeze_token = $1, canvas_freeze_until = clock_timestamp() + interval '15 seconds' WHERE id = $2`, token, fx.session.ID)
+	require.NoError(t, err)
+
+	call := func(t *testing.T, bearer string, body any) *httptest.ResponseRecorder {
+		t.Helper()
+		encoded, err := json.Marshal(body)
+		require.NoError(t, err)
+		req := httptest.NewRequest(http.MethodPost, "/api/internal/canvas-sessions/freeze-auth", bytes.NewReader(encoded))
+		req.Header.Set("Authorization", "Bearer "+bearer)
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		return w
+	}
+
+	valid := call(t, canvasControlTestSecret, map[string]string{"sessionId": fx.session.ID, "freezeToken": token})
+	require.Equal(t, http.StatusOK, valid.Code, valid.Body.String())
+	var response struct {
+		Allowed     bool `json:"allowed"`
+		RemainingMS int  `json:"remainingMs"`
+	}
+	require.NoError(t, json.Unmarshal(valid.Body.Bytes(), &response))
+	require.True(t, response.Allowed)
+	require.Positive(t, response.RemainingMS)
+
+	denied := call(t, canvasControlTestSecret, map[string]string{"sessionId": fx.session.ID, "freezeToken": "22222222-2222-4222-8222-222222222222"})
+	require.Equal(t, http.StatusOK, denied.Code, denied.Body.String())
+	require.JSONEq(t, `{"allowed":false}`, denied.Body.String())
+	require.Equal(t, http.StatusUnauthorized, call(t, "wrong-control-bearer", map[string]string{"sessionId": fx.session.ID, "freezeToken": token}).Code)
+	require.Equal(t, http.StatusBadRequest, call(t, canvasControlTestSecret, map[string]string{"sessionId": fx.session.ID}).Code)
+}
+
+func TestFreezeAuth_RejectsTrailingUnknownExpiredAndMissingLeaseWithoutLeakingState(t *testing.T) {
+	fx := newCanvasHandlerFixture(t)
+	h := newRealtimeHandlerForCanvasFixture(fx)
+	r := chi.NewRouter()
+	h.InternalRoutes(r)
+	const token = "11111111-1111-4111-8111-111111111111"
+
+	callRaw := func(t *testing.T, raw string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, "/api/internal/canvas-sessions/freeze-auth", strings.NewReader(raw))
+		req.Header.Set("Authorization", "Bearer "+canvasControlTestSecret)
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		return w
+	}
+
+	for _, raw := range []string{
+		`{"sessionId":"` + fx.session.ID + `","freezeToken":"` + token + `","extra":true}`,
+		`{"sessionId":"` + fx.session.ID + `","freezeToken":"` + token + `}{}`,
+		`{"sessionId":"` + fx.session.ID + `"}`,
+		`{"sessionId":"not-a-uuid","freezeToken":"` + token + `"}`,
+	} {
+		w := callRaw(t, raw)
+		require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+		require.NotContains(t, w.Body.String(), fx.session.ID)
+	}
+
+	// A missing or expired operation is deliberately indistinguishable from a
+	// wrong token.  The control caller receives a closed gate, never a detail
+	// about this teacher's session lifecycle.
+	missing := callRaw(t, `{"sessionId":"`+fx.session.ID+`","freezeToken":"`+token+`"}`)
+	require.Equal(t, http.StatusOK, missing.Code, missing.Body.String())
+	require.JSONEq(t, `{"allowed":false}`, missing.Body.String())
+	_, err := fx.db.ExecContext(context.Background(), `UPDATE sessions SET canvas_freeze_token = $1, canvas_freeze_until = clock_timestamp() - interval '1 second' WHERE id = $2`, token, fx.session.ID)
+	require.NoError(t, err)
+	expired := callRaw(t, `{"sessionId":"`+fx.session.ID+`","freezeToken":"`+token+`"}`)
+	require.Equal(t, http.StatusOK, expired.Code, expired.Body.String())
+	require.JSONEq(t, `{"allowed":false}`, expired.Body.String())
+}
+
+func TestRealtimeAuth_BlocksBehindFreezeLifecycleLock(t *testing.T) {
+	fx := newCanvasHandlerFixture(t)
+	canvas, err := fx.h.Canvases.CreateCanvas(context.Background(), store.CreateCanvasInput{
+		SessionID: fx.session.ID, OwnerID: fx.student.ID, Title: "Writable board", Visibility: "private",
+	})
+	require.NoError(t, err)
+	key, err := strconv.ParseUint(fx.session.ID[:8], 16, 32)
+	require.NoError(t, err)
+	holder, err := fx.db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = holder.Rollback() })
+	_, err = holder.ExecContext(context.Background(), `SELECT pg_advisory_xact_lock($1, $2)`, int32(1112687687), int32(key))
+	require.NoError(t, err)
+
+	result := make(chan int, 1)
+	go func() {
+		body, marshalErr := json.Marshal(map[string]string{"documentName": "canvas:" + canvas.ID, "sub": fx.student.ID, "sessionId": fx.session.ID})
+		if marshalErr != nil {
+			result <- http.StatusInternalServerError
+			return
+		}
+		req := httptest.NewRequest(http.MethodPost, "/api/internal/realtime/auth", bytes.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+rtSecret)
+		w := httptest.NewRecorder()
+		newRealtimeHandlerForCanvasFixture(fx).InternalAuth(w, req)
+		result <- w.Code
+	}()
+	select {
+	case code := <-result:
+		t.Fatalf("realtime authorization bypassed the exclusive lifecycle lock with status %d", code)
+	case <-time.After(100 * time.Millisecond):
+	}
+	require.NoError(t, holder.Commit())
+	select {
+	case code := <-result:
+		require.Equal(t, http.StatusOK, code)
+	case <-time.After(time.Second):
+		t.Fatal("realtime authorization did not resume after lifecycle-lock release")
+	}
+}
+
+func TestRealtimeAuthLifecycle_ActiveFreezeIsRetryableNotPermanentReadOnly(t *testing.T) {
+	fx := newCanvasHandlerFixture(t)
+	canvas, err := fx.h.Canvases.CreateCanvas(context.Background(), store.CreateCanvasInput{
+		SessionID: fx.session.ID, OwnerID: fx.student.ID, Title: "Writable board", Visibility: "private",
+	})
+	require.NoError(t, err)
+	_, err = fx.db.ExecContext(context.Background(), `UPDATE sessions SET canvas_freeze_token = '11111111-1111-4111-8111-111111111111', canvas_freeze_until = clock_timestamp() + interval '15 seconds' WHERE id = $1`, fx.session.ID)
+	require.NoError(t, err)
+
+	code, _ := callInternalAuth(t, newRealtimeHandlerForCanvasFixture(fx), rtSecret, "canvas:"+canvas.ID, fx.student.ID, fx.session.ID)
+	require.Equal(t, http.StatusConflict, code, "a live freeze must report retryable session_freezing instead of minting a permanent reader decision")
 }

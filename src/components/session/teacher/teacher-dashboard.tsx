@@ -19,11 +19,10 @@ import { AnnotationList } from "@/components/annotations/annotation-list";
 import { EditorSwitcher } from "@/components/editor/editor-switcher";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { WhiteboardPanel } from "@/components/session/whiteboard/whiteboard-panel";
 
 interface TeacherDashboardProps {
   sessionId: string;
-  classId: string | null;
-  returnPath?: string;
   editorMode: "python" | "javascript" | "blockly";
   // Plan 044 phase 2: presentation mode renders the linked
   // teaching_unit per topic.
@@ -115,8 +114,6 @@ function normalizeParticipant(participant: ParticipantResponse): Participant | n
 
 export function TeacherDashboard({
   sessionId,
-  classId,
-  returnPath,
   editorMode,
   courseTopics,
   inviteToken,
@@ -133,6 +130,8 @@ export function TeacherDashboard({
   const [participantLookup, setParticipantLookup] = useState("");
   const [participantLookupError, setParticipantLookupError] = useState<string | null>(null);
   const [isAddingParticipant, setIsAddingParticipant] = useState(false);
+  const [showWhiteboard, setShowWhiteboard] = useState(false);
+  const [endSessionError, setEndSessionError] = useState<string | null>(null);
 
   const userId = session?.user?.id || "";
 
@@ -247,9 +246,34 @@ export function TeacherDashboard({
   }
 
   const endSession = useCallback(async () => {
-    await fetch(`/api/sessions/${sessionId}/end`, { method: "POST" });
-    router.push(returnPath ?? (classId ? `/teacher/classes/${classId}` : "/teacher"));
-  }, [sessionId, classId, returnPath, router]);
+    let response: Response;
+    try {
+      response = await fetch(`/api/sessions/${sessionId}/end`, { method: "POST" });
+    } catch (cause) {
+      setEndSessionError(cause instanceof Error ? cause.message : "Unable to end the session");
+      return;
+    }
+
+    if (!response.ok) {
+      const body = await response.json().catch(() => null) as { error?: string } | null;
+      setEndSessionError(body?.error || "Unable to end the session");
+      return;
+    }
+
+    setEndSessionError(null);
+    const ended = await response.json().catch(() => null) as { whiteboardServerArchiveComplete?: unknown } | null;
+    // The durable completion flag is authoritative for the archive page's own
+    // settings fetch; this fallback only covers the window before that fetch
+    // resolves (or if it never can — network/non-200 on the archive route).
+    if (ended?.whiteboardServerArchiveComplete === false && typeof window !== "undefined") {
+      try {
+        window.sessionStorage.setItem(`whiteboard-archive-fallback:${sessionId}`, "1");
+      } catch {
+        // Storage may be unavailable (private browsing); the durable value still renders.
+      }
+    }
+    router.push(`/sessions/${sessionId}/whiteboards`);
+  }, [sessionId, router]);
 
   function handleSelectStudent(id: string) {
     setSelectedStudent(id);
@@ -296,6 +320,9 @@ export function TeacherDashboard({
   }
 
   function renderMainArea() {
+    if (showWhiteboard) {
+      return <WhiteboardPanel sessionId={sessionId} teacherControls />;
+    }
     switch (mode) {
       case "presentation": {
         // Plan 044 phase 2: render linked Unit per topic (1:1). Per Codex
@@ -416,6 +443,11 @@ export function TeacherDashboard({
         leftVisible={layout.leftVisible}
         rightVisible={layout.rightVisible}
       />
+      {endSessionError && (
+        <p role="alert" className="border-b border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive">
+          {endSessionError}
+        </p>
+      )}
 
       <div className="flex min-h-0 flex-1">
         {layout.leftVisible && (
@@ -465,7 +497,15 @@ export function TeacherDashboard({
 
         <div className="flex min-h-0 flex-1 flex-col">
           <div className="min-h-0 flex-1">{renderMainArea()}</div>
-          <ModeToolbar activeMode={mode} onModeChange={setMode} />
+          <div className="flex items-center justify-between border-t px-2 py-1">
+            <ModeToolbar activeMode={mode} onModeChange={(nextMode) => {
+              setShowWhiteboard(false);
+              setMode(nextMode);
+            }} />
+            <Button variant={showWhiteboard ? "secondary" : "ghost"} size="sm" onClick={() => setShowWhiteboard((current) => !current)}>
+              Whiteboard
+            </Button>
+          </div>
         </div>
 
         {layout.rightVisible && (

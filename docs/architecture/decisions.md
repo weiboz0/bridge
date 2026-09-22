@@ -95,6 +95,65 @@ collections. Don't strip defensive logic in the name of YAGNI.
 The documented defaults (3003 / 8002) are **not** what the primary dev machine runs — other services
 occupy those ports there. Never assume; read `.env`.
 This is why E2E requires a pinned `E2E_BASE_URL` (`docs/testing.md`).
+A full E2E gate additionally requires an **attested single-instance stack** (Plan 094 Phase 14): `scripts/check-e2e-stack.mjs` holds an advisory lock in the validated `_test` database and the Go API, Next.js, and Hocuspocus must each observe it through their own pools before the seed or Playwright run, so a stack pointed at another database fails closed rather than being mutated.
+
+A pinned URL names a stack; it does not prove which database that stack writes to.
+The gate therefore requires every database-holding service to observe, through its own pool, a transaction-scoped advisory lock the gate holds in its validated `_test` database, on the origin E2E traffic actually uses.
+Live shared state was chosen over metadata (a database name or `system_identifier` survives clones and standbys) and over a proof table (Bridge has no test-only migration path, so a table would reach production).
+The lock is the one-key form with reserved class `0x42523245`, structurally disjoint from the two-key session-lifecycle locks and from the one-key `hashtext` lock in `store/sessions.go`.
+The E2E stack is defined as one process per service, without load balancing; the user starts it, and an agent never starts, stops, or signals services.
+
+## §10 — Session whiteboards are persisted, visibility-floored realtime documents
+
+Each whiteboard has a durable owner and a `canvas:{uuid}` Yjs document.
+Canvas realtime minting also carries a canonical session-ID hint.
+The hint grants no access: Go acquires that session's shared lifecycle lock first, then authorizes only the exact canvas/session pair and signs the authoritative binding into a canvas-only JWT claim used by every Hocuspocus recheck.
+Canvas tokens missing the binding fail closed; non-canvas JWTs omit it.
+Canvas visibility is ordered `private < host < participants < session`; PostgreSQL enum ordering is part of the persistence contract.
+The enum is append-only: adding a level between existing levels would change `<` comparisons, so a new level belongs at an end or the comparison must move to explicit ranks.
+
+The session host controls a minimum floor up to `participants`; owners may only loosen, never tighten, a canvas visibility.
+All floor and visibility writes lock the session row so no concurrent mutation can persist a canvas below its floor.
+
+Live `session` visibility follows the live session's access rule, including authenticated outsiders for public class-less sessions.
+After end, no public admission remains: the archive permits the owner, the teacher at `host` or wider, and `present`/`left` former participants at `participants` or wider.
+All archive tokens are read-only.
+The Hocuspocus connection receives that signed `readOnly` claim and rechecks mutation-bearing canvas frames before Yjs applies or relays them, so a token minted before the end transition cannot write afterward.
+
+The neutral `/sessions/{id}/whiteboards` archive is deliberately client-read-only even while the session remains live: it suppresses local binding writes and mutation controls, while the Go mint and Hocuspocus checks remain authoritative.
+The accepted MVP limitations are that an owner cannot tighten an accidental share, a departed live viewer can retain a read token until its short TTL, and the host has no per-canvas takedown control.
+The custom binding writes the whole scene last-writer-wins, which is sound because a canvas has exactly one writer; the same owner drawing in two tabs at once will overwrite rather than merge.
+That retention is bounded by the token, not by the socket: Hocuspocus closes every established canvas connection, writable or read-only, when its JWT expires, so a reader must re-mint and pass current authorization to continue.
+
+Canvas authorization has no independent platform-administrator or impersonator bypass, unlike other realtime document types.
+An administrator or impersonator receives exactly the represented user's canvas access, for creation, the settings routes, minting, and every recheck.
+A private student canvas is therefore not an oversight surface; the host's supervision lever is the floor.
+Only the session teacher or a currently `present` participant may create a canvas, so an authenticated outsider admitted to a public class-less session can read `session`-visibility boards but cannot spend the per-session cap.
+
+Whiteboards do not persist Excalidraw binary files.
+Image insertion, image paste, and file drop are disabled in the client with a visible explanation, and only `viewBackgroundColor` is shared from `appState`; viewport, zoom, selection, and tool state stay local to each viewer.
+
+## §11 — Canvas lifecycle control uses a separate bearer and private transport
+
+The Go API ends a session status-first: it durably leases and lists canvases, requests a same-token Hocuspocus freeze, then records either an atomic confirmed snapshot/end or a separate degraded false/no-snapshot end.
+The database result is authoritative; terminal complete/unfreeze calls are best effort and events or schedule completion occur only after a durable end.
+PostgreSQL session status outranks Hocuspocus availability: an unreachable, slow, rejecting, or malformed freeze never keeps a session live, it only downgrades the end to degraded.
+A confirmed end guarantees that the archive holds the final state present in the responding Hocuspocus process under an active freeze fence.
+A degraded end guarantees only that no new write authorization is granted; already-authorized in-flight frames may still fan out to connected peers without reaching the archive, and the teacher is told the latest changes may not have been archived.
+Starting a session that implicitly replaces a live one ends the replaced session through the same lifecycle, and the create and scheduled-start responses always carry `replacedSessions` with each durable `whiteboardServerArchiveComplete` flag so the teacher sees a replacement warning without depending on realtime.
+No TypeScript code writes session status; the Go lifecycle path is the only producer.
+
+Mutation authorization is never cached in Hocuspocus, because session status must stay authoritative for every accepted frame.
+The cost is bounded instead of cached: client writes coalesce on a 100 ms trailing debounce and identical scenes are skipped, each canvas document admits at most eight active-plus-queued mutations (the ninth closes retryably), each authorization recheck has a 500 ms abortable deadline, and a canvas update above 1 MiB is rejected after parsing while the shared 100 MiB websocket ceiling keeps other document types compatible.
+Persisted updates and current state are capped at 4 MiB, a snapshot at 8 MiB, a freeze bundle at 50 snapshots, 32 MiB decoded, and a 48 MiB response, under process-wide 128 MiB resident-document and 256 MiB capture ledgers.
+
+Bridge supports exactly one Hocuspocus process.
+The freeze fence, admission counters, and memory ledgers are in-process state, so a second realtime process would accept canvas mutations outside the fence and void the confirmed-end guarantee.
+Scaling the realtime tier horizontally requires a new decision, not a configuration change.
+
+`HOCUSPOCUS_CONTROL_SECRET` is distinct from `HOCUSPOCUS_TOKEN_SECRET` and is required on both server processes.
+The Go API derives `http://127.0.0.1:4001` from `HOCUSPOCUS_CONTROL_PORT` by default.
+Plain HTTP is limited to canonical numeric 127/8 or `::1` loopback; IPv4-mapped IPv6 and DNS names (including `localhost`) are rejected. Every non-loopback control endpoint requires verified HTTPS and redirects are refused.
 
 ---
 

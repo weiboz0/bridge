@@ -14,6 +14,7 @@ import {
   doublePrecision,
   primaryKey,
   customType,
+  check,
   type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
@@ -67,6 +68,15 @@ export const sessionStatusEnum = pgEnum("session_status", [
 export const sessionVisibilityEnum = pgEnum("session_visibility", [
   "unlisted",
   "public",
+]);
+
+// Declaration order is a persisted authorization invariant: SQL comparisons
+// enforce private < host < participants < session.
+export const canvasVisibilityEnum = pgEnum("canvas_visibility", [
+  "private",
+  "host",
+  "participants",
+  "session",
 ]);
 
 // schedule_status mirrors the `schedule_status` ENUM created in
@@ -246,6 +256,10 @@ export const sessions = pgTable(
     ),
     status: sessionStatusEnum("status").notNull().default("live"),
     visibility: sessionVisibilityEnum("visibility").notNull().default("unlisted"),
+    canvasFloor: canvasVisibilityEnum("canvas_floor").notNull().default("private"),
+    canvasFreezeToken: uuid("canvas_freeze_token"),
+    canvasFreezeUntil: timestamp("canvas_freeze_until", { withTimezone: true }),
+    whiteboardServerArchiveComplete: boolean("whiteboard_server_archive_complete"),
     settings: jsonb("settings").default({}),
     startedAt: timestamp("started_at").defaultNow().notNull(),
     endedAt: timestamp("ended_at"),
@@ -255,6 +269,13 @@ export const sessions = pgTable(
   (table) => [
     index("sessions_class_idx").on(table.classId),
     index("sessions_class_status_idx").on(table.classId, table.status),
+    // Mirrors drizzle/0028: the freeze lease is a token/expiry pair, never half
+    // set. Declared here so a future `drizzle-kit generate` cannot emit a DROP
+    // for it — Bridge has no down-migrations.
+    check(
+      "sessions_canvas_freeze_lease_pair",
+      sql`(${table.canvasFreezeToken} IS NULL) = (${table.canvasFreezeUntil} IS NULL)`,
+    ),
   ]
 );
 
@@ -316,6 +337,28 @@ export const sessionParticipants = pgTable(
     ),
     index("session_participants_session_idx").on(table.sessionId),
     index("session_participants_session_status_idx").on(table.sessionId, table.status),
+  ]
+);
+
+export const sessionCanvases = pgTable(
+  "session_canvases",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    sessionId: uuid("session_id")
+      .notNull()
+      .references(() => sessions.id, { onDelete: "cascade" }),
+    ownerId: uuid("owner_id")
+      .notNull()
+      .references(() => users.id),
+    title: varchar("title", { length: 255 }).notNull(),
+    visibility: canvasVisibilityEnum("visibility").notNull(),
+    yjsState: text("yjs_state"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("session_canvases_session_idx").on(table.sessionId),
+    index("session_canvases_session_owner_idx").on(table.sessionId, table.ownerId),
   ]
 );
 

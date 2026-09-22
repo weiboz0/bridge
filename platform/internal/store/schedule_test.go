@@ -2,9 +2,11 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -14,7 +16,7 @@ func TestScheduleStore_CreateAndGet(t *testing.T) {
 	schedules := NewScheduleStore(db)
 	ctx := context.Background()
 
-	classID, teacherID := setupSessionTest(t, db, t.Name())
+	classID, teacherID := setupSessionTest(t, db, t.Name()+uuid.NewString())
 
 	title := "Intro to Loops"
 	start := time.Now().Add(24 * time.Hour)
@@ -45,7 +47,7 @@ func TestScheduleStore_ListByClass(t *testing.T) {
 	schedules := NewScheduleStore(db)
 	ctx := context.Background()
 
-	classID, teacherID := setupSessionTest(t, db, t.Name())
+	classID, teacherID := setupSessionTest(t, db, t.Name()+uuid.NewString())
 
 	for i := 0; i < 3; i++ {
 		start := time.Now().Add(time.Duration(i+1) * 24 * time.Hour)
@@ -201,6 +203,91 @@ func TestScheduleStore_StartScheduledSession(t *testing.T) {
 	linkedTopics, _ := NewSessionStore(db).GetSessionTopics(ctx, session.ID)
 	assert.Len(t, linkedTopics, 1)
 	assert.Equal(t, topic.ID, linkedTopics[0].TopicID)
+}
+
+func TestStartScheduledSession_ReplacementCompletesScheduleAndWarns(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	schedules := NewScheduleStore(db)
+	sessions := NewSessionStore(db)
+	classID, teacherID := setupSessionTest(t, db, t.Name())
+	prior, err := sessions.CreateSession(ctx, CreateSessionInput{ClassID: strPtr(classID), TeacherID: teacherID, Title: "prior"})
+	require.NoError(t, err)
+	start := time.Now().Add(time.Hour)
+	schedule, err := schedules.CreateSchedule(ctx, CreateScheduleInput{ClassID: classID, TeacherID: teacherID, ScheduledStart: start, ScheduledEnd: start.Add(time.Hour)})
+	require.NoError(t, err)
+
+	started, err := schedules.StartScheduledSession(ctx, schedule.ID, teacherID)
+	require.NoError(t, err)
+	require.Len(t, started.ReplacedSessions, 1)
+	assert.Equal(t, prior.ID, started.ReplacedSessions[0].ID)
+	assert.False(t, started.ReplacedSessions[0].WhiteboardServerArchiveComplete)
+	var complete sql.NullBool
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT whiteboard_server_archive_complete FROM sessions WHERE id = $1`, prior.ID).Scan(&complete))
+	require.True(t, complete.Valid)
+	assert.False(t, complete.Bool)
+}
+
+func TestStartScheduledSessionRereadsPlannedScheduleBeforeDiscoveringLiveSessions(t *testing.T) {
+	db := testDB(t)
+	observer := testDB(t)
+	ctx := context.Background()
+	schedules := NewScheduleStore(db)
+	sessions := NewSessionStore(db)
+	classID, teacherID := setupSessionTest(t, db, t.Name()+uuid.NewString())
+	live, err := sessions.CreateSession(ctx, CreateSessionInput{ClassID: strPtr(classID), TeacherID: teacherID, Title: "live"})
+	require.NoError(t, err)
+	start := time.Now().Add(time.Hour)
+	schedule, err := schedules.CreateSchedule(ctx, CreateScheduleInput{ClassID: classID, TeacherID: teacherID, ScheduledStart: start, ScheduledEnd: start.Add(time.Hour)})
+	require.NoError(t, err)
+
+	guarded := make(chan struct{})
+	release := make(chan struct{})
+	discoveries := 0
+	schedules.testHooks = &scheduleStoreTestHooks{
+		afterClassGuard:            func() { close(guarded); <-release },
+		beforeLiveSessionDiscovery: func() { discoveries++ },
+	}
+	result := make(chan error, 1)
+	go func() { _, err := schedules.StartScheduledSession(ctx, schedule.ID, teacherID); result <- err }()
+	<-guarded
+	_, err = observer.ExecContext(ctx, `UPDATE scheduled_sessions SET status = 'cancelled' WHERE id = $1`, schedule.ID)
+	require.NoError(t, err)
+	close(release)
+	require.Error(t, <-result)
+	assert.Zero(t, discoveries, "cancelled schedule must fail before live-session discovery")
+
+	stillLive, err := sessions.GetSession(ctx, live.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "live", stillLive.Status)
+}
+
+func TestStartScheduledSessionReplacementRacePreservesConfirmedArchive(t *testing.T) {
+	db := testDB(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	schedules := NewScheduleStore(db)
+	sessions := NewSessionStore(db)
+	classID, teacherID := setupSessionTest(t, db, t.Name()+uuid.NewString())
+	prior, err := sessions.CreateSession(ctx, CreateSessionInput{ClassID: strPtr(classID), TeacherID: teacherID, Title: "prior"})
+	require.NoError(t, err)
+	token := uuid.NewString()
+	_, err = acquireSessionFreezeLease(ctx, db, prior.ID, token)
+	require.NoError(t, err)
+	start := time.Now().Add(time.Hour)
+	schedule, err := schedules.CreateSchedule(ctx, CreateScheduleInput{ClassID: classID, TeacherID: teacherID, ScheduledStart: start, ScheduledEnd: start.Add(time.Hour)})
+	require.NoError(t, err)
+	guarded, release := make(chan struct{}), make(chan struct{})
+	schedules.testHooks = &scheduleStoreTestHooks{afterClassGuard: func() { close(guarded); <-release }}
+	started := make(chan error, 1)
+	go func() { _, err := schedules.StartScheduledSession(ctx, schedule.ID, teacherID); started <- err }()
+	<-guarded
+	require.NoError(t, completeSessionConfirmed(ctx, testDB(t), prior.ID, token, nil))
+	close(release)
+	require.NoError(t, <-started)
+	var archive bool
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT whiteboard_server_archive_complete FROM sessions WHERE id = $1`, prior.ID).Scan(&archive))
+	assert.True(t, archive)
 }
 
 func TestScheduleStore_GetSchedule_NotFound(t *testing.T) {

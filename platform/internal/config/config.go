@@ -3,20 +3,24 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/BurntSushi/toml"
 	"github.com/joho/godotenv"
+	"github.com/weiboz0/bridge/platform/internal/realtime"
 )
 
 type Config struct {
-	Server        ServerConfig        `toml:"server"`
-	Database      DatabaseConfig      `toml:"database"`
-	Auth          AuthConfig          `toml:"auth"`
-	LLM           LLMConfig           `toml:"llm"`
-	Sandbox       SandboxConfig       `toml:"sandbox"`
-	Realtime      RealtimeConfig      `toml:"realtime"`
-	BridgeSession BridgeSessionConfig `toml:"bridge_session"`
+	Server                  ServerConfig        `toml:"server"`
+	Database                DatabaseConfig      `toml:"database"`
+	Auth                    AuthConfig          `toml:"auth"`
+	LLM                     LLMConfig           `toml:"llm"`
+	Sandbox                 SandboxConfig       `toml:"sandbox"`
+	Realtime                RealtimeConfig      `toml:"realtime"`
+	BridgeSession           BridgeSessionConfig `toml:"bridge_session"`
+	E2EStack                bool                `toml:"-"`
+	AllowE2EStackOverTunnel bool                `toml:"-"`
 }
 
 type ServerConfig struct {
@@ -51,6 +55,35 @@ type SandboxConfig struct {
 // HOCUSPOCUS_TOKEN_SECRET; never lives in the TOML config file.
 type RealtimeConfig struct {
 	HocuspocusTokenSecret string `toml:"-"`
+	// HocuspocusInternalURL is server-to-server only. HTTP is accepted only
+	// for a canonical numeric IPv4 or IPv6 loopback origin; non-loopback deployments use normal
+	// verified HTTPS. The listener port defaults to 4001 when no URL override
+	// is supplied.
+	HocuspocusInternalURL   string `toml:"-"`
+	HocuspocusControlSecret string `toml:"-"`
+	// E2ECanvasControlFailure is a deliberately exact test-only opt-in. Startup
+	// independently verifies parsed and live database names before it can reach
+	// the control client; any value other than "1" leaves the seam unavailable.
+	E2ECanvasControlFailure bool `toml:"-"`
+}
+
+// ValidateControl is called at API startup, before any database connection or
+// route registration. The control bearer is intentionally distinct from the
+// websocket JWT signing key: either credential alone must not grant both jobs.
+func (r RealtimeConfig) ValidateControl() error {
+	if err := realtime.ValidateControlSecret(r.HocuspocusControlSecret); err != nil {
+		return err
+	}
+	if strings.TrimSpace(r.HocuspocusTokenSecret) == "" {
+		return fmt.Errorf("HOCUSPOCUS_TOKEN_SECRET is required")
+	}
+	if r.HocuspocusControlSecret == r.HocuspocusTokenSecret {
+		return fmt.Errorf("HOCUSPOCUS_CONTROL_SECRET must differ from HOCUSPOCUS_TOKEN_SECRET")
+	}
+	if err := realtime.ValidateControlURL(r.HocuspocusInternalURL); err != nil {
+		return fmt.Errorf("invalid HOCUSPOCUS_INTERNAL_URL: %w", err)
+	}
+	return nil
 }
 
 // BridgeSessionConfig — plan 065. Bridge-issued HS256 session
@@ -122,6 +155,29 @@ func Load(path string) (*Config, error) {
 	if v := os.Getenv("HOCUSPOCUS_TOKEN_SECRET"); v != "" {
 		cfg.Realtime.HocuspocusTokenSecret = v
 	}
+	controlPort := 4001
+	if v := os.Getenv("HOCUSPOCUS_CONTROL_PORT"); v != "" {
+		parsed, err := strconv.Atoi(v)
+		if err == nil && parsed >= 1 && parsed <= 65535 {
+			controlPort = parsed
+		} else {
+			// Preserve an invalid value in the derived URL so startup's strict
+			// validator refuses it rather than silently listening elsewhere.
+			cfg.Realtime.HocuspocusInternalURL = "http://127.0.0.1:" + v
+		}
+	}
+	if cfg.Realtime.HocuspocusInternalURL == "" {
+		cfg.Realtime.HocuspocusInternalURL = fmt.Sprintf("http://127.0.0.1:%d", controlPort)
+	}
+	if v := os.Getenv("HOCUSPOCUS_INTERNAL_URL"); v != "" {
+		cfg.Realtime.HocuspocusInternalURL = v
+	}
+	if v := os.Getenv("HOCUSPOCUS_CONTROL_SECRET"); v != "" {
+		cfg.Realtime.HocuspocusControlSecret = v
+	}
+	cfg.Realtime.E2ECanvasControlFailure = os.Getenv("BRIDGE_E2E_CANVAS_CONTROL_FAILURE") == "1"
+	cfg.E2EStack = os.Getenv("BRIDGE_E2E_STACK") == "1"
+	cfg.AllowE2EStackOverTunnel = os.Getenv("ALLOW_E2E_STACK_OVER_TUNNEL") == "true"
 
 	// Plan 065 — Bridge session secrets. Prefer the plural
 	// (rotation-aware) BRIDGE_SESSION_SECRETS; fall back to the

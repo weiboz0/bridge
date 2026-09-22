@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
-# The authoritative gate. CI runs this same script, so local and remote cannot drift.
+# The authoritative local gate. Any future CI must run this same script, so the
+# two cannot drift.
 #
 # Two safety properties this script exists to guarantee, both of which were found
 # the hard way during plan 091's review:
 #
 #   1. It never bills API calls. tests/llm/*.test.ts hit real provider endpoints and
 #      are gated only by the presence of an API key — and bun AUTO-LOADS .env, which
-#      carries real keys. `unset ANTHROPIC_API_KEY` does not work; the key is re-read
-#      from .env. Only --env-file=/dev/null actually suppresses them.
+#      carries real keys. Vitest explicitly exports ANTHROPIC_API_KEY=,
+#      OPENAI_API_KEY=, GEMINI_API_KEY=, DASHSCOPE_API_KEY=, and OPENROUTER_API_KEY=
+#      so those empty values make every live-provider skip condition fire.
 #
 #   2. It never touches a real database or a foreign service. Migrations read
 #      DATABASE_URL with no test-only path, and Playwright's baseURL defaults to a
@@ -38,17 +40,174 @@ step() {
   fi
 }
 
+# Root Vitest and Go tests clean bridge_test, including the canonical demo
+# identities required by e2e/auth.setup.ts.  This applies the idempotent seed
+# only after those destructive suites, and only after the gate URL has passed
+# its parsed and live _test checks below.
+restore_e2e_demo_seed() {
+  psql -v ON_ERROR_STOP=1 -d "$GATE_DATABASE_URL" -f "$REPO_ROOT/scripts/seed_problem_demo.sql"
+}
+
+# Proves the separately running stack behind E2E_BASE_URL is connected to the
+# gate's validated _test database before the seed or Playwright mutate
+# anything (Plan 094 Phase 14).  The verifier holds an advisory lock through
+# GATE_DATABASE_URL and all three services must observe it on their own pools.
+# A child cannot export into this shell, so the per-process instance ids come
+# back on one machine-readable line and are re-checked by e2e/seed.setup.ts.
+attest_e2e_stack() {
+  local out line
+  E2E_STACK_INSTANCE_GO="" E2E_STACK_INSTANCE_NEXT="" E2E_STACK_INSTANCE_HOCUSPOCUS=""
+  if ! out="$(E2E_BASE_URL="$E2E_BASE_URL" CHECK_E2E_STACK_DATABASE_URL="$GATE_DATABASE_URL" \
+    node "$REPO_ROOT/scripts/check-e2e-stack.mjs")"; then
+    [[ -n "$out" ]] && printf '%s\n' "$out"
+    return 1
+  fi
+  printf '%s\n' "$out"
+  line="$(printf '%s\n' "$out" | grep -m1 '^E2E_STACK_INSTANCES ')" || return 1
+  # The ids come from network services.  The verifier already restricts them,
+  # but this shell must not depend on a regex in another file: the whole line
+  # is matched against the same alphabet before anything is split, so no glob,
+  # whitespace, or metacharacter can reach the environment block below.
+  local id='[A-Za-z0-9._-]{1,128}'
+  [[ "$line" =~ ^E2E_STACK_INSTANCES\ next=($id)\ go=($id)\ hocuspocus=($id)$ ]] || return 1
+  E2E_STACK_INSTANCE_NEXT="${BASH_REMATCH[1]}"
+  E2E_STACK_INSTANCE_GO="${BASH_REMATCH[2]}"
+  E2E_STACK_INSTANCE_HOCUSPOCUS="${BASH_REMATCH[3]}"
+}
+
+load_persistent_e2e_base_url() {
+  [[ -n "${E2E_BASE_URL:-}" ]] && return
+  # Do not source .env: it is data, not trusted shell.  Dotenv leaves an
+  # explicit shell value untouched and this process prints only the one URL
+  # ci-local needs for its pinned-stack refusal check.
+  local env_file="${1:-.env}" loaded
+  if ! loaded="$(node --input-type=module -e 'import { config } from "dotenv"; config({ path: process.argv.at(-1), quiet: true }); process.stdout.write(process.env.E2E_BASE_URL ?? "");' "$env_file")"; then
+    echo "REFUSING TO RUN E2E: persistent E2E_BASE_URL loading failed." >&2
+    rm -f "$ATTESTATION"
+    FAILED+=("e2e (persistent E2E_BASE_URL load failed)")
+    return 1
+  fi
+  E2E_BASE_URL="$loaded"
+}
+
+run_e2e_gate() {
+  if [[ $FAST -eq 1 ]]; then
+    echo ""
+    echo "══ e2e SKIPPED (--fast)"
+    return
+  fi
+
+  if ! load_persistent_e2e_base_url; then
+    return
+  fi
+  if [[ -z "${E2E_BASE_URL:-}" ]]; then
+    echo ""
+    echo "REFUSING TO RUN E2E: E2E_BASE_URL is unset." >&2
+    echo "  playwright.config.ts would fall back to http://localhost:3003, which on this" >&2
+    echo "  machine is an unrelated service — and e2e/seed.setup.ts CREATES CLASSES and" >&2
+    echo "  ENROLLS USERS against whatever answers." >&2
+    echo "  Export E2E_BASE_URL pointing at your own stack, or use --fast." >&2
+    FAILED+=("e2e (E2E_BASE_URL unset)")
+    return
+  fi
+
+  # Attestation comes first: a stack on the wrong database must be refused
+  # before the seed restore, and long before Playwright.
+  export E2E_BASE_URL
+  echo ""
+  echo "══ e2e stack attestation"
+  if attest_e2e_stack; then
+    echo "── e2e stack attestation OK"
+  else
+    echo "── e2e stack attestation FAILED" >&2
+    rm -f "$ATTESTATION"
+    FAILED+=("e2e (stack attestation)")
+    return
+  fi
+
+  echo ""
+  echo "══ e2e demo seed restore"
+  if restore_e2e_demo_seed; then
+    echo "── e2e demo seed restore OK"
+  else
+    echo "── e2e demo seed restore FAILED" >&2
+    FAILED+=("e2e demo seed restore")
+    return
+  fi
+  step "e2e" env \
+    DATABASE_URL="$GATE_DATABASE_URL" \
+    TEST_DATABASE_URL="$GATE_DATABASE_URL" \
+    E2E_BASE_URL="$E2E_BASE_URL" \
+    E2E_STACK_INSTANCE_GO="$E2E_STACK_INSTANCE_GO" \
+    E2E_STACK_INSTANCE_NEXT="$E2E_STACK_INSTANCE_NEXT" \
+    E2E_STACK_INSTANCE_HOCUSPOCUS="$E2E_STACK_INSTANCE_HOCUSPOCUS" \
+    ANTHROPIC_API_KEY= \
+    OPENAI_API_KEY= \
+    GEMINI_API_KEY= \
+    DASHSCOPE_API_KEY= \
+    OPENROUTER_API_KEY= \
+    bun run test:e2e
+}
+
+canonicalize_test_database_url() {
+  local input="$1" output_var="$2" before_query query_suffix scheme rest authority pathname base_length
+  if [[ "$input" == *\?* ]]; then
+    before_query="${input%%\?*}"
+    query_suffix="?${input#*\?}"
+  else
+    before_query="$input"
+    query_suffix=""
+  fi
+
+  if [[ "$before_query" != *://* ]]; then
+    printf -v "$output_var" '%s' "$input"
+    return
+  fi
+
+  scheme="${before_query%%://*}"
+  rest="${before_query#*://}"
+  if [[ "$rest" != */* ]]; then
+    printf -v "$output_var" '%s' "$input"
+    return
+  fi
+
+  authority="${rest%%/*}"
+  pathname="/${rest#*/}"
+  case "$pathname" in
+    *%5Ftest|*%5ftest)
+      base_length=$(( ${#pathname} - 7 ))
+      pathname="${pathname:0:base_length}_test"
+      ;;
+  esac
+  printf -v "$output_var" '%s' "$scheme://$authority$pathname$query_suffix"
+}
+
 # ── Safety preconditions ─────────────────────────────────────────────────────
 
-# Refuse to run against a non-test database. See AGENTS.md hard safeguards.
+# Validate an inherited URL before it can become the selected gate URL.  The
+# validator parses the pathname and then probes the live database name without
+# printing credentials or the URL; it is the only database validation authority.
 if [[ -n "${DATABASE_URL:-}" ]]; then
-  if [[ ! "$DATABASE_URL" =~ _test(\?|$) && ! "$DATABASE_URL" =~ @(localhost|127\.0\.0\.1|postgres):[0-9]+/bridge_test ]]; then
-    echo "REFUSING TO RUN: DATABASE_URL does not look like a test database." >&2
-    echo "  got: ${DATABASE_URL%%\?*}" >&2
-    echo "  Migrations read DATABASE_URL and Bridge has no down-migrations." >&2
-    echo "  Point it at a *_test database, or unset it if this run needs no DB." >&2
+  canonicalize_test_database_url "$DATABASE_URL" AMBIENT_DATABASE_URL
+  if [[ -z "$AMBIENT_DATABASE_URL" ]]; then
+    echo "REFUSING TO RUN: inherited DATABASE_URL canonicalization produced an empty value." >&2
     exit 2
   fi
+  if ! env CHECK_TEST_DATABASE_URL="$AMBIENT_DATABASE_URL" node scripts/check-test-database-url.mjs; then
+    echo "REFUSING TO RUN: inherited DATABASE_URL did not validate as a live test database." >&2
+    exit 2
+  fi
+fi
+
+GATE_DATABASE_URL="${TEST_DATABASE_URL:-${DATABASE_URL:-postgresql://work@127.0.0.1:5432/bridge_test}}"
+canonicalize_test_database_url "$GATE_DATABASE_URL" GATE_DATABASE_URL
+if [[ -z "$GATE_DATABASE_URL" ]]; then
+  echo "REFUSING TO RUN: resolved gate database URL canonicalization produced an empty value." >&2
+  exit 2
+fi
+if ! env CHECK_TEST_DATABASE_URL="$GATE_DATABASE_URL" node scripts/check-test-database-url.mjs; then
+  echo "REFUSING TO RUN: resolved gate database URL did not validate as a live test database." >&2
+  exit 2
 fi
 
 echo "Bridge local gate — repo $REPO_ROOT"
@@ -86,7 +245,8 @@ step "guard: self-test"  bash scripts/tests/test-guards.sh
 #     `skipIf(!key)`. Exporting them EMPTY makes skipIf fire; `unset` does not
 #     work, because bun re-reads the real values from .env.
 step "vitest" env \
-  DATABASE_URL="${TEST_DATABASE_URL:-postgresql://work@127.0.0.1:5432/bridge_test}" \
+  DATABASE_URL="$GATE_DATABASE_URL" \
+  TEST_DATABASE_URL="$GATE_DATABASE_URL" \
   ANTHROPIC_API_KEY= \
   OPENAI_API_KEY= \
   GEMINI_API_KEY= \
@@ -94,24 +254,14 @@ step "vitest" env \
   OPENROUTER_API_KEY= \
   bun run test
 
-step "go test" bash -c 'cd platform && go test ./... -count=1 -timeout 120s'
+step "go test" env \
+  DATABASE_URL="$GATE_DATABASE_URL" \
+  TEST_DATABASE_URL="$GATE_DATABASE_URL" \
+  bash -c 'cd platform && go test ./... -count=1 -timeout 120s'
 
 # ── E2E ──────────────────────────────────────────────────────────────────────
 
-if [[ $FAST -eq 1 ]]; then
-  echo ""
-  echo "══ e2e SKIPPED (--fast)"
-elif [[ -z "${E2E_BASE_URL:-}" ]]; then
-  echo ""
-  echo "REFUSING TO RUN E2E: E2E_BASE_URL is unset." >&2
-  echo "  playwright.config.ts would fall back to http://localhost:3003, which on this" >&2
-  echo "  machine is an unrelated service — and e2e/seed.setup.ts CREATES CLASSES and" >&2
-  echo "  ENROLLS USERS against whatever answers." >&2
-  echo "  Export E2E_BASE_URL pointing at your own stack, or use --fast." >&2
-  FAILED+=("e2e (E2E_BASE_URL unset)")
-else
-  step "e2e" bun run test:e2e
-fi
+run_e2e_gate
 
 # ── Result ───────────────────────────────────────────────────────────────────
 

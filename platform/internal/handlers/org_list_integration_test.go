@@ -39,7 +39,6 @@ func newOrgListFixture(t *testing.T, suffix string) *orgListFixture {
 	ctx := context.Background()
 
 	orgs := store.NewOrgStore(db)
-	users := store.NewUserStore(db)
 	courses := store.NewCourseStore(db)
 	classes := store.NewClassStore(db)
 	stats := store.NewStatsStore(db)
@@ -52,12 +51,11 @@ func newOrgListFixture(t *testing.T, suffix string) *orgListFixture {
 	}
 
 	mkUser := func(label string) *store.RegisteredUser {
-		u, err := users.RegisterUser(ctx, store.RegisterInput{
+		u := insertFixtureUser(t, db, store.RegisterInput{
 			Name:     "User " + label,
 			Email:    label + "@example.com",
 			Password: "testpassword123",
 		})
-		require.NoError(t, err)
 		t.Cleanup(func() {
 			db.ExecContext(ctx, "DELETE FROM class_memberships WHERE user_id = $1", u.ID)
 			db.ExecContext(ctx, "DELETE FROM org_memberships WHERE user_id = $1", u.ID)
@@ -299,12 +297,11 @@ func TestOrgList_SuspendedMemberVisible(t *testing.T) {
 	orgs := store.NewOrgStore(fx.db)
 
 	// Add a second teacher then suspend them.
-	extra, err := store.NewUserStore(fx.db).RegisterUser(ctx, store.RegisterInput{
+	extra := insertFixtureUser(t, fx.db, store.RegisterInput{
 		Name:     "Extra Teacher",
 		Email:    "extra-suspended-visible@example.com",
 		Password: "testpassword123",
 	})
-	require.NoError(t, err)
 	t.Cleanup(func() {
 		fx.db.ExecContext(ctx, "DELETE FROM org_memberships WHERE user_id = $1", extra.ID)
 		fx.db.ExecContext(ctx, "DELETE FROM auth_providers WHERE user_id = $1", extra.ID)

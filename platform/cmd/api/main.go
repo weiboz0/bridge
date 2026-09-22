@@ -21,8 +21,10 @@ import (
 	"github.com/weiboz0/bridge/platform/internal/events"
 	"github.com/weiboz0/bridge/platform/internal/handlers"
 	"github.com/weiboz0/bridge/platform/internal/llm"
+	"github.com/weiboz0/bridge/platform/internal/realtime"
 	"github.com/weiboz0/bridge/platform/internal/sandbox"
 	"github.com/weiboz0/bridge/platform/internal/skills"
+	"github.com/weiboz0/bridge/platform/internal/store"
 )
 
 func main() {
@@ -39,6 +41,15 @@ func main() {
 		slog.Error("Failed to load config", "error", err)
 		os.Exit(1)
 	}
+	if err := validateE2EStackEnv(
+		cfg.E2EStack,
+		os.Getenv("APP_ENV") == "production",
+		os.Getenv("BRIDGE_HOST_EXPOSURE"),
+		cfg.AllowE2EStackOverTunnel,
+	); err != nil {
+		slog.Error(err.Error())
+		os.Exit(1)
+	}
 
 	// Plan 065 — fail fast at boot when BRIDGE_SESSION_AUTH=1 but
 	// the supporting secrets are unset. Otherwise the flag-on
@@ -47,6 +58,16 @@ func main() {
 	// notice than a refused boot.
 	if err := validateBridgeSessionEnv(cfg); err != nil {
 		slog.Error(err.Error())
+		os.Exit(1)
+	}
+	if err := cfg.Realtime.ValidateControl(); err != nil {
+		slog.Error("Invalid canvas control configuration", "error", err)
+		os.Exit(1)
+	}
+	// Reject an unsafe E2E failure-injection configuration before opening any
+	// database connection. The live database proof below remains mandatory.
+	if err := realtime.ValidateE2ECanvasControlFailureDatabaseURL(cfg.Realtime.E2ECanvasControlFailure, cfg.Database.URL); err != nil {
+		slog.Error("Invalid E2E canvas control failure injection", "error", err)
 		os.Exit(1)
 	}
 
@@ -69,6 +90,28 @@ func main() {
 	// into a startup refusal with a clear remediation message.
 	if err := db.CheckSchemaProbe(context.Background(), database); err != nil {
 		slog.Error("Schema probe failed", "error", err.Error())
+		os.Exit(1)
+	}
+
+	// The only live-stack E2E fault seam is a synthetic client Freeze failure.
+	// It cannot become active unless the explicit flag and both independent
+	// parsed/live _test database proofs have already succeeded.
+	failureInjection, err := realtime.NewE2ECanvasControlFailureInjection(
+		context.Background(),
+		cfg.Realtime.E2ECanvasControlFailure,
+		cfg.Database.URL,
+		realtime.SQLCurrentDatabase{DB: database},
+	)
+	if err != nil {
+		slog.Error("Invalid E2E canvas control failure injection", "error", err)
+		os.Exit(1)
+	}
+	canvasControl, err := realtime.NewCanvasControlClient(realtime.CanvasControlConfig{
+		URL: cfg.Realtime.HocuspocusInternalURL, Secret: cfg.Realtime.HocuspocusControlSecret,
+		E2EFailureInjection: failureInjection,
+	})
+	if err != nil {
+		slog.Error("Invalid canvas control client", "error", err)
 		os.Exit(1)
 	}
 
@@ -176,13 +219,23 @@ func main() {
 		Attempts:                    stores.Attempts,
 		Users:                       stores.Users,
 		ParentLinks:                 stores.ParentLinks, // plan 053b phase 4
+		Canvases:                    store.NewCanvasStore(database),
 		HocuspocusTokenSecret:       cfg.Realtime.HocuspocusTokenSecret,
+		HocuspocusControlSecret:     cfg.Realtime.HocuspocusControlSecret,
 		BridgeSessionSecrets:        cfg.BridgeSession.Secrets,
 		BridgeSessionInternalBearer: cfg.BridgeSession.InternalBearer,
 		BridgeSessionAuthFlag:       cfg.BridgeSession.AuthFlag,
 	}
 	realtimeH.HealthRoutes(r)
 	realtimeH.InternalRoutes(r)
+	if cfg.E2EStack {
+		e2eStackH := handlers.NewE2EStackHandler(handlers.E2EStackHandlerConfig{
+			DB:          database,
+			DatabaseURL: cfg.Database.URL,
+			NotFound:    r.NotFoundHandler(),
+		})
+		e2eStackH.Routes(r)
+	}
 
 	// Plan 065 Phase 1 — Bridge session mint endpoint. Like the
 	// realtime internal callback, this is server-to-server only
@@ -254,12 +307,15 @@ func main() {
 		classH := &handlers.ClassHandler{Classes: stores.Classes, Orgs: stores.Orgs, Users: stores.Users}
 		classH.Routes(r)
 
-		sessionH := &handlers.SessionHandler{Sessions: stores.Sessions, Schedules: stores.Schedules, Classes: stores.Classes, Courses: stores.Courses, Topics: stores.Topics, Chapters: stores.Chapters, Orgs: stores.Orgs, ParentLinks: stores.ParentLinks, Broadcaster: broadcaster}
+		sessionH := &handlers.SessionHandler{Sessions: stores.Sessions, Schedules: stores.Schedules, Classes: stores.Classes, Courses: stores.Courses, Topics: stores.Topics, Chapters: stores.Chapters, Orgs: stores.Orgs, ParentLinks: stores.ParentLinks, Broadcaster: broadcaster, CanvasControl: canvasControl}
 		sessionH.Routes(r)
+
+		canvasH := &handlers.CanvasHandler{Sessions: stores.Sessions, Canvases: realtimeH.Canvases}
+		canvasH.Routes(r)
 
 		scheduleH := &handlers.ScheduleHandler{
 			Schedules: stores.Schedules, Sessions: stores.Sessions, Classes: stores.Classes,
-			Orgs: stores.Orgs, Broadcaster: broadcaster,
+			Orgs: stores.Orgs, Broadcaster: broadcaster, CanvasControl: canvasControl,
 		}
 		scheduleH.Routes(r)
 
@@ -537,5 +593,20 @@ func validateDevAuthEnv(getEnv func(string) string) error {
 
 	slog.Warn("DEV_SKIP_AUTH is active — all requests bypass authentication. NEVER use in production.",
 		"DEV_SKIP_AUTH", devSkipAuth)
+	return nil
+}
+
+// validateE2EStackEnv is deliberately pure so startup policy can be
+// table-tested without mutating process environment or invoking os.Exit.
+func validateE2EStackEnv(enabled, production bool, exposure string, allowOverTunnel bool) error {
+	if !enabled {
+		return nil
+	}
+	if production {
+		return fmt.Errorf("refusing to start: BRIDGE_E2E_STACK=1 is set with APP_ENV=production. Unset BRIDGE_E2E_STACK before starting")
+	}
+	if strings.EqualFold(strings.TrimSpace(exposure), "exposed") && !allowOverTunnel {
+		return fmt.Errorf("refusing to start: BRIDGE_E2E_STACK=1 is set with BRIDGE_HOST_EXPOSURE=exposed. Set ALLOW_E2E_STACK_OVER_TUNNEL=true only for a deliberate exposed-host E2E stack")
+	}
 	return nil
 }

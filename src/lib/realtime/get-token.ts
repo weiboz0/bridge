@@ -29,46 +29,48 @@ const inflight = new Map<string, Promise<string>>();
 const LEEWAY_MS = 60_000;
 
 export class RealtimeMintError extends Error {
-  constructor(message: string, public status?: number) {
+  constructor(message: string, public status?: number, public code?: string) {
     super(message);
     this.name = "RealtimeMintError";
   }
 }
 
-export async function getRealtimeToken(documentName: string): Promise<string> {
+export async function getRealtimeToken(documentName: string, sessionId?: string, options: { forceRefresh?: boolean } = {}): Promise<string> {
   if (!documentName || documentName === "noop") {
     throw new RealtimeMintError("documentName is required");
   }
 
+  const identityKey = sessionId === undefined ? documentName : `${documentName}\u0000${sessionId}`;
   const now = Date.now();
-  const cached = cache.get(documentName);
+  if (options.forceRefresh) cache.delete(identityKey);
+  const cached = cache.get(identityKey);
   if (cached && cached.expiresAt - now > LEEWAY_MS) {
     return cached.token;
   }
 
-  const existing = inflight.get(documentName);
+  const existing = inflight.get(identityKey);
   if (existing) return existing;
 
-  const promise = mintFresh(documentName)
+  const promise = mintFresh(documentName, sessionId)
     .then((minted) => {
-      cache.set(documentName, minted);
+      cache.set(identityKey, minted);
       return minted.token;
     })
     .finally(() => {
-      inflight.delete(documentName);
+      inflight.delete(identityKey);
     });
 
-  inflight.set(documentName, promise);
+  inflight.set(identityKey, promise);
   return promise;
 }
 
-async function mintFresh(documentName: string): Promise<CachedToken> {
+async function mintFresh(documentName: string, sessionId?: string): Promise<CachedToken> {
   let res: Response;
   try {
     res = await fetch("/api/realtime/token", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ documentName }),
+      body: JSON.stringify(sessionId === undefined ? { documentName } : { documentName, sessionId }),
       credentials: "include",
     });
   } catch (err) {
@@ -84,13 +86,16 @@ async function mintFresh(documentName: string): Promise<CachedToken> {
   }
   if (!res.ok) {
     let detail = `${res.status}`;
+    let code: string | undefined;
     try {
-      const body = (await res.json()) as { error?: string };
+      const body = parseMintFailure(await res.json(), res.status);
       if (body.error) detail = `${res.status} ${body.error}`;
-    } catch {
+      code = body.code;
+    } catch (error) {
+      if (error instanceof RealtimeMintError) throw error;
       /* body not JSON — keep status alone */
     }
-    throw new RealtimeMintError(`Realtime token mint failed: ${detail}`, res.status);
+    throw new RealtimeMintError(`Realtime token mint failed: ${detail}`, res.status, code);
   }
 
   const body = (await res.json()) as { token: string; expiresAt: string };
@@ -102,6 +107,19 @@ async function mintFresh(documentName: string): Promise<CachedToken> {
     throw new RealtimeMintError("Realtime token expiresAt is unparseable");
   }
   return { token: body.token, expiresAt };
+}
+
+function parseMintFailure(value: unknown, status: number): { error?: string; code?: string } {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new RealtimeMintError("Realtime token mint error response is invalid", status);
+  }
+  const body = value as Record<string, unknown>;
+  if (Object.keys(body).some((key) => key !== "error" && key !== "code")
+    || (body.error !== undefined && typeof body.error !== "string")
+    || (body.code !== undefined && typeof body.code !== "string")) {
+    throw new RealtimeMintError("Realtime token mint error response is invalid", status);
+  }
+  return { error: body.error as string | undefined, code: body.code as string | undefined };
 }
 
 // Test-only — drop the cache + in-flight maps so unit tests don't

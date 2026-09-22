@@ -27,16 +27,14 @@ func setupStrictTopicHandler(t *testing.T) (*TopicHandler, *store.Course, *store
 	ctx := context.Background()
 
 	orgs := store.NewOrgStore(db)
-	users := store.NewUserStore(db)
 	topics := store.NewTopicStore(db)
 	courses := store.NewCourseStore(db)
 
-	user, err := users.RegisterUser(ctx, store.RegisterInput{
+	user := insertFixtureUser(t, db, store.RegisterInput{
 		Name:     "StrictTopic",
 		Email:    "stricttopic-" + t.Name() + "@example.com",
 		Password: "testpassword123",
 	})
-	require.NoError(t, err)
 	t.Cleanup(func() {
 		db.ExecContext(ctx, "DELETE FROM auth_providers WHERE user_id = $1", user.ID)
 		db.ExecContext(ctx, "DELETE FROM users WHERE id = $1", user.ID)

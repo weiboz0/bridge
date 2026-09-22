@@ -32,7 +32,7 @@ test.describe("Course & Class Management", () => {
       if (await topicInput.isVisible()) {
         const topicName = `E2E Topic ${Date.now()}`;
         await topicInput.fill(topicName);
-        await page.click('button:text("Add Topic")');
+        await page.getByRole("button", { name: "Add Focus Area" }).click();
         await page.waitForTimeout(1000);
         await expect(page.locator(`text=${topicName}`).first()).toBeVisible();
       }

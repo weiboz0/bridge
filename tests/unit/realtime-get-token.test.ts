@@ -71,6 +71,35 @@ describe("getRealtimeToken", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it("uses the canvas sessionId in both the mint body and cache identity", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(mintResponse("canvas-session-A", 25 * 60 * 1000))
+      .mockResolvedValueOnce(mintResponse("canvas-session-B", 25 * 60 * 1000));
+    vi.stubGlobal("fetch", fetchMock);
+    const getCanvasToken = getRealtimeToken as (documentName: string, sessionId?: string) => Promise<string>;
+    const documentName = "canvas:22222222-2222-4222-8222-222222222222";
+    await expect(getCanvasToken(documentName, "11111111-1111-4111-8111-111111111111")).resolves.toBe("canvas-session-A");
+    await expect(getCanvasToken(documentName, "33333333-3333-4333-8333-333333333333")).resolves.toBe("canvas-session-B");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ documentName, sessionId: "11111111-1111-4111-8111-111111111111" });
+  });
+
+  it("does not de-dupe in-flight canvas mints across different sessionIds", async () => {
+    const resolvers: Array<(response: Response) => void> = [];
+    const fetchMock = vi.fn().mockImplementation(() => new Promise<Response>((resolve) => resolvers.push(resolve)));
+    vi.stubGlobal("fetch", fetchMock);
+    const getCanvasToken = getRealtimeToken as (documentName: string, sessionId?: string) => Promise<string>;
+    const documentName = "canvas:22222222-2222-4222-8222-222222222222";
+    const first = getCanvasToken(documentName, "11111111-1111-4111-8111-111111111111");
+    const second = getCanvasToken(documentName, "33333333-3333-4333-8333-333333333333");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    resolvers[0](mintResponse("first", 25 * 60 * 1000));
+    resolvers[1](mintResponse("second", 25 * 60 * 1000));
+    await expect(first).resolves.toBe("first");
+    await expect(second).resolves.toBe("second");
+  });
+
   it("dedupes in-flight requests for the same doc-name", async () => {
     let resolveFetch: (r: Response) => void = () => {};
     const fetchMock = vi.fn().mockImplementation(
@@ -138,6 +167,30 @@ describe("getRealtimeToken", () => {
     });
   });
 
+  it("preserves the strict retryable session_freezing code from the real 409 mint response", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: "Session is freezing", code: "session_freezing" }), {
+      status: 409,
+      headers: { "content-type": "application/json" },
+    })));
+    await expect(getRealtimeToken("canvas:22222222-2222-4222-8222-222222222222", "11111111-1111-4111-8111-111111111111", { forceRefresh: true })).rejects.toMatchObject({
+      name: "RealtimeMintError",
+      status: 409,
+      code: "session_freezing",
+    });
+  });
+
+  it("rejects malformed or trailing mint-error fields instead of synthesizing a retryable code", async () => {
+    for (const body of [{ error: "freezing", code: 409 }, { error: "freezing", code: "session_freezing", extra: true }]) {
+      __resetRealtimeTokenCacheForTesting();
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(body), { status: 409, headers: { "content-type": "application/json" } })));
+      await expect(getRealtimeToken("canvas:22222222-2222-4222-8222-222222222222", "11111111-1111-4111-8111-111111111111", { forceRefresh: true })).rejects.toMatchObject({
+        status: 409,
+        code: undefined,
+        message: expect.stringContaining("invalid"),
+      });
+    }
+  });
+
   it("translates network errors into RealtimeMintError", async () => {
     vi.stubGlobal(
       "fetch",
@@ -193,8 +246,9 @@ describe("getRealtimeToken", () => {
   });
 
   it("RealtimeMintError class is exported and named", () => {
-    const err = new RealtimeMintError("test", 400);
+    const err = new RealtimeMintError("test", 400, "test_code");
     expect(err.name).toBe("RealtimeMintError");
     expect(err.status).toBe(400);
+    expect(err.code).toBe("test_code");
   });
 });

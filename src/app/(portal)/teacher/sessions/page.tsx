@@ -15,11 +15,8 @@ export interface SessionItem {
 }
 
 /**
- * Plan 043 phase 2: ended sessions used to link to /teacher/sessions/{id}
- * which renders the live TeacherDashboard regardless of status. The
- * dashboard isn't designed for read-only review (Yjs / broadcast / end
- * action are heavily wired to live state). Until a dedicated review
- * surface exists, ended sessions render as plain text rows — no link.
+ * Ended sessions link to the dedicated whiteboard archive rather than the
+ * live dashboard, whose controls are not safe in archive mode.
  */
 export function SessionRow({ session: s }: { session: SessionItem }) {
   const meta = (
@@ -64,10 +61,13 @@ export function SessionRow({ session: s }: { session: SessionItem }) {
     );
   }
   return (
-    <div className="flex items-center justify-between rounded-lg border border-zinc-200 bg-white px-4 py-3">
+    <Link
+      href={`/sessions/${s.id}/whiteboards`}
+      className="flex items-center justify-between rounded-lg border border-zinc-200 bg-white px-4 py-3 transition-colors hover:border-zinc-300"
+    >
       {meta}
       {badge}
-    </div>
+    </Link>
   );
 }
 

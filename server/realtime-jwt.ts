@@ -13,6 +13,8 @@ export interface RealtimeClaims {
   sub: string;
   role: string;
   scope: string;
+  readOnly: boolean;
+  sessionId?: string;
   iss: string;
   iat: number;
   exp: number;
@@ -89,6 +91,20 @@ export function verifyRealtimeJwt(token: string, secret: string): RealtimeClaims
   if (!claims.scope || typeof claims.scope !== "string") {
     throw new JwtVerifyError("missing scope");
   }
+  if (claims.readOnly === undefined) {
+    claims.readOnly = false;
+  } else if (typeof claims.readOnly !== "boolean") {
+    throw new JwtVerifyError("invalid readOnly");
+  }
+  const canvasScope = claims.scope.startsWith("canvas:");
+  const canonicalUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+  if (canvasScope) {
+    if (typeof claims.sessionId !== "string" || !canonicalUuid.test(claims.sessionId)) {
+      throw new JwtVerifyError("invalid canvas sessionId");
+    }
+  } else if (claims.sessionId !== undefined) {
+    throw new JwtVerifyError("sessionId is only valid for canvas scopes");
+  }
   return claims as RealtimeClaims;
 }
 
@@ -102,19 +118,30 @@ export async function rechckDocumentAccess(args: {
   secret: string;
   documentName: string;
   sub: string;
-}): Promise<{ allowed: boolean; reason?: string }> {
-  const { apiBaseUrl, secret, documentName, sub } = args;
+  sessionId?: string;
+}): Promise<{ allowed: boolean; reason?: string; readOnly?: boolean }> {
+  const { apiBaseUrl, secret, documentName, sub, sessionId } = args;
   const res = await fetch(`${apiBaseUrl}/api/internal/realtime/auth`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${secret}`,
     },
-    body: JSON.stringify({ documentName, sub }),
+    body: JSON.stringify(sessionId === undefined ? { documentName, sub } : { documentName, sub, sessionId }),
+    redirect: "error",
   });
   if (res.status === 200) {
-    const body = (await res.json()) as { allowed?: boolean; reason?: string };
-    return { allowed: !!body.allowed, reason: body.reason };
+    const body = (await res.json()) as { allowed?: boolean; reason?: string; readOnly?: boolean };
+    if (typeof body.allowed !== "boolean") {
+      throw new JwtVerifyError("internal recheck returned invalid allowed");
+    }
+    if (body.readOnly === undefined && !documentName.startsWith("canvas:")) {
+      return { allowed: body.allowed, reason: body.reason };
+    }
+    if (typeof body.readOnly !== "boolean") {
+      throw new JwtVerifyError("internal recheck returned invalid readOnly");
+    }
+    return { allowed: body.allowed, reason: body.reason, readOnly: body.readOnly };
   }
   // Anything other than 200 means the recheck couldn't render an
   // authorization decision (4xx malformed input, 404 missing

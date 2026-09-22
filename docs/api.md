@@ -53,6 +53,8 @@ Compatibility notes:
 - `POST /api/sessions/{id}/join` still returns `studentId` in the response payload when applicable.
 - `GET /api/sessions/{id}/help-queue` still returns the raised-hand queue, but internally it is backed by `help_requested_at` rather than a `"needs_help"` participant status.
 - `POST /api/sessions/{id}/end` ends a session (moved from `PATCH /api/sessions/{id}` in Plan 030b).
+  The session teacher or a platform administrator may end it, as on the sibling teacher-only session routes.
+  Ending archives the session's canvas snapshots server-side, but the response discloses no canvas content and the administrator gains no canvas read, mint, or settings access.
 - `GET /api/sessions/by-class/{classId}` and `GET /api/sessions/active/{classId}` remain available as compatibility wrappers for class-scoped surfaces.
 
 ### Ad-hoc (orphan) sessions — Plan 090
@@ -65,6 +67,79 @@ Any authenticated user — not only teachers — may host an orphan (`classId: n
 - **Concurrent-host cap:** a single host is limited to a bounded number of simultaneously-live orphan sessions (abuse guard, Plan 090 Phase 1).
 - **Role-neutral surface:** `/sessions` (browse), `/sessions/{id}` (room — host or participant, resolved by which of `teacher-page`/`student-page` the caller is authorized for), served by `PortalShell portalRole={null}`, which admits any authenticated user (see `authenticated` on `/api/me/portal-access`).
 - **Abuse — deferred, not solved.** Auth, the concurrent cap, and host-only controls are the in-scope mitigations. Reporting, bans, per-window rate limits, and content moderation are explicitly out of scope for Plan 090 and tracked there as follow-ups.
+
+### E2E stack attestation — test-only, not part of the product API
+
+Three surfaces exist **only** when a service is started with `BRIDGE_E2E_STACK=1`; otherwise the paths do not exist.
+They take no session and are tenant-independent.
+
+- **`GET /api/health/e2e-stack?nonce=<64 hex>`** (Go, reached through the `/api/health/:path*` proxy) → `{ "fingerprint", "instance" }`.
+- **`GET /api/e2e-stack?nonce=<64 hex>`** (Next.js) → `{ "fingerprint", "instance", "realtimeUrl"? }`.
+- **`GET /e2e-stack?nonce=<64 hex>`** (Hocuspocus, on the client-facing websocket port) → `{ "fingerprint", "instance" }`.
+
+A service answers only while `scripts/check-e2e-stack.mjs` holds its advisory lock in a database whose parsed and live names both end in `_test`.
+Every other outcome is indistinguishable from the path not existing: the ordinary 404 on Go and Next.js, the ordinary default response on Hocuspocus.
+Successful responses are `Cache-Control: no-store`. See `docs/testing.md` “The E2E hazard”.
+
+### Whiteboard canvases — Plan 094
+
+Whiteboards are durable Yjs documents scoped as `canvas:{canvasId}`.
+The canvas metadata endpoints require authentication and a session UUID.
+
+- **`GET /api/sessions/{id}/canvases`** returns `{ "items": Canvas[] }` containing only canvases visible to the caller.
+- **`POST /api/sessions/{id}/canvases`** creates an owner canvas while the session is live.
+  The body requires `title` and `visibility` (`private`, `host`, `participants`, or `session`); the session floor may raise the requested visibility.
+  Only the represented teacher or a currently `present` participant may create it; public outsiders, invited/left users, and independent administrator or impersonator claims are denied.
+- **`PATCH /api/sessions/{id}/canvases/{canvasId}`** changes an owner canvas title and/or loosens its visibility.
+  Equal or tighter visibility is rejected.
+- **`DELETE /api/sessions/{id}/canvases/{canvasId}`** deletes an owner canvas and its persisted document while live.
+
+Authorization is answered before session state on every canvas mutation: a caller who may not perform it gets the same `403` (or `404` for a missing canvas) whether the session is live, ending, or ended, so an outsider holding a session UUID cannot learn its lifecycle state.
+For an **authorized** caller, canvas mutations return `409` with `code: "session_ended"` after the session ends, `409` with `code: "canvas_cap_reached"` when the per-session whiteboard limit is hit, and while an end lease is live `409` with
+`code: "session_end_in_progress"`. Clients must branch on `code`, never on the bare status: a `409` is not always an ended session; the internal realtime recheck instead
+returns retryable `409` with `code: "session_freezing"` and does not convert a
+writable connection to a permanent reader.
+
+`GET` and `PATCH /api/sessions/{id}/canvas-settings` are the sole canvas-floor
+settings routes. Both require the represented session teacher (no independent
+platform-administrator or impersonator bypass); GET returns `canvasFloor` and,
+after an end, an optional durable `whiteboardServerArchiveComplete` boolean.
+PATCH accepts exactly `{ "canvasFloor": "private" | "host" | "participants" }`.
+The older `/settings` route has no compatibility alias.
+
+Ending a session is status-first: the database transition is authoritative and
+succeeds even when Hocuspocus is unavailable, times out, or answers malformed.
+`whiteboardServerArchiveComplete: true` is a confirmed end — the archive holds
+the final state the responding Hocuspocus process had under an active freeze
+fence. `false` is a degraded end — no new write is authorized, but changes that
+existed only in an unavailable or already-authorized in-flight path may be
+missing from the archive.
+
+An explicit successful end has the ordinary top-level session fields plus
+`whiteboardServerArchiveComplete`.
+When that value is `false`, it also has
+`warning: "whiteboard_server_archive_incomplete"`.
+It has no nested session wrapper.
+
+Session creation and scheduled-session start always return `replacedSessions`
+as an array, including `[]` when no live session was replaced. Each item has
+the replaced `id` and durable `whiteboardServerArchiveComplete` flag.
+Canvas documents are read through the existing realtime-token mint endpoint using the `canvas:{canvasId}` scope.
+Canvas mint requests additionally require the selected canvas's canonical `sessionId`; the server uses it only to acquire the lifecycle lock before authorization, then verifies the exact canvas/session binding.
+The signed canvas token carries the authoritative `sessionId` for locked admission and mutation rechecks, while its `readOnly` claim is enforced by Hocuspocus rather than merely by the browser UI.
+Non-canvas mint requests and tokens retain their existing shape.
+Hocuspocus closes every established canvas connection, writable or read-only, when its token expires; the client re-mints and is re-authorized against current state.
+
+Realtime canvas writes are bounded rather than cached.
+Every mutation-bearing frame is rechecked against Go with a 500 ms deadline; a document admits at most eight active-plus-queued mutations and closes the ninth with a retryable `1013`, and a canvas update larger than 1 MiB is rejected.
+The freeze, admission, and memory accounting live in one process, so Bridge supports a single Hocuspocus instance — see `docs/architecture/decisions.md` §11.
+Excalidraw binary files are not persisted: image insertion, image paste, and file drop are disabled in the client.
+
+Live access follows the visibility ladder: owner at `private`; teacher at `host` and wider; a `present` participant at `participants` and wider; and any caller allowed into the live session at `session`.
+For a public class-less session, that last live level intentionally includes any authenticated caller.
+After end, access becomes a read-only archive: owner; teacher for `host` and wider; `present` or `left` former participant for `participants` and `session`.
+Invited-only users and public non-participants do not retain archive access.
+The role-neutral archive page is `/sessions/{id}/whiteboards`; it first lists visible metadata and only mints a document token after a visible canvas is selected.
 
 ### `POST /api/sessions`
 

@@ -8,8 +8,11 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
+	"strings"
 	"testing"
+	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/assert"
@@ -24,14 +27,62 @@ import (
 
 func integrationDB(t *testing.T) *sql.DB {
 	t.Helper()
-	url := os.Getenv("DATABASE_URL")
-	if url == "" {
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
 		t.Skip("DATABASE_URL not set -- skipping integration test")
 	}
-	db, err := sql.Open("pgx", url)
-	require.NoError(t, err)
+	if err := validateIntegrationDatabaseURL(databaseURL); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("pgx", databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() { db.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var liveDatabaseName string
+	if err := db.QueryRowContext(ctx, "SELECT current_database()").Scan(&liveDatabaseName); err != nil {
+		t.Fatalf("validate live test database: %v", err)
+	}
+	if !strings.HasSuffix(liveDatabaseName, "_test") {
+		t.Fatalf("live database %q is not a test database", liveDatabaseName)
+	}
 	return db
+}
+
+func validateIntegrationDatabaseURL(databaseURL string) error {
+	parsed, err := url.Parse(databaseURL)
+	if err != nil {
+		return fmt.Errorf("DATABASE_URL must be a valid test database URL: %w", err)
+	}
+	if strings.Contains(databaseURL, "#") || parsed.Fragment != "" {
+		return fmt.Errorf("DATABASE_URL must not contain a fragment")
+	}
+	escapedPath := parsed.EscapedPath()
+	decodedPath, err := url.PathUnescape(escapedPath)
+	if err != nil {
+		return fmt.Errorf("DATABASE_URL must have a valid escaped database pathname: %w", err)
+	}
+	databaseName := strings.TrimPrefix(decodedPath, "/")
+	hostname := parsed.Hostname()
+	if (parsed.Scheme != "postgres" && parsed.Scheme != "postgresql") || hostname == "" || strings.Contains(hostname, ",") || databaseName == "" || strings.Contains(databaseName, "/") || !strings.HasSuffix(databaseName, "_test") {
+		return fmt.Errorf("DATABASE_URL must name a PostgreSQL database ending in _test")
+	}
+	query, err := url.ParseQuery(parsed.RawQuery)
+	if err != nil {
+		return fmt.Errorf("DATABASE_URL must have a valid query: %w", err)
+	}
+	var queryHosts []string
+	for key, values := range query {
+		if strings.EqualFold(key, "host") {
+			queryHosts = append(queryHosts, values...)
+		}
+	}
+	if len(queryHosts) > 1 || (len(queryHosts) == 1 && strings.Contains(queryHosts[0], ",")) {
+		return fmt.Errorf("DATABASE_URL must not route through multiple query hosts")
+	}
+	return nil
 }
 
 // problemFixture is the world an integration test runs against: two orgs, a
@@ -65,7 +116,6 @@ func newProblemFixture(t *testing.T, suffix string) *problemFixture {
 	ctx := context.Background()
 
 	orgs := store.NewOrgStore(db)
-	users := store.NewUserStore(db)
 	courses := store.NewCourseStore(db)
 	topics := store.NewTopicStore(db)
 	classes := store.NewClassStore(db)
@@ -97,12 +147,11 @@ func newProblemFixture(t *testing.T, suffix string) *problemFixture {
 		return org
 	}
 	mkUser := func(label string) *store.RegisteredUser {
-		u, err := users.RegisterUser(ctx, store.RegisterInput{
+		u := insertFixtureUser(t, db, store.RegisterInput{
 			Name:     "User " + label,
 			Email:    label + "@example.com",
 			Password: "testpassword123",
 		})
-		require.NoError(t, err)
 		t.Cleanup(func() {
 			db.ExecContext(ctx, "DELETE FROM attempts WHERE user_id = $1 OR problem_id IN (SELECT id FROM problems WHERE created_by = $1)", u.ID)
 			db.ExecContext(ctx, "DELETE FROM test_cases WHERE problem_id IN (SELECT id FROM problems WHERE created_by = $1) OR owner_id = $1", u.ID)

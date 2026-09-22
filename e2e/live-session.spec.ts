@@ -12,12 +12,12 @@ test.describe("Live Sessions (multi-browser)", () => {
 
     // Login as teacher
     const teacherPage = await teacherContext.newPage();
-    await loginWithCredentials(teacherPage, ACCOUNTS.teacher.email, ACCOUNTS.teacher.password);
+    await loginWithCredentials(teacherPage, ACCOUNTS.teacher.email, ACCOUNTS.teacher.password, "/teacher");
     await teacherPage.close();
 
     // Login as student
     const studentPage = await studentContext.newPage();
-    await loginWithCredentials(studentPage, ACCOUNTS.student.email, ACCOUNTS.student.password);
+    await loginWithCredentials(studentPage, ACCOUNTS.student.email, ACCOUNTS.student.password, "/student");
     await studentPage.close();
   });
 
@@ -54,8 +54,7 @@ test.describe("Live Sessions (multi-browser)", () => {
     if (await courseLink.isVisible({ timeout: 3000 }).catch(() => false)) {
       await courseLink.click();
       await page.waitForURL(/\/teacher\/courses\//);
-      // Should see topics section
-      await expect(page.locator("text=Topics")).toBeVisible();
+      await expect(page.getByRole("heading", { name: /Focus Areas/ })).toBeVisible();
     }
     await page.close();
   });

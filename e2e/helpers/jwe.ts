@@ -1,5 +1,3 @@
-import { encode } from "@auth/core/jwt";
-
 const SECURE_COOKIE_NAME = "__Secure-authjs.session-token";
 const INSECURE_COOKIE_NAME = "authjs.session-token";
 
@@ -34,6 +32,7 @@ export async function mintSessionToken(opts: {
 
   const salt = opts.cookieName ?? SECURE_COOKIE_NAME;
 
+  const { encode } = await import("@auth/core/jwt");
   return encode({
     secret,
     salt,

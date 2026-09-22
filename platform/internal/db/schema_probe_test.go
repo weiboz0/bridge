@@ -4,24 +4,38 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"net/url"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// integrationDB returns a real DB handle for the local bridge_test
-// database; tests that don't need a DB use the unit-style branches
-// instead.
+// integrationDB fails closed unless both the parsed connection URL and the
+// database selected by PostgreSQL name a *_test database. Some probe tests
+// execute destructive DDL, so either signal alone is insufficient.
 func integrationDB(t *testing.T) *sql.DB {
 	t.Helper()
-	url := os.Getenv("DATABASE_URL")
-	if url == "" {
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
 		t.Skip("DATABASE_URL not set -- skipping integration test")
 	}
-	db, err := Open(url)
+	parsed, err := url.Parse(databaseURL)
+	require.NoError(t, err, "DATABASE_URL must parse before integration DDL")
+	parsedName := strings.TrimPrefix(parsed.EscapedPath(), "/")
+	decodedName, err := url.PathUnescape(parsedName)
+	require.NoError(t, err, "DATABASE_URL database path must decode")
+	require.True(t, strings.HasSuffix(decodedName, "_test"),
+		"refusing schema-probe integration DDL: DATABASE_URL database %q does not end in _test", decodedName)
+
+	db, err := Open(databaseURL)
 	require.NoError(t, err)
+	var currentDatabase string
+	require.NoError(t, db.QueryRow(`SELECT current_database()`).Scan(&currentDatabase))
+	require.True(t, strings.HasSuffix(currentDatabase, "_test"),
+		"refusing schema-probe integration DDL: connected database %q does not end in _test", currentDatabase)
 	t.Cleanup(func() { db.Close() })
 	return db
 }
@@ -34,9 +48,42 @@ func TestCheckSchemaProbe_NilDB(t *testing.T) {
 
 func TestCheckSchemaProbe_HappyPath(t *testing.T) {
 	db := integrationDB(t)
-	// bridge_test is fully migrated, so parent_links exists.
+	// bridge_test is fully migrated, so session_canvases and its related
+	// session/enum sentinels exist.
 	err := CheckSchemaProbe(context.Background(), db)
 	require.NoError(t, err)
+}
+
+func TestExpectedSchemaProbe_TracksSessionCanvases(t *testing.T) {
+	require.Equal(t, "session_canvases", ExpectedSchemaProbe)
+	require.Len(t, ExpectedSchemaSentinels.Tables, 2)
+	primary := ExpectedSchemaSentinels.Tables[0]
+	require.Equal(t, "session_canvases", primary.Table)
+	require.ElementsMatch(t, []string{
+		"id", "session_id", "owner_id", "title", "visibility", "yjs_state", "created_at", "updated_at",
+	}, primary.Columns)
+	require.Empty(t, primary.Constraints)
+	require.ElementsMatch(t, []string{
+		"session_canvases_session_idx", "session_canvases_session_owner_idx",
+	}, primary.Indexes)
+	require.Equal(t, SchemaTableSentinels{Table: "sessions", Columns: []string{"canvas_floor", "canvas_freeze_token", "canvas_freeze_until", "whiteboard_server_archive_complete"}, ColumnDefinitions: []SchemaColumnSentinel{{Name: "canvas_freeze_token", DataType: "uuid", Nullable: true}, {Name: "canvas_freeze_until", DataType: "timestamp with time zone", Nullable: true}, {Name: "whiteboard_server_archive_complete", DataType: "boolean", Nullable: true}}, Constraints: []string{"sessions_canvas_freeze_lease_pair"}}, ExpectedSchemaSentinels.Tables[1])
+	require.Equal(t, []SchemaEnumSentinel{{Name: "canvas_visibility", Labels: []string{"private", "host", "participants", "session"}}}, ExpectedSchemaSentinels.Enums)
+}
+
+func TestExpectedSchemaProbe_TracksLifecycleColumnTypeAndNullability(t *testing.T) {
+	var sessions SchemaTableSentinels
+	for _, table := range ExpectedSchemaSentinels.Tables {
+		if table.Table == "sessions" {
+			sessions = table
+			break
+		}
+	}
+	require.Equal(t, []SchemaColumnSentinel{
+		{Name: "canvas_freeze_token", DataType: "uuid", Nullable: true},
+		{Name: "canvas_freeze_until", DataType: "timestamp with time zone", Nullable: true},
+		{Name: "whiteboard_server_archive_complete", DataType: "boolean", Nullable: true},
+	}, sessions.ColumnDefinitions)
+	require.Contains(t, sessions.Constraints, "sessions_canvas_freeze_lease_pair")
 }
 
 func TestCheckSchemaProbe_NullToRegclass(t *testing.T) {
@@ -64,7 +111,7 @@ func TestErrSchemaProbeMissing_Format(t *testing.T) {
 	msg := err.Error()
 	assert.Contains(t, msg, "fake_table")
 	assert.Contains(t, msg, "drizzle/")
-	assert.Contains(t, msg, "psql")
+	assert.Contains(t, msg, "approved database-change workflow")
 }
 
 func TestCheckSchemaProbe_TypedError(t *testing.T) {

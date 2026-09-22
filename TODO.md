@@ -2,6 +2,10 @@
 
 Outstanding tasks and technical debt. Check this file when planning new work.
 
+## Recently shipped
+
+- [x] **Plan 094 — session whiteboards** (Excalidraw over Yjs/Hocuspocus; ownership + visibility floor; durable end lifecycle; read-only archive; E2E stack attestation). Full gate green with a live-stack attestation; code-review consensus reached. Follow-ups: reword the stale `deploy/nginx/bridge.conf` `/hocuspocus` comment (the new `/e2e-stack` HTTP endpoint is path-sensitive) when that file is next touched.
+
 ## Technical Debt
 
 - [ ] **Next.js middleware deprecation** — `middleware.ts` convention is deprecated in Next.js 16, should migrate to `proxy` pattern

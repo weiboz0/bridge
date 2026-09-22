@@ -96,17 +96,15 @@ func callResolve(t *testing.T, h *AnnotationHandler, claims *auth.Claims, annotI
 // the matrix never exercised the TA branch of RequireClassAuthority.
 func addAnnotTA(t *testing.T, fx *sessionPageFixture, suffix string) string {
 	t.Helper()
-	users := store.NewUserStore(fx.db)
 	classes := store.NewClassStore(fx.db)
 	orgs := store.NewOrgStore(fx.db)
 	ctx := context.Background()
 
-	u, err := users.RegisterUser(ctx, store.RegisterInput{
+	u := insertFixtureUser(t, fx.db, store.RegisterInput{
 		Name:     "TA " + suffix,
 		Email:    "ta-" + suffix + "@example.com",
 		Password: "testpassword123",
 	})
-	require.NoError(t, err)
 	t.Cleanup(func() {
 		fx.db.ExecContext(ctx, "DELETE FROM session_participants WHERE user_id = $1", u.ID)
 		fx.db.ExecContext(ctx, "DELETE FROM class_memberships WHERE user_id = $1", u.ID)
@@ -114,7 +112,7 @@ func addAnnotTA(t *testing.T, fx *sessionPageFixture, suffix string) string {
 		fx.db.ExecContext(ctx, "DELETE FROM auth_providers WHERE user_id = $1", u.ID)
 		fx.db.ExecContext(ctx, "DELETE FROM users WHERE id = $1", u.ID)
 	})
-	_, err = orgs.AddOrgMember(ctx, store.AddMemberInput{
+	_, err := orgs.AddOrgMember(ctx, store.AddMemberInput{
 		OrgID: fx.orgID, UserID: u.ID, Role: "teacher", Status: "active",
 	})
 	require.NoError(t, err)
@@ -133,17 +131,15 @@ func addAnnotTA(t *testing.T, fx *sessionPageFixture, suffix string) string {
 // staff.
 func addAnnotPeerStudent(t *testing.T, fx *sessionPageFixture, suffix string) string {
 	t.Helper()
-	users := store.NewUserStore(fx.db)
 	classes := store.NewClassStore(fx.db)
 	orgs := store.NewOrgStore(fx.db)
 	ctx := context.Background()
 
-	u, err := users.RegisterUser(ctx, store.RegisterInput{
+	u := insertFixtureUser(t, fx.db, store.RegisterInput{
 		Name:     "Peer " + suffix,
 		Email:    "peer-" + suffix + "@example.com",
 		Password: "testpassword123",
 	})
-	require.NoError(t, err)
 	t.Cleanup(func() {
 		fx.db.ExecContext(ctx, "DELETE FROM session_participants WHERE user_id = $1", u.ID)
 		fx.db.ExecContext(ctx, "DELETE FROM class_memberships WHERE user_id = $1", u.ID)
@@ -151,7 +147,7 @@ func addAnnotPeerStudent(t *testing.T, fx *sessionPageFixture, suffix string) st
 		fx.db.ExecContext(ctx, "DELETE FROM auth_providers WHERE user_id = $1", u.ID)
 		fx.db.ExecContext(ctx, "DELETE FROM users WHERE id = $1", u.ID)
 	})
-	_, err = orgs.AddOrgMember(ctx, store.AddMemberInput{
+	_, err := orgs.AddOrgMember(ctx, store.AddMemberInput{
 		OrgID: fx.orgID, UserID: u.ID, Role: "student", Status: "active",
 	})
 	require.NoError(t, err)

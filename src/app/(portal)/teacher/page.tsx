@@ -141,11 +141,8 @@ export default async function TeacherDashboard() {
                 const isLive = session.status === "live";
                 const sessionLabel = session.classId ? "Class session" : "Independent session";
 
-                // Plan 048 phase 6: ended sessions render as a non-clickable row
-                // (matches SessionRow in /teacher/sessions/page.tsx). The
-                // dedicated /teacher/sessions/{id} dashboard isn't built for
-                // ended-state read-only viewing yet; linking to a "Session
-                // ended" placeholder is worse UX than no link at all.
+                // Ended sessions use the purpose-built whiteboard archive,
+                // never the live teacher dashboard.
                 const meta = (
                   <div className="space-y-1">
                     <p className="font-medium text-zinc-900">{session.title}</p>
@@ -178,13 +175,14 @@ export default async function TeacherDashboard() {
                   );
                 }
                 return (
-                  <div
+                  <Link
                     key={session.id}
-                    className="flex items-center justify-between rounded-lg border border-zinc-200 bg-white px-4 py-3"
+                    href={`/sessions/${session.id}/whiteboards`}
+                    className="flex items-center justify-between rounded-lg border border-zinc-200 bg-white px-4 py-3 transition-colors hover:bg-zinc-50"
                   >
                     {meta}
                     {badge}
-                  </div>
+                  </Link>
                 );
               })}
             </div>

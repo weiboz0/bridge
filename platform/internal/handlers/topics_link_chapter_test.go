@@ -35,7 +35,6 @@ func newLinkChapterFixture(t *testing.T, suffix string) *linkChapterFixture {
 	ctx := context.Background()
 
 	orgs := store.NewOrgStore(db)
-	users := store.NewUserStore(db)
 	courses := store.NewCourseStore(db)
 	topics := store.NewTopicStore(db)
 	units := store.NewChapterStore(db)
@@ -48,12 +47,11 @@ func newLinkChapterFixture(t *testing.T, suffix string) *linkChapterFixture {
 	}
 
 	mkUser := func(label string) *store.RegisteredUser {
-		u, err := users.RegisterUser(ctx, store.RegisterInput{
+		u := insertFixtureUser(t, db, store.RegisterInput{
 			Name:     label,
 			Email:    label + suffix + "@example.com",
 			Password: "testpassword123",
 		})
-		require.NoError(t, err)
 		t.Cleanup(func() {
 			db.ExecContext(ctx, "DELETE FROM auth_providers WHERE user_id = $1", u.ID)
 			db.ExecContext(ctx, "DELETE FROM users WHERE id = $1", u.ID)

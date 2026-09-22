@@ -203,6 +203,24 @@ starts and calls `process.exit(1)` on any misconfig — mirrors the Go API's
   causes a boot failure with no escape hatch — plan 072 phase 2 made this
   unconditional. Generate with `openssl rand -hex 32` and set the same value
   on both the Go API and the Hocuspocus process.
+
+- `HOCUSPOCUS_CONTROL_SECRET` — **required.** A separately generated bearer
+  shared only by the Go API and Hocuspocus's canvas lifecycle listener.
+  It must differ from `HOCUSPOCUS_TOKEN_SECRET`; the Go API refuses startup if
+  either is missing, equal, or paired with an unsafe control URL.
+  Generate it with `openssl rand -hex 32`; the value must be exactly 64
+  lowercase hexadecimal characters.
+  The default listener target is `http://127.0.0.1:4001`, derived from
+  `HOCUSPOCUS_CONTROL_PORT` (default `4001`).
+  Set `HOCUSPOCUS_INTERNAL_URL` only for an explicit override: HTTP is allowed
+  only on canonical numeric `127.0.0.0/8` or IPv6 `::1` loopback hosts, while remote listeners require verified HTTPS.
+  This URL and secret are server-only; do not put either in `NEXT_PUBLIC_*`.
+  If the listener is down or the secret is wrong, sessions still end — the database
+  transition is authoritative — but the end is recorded as degraded and the teacher is
+  warned that the latest whiteboard changes may not have been archived.
+  Run exactly one Hocuspocus process: the canvas freeze fence and its admission and
+  memory bounds are in-process state, so a second instance voids the confirmed-archive
+  guarantee (`docs/architecture/decisions.md` §11).
 - `BRIDGE_HOST_EXPOSURE` — same semantics as the Go API (see "Host Exposure
   Declaration" above). Allowed values: `""` / `"localhost"` (default) and
   `"exposed"`. Unrecognized values fail loud at boot.
@@ -254,7 +272,20 @@ DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test bun run test:watch
 
 ## Running E2E Tests (Playwright)
 
-Playwright tests hit a live stack: Next.js (3003) + Go platform (8002) + Hocuspocus (4000). Start all three, then:
+Playwright tests hit a live stack: Next.js + Go platform + Hocuspocus, on whatever ports your `.env` sets
+(the code defaults 3003 / 8002 / 4000 belong to other services on the primary dev machine).
+The seed setup **writes** — it creates classes, enrolls users, and ends sessions — so the stack must prove it is
+on the test database before anything runs:
+
+- start all three against the same `_test` database with `BRIDGE_E2E_STACK=1`
+  (plus `ALLOW_E2E_STACK_OVER_TUNNEL=true` if `BRIDGE_HOST_EXPOSURE=exposed`);
+- set `NEXT_PUBLIC_HOCUSPOCUS_URL` to the real `ws://`/`wss://` URL;
+- run exactly one process per service, with live reload off (`go run ./cmd/api/`, not `air`);
+- pin `E2E_BASE_URL` in `.env` or the shell.
+
+`bash scripts/ci-local.sh` attests the stack before it seeds or runs Playwright, and `e2e/seed.setup.ts`
+re-checks before its first write; `docs/testing.md` “The E2E hazard” explains the protocol and the failure
+classes. Then:
 
 ```bash
 bun run test:e2e              # headless
@@ -263,7 +294,9 @@ bun run test:e2e:ui           # interactive
 
 ### Required test accounts
 
-E2E tests expect the following accounts to exist in the dev DB (passwords all `bridge123`):
+The demo seed owns the complete Playwright identity contract with fixed UUIDs.
+All listed accounts use `bridge123`; `admin@e2e.test` is intentionally created only when the connected database name ends in `_test`.
+That prevents a known-password platform administrator from appearing in a development or production database.
 
 | Role        | Email                |
 |-------------|----------------------|
@@ -274,23 +307,21 @@ E2E tests expect the following accounts to exist in the dev DB (passwords all `b
 | parent      | diana@demo.edu       |
 | platform admin | admin@e2e.test    |
 
-The `demo.edu` accounts come from the demo seed. The `admin@e2e.test` account must be created once with `is_platform_admin=true`:
-
-```sql
--- Bcrypt hash for "bridge123" (same hash used by the demo accounts).
--- Run once in the dev DB:
-INSERT INTO "user" (id, email, name, password_hash, is_platform_admin)
-VALUES (
-  gen_random_uuid(),
-  'admin@e2e.test',
-  'E2E Admin',
-  '<bcrypt-of-bridge123>',
-  true
-);
-```
-
-To generate the bcrypt hash:
+For a Playwright stack backed by `bridge_test`, validate the target and apply the idempotent seed before starting the stack:
 
 ```bash
-bun -e "import('bcryptjs').then(b => console.log(b.default.hashSync('bridge123', 10)))"
+CHECK_TEST_DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test \
+  node scripts/check-test-database-url.mjs
+psql -v ON_ERROR_STOP=1 postgresql://work@127.0.0.1:5432/bridge_test \
+  -f scripts/seed_problem_demo.sql
 ```
+
+The seed is one transaction and uses fixed IDs with conflict no-ops, so it is safe to re-run.
+Its focused integration contract runs the real seed and isolated near-miss copies only against a live-validated test database:
+
+```bash
+CHECK_TEST_DATABASE_URL=postgresql://work@127.0.0.1:5432/bridge_test \
+  scripts/tests/test-problem-demo-seed.sh
+```
+
+The check first proves that a parser-rejected target cannot invoke `psql` or the seed, then validates the fixed login identities, email auth providers, bcrypt password, memberships, current chapter/document rows resolved by the two fixed topic IDs (including supported pre-existing chapter UUIDs), test-only platform-admin guard, transactional rollback, current `topics` columns, and an unchanged second-run fixture fingerprint.

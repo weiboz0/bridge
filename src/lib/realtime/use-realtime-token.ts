@@ -36,33 +36,23 @@ export interface UseRealtimeToken {
   unavailable: boolean;
 }
 
-export function useRealtimeToken(documentName: string): UseRealtimeToken {
-  const [token, setToken] = useState<string>("");
-  const [unavailable, setUnavailable] = useState<boolean>(false);
+export function useRealtimeToken(documentName: string, sessionId?: string): UseRealtimeToken {
+  const identity = sessionId === undefined ? documentName : `${documentName}\u0000${sessionId}`;
+  const [result, setResult] = useState<{ identity: string; token: string; unavailable: boolean }>({
+    identity: "",
+    token: "",
+    unavailable: false,
+  });
 
   useEffect(() => {
     if (!documentName || documentName === "noop") {
-      setToken("");
-      setUnavailable(false);
       return;
     }
-    // CLEAR the previous doc's token synchronously before the new
-    // mint resolves. Otherwise a docName change A→B leaves the
-    // stale A-scoped token in state during the B-mint window, and
-    // useYjsProvider would feed it into a Hocuspocus connection for
-    // documentName=B → server-side `claims.scope === documentName`
-    // check fails and the WS closes (best case) or scope confusion
-    // happens (worst case). Resetting here forces useYjsProvider's
-    // `shouldConnect` guard to skip the WS open until the B-mint
-    // lands.
-    setToken("");
-    setUnavailable(false);
     let cancelled = false;
-    getRealtimeToken(documentName)
+    getRealtimeToken(documentName, sessionId)
       .then((t) => {
         if (!cancelled) {
-          setToken(t);
-          setUnavailable(false);
+          setResult({ identity, token: t, unavailable: false });
         }
       })
       .catch((err) => {
@@ -72,23 +62,25 @@ export function useRealtimeToken(documentName: string): UseRealtimeToken {
         // "Disconnected" UI instead of a stack trace.
         console.error(`[realtime] token mint failed for ${documentName}:`, err);
         if (cancelled) return;
-        setToken("");
         // Specifically mark "unavailable" only on 503 — other failure
         // modes (4xx auth errors, 5xx other, network blips) surface
         // via console error and the disconnect-state UI. The banner
         // copy points specifically at the env-config issue, so a
         // misleading false-positive on a transient network error
         // would be worse than no banner.
-        if (err instanceof RealtimeMintError && err.status === 503) {
-          setUnavailable(true);
-        } else {
-          setUnavailable(false);
-        }
+        setResult({
+          identity,
+          token: "",
+          unavailable: err instanceof RealtimeMintError && err.status === 503,
+        });
       });
     return () => {
       cancelled = true;
     };
-  }, [documentName]);
+  }, [documentName, identity, sessionId]);
 
-  return { token, unavailable };
+  if (!documentName || documentName === "noop" || result.identity !== identity) {
+    return { token: "", unavailable: false };
+  }
+  return { token: result.token, unavailable: result.unavailable };
 }

@@ -5,24 +5,25 @@
  * chain: tests → auth-setup → seed).
  *
  * Contract:
- *  1. Assert HOCUSPOCUS_TOKEN_SECRET is set — fail loudly if missing.
- *  2. Log in as eve@demo.edu (hard-fail if users not seeded).
- *  3. Idempotently ensure a fixture class exists (title starts with "e2e-fixture").
+ *  1. Re-attest the E2E stack (Plan 094 Phase 14) with a FRESH nonce before any
+ *     mutating request — fail closed if the gate did not verify it first.
+ *  2. Assert HOCUSPOCUS_TOKEN_SECRET is set — fail loudly if missing.
+ *  3. Log in as eve@demo.edu (hard-fail if users not seeded).
+ *  4. Idempotently ensure a fixture class exists (title starts with "e2e-fixture").
  *     - If found: reuse classId.
  *     - If not: create via POST /api/classes (uses demo seed courseId + orgId).
- *  4. Idempotently ensure alice@demo.edu is enrolled as student.
+ *  5. Idempotently ensure alice@demo.edu is enrolled as student.
  *     - If not enrolled: get join code, log in as alice, join via API, log back in as eve.
- *  5. Active-session cleanup: end any live session on the fixture class.
- *  6. Idempotently ensure a fixture unit exists (title starts with "e2e-fixture").
- *     - SKIP (log TODO) if not found — unit creation via UI is complex and
- *       not blocking the WS auth tests.
- *  7. Write e2e/.fixture/state.json: { classId, unitId? }.
+ *  6. Active-session cleanup: end any live session on the fixture class.
+ *  7. Resolve a canonical demo chapter for realtime-token tests.
+ *  8. Write e2e/.fixture/state.json: { classId, chapterId }.
  */
 
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { test as setup, expect } from "@playwright/test";
 import { ACCOUNTS, loginWithCredentials, logout } from "./helpers";
+import { assertAttestedE2EStack } from "./helpers/e2e-stack";
 
 // Fixed demo-seed identifiers. Eve's org and the Python-101 course are
 // created by scripts/seed_problem_demo.sql and are stable across re-runs.
@@ -30,8 +31,8 @@ const DEMO_ORG_ID = "d386983b-6da4-4cb8-8057-f2aa70d27c07";
 const DEMO_COURSE_ID = "00000000-0000-0000-0000-0000000aa001";
 
 const FIXTURE_CLASS_PREFIX = "e2e-fixture";
-const FIXTURE_UNIT_PREFIX = "e2e-fixture";
 const FIXTURE_CLASS_TITLE = "e2e-fixture-class";
+const DEMO_CHAPTER_TITLE = "Warm-ups";
 
 const FIXTURE_DIR = path.resolve(__dirname, ".fixture");
 const FIXTURE_STATE_PATH = path.join(FIXTURE_DIR, "state.json");
@@ -62,22 +63,32 @@ interface ActiveSession {
   status: string;
 }
 
-interface UnitItem {
+interface ChapterItem {
   id: string;
   title: string;
 }
 
 setup("seed fixture data", async ({ page }) => {
-  // ── Step 1: Assert HOCUSPOCUS_TOKEN_SECRET ─────────────────────────────────
+  // ── Step 1: Re-attest the stack before ANY mutation ────────────────────────
+  // Must be the first statement: every later step writes to whatever database
+  // this stack is connected to. A fresh nonce and the gate's own instance ids
+  // are required, so a replayed gate answer or a stack restarted since the gate
+  // ran cannot pass. Fails closed when the gate did not run the attestation.
+  const attestation = await assertAttestedE2EStack({ env: process.env });
+  console.log(
+    `[seed] e2e stack attested: ${attestation.baseUrl} (realtime ${attestation.realtimeOrigin ?? "n/a"})`,
+  );
+
+  // ── Step 2: Assert HOCUSPOCUS_TOKEN_SECRET ─────────────────────────────────
   expect(
     process.env.HOCUSPOCUS_TOKEN_SECRET,
     "HOCUSPOCUS_TOKEN_SECRET is not set in the runner environment. " +
       "The e2e suite cannot run without it — set it before running 'bun run test:e2e'.",
   ).toBeTruthy();
 
-  // ── Step 2: Log in as eve@demo.edu ─────────────────────────────────────────
+  // ── Step 3: Log in as eve@demo.edu ─────────────────────────────────────────
   try {
-    await loginWithCredentials(page, ACCOUNTS.teacher.email, ACCOUNTS.teacher.password);
+    await loginWithCredentials(page, ACCOUNTS.teacher.email, ACCOUNTS.teacher.password, "/teacher");
   } catch {
     throw new Error(
       "e2e seed failed: demo.edu users not found. " +
@@ -86,7 +97,7 @@ setup("seed fixture data", async ({ page }) => {
     );
   }
 
-  // ── Step 3: Idempotently ensure fixture class exists ───────────────────────
+  // ── Step 4: Idempotently ensure fixture class exists ───────────────────────
   let classId: string | undefined;
 
   const classesRes = await page.request.get("/api/classes/mine");
@@ -121,7 +132,7 @@ setup("seed fixture data", async ({ page }) => {
     console.log(`[seed] fixture class created: ${classId}`);
   }
 
-  // ── Step 4: Idempotently ensure alice is enrolled ──────────────────────────
+  // ── Step 5: Idempotently ensure alice is enrolled ──────────────────────────
   const membersRes = await page.request.get(`/api/classes/${classId}/members`);
   let aliceEnrolled = false;
   let joinCode: string | undefined;
@@ -148,7 +159,7 @@ setup("seed fixture data", async ({ page }) => {
     // Log out as eve, log in as alice, join the class, log back in as eve
     await logout(page);
     try {
-      await loginWithCredentials(page, ACCOUNTS.student.email, ACCOUNTS.student.password);
+      await loginWithCredentials(page, ACCOUNTS.student.email, ACCOUNTS.student.password, "/student");
     } catch {
       throw new Error(
         "e2e seed failed: could not log in as alice@demo.edu. " +
@@ -173,12 +184,12 @@ setup("seed fixture data", async ({ page }) => {
 
     // Log back in as eve
     await logout(page);
-    await loginWithCredentials(page, ACCOUNTS.teacher.email, ACCOUNTS.teacher.password);
+    await loginWithCredentials(page, ACCOUNTS.teacher.email, ACCOUNTS.teacher.password, "/teacher");
   } else {
     console.log("[seed] alice already enrolled in fixture class");
   }
 
-  // ── Step 5: Active-session cleanup ─────────────────────────────────────────
+  // ── Step 6: Active-session cleanup ─────────────────────────────────────────
   try {
     const activeRes = await page.request.get(`/api/sessions/active/${classId}`);
     if (activeRes.ok()) {
@@ -208,51 +219,34 @@ setup("seed fixture data", async ({ page }) => {
     console.warn(`[seed] WARNING: active-session cleanup failed: ${err}. Proceeding anyway.`);
   }
 
-  // ── Step 6: Idempotently ensure a fixture unit exists ──────────────────────
-  // Query /api/units (which the seed accesses as an authenticated teacher).
-  // The hocuspocus-auth tests use the FIRST available unit from /api/me/units,
-  // which is the same endpoint backed by /api/units. If no e2e-fixture unit
-  // exists, log a TODO and proceed — unit creation requires a published course
-  // + topic linkage that is too complex for this phase. Phase 2 skip-to-fail
-  // conversion will read unitId from the fixture and assert it is defined.
-  let unitId: string | undefined;
+  // ── Step 7: Resolve the canonical demo chapter ────────────────────────────
+  let chapterId: string | undefined;
 
   try {
-    const unitsRes = await page.request.get("/api/units");
-    if (unitsRes.ok()) {
-      const body = (await unitsRes.json()) as
-        | UnitItem[]
-        | { units?: UnitItem[]; items?: UnitItem[] };
-      const unitList = Array.isArray(body)
-        ? body
-        : (body.units ?? body.items ?? []);
-      const existing = unitList.find((u) => u.title.startsWith(FIXTURE_UNIT_PREFIX));
+    const chaptersRes = await page.request.get(
+      `/api/chapters?scope=org&scopeId=${DEMO_ORG_ID}`,
+    );
+    if (chaptersRes.ok()) {
+      const body = (await chaptersRes.json()) as { items?: ChapterItem[] };
+      const existing = body.items?.find((chapter) => chapter.title === DEMO_CHAPTER_TITLE);
       if (existing) {
-        unitId = existing.id;
-        console.log(`[seed] reusing existing fixture unit: ${unitId} (${existing.title})`);
+        chapterId = existing.id;
+        console.log(`[seed] using canonical demo chapter: ${chapterId} (${existing.title})`);
       } else {
-        console.log(
-          "[seed] TODO: no e2e-fixture unit found. Unit creation via the API requires a " +
-            "published course + topic linkage — deferred to a future phase. " +
-            "Phase-2 hocuspocus-auth skip-to-fail conversion will assert unitId is defined " +
-            "once unit seeding is added.",
-        );
+        throw new Error("e2e seed failed: canonical Warm-ups chapter is missing from the demo seed.");
       }
     } else {
-      console.warn(
-        `[seed] WARNING: GET /api/units returned ${unitsRes.status()} — ` +
-          "skipping unit check.",
-      );
+      throw new Error(`e2e seed failed: GET /api/chapters returned ${chaptersRes.status()}.`);
     }
   } catch (err) {
-    console.warn(`[seed] WARNING: unit lookup failed: ${err}. Proceeding.`);
+    throw new Error(`e2e seed failed: canonical chapter lookup failed: ${err}`);
   }
 
-  // ── Step 7: Write state.json ────────────────────────────────────────────────
+  // ── Step 8: Write state.json ────────────────────────────────────────────────
   if (!fs.existsSync(FIXTURE_DIR)) {
     fs.mkdirSync(FIXTURE_DIR, { recursive: true });
   }
-  const state = { classId, ...(unitId ? { unitId } : {}) };
+  const state = { classId, chapterId };
   fs.writeFileSync(FIXTURE_STATE_PATH, JSON.stringify(state, null, 2), "utf-8");
   console.log(`[seed] wrote fixture state to ${FIXTURE_STATE_PATH}:`, state);
 });

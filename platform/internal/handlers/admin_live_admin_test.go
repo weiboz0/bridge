@@ -44,20 +44,18 @@ func makeLiveAdminJWT(t *testing.T, userID string, jwtClaimAdmin bool) string {
 func TestLiveAdmin_DBPromotedUserBypassesStaleNonAdminJWT(t *testing.T) {
 	db := integrationDB(t)
 	ctx := context.Background()
-	users := store.NewUserStore(db)
 
 	// Create a user, then promote them in the DB.
-	user, err := users.RegisterUser(ctx, store.RegisterInput{
+	user := insertFixtureUser(t, db, store.RegisterInput{
 		Name:     "Live Admin Promoted",
 		Email:    "live-admin-promoted@example.test",
 		Password: "testpassword123",
 	})
-	require.NoError(t, err)
 	t.Cleanup(func() {
 		db.ExecContext(ctx, "DELETE FROM auth_providers WHERE user_id = $1", user.ID)
 		db.ExecContext(ctx, "DELETE FROM users WHERE id = $1", user.ID)
 	})
-	_, err = db.ExecContext(ctx, "UPDATE users SET is_platform_admin = true WHERE id = $1", user.ID)
+	_, err := db.ExecContext(ctx, "UPDATE users SET is_platform_admin = true WHERE id = $1", user.ID)
 	require.NoError(t, err)
 
 	// Build the middleware chain with a real DB-backed AdminChecker.
@@ -96,16 +94,14 @@ func TestLiveAdmin_DBPromotedUserBypassesStaleNonAdminJWT(t *testing.T) {
 func TestLiveAdmin_DBDemotedUserGets403DespiteStaleAdminJWT(t *testing.T) {
 	db := integrationDB(t)
 	ctx := context.Background()
-	users := store.NewUserStore(db)
 
 	// Create a user. is_platform_admin defaults to false. The JWT
 	// will claim true (stale grant from before demote).
-	user, err := users.RegisterUser(ctx, store.RegisterInput{
+	user := insertFixtureUser(t, db, store.RegisterInput{
 		Name:     "Live Admin Demoted",
 		Email:    "live-admin-demoted@example.test",
 		Password: "testpassword123",
 	})
-	require.NoError(t, err)
 	t.Cleanup(func() {
 		db.ExecContext(ctx, "DELETE FROM auth_providers WHERE user_id = $1", user.ID)
 		db.ExecContext(ctx, "DELETE FROM users WHERE id = $1", user.ID)

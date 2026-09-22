@@ -40,7 +40,6 @@ func newSessionPageFixture(t *testing.T, suffix string) *sessionPageFixture {
 	ctx := context.Background()
 
 	orgs := store.NewOrgStore(db)
-	users := store.NewUserStore(db)
 	courses := store.NewCourseStore(db)
 	topics := store.NewTopicStore(db)
 	classes := store.NewClassStore(db)
@@ -59,12 +58,11 @@ func newSessionPageFixture(t *testing.T, suffix string) *sessionPageFixture {
 	}
 
 	mkUser := func(label string) *store.RegisteredUser {
-		u, err := users.RegisterUser(ctx, store.RegisterInput{
+		u := insertFixtureUser(t, db, store.RegisterInput{
 			Name:     "User " + label,
 			Email:    label + "@example.com",
 			Password: "testpassword123",
 		})
-		require.NoError(t, err)
 		t.Cleanup(func() {
 			db.ExecContext(ctx, "DELETE FROM session_participants WHERE user_id = $1", u.ID)
 			db.ExecContext(ctx, "DELETE FROM class_memberships WHERE user_id = $1", u.ID)

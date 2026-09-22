@@ -30,7 +30,8 @@ The repo-root `CLAUDE.md` is a thin pointer that `@`-imports this file — **edi
 - **Delegate coding work by DOMAIN, not by complexity.**
   Backend (Go in `platform/`, `server/hocuspocus.ts`) → Codex `gpt-5.6-terra`.
   Frontend (`src/`) → Sonnet 5.
-  All tests → Opus 5.
+  All tests → Opus 5 by default.
+  An explicit user model pin overrides these implementation defaults for the named work.
   Cross-cutting refactors, new patterns, and hard multi-system debugging stay inline on the orchestrator.
   Dispatch table: `docs/coding-agent.md`.
 
@@ -72,9 +73,12 @@ Always pause and surface to the user, regardless of operating mode.
 
   This one is *enforced*, not trusted: `drizzle.config.ts` reads `process.env.DATABASE_URL`,
   so there is no separate test-only migration path and an inherited `DATABASE_URL` silently targets production.
-  `scripts/ci-local.sh` and the CI job refuse to migrate unless `DATABASE_URL` ends in `_test`
-  or resolves to the ephemeral CI service container.
-  Migrating that throwaway container is the one narrow exception.
+  `scripts/check-test-database-url.mjs`, `scripts/tests/test-guards.sh`, and
+  `scripts/ci-local.sh` require a parsed and live-validated `_test` database name before tests run.
+  Migrating that throwaway container is one narrow exception.
+  The other is `scripts/ci-local.sh` reapplying the canonical `scripts/seed_problem_demo.sql` immediately before a full pinned E2E run,
+  only through the parsed and live-validated `_test` `GATE_DATABASE_URL`;
+  running any seed by hand, or against any other target, remains a pause.
 
 - **Auth and tenancy** — `platform/internal/middleware` session verification, org-tenancy scoping,
   Hocuspocus signed tokens, admin impersonation.
@@ -82,9 +86,15 @@ Always pause and surface to the user, regardless of operating mode.
 
 - **Processes and ports** — never kill a process.
   **Never run E2E without a pinned `E2E_BASE_URL`**: `e2e/playwright.config.ts` declares no `webServer`
-  and defaults to `http://localhost:3003`, which on the primary dev machine is a *different* service,
-  while `e2e/seed.setup.ts` creates classes and enrolls users.
+  and refuses to evaluate without one, because the code default port 3003 is a *different* service on the
+  primary dev machine while `e2e/seed.setup.ts` creates classes and enrolls users.
   Bridge's own stack is on `NEXTJS_PORT` / `PLATFORM_PORT` per `.env`.
+  **A pinned URL is not enough: a full gate also requires an attested stack.**
+  `scripts/check-e2e-stack.mjs` holds an advisory lock in the gate's validated `_test` database, and the Go API,
+  Next.js, and Hocuspocus must each observe it through their own pools before the demo seed or Playwright run;
+  `e2e/seed.setup.ts` re-checks before its first write.
+  The user starts the stack, with `BRIDGE_E2E_STACK=1`, as exactly one process per service with live reload off
+  and no load balancing; an attestation failure is a pause, never something to work around.
 
 - **History and remote** — `git push --force`, `reset --hard` on shared history,
   a direct commit to `main`, `git branch -D` with unmerged commits,
@@ -92,11 +102,12 @@ Always pause and surface to the user, regardless of operating mode.
   Autopilot merges with `gh pr merge --squash` only.
 
 - **Process** — file changes outside the plan's `## File scope`,
-  unresolved `[OPEN]` findings at the review round-cap,
+  unresolved `[OPEN]` review findings,
   and a failing `pre-merge-guard.sh` or `ci-local.sh`.
 
 - **Governance docs** — `AGENTS.md`, the `CLAUDE.md` pointer,
-  `docs/{coding-agent,development-workflow,reviewers}.md`, `.githooks/`, and `scripts/ci-local.sh`,
+  `docs/{coding-agent,development-workflow,reviewers}.md`, `.githooks/`,
+  `scripts/check-test-database-url.mjs`, `scripts/check-e2e-stack.mjs`, `scripts/tests/test-guards.sh`, and `scripts/ci-local.sh`,
   unless declared in the plan's `## File scope` at gate time.
   The hook and the gate script are governance: weakening either removes the only pre-merge check Bridge has.
 
@@ -104,6 +115,20 @@ Always pause and surface to the user, regardless of operating mode.
   via `AskUserQuestion`.
   Under autopilot a fork **halts the run**; it does not proceed on a default.
   Mechanical or clear-cut decisions proceed without asking — don't manufacture questions.
+
+## Permanent review-gate contract
+
+Every committed design spec under `docs/specs/**` passes a design-review gate before an implementation plan is drafted or revised from it.
+The design gate has exactly two required reviewers: Codex Sol (`gpt-5.6-sol`, reasoning effort high) and Claude Code (`claude-fable-5`).
+Design reviews are read-only and bind every verdict to the exact substantive commit.
+Both receive read-only prompts and must approve the same exact substantive commit with no open blocker.
+Verdicts and findings are recorded in the spec with `[sol]` and `[fable]` tags; author responses remain `[OPEN]` until the flagging reviewer confirms them.
+
+The design gate, plan-review gate, and code-review gate are uncapped consensus loops with no numeric round cap.
+Consensus requires every required reviewer to return `APPROVE` or `APPROVE WITH NITS` with no open blocker.
+Only flagging reviewers are re-dispatched after a response; a material revision invalidates approval of the prior substantive commit.
+An unavailable required reviewer pauses the gate; the reviewer is never silently substituted, replaced, or waived.
+After every three consecutive non-converged substantive rounds, record and surface a concise checkpoint; repeated reopening or two checkpoints without net blocker reduction becomes a genuine user-decision pause.
 
 ## References
 
@@ -169,7 +194,8 @@ Full tier descriptions, commands, and gating env vars: `docs/testing.md`.
   `tests/llm/*.test.ts` call live provider endpoints and are gated only by the presence of an API key —
   and bun auto-loads `.env`, which carries real keys.
   Never run the full suite against live providers casually;
-  `scripts/ci-local.sh` isolates itself with `bun run --env-file=/dev/null test`.
+  `scripts/ci-local.sh` explicitly exports `ANTHROPIC_API_KEY=`, `OPENAI_API_KEY=`,
+  `GEMINI_API_KEY=`, `DASHSCOPE_API_KEY=`, and `OPENROUTER_API_KEY=` for Vitest.
 
 ## Documentation
 
