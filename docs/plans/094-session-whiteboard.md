@@ -1190,8 +1190,8 @@ R2-12 (REOPENED, second time). `[codex]` `sql.end({timeout:0})` ends the socket 
 **Nice to Have** (`[opus]`, batched here rather than respun)
 
 R2-32. `[FIXED]` A synchronously throwing `close` in the late-disposal handler would escape as an unhandled rejection. → wrapped, above.
-R2-33. `[OPEN]` `lateConnectionIsDisposedAfterAConnectTimeout` relies on wall-clock margins. → Response: accepted; to be polled rather than slept, with the other test polish, before the PR.
-R2-34. `[OPEN]` `updateFloor` still shows a generic error although the settings route now returns usable codes. → Response: accepted; routed through `whiteboardMutationErrorMessage` with the other panel polish, before the PR.
+R2-33. `[FIXED]` `lateConnectionIsDisposedAfterAConnectTimeout` relies on wall-clock margins. → Response: `[FIXED]` The selftest polls for the forced close up to five seconds instead of sleeping a fixed interval.
+R2-34. `[FIXED]` `updateFloor` still shows a generic error although the settings route now returns usable codes. → Response: `[FIXED]` `updateFloor` goes through `whiteboardMutationErrorMessage`; a test covers ended, ending, the whiteboard limit, and a plain 403 keeping the generic text.
 
 ## Post-Execution Report
 
