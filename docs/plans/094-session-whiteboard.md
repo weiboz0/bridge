@@ -1193,6 +1193,16 @@ R2-32. `[FIXED]` A synchronously throwing `close` in the late-disposal handler w
 R2-33. `[FIXED]` `lateConnectionIsDisposedAfterAConnectTimeout` relies on wall-clock margins. → Response: `[FIXED]` The selftest polls for the forced close up to five seconds instead of sleeping a fixed interval.
 R2-34. `[FIXED]` `updateFloor` still shows a generic error although the settings route now returns usable codes. → Response: `[FIXED]` `updateFloor` goes through `whiteboardMutationErrorMessage`; a test covers ended, ending, the whiteboard limit, and a plain 403 keeping the generic text.
 
+### Plan-wide Review 2 — Round 5 and confirmation (2026-09-21) — **CONSENSUS at `ddb17f3`**
+
+- **Round 5** (`[codex]` only, on `0ae45f0`): APPROVE, R2-12 RESOLVED, no findings; TLS is not bypassed by the socket factory, and the `SET LOCAL` bound is valid and cannot pre-empt the client-side deadlines.
+- **Confirmation on the same exact commit `ddb17f3`** (HEAD after the two nit fixes): `[codex]` APPROVE; `[glm]` APPROVE (the server-side bound is internal and needs no operator doc line); `[opus]` APPROVE WITH NITS (all three of its nits RESOLVED; verified postgres-js skips its own connect when given a socket and that `destroy()` tears down a TLS-upgraded connection too); `[claude-self]` APPROVE.
+- Every required reviewer approves the same exact commit with no open blocker: **the code-review gate passes at `ddb17f3`.**
+- `[opus]` confirmation nits, non-blocking and needing no re-review: (1) the black-holed-handshake test confirms the end state but does not isolate the new `destroy()` from postgres-js's own connect-timeout destroy; (2) the trailing `destroy()` in the non-forced close path means the forced-close test cannot distinguish destroy-before-`sql.end` from destroy-after — the `SET LOCAL` bound is the real guard there; (3) a reused nonce could let a stranded lock block a test. (3) is fixed in `6f381d1`; (1) and (2) are recorded as-is: the tests pin the guaranteed end state, which is the property that matters, and the plan says so rather than claiming more.
+- R2-1 remains `[OPEN]` for one reason only: the attestation has never run against a live stack.
+
+**Final tally of Plan-wide Review 2:** 34 findings over five rounds; 30 `[FIXED]`, 3 `[WONTFIX]` accepted by the flagging reviewers (R2-11, R2-24, R2-31), 1 `[OPEN]` (R2-1, pending the live run).
+
 ## Post-Execution Report
 
 _Plan-wide report pending later phases._
