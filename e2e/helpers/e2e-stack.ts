@@ -8,127 +8,135 @@
  * the gate's answer, so the seed re-runs the SAME verifier with a FRESH nonce and
  * its own lock before its first mutating request.
  *
- * The logic lives here rather than in `seed.setup.ts` so it is unit-testable
- * without Playwright: everything observable (`env`, `verify`, `report`) is
- * injected. Importing this module — and the verifier it wraps — performs no work
- * and opens no connection.
+ * The verifier (`scripts/check-e2e-stack.mjs`) is run as a SUBPROCESS, not
+ * imported: it is an ESM module that uses Node built-ins, and Playwright's TS
+ * transform mishandles importing a `.mjs` into its graph (`exports is not
+ * defined` / require-of-ESM). Running it out of process is also how
+ * `ci-local.sh` invokes it, so there is exactly one attestation code path.
+ *
+ * The CLI mints its own fresh nonce and, because the gate exported the
+ * per-process instance ids into this child's environment, enforces that the same
+ * three processes answer (see `main()` in the verifier). Everything observable
+ * here (`env`, `run`) is injected so the fail-closed logic is unit-testable
+ * without spawning anything.
  */
 
-import {
-  INSTANCE_ENV,
-  expectedInstancesFromEnv as expectedInstancesFromEnvImpl,
-  formatReport as formatReportImpl,
-  verifyE2EStack as verifyE2EStackImpl,
-} from "../../scripts/check-e2e-stack.mjs";
+import { execFile } from "node:child_process";
+import * as path from "node:path";
 
-/** One per-service failure recorded by the verifier (`{service, class}`). */
-export interface E2EStackFailure {
-  service: string;
-  class: string;
-}
-
-/** The verifier's result shape (`scripts/check-e2e-stack.mjs`). */
-export interface E2EStackResult {
-  ok: boolean;
-  baseUrl: string;
-  realtimeOrigin: string | null;
-  instances: Record<string, string>;
-  failures: E2EStackFailure[];
-}
-
-/**
- * The exact argument object the seed hands the verifier. `nonce` is deliberately
- * absent: the verifier must mint a fresh one per call, and the seed must never
- * inherit the gate's nonce through the environment.
- */
-export interface VerifyE2EStackArgs {
-  baseUrl: string;
-  databaseUrl: string;
-  expectedInstances: Record<string, string>;
-}
-
-export type VerifyE2EStack = (args: VerifyE2EStackArgs) => Promise<E2EStackResult>;
+// Mirrors INSTANCE_ENV in scripts/check-e2e-stack.mjs. Duplicated as three
+// literals rather than imported, because importing that module into Playwright's
+// graph fails; the verifier's own tests pin these names.
+const INSTANCE_VARS = [
+  "E2E_STACK_INSTANCE_GO",
+  "E2E_STACK_INSTANCE_NEXT",
+  "E2E_STACK_INSTANCE_HOCUSPOCUS",
+] as const;
 
 export type EnvLike = Record<string, string | undefined>;
 
-export interface AssertAttestedE2EStackDeps {
-  env?: EnvLike;
-  verify?: VerifyE2EStack;
-  report?: (result: E2EStackResult) => string[];
+/** The outcome of running the verifier subprocess. */
+export interface VerifierRun {
+  code: number;
+  stdout: string;
+  stderr: string;
 }
 
-const verifyE2EStack = verifyE2EStackImpl as unknown as VerifyE2EStack;
-const formatReport = formatReportImpl as unknown as (result: E2EStackResult) => string[];
-const expectedInstancesFromEnv = expectedInstancesFromEnvImpl as unknown as (
-  env: EnvLike,
-) => Record<string, string> | undefined;
+/** Runs the verifier CLI with the given environment; resolves with its exit code and output. */
+export type RunVerifier = (scriptPath: string, env: EnvLike) => Promise<VerifierRun>;
 
-const INSTANCE_VARS = [INSTANCE_ENV.go, INSTANCE_ENV.next, INSTANCE_ENV.hocuspocus] as string[];
+export interface AssertAttestedE2EStackDeps {
+  env?: EnvLike;
+  run?: RunVerifier;
+  scriptPath?: string;
+}
 
-const REFUSAL_PREFIX =
-  "e2e seed refuses to write without an attested stack";
+/** What the seed logs on success. */
+export interface E2EStackAttestation {
+  ok: true;
+  baseUrl: string;
+  realtimeOrigin: string | null;
+}
+
+const REFUSAL_PREFIX = "e2e seed refuses to write without an attested stack";
 const REMEDIATION =
   "Run the E2E tier through `bash scripts/ci-local.sh`, which verifies the running stack " +
   "against its validated _test database and exports these variables into the Playwright child. " +
   "See docs/testing.md.";
 
-/** Postgres client errors can embed the whole connection string; never re-throw one that does. */
-function safeCauseLine(error: unknown): string {
-  if (!(error instanceof Error)) return "";
-  if (/postgres(ql)?:\/\//i.test(error.message)) return "";
-  return error.message;
+/** Postgres client errors can embed the whole connection string; never surface one that does. */
+function scrub(text: string): string {
+  return text
+    .split("\n")
+    .filter((line) => !/postgres(ql)?:\/\//i.test(line))
+    .join("\n")
+    .trim();
 }
 
+function parseLine(stdout: string, prefix: string): string | null {
+  const line = stdout.split("\n").find((l) => l.startsWith(prefix));
+  return line ? line.slice(prefix.length).trim() : null;
+}
+
+const defaultRun: RunVerifier = (scriptPath, env) =>
+  new Promise((resolve) => {
+    execFile(
+      process.execPath,
+      [scriptPath],
+      { env: env as NodeJS.ProcessEnv, timeout: 60_000, maxBuffer: 1024 * 1024 },
+      (error, stdout, stderr) => {
+        const code = error && typeof error.code === "number" ? error.code : error ? 1 : 0;
+        resolve({ code, stdout: stdout ?? "", stderr: stderr ?? "" });
+      },
+    );
+  });
+
 /**
- * Re-verifies the E2E stack with a fresh nonce and throws unless every service
- * attested. Fails CLOSED: a missing `E2E_BASE_URL`, a missing `DATABASE_URL`, or
- * missing gate-exported instance ids all refuse rather than skip the check.
- *
- * The thrown message carries the per-service failure class and its remediation
- * line, and never the database URL.
+ * Re-verifies the E2E stack with a fresh nonce (via the verifier subprocess) and
+ * throws unless every service attests and matches the gate's instance ids. Fails
+ * CLOSED: a missing `E2E_BASE_URL`, a missing `DATABASE_URL`, or missing
+ * gate-exported instance ids all refuse rather than skip the check. The thrown
+ * message carries the verifier's per-service failure lines and never the URL.
  */
 export async function assertAttestedE2EStack({
   env = process.env,
-  verify = verifyE2EStack,
-  report = formatReport,
-}: AssertAttestedE2EStackDeps = {}): Promise<E2EStackResult> {
+  run = defaultRun,
+  scriptPath = path.resolve(process.cwd(), "scripts/check-e2e-stack.mjs"),
+}: AssertAttestedE2EStackDeps = {}): Promise<E2EStackAttestation> {
   const baseUrl = env.E2E_BASE_URL;
   const databaseUrl = env.DATABASE_URL;
-  const expectedInstances = expectedInstancesFromEnv(env);
 
   const missing: string[] = [];
   if (!baseUrl) missing.push("E2E_BASE_URL");
   if (!databaseUrl) missing.push("DATABASE_URL");
-  if (!expectedInstances) {
-    // R2-23: name only the variables actually missing or empty. Listing all
-    // three sent the reader looking for two variables that were already set.
-    const blank = INSTANCE_VARS.filter((variable) => !env[variable]);
-    // Still fails CLOSED: if the verifier rejected the set without any single
-    // variable being empty, name the whole set rather than nothing.
-    missing.push(...(blank.length > 0 ? blank : INSTANCE_VARS));
+  // Name only the instance vars actually missing/empty (R2-23).
+  for (const v of INSTANCE_VARS) if (!env[v]) missing.push(v);
+
+  if (missing.length > 0) {
+    throw new Error(`${REFUSAL_PREFIX}: missing ${missing.join(", ")}. ${REMEDIATION}`);
   }
 
-  if (!baseUrl || !databaseUrl || !expectedInstances) {
-    throw new Error(
-      `${REFUSAL_PREFIX}: missing ${missing.join(", ")}. ${REMEDIATION}`,
-    );
-  }
+  // The verifier reads its target database from CHECK_E2E_STACK_DATABASE_URL and
+  // mints its own fresh nonce. The gate-exported E2E_STACK_INSTANCE_* pass
+  // through so the CLI enforces the same three processes answered.
+  const childEnv: EnvLike = { ...env, CHECK_E2E_STACK_DATABASE_URL: databaseUrl };
 
-  let result: E2EStackResult;
+  let outcome: VerifierRun;
   try {
-    // No `nonce` key: the verifier mints a fresh one, so a cached or replayed
-    // gate answer cannot satisfy this re-check.
-    result = await verify({ baseUrl, databaseUrl, expectedInstances });
+    outcome = await run(scriptPath, childEnv);
   } catch (error) {
-    const cause = safeCauseLine(error);
-    throw new Error(
-      `${REFUSAL_PREFIX}: the attestation could not run.${cause ? ` ${cause}` : ""} ${REMEDIATION}`,
-    );
+    const cause = scrub(error instanceof Error ? error.message : String(error));
+    throw new Error(`${REFUSAL_PREFIX}: the attestation could not run.${cause ? ` ${cause}` : ""} ${REMEDIATION}`);
   }
 
-  if (!result.ok) {
-    throw new Error([`${REFUSAL_PREFIX}.`, ...report(result), REMEDIATION].join("\n"));
+  if (outcome.code !== 0) {
+    const detail = scrub(`${outcome.stdout}\n${outcome.stderr}`);
+    throw new Error([`${REFUSAL_PREFIX}.`, detail, REMEDIATION].filter(Boolean).join("\n"));
   }
 
-  return result;
+  return {
+    ok: true,
+    baseUrl: parseLine(outcome.stdout, "E2E stack target:") ?? (baseUrl as string),
+    realtimeOrigin: parseLine(outcome.stdout, "E2E realtime origin:"),
+  };
 }

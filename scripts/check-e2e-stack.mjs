@@ -503,9 +503,15 @@ async function main() {
     console.error("check-e2e-stack: E2E_BASE_URL and CHECK_E2E_STACK_DATABASE_URL are required");
     return 2;
   }
+  // When the gate has already attested and exported the per-process instance
+  // ids (E2E_STACK_INSTANCE_*), enforce them here too: a re-run (e.g. from
+  // e2e/seed.setup.ts) then fails closed if any service was restarted between
+  // the gate's check and this one. Absent (the gate's own first run), this is
+  // undefined and the instance check is skipped.
+  const expectedInstances = expectedInstancesFromEnv(process.env);
   let result;
   try {
-    result = await verifyE2EStack({ baseUrl, databaseUrl });
+    result = await verifyE2EStack({ baseUrl, databaseUrl, expectedInstances });
   } catch (error) {
     // Never echo the database URL: postgres errors can embed it.
     console.error(`check-e2e-stack: ${error?.code ?? error?.name ?? "error"}: verification could not run`);
@@ -519,5 +525,16 @@ async function main() {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  process.exitCode = await main();
+  // No top-level await: this module is imported by e2e/seed.setup.ts, which
+  // Playwright loads via require(), and Node refuses to require() an ESM graph
+  // that contains a top-level await. Set the exit code from the promise instead.
+  main().then(
+    (code) => {
+      process.exitCode = code;
+    },
+    (error) => {
+      console.error(`check-e2e-stack: ${error?.message ?? error}`);
+      process.exitCode = 1;
+    },
+  );
 }
