@@ -1,7 +1,7 @@
 # Plan 094 — Excalidraw whiteboards in live sessions
 
 **Branch:** `feat/094-session-whiteboard`
-**Status:** Phases 1a through 12 and Phase 14 (E2E stack attestation) are implemented; Phase 13 (closing) is in progress. Remaining: code-review consensus (Round 1 on `8ce0a6e` requested changes; nine of ten findings fixed, R2-1 open until the attestation has run against a live stack), the full pinned-E2E gate on the merge commit, and the plan-wide report.
+**Status:** COMPLETE pending final re-attest + PR. All phases (1a–14) implemented; code-review consensus reached at `df42ea8` (Codex, GLM, independent Opus, self — no open blocker); the full pinned-E2E gate passed green on `b352fd0` with a valid attestation (`e2e:true`), closing R2-1. Remaining is mechanical: re-attest the final shipping commit, `pre-merge-guard.sh`, PR, squash-merge.
 Earlier status, kept for history: Phases 1a through 6 are complete.
 Spec 013 passed its exact-commit Sol + Fable 5 design gate; the user approved the remediation scope widening on 2026-08-11.
 The Spec 013 remediation plan gate reached consensus at exact substantive commit `fdaf90af2a6c9500396ced27f2ca0df4be780645`.
@@ -1226,9 +1226,35 @@ R2-1. `[FIXED]` The gate now proves the running stack uses the test database, ex
 
 These are the only code changes since the `4c785ec` consensus (R2-36 in `445f2cf`, R2-37 in `b352fd0`), both test/harness-scoped and in File scope; a final Tier-A code-review pass on `b352fd0` re-confirms them before merge.
 
+**Final code-review consensus (2026-09-22) — `df42ea8`:** `[codex]` APPROVE, `[glm]` APPROVE WITH NITS, `[opus]` APPROVE WITH NITS, `[claude-self]` APPROVE — no Must/Should Fix. The single nit (a stale rationale comment in `check-e2e-stack.mjs`) is folded in the shipping commit. This is the whole-plan code-review consensus; every `[OPEN]` finding across Plan-wide Review 1 and 2 is resolved or accepted-`[WONTFIX]`.
+
 ## Post-Execution Report
 
-_Plan-wide report pending later phases._
+### Plan-wide report (2026-09-22)
+
+**Shipped.** Excalidraw whiteboards in live sessions, synced over the existing Yjs/Hocuspocus plumbing, with an ownership + visibility-floor model, persistence, and a read-only archive after a session ends. Phases 1a–14:
+- 1a–3: canvas schema/store, handlers, realtime mint + JWT `readOnly` claim, and the Excalidraw surface with a custom onChange↔Y.Map binding (y-excalidraw failed its vetting gate).
+- 4/12: named integration tests (mint matrix, creator/settings authorization, ended-archive, cross-org isolation, lifecycle, realtime, persistence).
+- 5–7: startup schema probe, local-gate test infrastructure, and the permanent consensus review-gate governance.
+- 8–11: durable session-end lifecycle — operation-owned freeze lease, advisory-lock ordering, confirmed vs degraded end, replacement-session ends, the Hocuspocus fence/admission/capture and control listener, and the teacher floor control.
+- 13: documentation, cross-phase verification, and the E2E-gate remediation.
+- 14: the E2E stack attestation that proves the running stack is on the `_test` database before Playwright mutates anything.
+
+**Review + gate evidence.** Design gate (Spec 013) passed Sol + Fable. Plan-review gate passed Tier-A. Code review ran as an uncapped consensus loop: Plan-wide Review 2 logged 34 findings over its rounds — 30 `[FIXED]`, 3 `[WONTFIX]` accepted by the flagging reviewer (R2-11 canvas-existence oracle, R2-24 duplicate participant read, R2-31 snapshot-count log detail), and R2-1 fixed by Phase 14 and proven live. Two findings reopened once each (R2-12 verifier deadlines; the second reopening was a recorded user decision) and were closed. The full `bash scripts/ci-local.sh` passed green on `b352fd0` against a user-started stack: lint ratchet, type-check, all guards (140 selftests), Vitest (976), the Bun realtime/attestation suites, all Go packages, the E2E stack attestation, the demo-seed restore, and Playwright (95 passed, 6 skipped, 0 failed).
+
+**Deviations from plan.**
+- The attestation design was rewritten twice under review before implementation: from a `system_identifier` fingerprint to a gate-held advisory lock (a clone/standby cannot show it), and to attest each service on the origin E2E traffic actually uses. Both improved on the original plan text.
+- Three defects were surfaced only by the first real live-stack run (what R2-1 exists to force): an ESM/Playwright import incompatibility in the seed re-check (fixed by running the verifier as a subprocess), stale E2E locators in previously-repaired specs, and an `E2E_BASE_URL` that had to be the app's real origin (`:3100`, the nginx front) rather than the direct Next port.
+
+**Known limitations (accepted MVP, per Decisions and Spec 013).**
+- An owner cannot tighten an accidental share; a departed live viewer keeps a read token until its ~25-min TTL; the host has no per-canvas takedown (the floor is the lever). No administrator/impersonator bypass for private canvases (deliberate).
+- The custom binding is single-writer whole-scene last-writer-wins; two tabs of the same owner clobber rather than merge.
+- Realtime is a single Hocuspocus process; the freeze fence and memory ledgers are in-process, so the realtime tier does not horizontally scale without a new decision.
+- The E2E attestation supports a single-instance stack only; load-balanced or mid-run-restarted stacks are unsupported and fail closed.
+
+**Follow-ups (not blockers).**
+- `deploy/nginx/bridge.conf` comment says Hocuspocus "ignores the /hocuspocus path"; true for the Yjs websocket, but the new HTTP `/e2e-stack` endpoint is path-sensitive. Reword when that file is next touched (it is outside this plan's File scope).
+- The portal E2E nav locators rely on no substring collision within each `aside`; a future "My Courses"-style label would need `exact`/regex.
 
 ### Phase 1a — schema and store (2026-08-07)
 

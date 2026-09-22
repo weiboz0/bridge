@@ -14,7 +14,8 @@
 // by Go, Bun, Vitest, and scripts/tests/test-guards.sh.
 //
 // Import-safe: importing this module does no work and opens no connection.
-// e2e/seed.setup.ts imports verifyE2EStack() for its own fresh-nonce re-check.
+// e2e/helpers/e2e-stack.ts runs it as a subprocess for the seed's fresh-nonce
+// re-check; scripts/tests/check-e2e-stack.live.test.mjs imports its helpers.
 
 import { createHash, randomBytes } from "node:crypto";
 import net from "node:net";
@@ -525,9 +526,10 @@ async function main() {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  // No top-level await: this module is imported by e2e/seed.setup.ts, which
-  // Playwright loads via require(), and Node refuses to require() an ESM graph
-  // that contains a top-level await. Set the exit code from the promise instead.
+  // No top-level await: e2e/helpers/e2e-stack.ts runs this file as a subprocess
+  // and scripts/tests/check-e2e-stack.live.test.mjs imports it under Node, so it
+  // must stay a plain ESM module with no top-level await (Node refuses to
+  // require() an ESM graph that has one). Set the exit code from the promise.
   main().then(
     (code) => {
       process.exitCode = code;

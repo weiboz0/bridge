@@ -95,6 +95,7 @@ collections. Don't strip defensive logic in the name of YAGNI.
 The documented defaults (3003 / 8002) are **not** what the primary dev machine runs — other services
 occupy those ports there. Never assume; read `.env`.
 This is why E2E requires a pinned `E2E_BASE_URL` (`docs/testing.md`).
+A full E2E gate additionally requires an **attested single-instance stack** (Plan 094 Phase 14): `scripts/check-e2e-stack.mjs` holds an advisory lock in the validated `_test` database and the Go API, Next.js, and Hocuspocus must each observe it through their own pools before the seed or Playwright run, so a stack pointed at another database fails closed rather than being mutated.
 
 A pinned URL names a stack; it does not prove which database that stack writes to.
 The gate therefore requires every database-holding service to observe, through its own pool, a transaction-scoped advisory lock the gate holds in its validated `_test` database, on the origin E2E traffic actually uses.
