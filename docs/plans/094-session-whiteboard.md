@@ -1179,6 +1179,20 @@ R2-29. `[FIXED]` `[opus]` Go's `strings.TrimSpace` and JavaScript's `trim()` dis
 R2-30. `[FIXED]` `[opus]` `tests/unit/e2e-stack-route.test.ts` holds evaluations on live 2-second timers across two further round-trips, a flake window on a loaded machine. → Response: `[FIXED]` The route test runs under fake timers restored in `finally` and never advances past the timeout, so no assertion depends on wall-clock time.
 R2-31. `[WONTFIX]` `[glm]` `snapshot_count_mismatch` could log expected and actual counts. → Response: `[WONTFIX]` The sentinel carries neither; plumbing counts through the store's error for a log line is out of proportion, and the category already routes the investigation to the bundle-versus-session mismatch.
 
+### Plan-wide Review 2 — Round 4 (2026-09-21) — exact commit `5688cd7`
+
+- **Verdicts:** `[glm]` APPROVE (no nits; every remediation entry and the failure-class list verified against code); `[opus]` APPROVE WITH NITS (no Must Fix or Should Fix; R2-12 RESOLVED from its slot, R2-25 through R2-28 RESOLVED, no weakened assertion found, the held-slot consequence accepted — “No ceiling needed”); `[codex]` CHANGES REQUESTED with **R2-12 REOPENED a second time** as its only item, R2-25 RESOLVED, nothing else new; `[claude-self]` APPROVE.
+- **User-decision pause.** A finding reopening twice after claimed resolutions is a genuine user decision under `docs/reviewers.md`. The orchestrator verified `[codex]`'s claim in the installed driver — postgres-js 3.4.9 `end()` sends a graceful FIN via `socket.end()`, not `destroy()`, so a server that black-holes after the lock is taken can leave the half-open socket and the transaction lock alive until TCP cleanup — and put four options to the user. The user chose to fix it properly, both halves.
+
+R2-12 (REOPENED, second time). `[codex]` `sql.end({timeout:0})` ends the socket gracefully; if rollback stalls after lock acquisition the verifier can return while the half-open socket and lock survive until remote or TCP cleanup. Direction given: capture and destroy the raw socket on forced close, or install a server-side transaction deadline before taking the lock; test with a real socket that never completes shutdown.
+   → Response: `[FIXED]` Both. The verifier hands postgres-js a one-shot socket factory — the pattern `scripts/check-test-database-url.mjs` already uses — keeps the raw socket, and `destroy()`s it on every forced close and on a failed handshake, so the RST ends the backend and its transaction lock regardless of what the graceful FIN would have done. Independently, `BEGIN` now runs `SET LOCAL idle_in_transaction_session_timeout = 30000` before the lock, so PostgreSQL ends an abandoned transaction on its own even if the client machine vanishes. Live regressions against the real `_test` database: the bound reads back as `30s`; a black-holed TCP server that never completes the handshake leaves a destroyed socket, not a half-open one; a forced close of an established lock-holding connection destroys its socket and the observer sees the server drop the lock. The late-disposal handler was also wrapped so a synchronously throwing `close` can never become an unhandled rejection (`[opus]` nit).
+
+**Nice to Have** (`[opus]`, batched here rather than respun)
+
+R2-32. `[FIXED]` A synchronously throwing `close` in the late-disposal handler would escape as an unhandled rejection. → wrapped, above.
+R2-33. `[OPEN]` `lateConnectionIsDisposedAfterAConnectTimeout` relies on wall-clock margins. → Response: accepted; to be polled rather than slept, with the other test polish, before the PR.
+R2-34. `[OPEN]` `updateFloor` still shows a generic error although the settings route now returns usable codes. → Response: accepted; routed through `whiteboardMutationErrorMessage` with the other panel polish, before the PR.
+
 ## Post-Execution Report
 
 _Plan-wide report pending later phases._
