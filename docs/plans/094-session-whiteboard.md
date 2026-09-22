@@ -1203,6 +1203,15 @@ R2-34. `[FIXED]` `updateFloor` still shows a generic error although the settings
 
 **Final tally of Plan-wide Review 2:** 34 findings over five rounds; 30 `[FIXED]`, 3 `[WONTFIX]` accepted by the flagging reviewers (R2-11, R2-24, R2-31), 1 `[OPEN]` (R2-1, pending the live run).
 
+### Plan-wide Review 2 — live bring-up finding (2026-09-22) — consensus at `ddb17f3` INVALIDATED
+
+While bringing up a real stack to run the pinned E2E gate, the attestation preflight failed on Hocuspocus only (Go and Next attested — flag on, both on `bridge_test`, both saw the gate lock). Root cause is a genuine gap I introduced in Phase 14, missed by all four reviewers:
+
+R2-35. `[FIXED]` The E2E-stack attestation could not reach Hocuspocus behind a **path-prefix reverse proxy**. The dev/tunnel topology in `deploy/nginx/bridge.conf` mounts Hocuspocus under `/hocuspocus` on a single exposed port (3100), so `NEXT_PUBLIC_HOCUSPOCUS_URL` is `ws://host:3100/hocuspocus`. `realtimeOriginFrom()` dropped the path and probed the origin root `/e2e-stack`, which nginx routes to Next, not Hocuspocus; and `server/e2e-stack.ts` matched the request path with `=== "/e2e-stack"`, so even a path-preserving probe would have missed `/hocuspocus/e2e-stack`. The single-port proxy is a first-class supported setup (checked into the repo), and its own comment notes Hocuspocus "ignores the path" — true for the Yjs websocket, but the new HTTP `/e2e-stack` endpoint I added is path-sensitive.
+   → Response: `[FIXED]` The user chose to fix it in scope (over a follow-up plan or an nginx-only workaround). `realtimeOriginFrom()` now preserves the base path (`ws://host:3100/hocuspocus` → `http://host:3100/hocuspocus`), so Hocuspocus is probed at `<base>/e2e-stack`; `server/e2e-stack.ts` matches any pathname ending in `/e2e-stack` (a segment boundary, so `/xe2e-stack` does not match). This makes the checked-in `deploy/nginx/bridge.conf` single-port topology attest with no nginx or `.env` change. The shared contract gained `realtimeUrlHandling`; `docs/testing.md` documents it; tests cover the base-path probe, the exact-root case, and the segment-boundary non-matches. Both files are within the Phase 14 File scope, so no scope widening.
+
+This is a **material revision to attestation behaviour**, so the `ddb17f3` code-review consensus is invalidated and the Tier-A code-review gate re-runs on the new commit before merge. R2-1 remains `[OPEN]` (the attestation still has not completed a run against a live stack — this fix is a precondition for that run on this machine).
+
 ## Post-Execution Report
 
 _Plan-wide report pending later phases._
