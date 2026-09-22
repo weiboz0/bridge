@@ -1214,6 +1214,18 @@ This is a **material revision to attestation behaviour**, so the `ddb17f3` code-
 
 **Re-review consensus (2026-09-22) — `4c785ec`:** `[codex]` APPROVE (no findings), `[opus]` APPROVE (no findings; verified the URL edge cases, the segment-boundary matcher behind the flag/lock/`_test` gates, and that the tests fail against the old matcher), `[glm]` APPROVE (one non-blocking nit: the `deploy/nginx/bridge.conf:31-32` comment that Hocuspocus "ignores the /hocuspocus path" is now stale for the HTTP attestation endpoint — that file is outside Phase 14 File scope, left for a later docs touch), `[claude-self]` APPROVE. Code-review consensus re-established at `4c785ec`; R2-1 still `[OPEN]` pending the live-stack run.
 
+### Plan-wide Review 2 — live E2E bring-up (2026-09-22) — code-review consensus at `4c785ec` carried forward
+
+Running the full pinned gate against a user-started stack — the step R2-1 always required — surfaced three issues no prior tier could, then closed R2-1:
+
+R2-36. `[FIXED]` Playwright could not load `e2e/seed.setup.ts`: it imported `e2e/helpers/e2e-stack.ts`, which statically imported `scripts/check-e2e-stack.mjs`. Node refuses to `require()` an ESM graph with a top-level await, and Playwright's TS transform then mangled the `.mjs` (`exports is not defined`). The unit test had mocked the verifier, so only a real E2E run exposed it. Fix (`445f2cf`): the verifier's CLI guard no longer uses top-level await, and the seed helper runs the verifier as a **subprocess** (`node scripts/check-e2e-stack.mjs`) — the same way `ci-local.sh` invokes it, one code path — with the gate-exported `E2E_STACK_INSTANCE_*` enforced by the verifier's `main()`. The seed helper stays fail-closed and never surfaces the database URL; the unit test was rewritten to inject the subprocess runner.
+
+R2-37. `[FIXED]` Seven E2E specs the earlier session repaired but never ran failed on first live execution: the portal nav locators used `exact: true`, but the links' accessible names carry an emoji icon prefix (`"📖 Courses"`), and the past-session check matched the bare word "students", which also appears in hidden roster spans. Fix (`b352fd0`): portal nav locators are scoped to the `aside` without `exact`, and the past-session entry is matched by its link name; verified with a targeted 14-test run and then the full gate.
+
+R2-1. `[FIXED]` The gate now proves the running stack uses the test database, exercised end to end: `bash scripts/ci-local.sh` on `b352fd0` ran the attestation (all three services observed the gate's advisory lock in `bridge_test`, over the single-port `3100/hocuspocus` proxy), restored the demo seed, and ran Playwright — 95 passed, 6 skipped (the failure-injection whiteboard test and other environment-guarded cases), 0 failed. The attestation names `b352fd0`, `tree_dirty:false`, `fast:false`, `e2e:true`. `E2E_BASE_URL` was the app's real origin `http://localhost:3100`; an earlier attempt at `:3101` failed only because the app's absolute/auth URLs use `3100`.
+
+These are the only code changes since the `4c785ec` consensus (R2-36 in `445f2cf`, R2-37 in `b352fd0`), both test/harness-scoped and in File scope; a final Tier-A code-review pass on `b352fd0` re-confirms them before merge.
+
 ## Post-Execution Report
 
 _Plan-wide report pending later phases._
