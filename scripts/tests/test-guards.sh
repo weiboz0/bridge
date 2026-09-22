@@ -576,8 +576,12 @@ const scenarios = {
     if (result.ok || result.failures.map((f) => `${f.service}:${f.class}`).join("|") !== "gate:database timeout") fail("a connect timeout must fail closed as gate:database timeout");
     if (conn.trace.includes("connected")) fail("test invalid: the connection arrived before the deadline");
     // The handshake completes later; the verifier must dispose of that
-    // connection instead of leaving a reserved socket open.
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    // connection instead of leaving a reserved socket open. Poll rather than
+    // sleep a fixed interval, so a loaded machine cannot fail this spuriously.
+    const until = Date.now() + 5_000;
+    while (Date.now() < until && conn.trace.join(",") !== "connected,close:force") {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
     if (conn.trace.join(",") !== "connected,close:force") fail(`a late connection must be force-closed and nothing else, trace=${conn.trace}`);
   },
   async hungForcedCloseDoesNotDiscardTheResult() {

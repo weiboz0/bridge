@@ -232,9 +232,9 @@ export function WhiteboardPanel({
 
   const updateFloor = async (nextFloor: CanvasFloor) => {
     const requestSessionId = sessionId;
-    const publishPatchError = () => {
+    const publishPatchError = (message = "Unable to update the canvas floor") => {
       setSettings((current) => current.sessionId === requestSessionId
-        ? { ...current, error: "Unable to update the canvas floor" }
+        ? { ...current, error: message }
         : current);
     };
     try {
@@ -244,7 +244,9 @@ export function WhiteboardPanel({
         body: JSON.stringify({ canvasFloor: nextFloor }),
       });
       if (!response.ok) {
-        publishPatchError();
+        // The settings route answers an ending or ended session with the same
+        // stable codes as the canvas mutations; say so instead of "unable".
+        publishPatchError(await whiteboardMutationErrorMessage(response, "Unable to update the canvas floor"));
         return;
       }
       const parsed = parseCanvasFloorPatch(await response.json());

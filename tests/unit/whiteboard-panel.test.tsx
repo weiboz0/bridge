@@ -83,6 +83,29 @@ describe("WhiteboardPanel — plan 094 phase 9 settings cutover", () => {
     ));
   });
 
+  it("explains a floor change that races the end of the session, and stays generic otherwise", async () => {
+    const cases: Array<{ body: Response; expected: string }> = [
+      { body: json({ error: "Session has ended", code: "session_ended" }, 409), expected: "This session has ended, so whiteboards can no longer be changed." },
+      { body: json({ error: "Session end in progress", code: "session_end_in_progress" }, 409), expected: "This session is ending, so whiteboards can no longer be changed." },
+      { body: json({ error: "Not authorized" }, 403), expected: "Unable to update the canvas floor" },
+      { body: json({ error: "Session canvas cap reached", code: "canvas_cap_reached" }, 409), expected: "This session has reached its whiteboard limit." },
+    ];
+    for (const { body, expected } of cases) {
+      const fetchMock = vi.mocked(fetch);
+      fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = requestURL(input);
+        if (url.endsWith("/canvases")) return Promise.resolve(json({ items: [] }));
+        if (url.endsWith("/canvas-settings") && init?.method === "PATCH") return Promise.resolve(body);
+        if (url.endsWith("/canvas-settings")) return Promise.resolve(json({ canvasFloor: "host" }));
+        throw new Error(`unexpected endpoint ${url}`);
+      });
+      const view = render(<WhiteboardPanel sessionId={SESSION_ID} teacherControls />);
+      fireEvent.change(await screen.findByLabelText("Canvas floor"), { target: { value: "participants" } });
+      expect(await screen.findByRole("alert")).toHaveTextContent(expected);
+      view.unmount();
+    }
+  });
+
   it("does not show teacher settings controls when archive or nonteacher settings receives 403", async () => {
     const fetchMock = vi.mocked(fetch);
     fetchMock.mockImplementation((input: RequestInfo | URL) => {
