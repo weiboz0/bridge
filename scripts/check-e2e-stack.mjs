@@ -17,6 +17,7 @@
 // e2e/seed.setup.ts imports verifyE2EStack() for its own fresh-nonce re-check.
 
 import { createHash, randomBytes } from "node:crypto";
+import net from "node:net";
 import { pathToFileURL } from "node:url";
 
 export const E2E_STACK_LOCK_CLASS = 0x42523245;
@@ -40,6 +41,10 @@ const DEFAULT_HOLD_DEADLINE_MS = 30_000;
 // bounded too; otherwise a server that black-holes after the lock is taken
 // would hang the gate while the lock stayed held.
 const DEFAULT_DATABASE_PHASE_TIMEOUT_MS = 5_000;
+// Server-side bound on the lock-holding transaction, set inside it before the
+// lock is taken. PostgreSQL then ends the transaction — and releases the lock —
+// on its own if the client vanishes, whatever the client's socket does.
+const IDLE_IN_TRANSACTION_TIMEOUT_MS = 30_000;
 
 export function deriveObjid(nonce) {
   if (!NONCE_PATTERN.test(nonce)) throw new Error("nonce must be 64 lowercase hex characters");
@@ -115,10 +120,55 @@ export const REMEDIATION = {
   timeout: "the service did not answer in time; check that it is running and not overloaded",
 };
 
-async function defaultConnect(databaseUrl) {
+/**
+ * postgres-js closes with `socket.end()`, a graceful FIN that a black-holed
+ * server never answers, so a forced close must destroy the raw socket itself.
+ * Same pattern as scripts/check-test-database-url.mjs: hand the driver a
+ * socket factory, keep the one socket it makes, and destroy() it on demand.
+ * One attempt only — the verifier holds one backend for its whole run.
+ */
+function createOneShotSocketController() {
+  let attempted = false;
+  let rawSocket;
+  return {
+    createSocket(options) {
+      if (attempted) throw new Error("the E2E stack verifier permits one connection attempt");
+      attempted = true;
+      rawSocket = net.createConnection({ host: options.host[0], port: options.port[0] });
+      return new Promise((resolve, reject) => {
+        let connected = false;
+        rawSocket.once("connect", () => {
+          connected = true;
+          rawSocket.host = options.host[0];
+          rawSocket.port = options.port[0];
+          resolve(rawSocket);
+        });
+        rawSocket.once("error", reject);
+        rawSocket.once("close", () => {
+          if (!connected) reject(new Error("socket closed before connect"));
+        });
+      });
+    },
+    destroy() {
+      rawSocket?.destroy();
+    },
+    get destroyed() {
+      return rawSocket === undefined || rawSocket.destroyed;
+    },
+  };
+}
+
+/** Exported for the live regressions only; the verifier always uses it through `connect`. */
+export async function defaultConnect(databaseUrl, { socketController = createOneShotSocketController() } = {}) {
   // Imported lazily so importing this module never loads a driver or connects.
   const { default: postgres } = await import("postgres");
-  const sql = postgres(databaseUrl, { max: 1, idle_timeout: 0, connect_timeout: 5, onnotice: () => {} });
+  const sql = postgres(databaseUrl, {
+    max: 1,
+    idle_timeout: 0,
+    connect_timeout: 5,
+    onnotice: () => {},
+    socket: socketController.createSocket,
+  });
   // One reserved backend carries BEGIN, the lock, both re-reads, and ROLLBACK.
   // A transaction-scoped lock is released by rollback or by disconnect, so it
   // cannot be stranded and needs no unlock that could land on another backend.
@@ -126,13 +176,23 @@ async function defaultConnect(databaseUrl) {
   try {
     reserved = await sql.reserve();
   } catch (error) {
-    // The client exists even though no connection was handed back; end it so a
-    // failed handshake never leaves a socket behind.
+    // The client exists even though no connection was handed back; destroy the
+    // socket and end it so a failed handshake never leaves anything behind.
+    socketController.destroy();
     await sql.end({ timeout: 0 }).catch(() => {});
     throw error;
   }
   return {
-    begin: () => reserved`BEGIN`,
+    begin: async () => {
+      await reserved`BEGIN`;
+      // SET LOCAL lasts exactly as long as this transaction. Whatever happens
+      // to the client, the server drops an idle transaction — and its lock —
+      // after this long.
+      await reserved.unsafe(`SET LOCAL idle_in_transaction_session_timeout = ${IDLE_IN_TRANSACTION_TIMEOUT_MS}`);
+    },
+    /** Server-side view of the bound, for the live regressions. */
+    idleInTransactionTimeout: async () =>
+      (await reserved`SHOW idle_in_transaction_session_timeout`)[0].idle_in_transaction_session_timeout,
     backendPid: async () => (await reserved`SELECT pg_backend_pid() AS pid`)[0].pid,
     lock: (key) => reserved`SELECT pg_advisory_xact_lock(${key}::bigint)`,
     currentDatabase: async () => (await reserved`SELECT current_database() AS name`)[0].name,
@@ -154,9 +214,17 @@ async function defaultConnect(databaseUrl) {
       try {
         if (!force) reserved.release();
       } finally {
+        // A forced close destroys the raw socket FIRST: `sql.end` only sends a
+        // graceful FIN, which a server that stopped answering never completes.
+        // Destroying the socket ends the backend's session on the server side
+        // as soon as the RST arrives, which releases the transaction lock.
+        if (force) socketController.destroy();
         await sql.end({ timeout: force ? 0 : 2 });
+        if (!socketController.destroyed) socketController.destroy();
       }
     },
+    /** True once the raw socket is destroyed, for the live regressions. */
+    socketDestroyed: () => socketController.destroyed,
   };
 }
 
@@ -281,10 +349,17 @@ export async function verifyE2EStack({
       connection = await db("connect", () => connecting);
     } catch (error) {
       if (error instanceof DatabasePhaseTimeout) {
-        connecting.then(
-          (late) => Promise.resolve(late?.close?.({ force: true })).catch(() => {}),
-          () => {},
-        );
+        // Wrapped so even a close() that throws synchronously, or a non-function,
+        // can never surface as an unhandled rejection from this handler.
+        connecting
+          .then((late) => {
+            try {
+              return Promise.resolve(late?.close?.({ force: true })).catch(() => {});
+            } catch {
+              return undefined;
+            }
+          })
+          .catch(() => {});
       }
       throw error;
     }

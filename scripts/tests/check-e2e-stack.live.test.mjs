@@ -18,6 +18,7 @@
 import { afterAll, expect, test } from "bun:test";
 import postgres from "postgres";
 
+import net from "node:net";
 import {
   composeKey,
   deriveObjid,
@@ -28,6 +29,7 @@ import {
   SERVICES,
   testDatabaseName,
   verifyE2EStack,
+  defaultConnect,
 } from "../check-e2e-stack.mjs";
 
 const DATABASE_URL = process.env.DATABASE_URL ?? "";
@@ -438,4 +440,79 @@ live("a lock lost after sampling is reported as 'lock lost', not as a broken sta
   expect(calls.length).toBeGreaterThan(0);
   expect(result.failures).toEqual([{ service: "gate", class: "lock lost" }]);
   expect(await gateLockPids(objid)).toEqual([]);
+});
+
+// ---------------------------------------------------------------------------
+// R2-12 (reopened twice): a forced close must destroy the raw socket, because
+// postgres-js's end() only sends a graceful FIN that a black-holed server never
+// completes; and the server must bound the transaction on its own.
+// ---------------------------------------------------------------------------
+
+live("the lock-holding transaction carries a server-side idle bound", async () => {
+  const connection = await defaultConnect(DATABASE_URL);
+  try {
+    await connection.begin();
+    expect(await connection.idleInTransactionTimeout()).toBe("30s");
+  } finally {
+    await connection.rollback();
+    await connection.close();
+  }
+});
+
+live("a forced close destroys the raw socket even when the server never completes shutdown", async () => {
+  // A TCP server that accepts the connection and then never answers anything:
+  // the handshake never completes, so postgres-js is stuck on this socket.
+  const blackhole = net.createServer(() => {});
+  await new Promise((resolve) => blackhole.listen(0, "127.0.0.1", resolve));
+  const { port } = blackhole.address();
+  let rawSocket;
+  const socketController = {
+    createSocket(options) {
+      rawSocket = net.createConnection({ host: options.host[0], port: options.port[0] });
+      return new Promise((resolve, reject) => {
+        rawSocket.once("connect", () => {
+          rawSocket.host = options.host[0];
+          rawSocket.port = options.port[0];
+          resolve(rawSocket);
+        });
+        rawSocket.once("error", reject);
+      });
+    },
+    destroy() {
+      rawSocket?.destroy();
+    },
+    get destroyed() {
+      return rawSocket === undefined || rawSocket.destroyed;
+    },
+  };
+  const started = Date.now();
+  try {
+    await expect(
+      defaultConnect(`postgresql://work@127.0.0.1:${port}/bridge_test`, { socketController }),
+    ).rejects.toBeDefined();
+    expect(Date.now() - started).toBeLessThan(10_000);
+    // The socket to the black-holed server is destroyed, not left half-open
+    // waiting for a FIN the server will never send.
+    expect(rawSocket).toBeDefined();
+    expect(rawSocket.destroyed).toBe(true);
+  } finally {
+    await new Promise((resolve) => blackhole.close(resolve));
+  }
+}, 15_000); // postgres-js needs its full connect_timeout (5 s) to give up
+
+live("a forced close of an established connection destroys its socket and the server drops the lock", async () => {
+  const nonce = "6".repeat(64);
+  const objid = deriveObjid(nonce);
+  const connection = await defaultConnect(DATABASE_URL);
+  await connection.begin();
+  await connection.lock(composeKey(objid));
+  expect((await gateLockPids(objid)).length).toBe(1);
+  // Force-close WITHOUT rolling back, exactly what the verifier does when
+  // ROLLBACK never returns.
+  await connection.close({ force: true });
+  expect(connection.socketDestroyed()).toBe(true);
+  // The server sees the RST and ends the backend, which releases the
+  // transaction-scoped lock.
+  await waitForNoLock(objid);
+  expect((await gateLockPids(objid)).length).toBe(0);
 });
