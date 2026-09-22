@@ -94,7 +94,9 @@ So before the seed restore, `ci-local.sh` runs `scripts/check-e2e-stack.mjs`, wh
 
 Each service is asked on the origin E2E traffic really uses: Next.js at `/api/e2e-stack`, the Go API at
 `/api/health/e2e-stack` *through* the Next.js proxy, and Hocuspocus at `/e2e-stack` on the websocket origin
-that the attested Next.js reports from its build-time `NEXT_PUBLIC_HOCUSPOCUS_URL`.
+that the attested Next.js reports from its build-time `NEXT_PUBLIC_HOCUSPOCUS_URL` — including any base path,
+so a single-port proxy that mounts Hocuspocus under a prefix (e.g. `ws://host:3100/hocuspocus`,
+`deploy/nginx/bridge.conf`) is probed at `http://host:3100/hocuspocus/e2e-stack`.
 A cloned database, a standby, or another cluster with its own `bridge_test` cannot show the gate's lock.
 
 To run a full gate, start the stack yourself like this:

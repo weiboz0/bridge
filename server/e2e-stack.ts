@@ -153,7 +153,13 @@ export function createE2EStackAttestation({
       } catch {
         return;
       }
-      if (url.pathname !== E2E_STACK_PATH) return;
+      // Accept the endpoint under any reverse-proxy base path (e.g.
+      // `/hocuspocus/e2e-stack` when a single-port proxy mounts Hocuspocus
+      // under `/hocuspocus`, per deploy/nginx/bridge.conf). `endsWith` requires
+      // a `/` immediately before `e2e-stack`, so it only matches on a path
+      // segment boundary; the flag, lock, and _test gates below are what
+      // actually authorize a response.
+      if (!url.pathname.endsWith(E2E_STACK_PATH)) return;
 
       const nonce = url.searchParams.get("nonce");
       if (!nonce || !E2E_STACK_NONCE_PATTERN.test(nonce)) {

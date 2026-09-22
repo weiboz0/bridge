@@ -529,6 +529,35 @@ const scenarios = {
     const report = m.formatReport(r.result).join("\n");
     if (!report.includes("E2E stack target: http://localhost:3100") || !report.includes("E2E realtime origin: http://localhost:4100")) fail("target and derived origin must be printed");
   },
+  async realtimeBase() {
+    // realtimeOriginFrom preserves the base PATH of NEXT_PUBLIC_HOCUSPOCUS_URL
+    // (trailing slash trimmed), so a single-port reverse proxy that mounts
+    // Hocuspocus under a prefix is probed under that prefix. ws->http, wss->https;
+    // anything not ws/wss (and empty/undefined) is not a realtime URL.
+    const cases = [
+      ["ws://host:3100/hocuspocus", "http://host:3100/hocuspocus"],
+      ["ws://host:3100/hocuspocus/", "http://host:3100/hocuspocus"],
+      ["wss://host/a/b", "https://host/a/b"],
+      ["ws://host:4000", "http://host:4000"],
+      ["http://host:4000", null],
+      ["", null],
+      [undefined, null],
+    ];
+    for (const [input, want] of cases) {
+      const got = m.realtimeOriginFrom(input);
+      if (got !== want) fail(`realtimeOriginFrom(${JSON.stringify(input)}) === ${JSON.stringify(got)}, want ${JSON.stringify(want)}`);
+    }
+  },
+  async pathPrefixedRealtimeIsProbedUnderThatPath() {
+    // Next reports a path-prefixed realtime URL: the whole run must succeed, the
+    // derived origin must keep the base path, and Hocuspocus must be probed at
+    // `<base>/e2e-stack` — NOT at the bare origin.
+    const r = await run({ next: () => ({ status: 200, body: { fingerprint: good, instance: "next-1", realtimeUrl: "ws://localhost:4100/hocuspocus" } }) });
+    if (!r.result.ok) fail(`expected ok, got ${classes(r)}`);
+    if (r.result.realtimeOrigin !== "http://localhost:4100/hocuspocus") fail(`realtime origin must preserve the base path, got ${r.result.realtimeOrigin}`);
+    if (!r.calls.some((c) => c.url === `http://localhost:4100/hocuspocus/e2e-stack?nonce=${nonce}`)) fail("hocuspocus must be probed under the base path");
+    if (r.calls.some((c) => c.url === `http://localhost:4100/e2e-stack?nonce=${nonce}`)) fail("hocuspocus must NOT be probed at the bare origin");
+  },
   async notAttested404() { expectFailure(await run({ go: () => ({ status: 404 }) }), "go:not attested"); },
   async hocuspocusDefault200() { expectFailure(await run({ hocuspocus: () => ({ status: 200 }) }), "hocuspocus:not attested"); },
   async malformedFingerprint() { expectFailure(await run({ go: () => ({ status: 200, body: { fingerprint: "XYZ", instance: "g" } }) }), "go:not attested"); },
@@ -611,6 +640,8 @@ NODE
 e2e_stack_selftest() { command node "$E2E_STACK_SELFTEST" "$REPO_ROOT/scripts/check-e2e-stack.mjs" "$REPO_ROOT/scripts/tests/e2e-stack-vector.json" "$1"; }
 expect 0 "verifier key derivation, fingerprint, lock class, and nonce pattern match the shared vector" e2e_stack_selftest vector
 expect 0 "verifier success: lock inside the transaction, five samples per origin, no redirects, target and derived origin printed, rollback then close" e2e_stack_selftest success
+expect 0 "realtimeOriginFrom preserves the base path (trailing slash trimmed), maps ws/wss to http/https, and rejects non-websocket/empty URLs" e2e_stack_selftest realtimeBase
+expect 0 "a path-prefixed realtime URL is probed under that path, not at the bare origin" e2e_stack_selftest pathPrefixedRealtimeIsProbedUnderThatPath
 expect 0 "a 404 is reported per service as not attested with its remediation" e2e_stack_selftest notAttested404
 expect 0 "Hocuspocus's default unhandled 200 is reported as not attested" e2e_stack_selftest hocuspocusDefault200
 expect 0 "a malformed fingerprint is not attested" e2e_stack_selftest malformedFingerprint

@@ -288,6 +288,85 @@ describe("hocuspocus e2e stack attestation", () => {
     );
   });
 
+  test("e2e stack attestation answers under a reverse-proxy base path", async () => {
+    // A single-port reverse proxy (deploy/nginx/bridge.conf) mounts Hocuspocus
+    // under `/hocuspocus`, so the gate probes `<base>/e2e-stack`, i.e.
+    // `/hocuspocus/e2e-stack`. The handler matches any pathname ending in a
+    // `/e2e-stack` segment. Against the OLD `pathname !== "/e2e-stack"` matcher
+    // this request would have fallen through — the hook would resolve rather
+    // than reject-to-suppress, and Hocuspocus would answer its default 200 text
+    // instead of the attestation. So this assertion (`.rejects.toBeUndefined()`
+    // plus a written 200 JSON body) fails on the pre-fix code; that is the
+    // regression it guards.
+    const { attestation, query } = harness();
+    const { response, heads, bodies } = fakeResponse();
+
+    await expect(
+      attestation.onRequest({
+        request: fakeRequest("GET", `/hocuspocus${attestationUrl()}`),
+        response,
+      }),
+    ).rejects.toBeUndefined();
+
+    expect(query.calls).toEqual([[E2E_STACK_LOCK_CLASS, deriveE2EStackObjid(NONCE)]]);
+    expect(heads).toHaveLength(1);
+    expect(heads[0].status).toBe(200);
+    expect(heads[0].headers).toEqual(vector.contract.successHeaders);
+    expect(heads[0].headers["Content-Type"]).toBe("application/json");
+    expect(heads[0].headers["Cache-Control"]).toBe("no-store");
+    expect(bodies).toHaveLength(1);
+
+    const body = JSON.parse(bodies[0]) as { fingerprint: string; instance: string };
+    expect(Object.keys(body).sort()).toEqual([...vector.contract.successBody.hocuspocus].sort());
+    expect(body.fingerprint).toBe(e2eStackFingerprint(NONCE, LIVE_DATABASE));
+    expect(body.fingerprint).toBe(vector.cases[0].fingerprint);
+    expect(body.instance).toContain(`-${process.pid}-`);
+    expect(body.instance).toMatch(/^hocuspocus-\d+-[0-9a-f]{32}$/);
+  });
+
+  test("e2e stack attestation still answers at the exact root path", async () => {
+    // Guards that base-path support did not regress the bare `/e2e-stack` case
+    // a directly-reached (non-proxied) Hocuspocus port serves.
+    const { attestation, query } = harness();
+    const { response, heads, bodies } = fakeResponse();
+
+    await expect(
+      attestation.onRequest({ request: fakeRequest("GET", attestationUrl()), response }),
+    ).rejects.toBeUndefined();
+
+    expect(query.calls).toEqual([[E2E_STACK_LOCK_CLASS, deriveE2EStackObjid(NONCE)]]);
+    expect(heads).toHaveLength(1);
+    expect(heads[0].status).toBe(200);
+    expect(heads[0].headers).toEqual(vector.contract.successHeaders);
+    const body = JSON.parse(bodies[0]) as { fingerprint: string };
+    expect(body.fingerprint).toBe(vector.cases[0].fingerprint);
+  });
+
+  test("e2e stack attestation falls through for a path not on a segment boundary", async () => {
+    // `endsWith("/e2e-stack")` matches only on a path-segment boundary: a `/`
+    // must sit immediately before `e2e-stack`. Each url below therefore misses,
+    // and a path miss must short-circuit BEFORE the database — the hook
+    // resolves (does NOT reject-to-suppress), writes no head/body, and runs no
+    // query.
+    for (const url of [
+      `/hocuspocus?${NONCE_PARAM}=${NONCE}`, // the prefix alone, no /e2e-stack segment
+      `/e2e-stackx?${NONCE_PARAM}=${NONCE}`, // suffix does not end in the segment
+      `/xe2e-stack?${NONCE_PARAM}=${NONCE}`, // ends in "e2e-stack" but not "/e2e-stack"
+      `/foo/bar?${NONCE_PARAM}=${NONCE}`, // unrelated path
+    ]) {
+      const { attestation, query } = harness();
+      const { response, heads, bodies } = fakeResponse();
+
+      await expect(
+        attestation.onRequest({ request: fakeRequest("GET", url), response }),
+      ).resolves.toBeUndefined();
+
+      expect(heads, `${url} wrote a response head`).toEqual([]);
+      expect(bodies, `${url} wrote a response body`).toEqual([]);
+      expect(query.calls, `${url} reached the database`).toEqual([]);
+    }
+  });
+
   test("e2e stack attestation refuses a non-test live database", async () => {
     // The parsed URL says _test but the pool is really connected elsewhere:
     // exactly the clone/standby/misconfiguration case this attestation exists

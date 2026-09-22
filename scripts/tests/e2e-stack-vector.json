@@ -62,7 +62,8 @@
       "maxInFlightPerProcess": 2,
       "rule": "at most this many observe queries may be in flight per process; an excess request is refused exactly like any other refusal and runs NO query. The gate samples sequentially, so legitimate traffic never exceeds 1.",
       "refusalReason": "observe_busy"
-    }
+    },
+    "realtimeUrlHandling": "The Hocuspocus attestation is probed at the base URL derived from NEXT_PUBLIC_HOCUSPOCUS_URL (ws->http, wss->https), with its base PATH preserved, plus the hocuspocus path suffix. So ws://host:3100/hocuspocus is probed at http://host:3100/hocuspocus/e2e-stack, and the Hocuspocus onRequest handler matches any pathname ending in /e2e-stack. This supports a single-port reverse proxy that mounts Hocuspocus under a prefix (deploy/nginx/bridge.conf)."
   },
   "cases": [
     {

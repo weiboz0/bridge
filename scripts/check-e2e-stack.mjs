@@ -67,7 +67,15 @@ export function fingerprint(nonce, database) {
     .digest("hex");
 }
 
-/** ws→http, wss→https; anything else (including http itself) is not a realtime URL. */
+/**
+ * ws→http, wss→https; anything else (including http itself) is not a realtime URL.
+ * The base PATH is preserved, not just the origin: a single-port reverse proxy
+ * commonly mounts Hocuspocus under a prefix (e.g. `ws://host:3100/hocuspocus`,
+ * per deploy/nginx/bridge.conf), and the attestation GET must be probed under
+ * that same prefix. The caller appends `/e2e-stack` to this base, so a browser
+ * URL of `ws://host:3100/hocuspocus` is probed at `http://host:3100/hocuspocus/e2e-stack`.
+ * A trailing slash is trimmed so the join never doubles it.
+ */
 export function realtimeOriginFrom(realtimeUrl) {
   if (typeof realtimeUrl !== "string" || realtimeUrl === "") return null;
   let parsed;
@@ -78,7 +86,9 @@ export function realtimeOriginFrom(realtimeUrl) {
   }
   if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") return null;
   if (parsed.username || parsed.password) return null;
-  return `${parsed.protocol === "wss:" ? "https:" : "http:"}//${parsed.host}`;
+  const scheme = parsed.protocol === "wss:" ? "https:" : "http:";
+  const basePath = parsed.pathname.replace(/\/+$/, "");
+  return `${scheme}//${parsed.host}${basePath}`;
 }
 
 /** The verifier never opens a connection to anything but a parsed _test name. */
